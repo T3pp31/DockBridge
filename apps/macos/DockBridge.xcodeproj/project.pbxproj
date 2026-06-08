@@ -35,6 +35,7 @@
 		C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */; };
 		E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */; };
 		0718293A4B5C6D7E8F901234 /* KeychainServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */; };
+		2A3B4C5D6E7F8091A2B3C4D5 /* KnownHostsErrorMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B4C5D6E7F8091A2B3C4D5E6 /* KnownHostsErrorMessageTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -70,6 +71,7 @@
 		D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePathTests.swift; sourceTree = "<group>"; };
 		F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyStoreTests.swift; sourceTree = "<group>"; };
 		18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceTests.swift; sourceTree = "<group>"; };
+		3B4C5D6E7F8091A2B3C4D5E6 /* KnownHostsErrorMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnownHostsErrorMessageTests.swift; sourceTree = "<group>"; };
 		293A4B5C6D7E8F9012345678 /* DockBridgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DockBridgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -255,6 +257,7 @@
 				D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */,
 				F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */,
 				18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */,
+				3B4C5D6E7F8091A2B3C4D5E6 /* KnownHostsErrorMessageTests.swift */,
 			);
 			path = DockBridgeTests;
 			sourceTree = "<group>";
@@ -279,6 +282,7 @@
 				FBA3DE38A25B6160C8CF03A1 /* Sources */,
 				EA974F75FF97A3F5DEE6C4BE /* Frameworks */,
 				ED809E2469EA48300F1D1F35 /* Resources */,
+				A1B2C3D4E5F60718293A4B5D /* Generate Dock App Icon icns */,
 			);
 			buildRules = (
 			);
@@ -364,6 +368,23 @@
 			);
 			shellScript = "set -euo pipefail\nROOT=\"${SRCROOT}/../..\"\nif [[ -x \"${ROOT}/scripts/generate-uniffi.sh\" ]]; then\n  \"${ROOT}/scripts/generate-uniffi.sh\" || true\nfi\n";
 		};
+		A1B2C3D4E5F60718293A4B5D /* Generate Dock App Icon icns */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Generate Dock App Icon icns";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			shellScript = "set -euo pipefail\nOUT=\"${BUILT_PRODUCTS_DIR}/${FULL_PRODUCT_NAME}/Contents/Resources/AppIcon.icns\"\n\"${SRCROOT}/../../scripts/generate-app-icon-icns.sh\" \"$OUT\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -406,6 +427,7 @@
 				C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */,
 				E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */,
 				0718293A4B5C6D7E8F901234 /* KeychainServiceTests.swift in Sources */,
+				2A3B4C5D6E7F8091A2B3C4D5 /* KnownHostsErrorMessageTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

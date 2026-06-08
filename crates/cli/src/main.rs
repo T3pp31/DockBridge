@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -115,7 +115,7 @@ fn resolve_password(
     if password_stdin {
         let mut buffer = String::new();
         io::stdin()
-            .read_to_string(&mut buffer)
+            .read_line(&mut buffer)
             .map_err(|err| anyhow::anyhow!("failed to read password from stdin: {err}"))?;
         let trimmed = buffer.trim_end_matches(['\r', '\n']).to_string();
         if trimmed.is_empty() {

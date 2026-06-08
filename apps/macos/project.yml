@@ -63,6 +63,14 @@ targets:
           else
             echo "Using DockBridgeFFIStub.swift until bindings are generated"
           fi
+    postBuildScripts:
+      - name: Generate Dock App Icon icns
+        shell: /bin/bash
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          OUT="${BUILT_PRODUCTS_DIR}/${FULL_PRODUCT_NAME}/Contents/Resources/AppIcon.icns"
+          "${SRCROOT}/../../scripts/generate-app-icon-icns.sh" "$OUT"
 schemes:
   DockBridge:
     build:

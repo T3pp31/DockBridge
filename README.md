@@ -1,5 +1,9 @@
 # DockBridge
 
+<p align="center">
+  <img src="docs/assets/thumbnail.png" alt="DockBridge" width="256">
+</p>
+
 DockBridge is a macOS-native SFTP client inspired by WinSCP.
 
 SCP support may be considered after v1.0.
