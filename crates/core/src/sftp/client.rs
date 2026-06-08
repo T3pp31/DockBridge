@@ -35,6 +35,22 @@ impl<'a> SftpClient<'a> {
         self.session.sftp()
     }
 
+    /// Resolves a relative remote path to an absolute path.
+    pub async fn canonicalize_path(&self, path: &str) -> Result<String, SftpError> {
+        self.sftp()
+            .canonicalize(path)
+            .await
+            .map_err(|err| SftpError::CanonicalizeFailed {
+                path: path.to_string(),
+                message: err.to_string(),
+            })
+    }
+
+    /// Returns the SFTP session's initial working directory (typically the user's home).
+    pub async fn initial_directory(&self) -> Result<String, SftpError> {
+        self.canonicalize_path(".").await
+    }
+
     /// Lists entries in a remote directory.
     pub async fn list_directory(&self, path: &str) -> Result<Vec<RemoteFile>, SftpError> {
         let mut read_dir =

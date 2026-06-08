@@ -3,6 +3,8 @@ import Foundation
 @MainActor
 final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
     @Published private(set) var isConnected = false
+    @Published private(set) var initialRemoteDirectory: String?
+    @Published private(set) var connectedUsername: String?
     @Published var pendingHostKeyChallenge: HostKeyChallenge?
     @Published var hostKeyContinuation: CheckedContinuation<Bool, Never>?
 
@@ -43,7 +45,21 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
             try client.connect(profile: record)
         }.value
 
+        let rawInitialDirectory = try await Task.detached(priority: .userInitiated) {
+            try client.getInitialDirectory(sessionId: newSessionId)
+        }.value
+
+        let resolvedDirectory = try await resolveWorkingDirectory(
+            rawInitialDirectory,
+            username: profile.username,
+            isRootUser: profile.isRootUser,
+            client: client,
+            sessionId: newSessionId
+        )
+
         sessionId = newSessionId
+        connectedUsername = profile.username
+        initialRemoteDirectory = resolvedDirectory
         isConnected = true
     }
 
@@ -53,7 +69,15 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
             try client.disconnect(sessionId: sessionId)
         }.value
         self.sessionId = nil
+        initialRemoteDirectory = nil
+        connectedUsername = nil
         isConnected = false
+    }
+
+    func getInitialDirectory() async throws -> String {
+        try await runOnBridge { client, sessionId in
+            try client.getInitialDirectory(sessionId: sessionId)
+        }
     }
 
     func listDirectory(path: String) async throws -> [RemoteFileRecord] {
@@ -151,6 +175,36 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
 
     private func refreshTransferQueue() async {
         _ = try? await fetchTransferTasks()
+    }
+
+    private func resolveWorkingDirectory(
+        _ rawDirectory: String,
+        username: String,
+        isRootUser: Bool,
+        client: DockBridgeClient,
+        sessionId: UInt64
+    ) async throws -> String {
+        guard rawDirectory == "/", !isRootUser else {
+            return rawDirectory
+        }
+
+        for candidate in Self.homeDirectoryCandidates(for: username) {
+            let exists = try await Task.detached(priority: .userInitiated) {
+                (try? client.listDirectory(sessionId: sessionId, path: candidate)) != nil
+            }.value
+            if exists {
+                return candidate
+            }
+        }
+
+        return "/home/\(username)"
+    }
+
+    private static func homeDirectoryCandidates(for username: String) -> [String] {
+        [
+            "/home/\(username)",
+            "/Users/\(username)",
+        ]
     }
 
     private func runOnBridge<T: Sendable>(

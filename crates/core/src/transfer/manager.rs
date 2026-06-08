@@ -318,16 +318,21 @@ impl TransferManager {
         let client = SftpClient::new(session);
         let attempts = self.retry_count.max(1);
         let mut last_error = String::from("unknown transfer error");
+        let mut attempt = 0;
 
-        for attempt in 1..=attempts {
+        for current in 1..=attempts {
+            attempt = current;
             match client.upload(local_path, remote_path).await {
                 Ok(()) => return Ok(()),
                 Err(err) => {
                     last_error = err.to_string();
-                    if attempt < attempts {
+                    if is_non_retryable_transfer_error(&last_error) {
+                        break;
+                    }
+                    if current < attempts {
                         tracing::warn!(
                             task_id,
-                            attempt,
+                            attempt = current,
                             max_attempts = attempts,
                             "upload attempt failed, retrying"
                         );
@@ -337,7 +342,7 @@ impl TransferManager {
         }
 
         Err(TransferError::RetriesExhausted {
-            attempts,
+            attempts: attempt.max(1),
             message: last_error,
         })
     }
@@ -352,16 +357,21 @@ impl TransferManager {
         let client = SftpClient::new(session);
         let attempts = self.retry_count.max(1);
         let mut last_error = String::from("unknown transfer error");
+        let mut attempt = 0;
 
-        for attempt in 1..=attempts {
+        for current in 1..=attempts {
+            attempt = current;
             match client.download(remote_path, local_path).await {
                 Ok(()) => return Ok(()),
                 Err(err) => {
                     last_error = err.to_string();
-                    if attempt < attempts {
+                    if is_non_retryable_transfer_error(&last_error) {
+                        break;
+                    }
+                    if current < attempts {
                         tracing::warn!(
                             task_id,
-                            attempt,
+                            attempt = current,
                             max_attempts = attempts,
                             "download attempt failed, retrying"
                         );
@@ -371,7 +381,7 @@ impl TransferManager {
         }
 
         Err(TransferError::RetriesExhausted {
-            attempts,
+            attempts: attempt.max(1),
             message: last_error,
         })
     }
@@ -390,6 +400,14 @@ fn parent_remote_path(remote_path: &str) -> Option<String> {
     } else {
         Some(parent.to_string())
     }
+}
+
+/// Returns `true` when retrying the same transfer is unlikely to succeed.
+pub(crate) fn is_non_retryable_transfer_error(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("session closed")
+        || lower.contains("permission denied")
+        || lower.contains("failure")
 }
 
 fn transfer_error_from_sftp(error: SftpError) -> TransferError {
@@ -493,6 +511,36 @@ mod tests {
         manager.insert_task(task);
         let err = manager.cancel_transfer(8).unwrap_err();
         assert!(matches!(err, TransferError::Cancelled));
+    }
+
+    #[test]
+    fn non_retryable_errors_are_detected() {
+        assert!(is_non_retryable_transfer_error("session closed"));
+        assert!(is_non_retryable_transfer_error(
+            "failed to upload '/a' to '/b': Permission denied"
+        ));
+        assert!(is_non_retryable_transfer_error("SFTP failure"));
+        assert!(!is_non_retryable_transfer_error("connection reset"));
+    }
+
+    #[test]
+    fn status_transitions_to_in_progress_before_external_poll_can_observe_pending() {
+        // Documents bug: enqueue_upload sets Pending then immediately InProgress (lines 126-127)
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 99,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::Pending,
+        };
+        manager.insert_task(task.clone());
+        manager.update_task_status(task.id, TransferStatus::InProgress);
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].status, TransferStatus::InProgress);
+        // UI only shows Cancel for Pending status
+        let cancel_result = manager.cancel_transfer(99);
+        assert!(matches!(cancel_result, Err(TransferError::Cancelled)));
     }
 
     #[test]

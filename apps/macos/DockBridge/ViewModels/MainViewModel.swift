@@ -92,6 +92,58 @@ final class MainViewModel: ObservableObject {
         selectedLocalItemID = nil
     }
 
+    func onConnectionChanged(isConnected: Bool) async {
+        if isConnected {
+            do {
+                try await prepareRemoteWorkingDirectory()
+            } catch {
+                errorMessage = error.dockBridgeUserMessage
+            }
+        } else {
+            remotePath = "/"
+            remoteItems = []
+            return
+        }
+        await reloadRemote()
+    }
+
+    func prepareRemoteWorkingDirectory() async throws {
+        guard bridge.isConnected else { return }
+        guard remotePath == "/" else { return }
+
+        if let initialDirectory = bridge.initialRemoteDirectory {
+            remotePath = initialDirectory
+            return
+        }
+
+        do {
+            remotePath = try await bridge.getInitialDirectory()
+        } catch {
+            if let fallback = fallbackHomePath() {
+                remotePath = fallback
+            } else {
+                throw error
+            }
+        }
+
+        if remotePath == "/", let fallback = fallbackHomePath() {
+            remotePath = fallback
+        }
+    }
+
+    private func fallbackHomePath() -> String? {
+        if let username = bridge.connectedUsername, !username.isEmpty, username != "root" {
+            return "/home/\(username)"
+        }
+        guard let profileID = connectionList.selectedProfileID,
+              let profile = connectionList.profiles.first(where: { $0.id == profileID })
+        else {
+            return nil
+        }
+        guard !profile.isRootUser else { return nil }
+        return "/home/\(profile.username)"
+    }
+
     func reloadRemote() async {
         guard bridge.isConnected else {
             remoteItems = []
@@ -141,7 +193,9 @@ final class MainViewModel: ObservableObject {
         }
 
         do {
-            try await bridge.upload(localPath: localURL.path, remoteDirectory: toRemoteDirectory)
+            try await prepareRemoteWorkingDirectory()
+            let directory = toRemoteDirectory == "/" ? remotePath : toRemoteDirectory
+            try await bridge.upload(localPath: localURL.path, remoteDirectory: directory)
             await transferQueue.refresh()
             await reloadRemote()
         } catch {

@@ -95,8 +95,8 @@ struct MainView: View {
         .onDisappear {
             viewModel.onDisappear()
         }
-        .onChange(of: bridge.isConnected) { _, _ in
-            Task { await viewModel.reloadRemote() }
+        .onChange(of: bridge.isConnected) { _, isConnected in
+            Task { await viewModel.onConnectionChanged(isConnected: isConnected) }
         }
         .errorAlert(message: $viewModel.errorMessage)
         .frame(minWidth: 960, minHeight: 640)

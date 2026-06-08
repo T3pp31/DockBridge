@@ -205,6 +205,20 @@ impl DockBridgeClient {
         Ok(())
     }
 
+    fn get_initial_directory(&self, session_id: u64) -> Result<String, DockBridgeError> {
+        let sessions = Arc::clone(&self.sessions);
+        block_on(async move {
+            let sessions = sessions.lock().await;
+            let session = sessions
+                .get(&session_id)
+                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+            SftpClient::new(session)
+                .initial_directory()
+                .await
+                .map_err(map_error)
+        })
+    }
+
     fn list_directory(
         &self,
         session_id: u64,

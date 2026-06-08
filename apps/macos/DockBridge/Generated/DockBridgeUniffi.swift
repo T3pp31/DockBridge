@@ -538,6 +538,8 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
     
     func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String) throws 
     
+    func getInitialDirectory(sessionId: UInt64) throws  -> String
+    
     func getTransferQueue()  -> [TransferTaskRecord]
     
     func listDirectory(sessionId: UInt64, path: String) throws  -> [RemoteFileRecord]
@@ -667,6 +669,14 @@ open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: S
         FfiConverterString.lower(localDirectory),$0
     )
 }
+}
+    
+open func getInitialDirectory(sessionId: UInt64)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_get_initial_directory(self.uniffiClonePointer(),
+        FfiConverterUInt64.lower(sessionId),$0
+    )
+})
 }
     
 open func getTransferQueue() -> [TransferTaskRecord]  {
@@ -1760,6 +1770,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download_entry() != 36929) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_initial_directory() != 10511) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_transfer_queue() != 62228) {
