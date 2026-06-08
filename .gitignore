@@ -1,6 +1,8 @@
 # Rust
 /target/
 target/test-known_hosts.json
+*.profraw
+default.profraw
 
 # macOS
 .DS_Store
