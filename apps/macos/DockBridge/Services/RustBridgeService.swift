@@ -20,10 +20,10 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
         super.init()
     }
 
-    func prepareClient() {
-        try? hostKeyStore.ensureStoreExists()
+    func prepareClient() throws {
+        try hostKeyStore.ensureStoreDirectoryExists()
         let record = settings.buildAppConfigRecord()
-        client = DockBridgeClient(appConfig: record, hostKeyHandler: self)
+        client = try DockBridgeClient(appConfig: record, hostKeyHandler: self)
     }
 
     func connect(
@@ -32,7 +32,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
         passphrase: String?
     ) async throws {
         if client == nil {
-            prepareClient()
+            try prepareClient()
         }
         guard let client else {
             throw DockBridgeError.Generic(message: "Rust client is not initialized.")
@@ -123,11 +123,17 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
         let decision = Decision()
 
         Task { @MainActor in
+            if self.pendingHostKeyChallenge != nil {
+                self.hostKeyContinuation?.resume(returning: false)
+                self.hostKeyContinuation = nil
+            }
+
             self.pendingHostKeyChallenge = challenge
             decision.accepted = await withCheckedContinuation { continuation in
                 self.hostKeyContinuation = continuation
             }
             self.pendingHostKeyChallenge = nil
+            self.hostKeyContinuation = nil
             semaphore.signal()
         }
 

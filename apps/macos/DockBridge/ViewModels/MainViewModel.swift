@@ -60,7 +60,7 @@ final class MainViewModel: ObservableObject {
             let config = settings.loadConfig()
             localItems = try LocalFileItem.list(directory: localPath, showHiddenFiles: config.showHiddenFiles)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.dockBridgeUserMessage
         }
     }
 
@@ -88,38 +88,34 @@ final class MainViewModel: ObservableObject {
         do {
             remoteItems = try await bridge.listDirectory(path: remotePath)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.dockBridgeUserMessage
         }
     }
 
     func navigateRemote(into item: RemoteFileRecord) {
         guard item.isDirectory else { return }
-        remotePath = item.path.hasSuffix("/") ? item.path : item.path + "/"
+        remotePath = RemotePath.directoryPath(item.path)
         selectedRemoteItemID = nil
         Task { await reloadRemote() }
     }
 
     func navigateRemoteUp() {
         guard remotePath != "/" else { return }
-        let trimmed = remotePath.hasSuffix("/") ? String(remotePath.dropLast()) : remotePath
-        let parent = (trimmed as NSString).deletingLastPathComponent
-        remotePath = parent.isEmpty ? "/" : parent + "/"
+        remotePath = RemotePath.directoryPath(RemotePath.parent(of: remotePath))
         selectedRemoteItemID = nil
         Task { await reloadRemote() }
     }
 
     func uploadSelected() async {
         guard let item = selectedLocalItem, !item.isDirectory else { return }
-        let remoteName = remotePath.hasSuffix("/")
-            ? remotePath + item.name
-            : remotePath + "/" + item.name
+        let remoteName = RemotePath.join(remotePath, item.name)
 
         do {
             try await bridge.upload(localPath: item.url.path, remotePath: remoteName)
             await transferQueue.refresh()
             await reloadRemote()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.dockBridgeUserMessage
         }
     }
 
@@ -132,7 +128,7 @@ final class MainViewModel: ObservableObject {
             await transferQueue.refresh()
             reloadLocal()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.dockBridgeUserMessage
         }
     }
 
@@ -157,7 +153,7 @@ final class MainViewModel: ObservableObject {
             try await bridge.deleteRemote(path: path)
             await reloadRemote()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.dockBridgeUserMessage
         }
     }
 
@@ -168,8 +164,8 @@ final class MainViewModel: ObservableObject {
 
     func commitRename() async {
         guard let target = renameTarget else { return }
-        let parent = (target.path as NSString).deletingLastPathComponent
-        let newPath = parent.isEmpty ? renameText : "\(parent)/\(renameText)"
+        let parent = RemotePath.parent(of: target.path)
+        let newPath = RemotePath.join(parent, renameText)
 
         do {
             try await bridge.renameRemote(from: target.path, to: newPath)
@@ -177,14 +173,14 @@ final class MainViewModel: ObservableObject {
             renameText = ""
             await reloadRemote()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.dockBridgeUserMessage
         }
     }
 
     func commitMkdir() async {
         let name = mkdirName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
-        let path = remotePath.hasSuffix("/") ? remotePath + name : remotePath + "/" + name
+        let path = RemotePath.join(remotePath, name)
 
         do {
             try await bridge.mkdirRemote(path: path)
@@ -192,7 +188,7 @@ final class MainViewModel: ObservableObject {
             showMkdirPrompt = false
             await reloadRemote()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.dockBridgeUserMessage
         }
     }
 }

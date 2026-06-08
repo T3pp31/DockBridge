@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use dockbridge_core::{
     AppConfig, AuthType, ConnectionProfile, HostKeyPrompt, KnownHostsManager, SecretPassword,
     SftpClient, SshSession, TransferManager,
@@ -12,7 +12,11 @@ use tracing_subscriber::EnvFilter;
 use zeroize::Zeroizing;
 
 #[derive(Parser, Debug)]
-#[command(name = "dockbridge", about = "DockBridge SFTP CLI")]
+#[command(
+    name = "dockbridge",
+    about = "DockBridge SFTP CLI",
+    after_help = "Password options:\n  --password is for development and testing only. It may appear in shell history and process listings.\n  Prefer --password-stdin for scripts."
+)]
 struct Cli {
     /// Path to TOML config file.
     #[arg(long, default_value = "config/default.toml")]
@@ -26,27 +30,15 @@ struct Cli {
 enum Commands {
     /// List a remote directory.
     List {
-        #[arg(long)]
-        host: String,
-        #[arg(long, default_value_t = 22)]
-        port: u16,
-        #[arg(long)]
-        user: String,
-        #[arg(long)]
-        password: String,
+        #[command(flatten)]
+        connection: ConnectionArgs,
         #[arg(long, default_value = ".")]
         path: String,
     },
     /// Upload a local file to a remote path.
     Upload {
-        #[arg(long)]
-        host: String,
-        #[arg(long, default_value_t = 22)]
-        port: u16,
-        #[arg(long)]
-        user: String,
-        #[arg(long)]
-        password: String,
+        #[command(flatten)]
+        connection: ConnectionArgs,
         #[arg(long)]
         local: PathBuf,
         #[arg(long)]
@@ -54,14 +46,8 @@ enum Commands {
     },
     /// Download a remote file to a local path.
     Download {
-        #[arg(long)]
-        host: String,
-        #[arg(long, default_value_t = 22)]
-        port: u16,
-        #[arg(long)]
-        user: String,
-        #[arg(long)]
-        password: String,
+        #[command(flatten)]
+        connection: ConnectionArgs,
         #[arg(long)]
         remote: String,
         #[arg(long)]
@@ -69,27 +55,15 @@ enum Commands {
     },
     /// Delete a remote file.
     Delete {
-        #[arg(long)]
-        host: String,
-        #[arg(long, default_value_t = 22)]
-        port: u16,
-        #[arg(long)]
-        user: String,
-        #[arg(long)]
-        password: String,
+        #[command(flatten)]
+        connection: ConnectionArgs,
         #[arg(long)]
         remote: String,
     },
     /// Rename a remote file or directory.
     Rename {
-        #[arg(long)]
-        host: String,
-        #[arg(long, default_value_t = 22)]
-        port: u16,
-        #[arg(long)]
-        user: String,
-        #[arg(long)]
-        password: String,
+        #[command(flatten)]
+        connection: ConnectionArgs,
         #[arg(long)]
         from: String,
         #[arg(long)]
@@ -97,38 +71,62 @@ enum Commands {
     },
     /// Create a remote directory.
     Mkdir {
-        #[arg(long)]
-        host: String,
-        #[arg(long, default_value_t = 22)]
-        port: u16,
-        #[arg(long)]
-        user: String,
-        #[arg(long)]
-        password: String,
+        #[command(flatten)]
+        connection: ConnectionArgs,
         #[arg(long)]
         remote: String,
     },
 }
 
-#[derive(Debug)]
+#[derive(Args, Debug)]
 struct ConnectionArgs {
+    #[arg(long)]
     host: String,
+    #[arg(long, default_value_t = 22)]
     port: u16,
+    #[arg(long)]
     user: String,
-    password: Zeroizing<String>,
+    /// Password for development and testing only. May appear in shell history and process listings.
+    #[arg(long, conflicts_with = "password_stdin")]
+    password: Option<String>,
+    /// Read password from standard input instead of the command line.
+    #[arg(long)]
+    password_stdin: bool,
 }
 
 impl ConnectionArgs {
-    fn into_profile(self) -> ConnectionProfile {
-        ConnectionProfile {
+    fn into_profile(self) -> anyhow::Result<ConnectionProfile> {
+        let password = resolve_password(self.password, self.password_stdin)?;
+        Ok(ConnectionProfile {
             host: self.host,
             port: self.port,
             username: self.user,
             auth: AuthType::Password {
-                password: SecretPassword::new(self.password.as_str()),
+                password: SecretPassword::new(password.as_str()),
             },
-        }
+        })
     }
+}
+
+fn resolve_password(
+    password: Option<String>,
+    password_stdin: bool,
+) -> anyhow::Result<Zeroizing<String>> {
+    if password_stdin {
+        let mut buffer = String::new();
+        io::stdin()
+            .read_line(&mut buffer)
+            .map_err(|err| anyhow::anyhow!("failed to read password from stdin: {err}"))?;
+        let trimmed = buffer.trim_end_matches(['\r', '\n']).to_string();
+        if trimmed.is_empty() {
+            anyhow::bail!("password read from stdin was empty");
+        }
+        return Ok(Zeroizing::new(trimmed));
+    }
+
+    let password = password
+        .ok_or_else(|| anyhow::anyhow!("either --password or --password-stdin is required"))?;
+    Ok(Zeroizing::new(password))
 }
 
 struct CliHostKeyPrompt;
@@ -164,25 +162,8 @@ async fn main() -> anyhow::Result<()> {
     let prompt = Arc::new(CliHostKeyPrompt);
 
     match cli.command {
-        Commands::List {
-            host,
-            port,
-            user,
-            password,
-            path,
-        } => {
-            let session = connect(
-                ConnectionArgs {
-                    host,
-                    port,
-                    user,
-                    password: Zeroizing::new(password),
-                },
-                &config,
-                known_hosts,
-                prompt,
-            )
-            .await?;
+        Commands::List { connection, path } => {
+            let session = connect(connection.into_profile()?, &config, known_hosts, prompt).await?;
 
             let client = SftpClient::new(&session);
             let entries = client.list_directory(&path).await?;
@@ -192,121 +173,45 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Upload {
-            host,
-            port,
-            user,
-            password,
+            connection,
             local,
             remote,
         } => {
-            let session = connect(
-                ConnectionArgs {
-                    host,
-                    port,
-                    user,
-                    password: Zeroizing::new(password),
-                },
-                &config,
-                known_hosts,
-                prompt,
-            )
-            .await?;
+            let session = connect(connection.into_profile()?, &config, known_hosts, prompt).await?;
 
             let manager = TransferManager::new(&config);
             let task = manager.enqueue_upload(&session, &local, remote).await?;
             println!("upload completed (task #{})", task.id);
         }
         Commands::Download {
-            host,
-            port,
-            user,
-            password,
+            connection,
             remote,
             local,
         } => {
-            let session = connect(
-                ConnectionArgs {
-                    host,
-                    port,
-                    user,
-                    password: Zeroizing::new(password),
-                },
-                &config,
-                known_hosts,
-                prompt,
-            )
-            .await?;
+            let session = connect(connection.into_profile()?, &config, known_hosts, prompt).await?;
 
             let manager = TransferManager::new(&config);
             let task = manager.enqueue_download(&session, remote, &local).await?;
             println!("download completed (task #{})", task.id);
         }
-        Commands::Delete {
-            host,
-            port,
-            user,
-            password,
-            remote,
-        } => {
-            let session = connect(
-                ConnectionArgs {
-                    host,
-                    port,
-                    user,
-                    password: Zeroizing::new(password),
-                },
-                &config,
-                known_hosts,
-                prompt,
-            )
-            .await?;
+        Commands::Delete { connection, remote } => {
+            let session = connect(connection.into_profile()?, &config, known_hosts, prompt).await?;
 
             SftpClient::new(&session).delete(&remote).await?;
             println!("deleted {remote}");
         }
         Commands::Rename {
-            host,
-            port,
-            user,
-            password,
+            connection,
             from,
             to,
         } => {
-            let session = connect(
-                ConnectionArgs {
-                    host,
-                    port,
-                    user,
-                    password: Zeroizing::new(password),
-                },
-                &config,
-                known_hosts,
-                prompt,
-            )
-            .await?;
+            let session = connect(connection.into_profile()?, &config, known_hosts, prompt).await?;
 
             SftpClient::new(&session).rename(&from, &to).await?;
             println!("renamed {from} -> {to}");
         }
-        Commands::Mkdir {
-            host,
-            port,
-            user,
-            password,
-            remote,
-        } => {
-            let session = connect(
-                ConnectionArgs {
-                    host,
-                    port,
-                    user,
-                    password: Zeroizing::new(password),
-                },
-                &config,
-                known_hosts,
-                prompt,
-            )
-            .await?;
+        Commands::Mkdir { connection, remote } => {
+            let session = connect(connection.into_profile()?, &config, known_hosts, prompt).await?;
 
             SftpClient::new(&session).create_directory(&remote).await?;
             println!("created directory {remote}");
@@ -325,12 +230,12 @@ fn load_config(path: &PathBuf) -> anyhow::Result<AppConfig> {
 }
 
 async fn connect(
-    args: ConnectionArgs,
+    profile: ConnectionProfile,
     config: &AppConfig,
     known_hosts: Arc<Mutex<KnownHostsManager>>,
     prompt: Arc<dyn HostKeyPrompt>,
 ) -> anyhow::Result<SshSession> {
-    SshSession::connect(args.into_profile(), config, known_hosts, prompt)
+    SshSession::connect(profile, config, known_hosts, prompt)
         .await
         .map_err(Into::into)
 }

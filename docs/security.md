@@ -9,6 +9,7 @@
 - Passwords and key passphrases stored in Keychain only
 - Private key files are referenced by path, never copied into the app bundle
 - No passwords, keys, or passphrases in logs
+- CLI `--password` is for development and testing only; prefer `--password-stdin` in scripts
 - Rust secrets use `Debug` redaction and `zeroize` where applicable
 - Delete confirmation for destructive operations
 - Warning when connecting as root

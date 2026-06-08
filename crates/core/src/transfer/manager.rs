@@ -59,17 +59,47 @@ impl TransferManager {
             .unwrap_or_default()
     }
 
-    /// Cancels a transfer task.
-    ///
-    /// Currently a stub that always succeeds.
-    pub fn cancel_transfer(&self, _task_id: u64) -> Result<(), TransferError> {
-        Ok(())
+    /// Cancels a pending transfer task.
+    pub fn cancel_transfer(&self, task_id: u64) -> Result<(), TransferError> {
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|_| TransferError::TaskNotFound { task_id })?;
+
+        let task = tasks
+            .iter_mut()
+            .find(|task| task.id == task_id)
+            .ok_or(TransferError::TaskNotFound { task_id })?;
+
+        match task.status {
+            TransferStatus::Pending => {
+                task.status = TransferStatus::Cancelled;
+                Ok(())
+            }
+            TransferStatus::InProgress => Err(TransferError::Cancelled),
+            _ => Err(TransferError::TaskNotFound { task_id }),
+        }
     }
 
-    fn record_task(&self, task: &TransferTask) {
+    fn insert_task(&self, task: TransferTask) {
         if let Ok(mut tasks) = self.tasks.lock() {
-            tasks.push(task.clone());
+            tasks.push(task);
         }
+    }
+
+    fn update_task_status(&self, task_id: u64, status: TransferStatus) {
+        if let Ok(mut tasks) = self.tasks.lock() {
+            if let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) {
+                task.status = status;
+            }
+        }
+    }
+
+    fn find_task(&self, task_id: u64) -> Option<TransferTask> {
+        self.tasks
+            .lock()
+            .ok()
+            .and_then(|tasks| tasks.iter().find(|task| task.id == task_id).cloned())
     }
 
     /// Enqueues and immediately executes a single upload task.
@@ -81,7 +111,8 @@ impl TransferManager {
     ) -> Result<TransferTask, TransferError> {
         let local_path = local_path.as_ref().to_path_buf();
         let remote_path = remote_path.into();
-        let mut task = TransferTask {
+
+        let task = TransferTask {
             id: self.next_id.fetch_add(1, Ordering::Relaxed),
             direction: TransferDirection::Upload,
             local_path: local_path.clone(),
@@ -89,11 +120,27 @@ impl TransferManager {
             status: TransferStatus::Pending,
         };
 
-        self.run_upload_with_retries(session, &mut task, &local_path, &remote_path)
-            .await?;
-        self.record_task(&task);
+        self.insert_task(task.clone());
+        self.update_task_status(task.id, TransferStatus::InProgress);
 
-        Ok(task)
+        let result = self
+            .run_upload_with_retries(session, task.id, &local_path, &remote_path)
+            .await;
+
+        match result {
+            Ok(()) => self.update_task_status(task.id, TransferStatus::Completed),
+            Err(err) => {
+                self.update_task_status(
+                    task.id,
+                    TransferStatus::Failed {
+                        message: err.to_string(),
+                    },
+                );
+                return Err(err);
+            }
+        }
+
+        Ok(self.find_task(task.id).unwrap_or(task))
     }
 
     /// Enqueues and immediately executes a single download task.
@@ -105,7 +152,8 @@ impl TransferManager {
     ) -> Result<TransferTask, TransferError> {
         let remote_path = remote_path.into();
         let local_path = local_path.as_ref().to_path_buf();
-        let mut task = TransferTask {
+
+        let task = TransferTask {
             id: self.next_id.fetch_add(1, Ordering::Relaxed),
             direction: TransferDirection::Download,
             local_path: local_path.clone(),
@@ -113,36 +161,48 @@ impl TransferManager {
             status: TransferStatus::Pending,
         };
 
-        self.run_download_with_retries(session, &mut task, &remote_path, &local_path)
-            .await?;
-        self.record_task(&task);
+        self.insert_task(task.clone());
+        self.update_task_status(task.id, TransferStatus::InProgress);
 
-        Ok(task)
+        let result = self
+            .run_download_with_retries(session, task.id, &remote_path, &local_path)
+            .await;
+
+        match result {
+            Ok(()) => self.update_task_status(task.id, TransferStatus::Completed),
+            Err(err) => {
+                self.update_task_status(
+                    task.id,
+                    TransferStatus::Failed {
+                        message: err.to_string(),
+                    },
+                );
+                return Err(err);
+            }
+        }
+
+        Ok(self.find_task(task.id).unwrap_or(task))
     }
 
     async fn run_upload_with_retries(
         &self,
         session: &SshSession,
-        task: &mut TransferTask,
+        task_id: u64,
         local_path: &Path,
         remote_path: &str,
     ) -> Result<(), TransferError> {
-        task.status = TransferStatus::InProgress;
         let client = SftpClient::new(session);
         let attempts = self.retry_count.max(1);
         let mut last_error = String::from("unknown transfer error");
 
         for attempt in 1..=attempts {
             match client.upload(local_path, remote_path).await {
-                Ok(()) => {
-                    task.status = TransferStatus::Completed;
-                    return Ok(());
-                }
+                Ok(()) => return Ok(()),
                 Err(err) => {
                     last_error = err.to_string();
                     if attempt < attempts {
                         tracing::warn!(
-                            task_id = task.id,
+                            task_id,
                             attempt,
                             max_attempts = attempts,
                             "upload attempt failed, retrying"
@@ -152,9 +212,6 @@ impl TransferManager {
             }
         }
 
-        task.status = TransferStatus::Failed {
-            message: last_error.clone(),
-        };
         Err(TransferError::RetriesExhausted {
             attempts,
             message: last_error,
@@ -164,26 +221,22 @@ impl TransferManager {
     async fn run_download_with_retries(
         &self,
         session: &SshSession,
-        task: &mut TransferTask,
+        task_id: u64,
         remote_path: &str,
         local_path: &Path,
     ) -> Result<(), TransferError> {
-        task.status = TransferStatus::InProgress;
         let client = SftpClient::new(session);
         let attempts = self.retry_count.max(1);
         let mut last_error = String::from("unknown transfer error");
 
         for attempt in 1..=attempts {
             match client.download(remote_path, local_path).await {
-                Ok(()) => {
-                    task.status = TransferStatus::Completed;
-                    return Ok(());
-                }
+                Ok(()) => return Ok(()),
                 Err(err) => {
                     last_error = err.to_string();
                     if attempt < attempts {
                         tracing::warn!(
-                            task_id = task.id,
+                            task_id,
                             attempt,
                             max_attempts = attempts,
                             "download attempt failed, retrying"
@@ -193,9 +246,6 @@ impl TransferManager {
             }
         }
 
-        task.status = TransferStatus::Failed {
-            message: last_error.clone(),
-        };
         Err(TransferError::RetriesExhausted {
             attempts,
             message: last_error,
@@ -213,5 +263,110 @@ mod tests {
         assert_eq!(manager.next_id.load(Ordering::Relaxed), 1);
         assert_eq!(manager.next_id.fetch_add(1, Ordering::Relaxed), 1);
         assert_eq!(manager.next_id.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn insert_task_records_pending_status() {
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 1,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::Pending,
+        };
+
+        manager.insert_task(task);
+
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].status, TransferStatus::Pending);
+    }
+
+    #[test]
+    fn update_task_status_changes_recorded_task() {
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 42,
+            direction: TransferDirection::Download,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::Pending,
+        };
+
+        manager.insert_task(task);
+        manager.update_task_status(42, TransferStatus::InProgress);
+
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].status, TransferStatus::InProgress);
+    }
+
+    #[test]
+    fn cancel_pending_task_marks_cancelled() {
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 7,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::Pending,
+        };
+
+        manager.insert_task(task);
+        manager.cancel_transfer(7).unwrap();
+
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].status, TransferStatus::Cancelled);
+    }
+
+    #[test]
+    fn cancel_unknown_task_returns_not_found() {
+        let manager = TransferManager::new(&AppConfig::default());
+        let err = manager.cancel_transfer(999).unwrap_err();
+        assert!(matches!(err, TransferError::TaskNotFound { task_id: 999 }));
+    }
+
+    #[test]
+    fn cancel_in_progress_task_is_rejected() {
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 8,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::InProgress,
+        };
+
+        manager.insert_task(task);
+        let err = manager.cancel_transfer(8).unwrap_err();
+        assert!(matches!(err, TransferError::Cancelled));
+    }
+
+    #[test]
+    fn failed_status_is_persisted_in_queue() {
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 3,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::Pending,
+        };
+
+        manager.insert_task(task);
+        manager.update_task_status(
+            3,
+            TransferStatus::Failed {
+                message: "permission denied".to_string(),
+            },
+        );
+
+        let queue = manager.get_transfer_queue();
+        assert_eq!(
+            queue[0].status,
+            TransferStatus::Failed {
+                message: "permission denied".to_string(),
+            }
+        );
     }
 }

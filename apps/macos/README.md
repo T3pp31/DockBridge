@@ -19,6 +19,10 @@ From the repository root:
 
 This writes Swift bindings to `DockBridge/Generated/` and links `target/release/libdockbridge_uniffi.a`.
 
+### Generated artifacts policy
+
+Policy B (v0.1): commit `DockBridge/Generated/DockBridgeUniffi.swift` only. Do not commit headers, modulemaps, static libraries, or other generated files under `Generated/`.
+
 ## Run
 
 1. Build the Rust library (above).

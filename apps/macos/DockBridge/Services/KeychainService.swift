@@ -8,9 +8,13 @@ enum KeychainServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .encodingFailed:
-            "Failed to encode secret for Keychain storage."
+            return "Failed to encode secret for Keychain storage."
         case .unexpectedStatus(let status):
-            "Keychain operation failed with status \(status)."
+            if status >= 100_000, status < 200_000 {
+                let errno = status - 100_000
+                return "Keychain operation failed (errno \(errno)). Ensure the app is signed with your Development Team in Xcode (Signing & Capabilities), then rebuild."
+            }
+            return "Keychain operation failed with status \(status). Ensure the app is signed with your Development Team in Xcode, then rebuild."
         }
     }
 }
@@ -18,7 +22,15 @@ enum KeychainServiceError: LocalizedError {
 final class KeychainService: @unchecked Sendable {
     static let shared = KeychainService()
 
-    private let serviceName = "com.dockbridge"
+    private let serviceName: String
+
+    private init() {
+        self.serviceName = "com.dockbridge"
+    }
+
+    init(serviceName: String) {
+        self.serviceName = serviceName
+    }
 
     func savePassword(_ password: String, account: String) throws {
         try save(secret: password, account: account, kind: "password")
@@ -61,7 +73,7 @@ final class KeychainService: @unchecked Sendable {
 
         let attributes: [String: Any] = [
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
 
         let status = SecItemCopyMatching(query as CFDictionary, nil)

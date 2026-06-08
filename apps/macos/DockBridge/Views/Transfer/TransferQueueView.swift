@@ -38,7 +38,7 @@ struct TransferQueueView: View {
                         Text(statusLabel(for: task.status))
                     }
                     TableColumn("") { task in
-                        if case .inProgress = task.status {
+                        if case .pending = task.status {
                             Button("Cancel") {
                                 Task { await viewModel.cancel(task: task) }
                             }

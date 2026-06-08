@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use dockbridge_core::{
-    expand_tilde, ensure_known_hosts_parent, AppConfig, AuthType, ConnectionProfile,
-    HostKeyPrompt, KnownHostsManager, RemoteFile, SecretPassword, SftpClient, SshSession,
-    TransferDirection, TransferManager, TransferStatus, TransferTask,
+    ensure_known_hosts_parent, expand_tilde, AppConfig, AuthType, ConnectionProfile, HostKeyPrompt,
+    KnownHostsManager, RemoteFile, SecretPassword, SftpClient, SshSession, TransferDirection,
+    TransferManager, TransferStatus, TransferTask,
 };
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -40,7 +40,9 @@ pub struct AppConfigRecord {
 /// Authentication method for a connection profile.
 #[derive(uniffi::Enum)]
 pub enum AuthTypeRecord {
-    Password { password: String },
+    Password {
+        password: String,
+    },
     PrivateKey {
         key_path: String,
         passphrase: Option<String>,
@@ -149,27 +151,28 @@ pub struct DockBridgeClient {
 #[uniffi::export]
 impl DockBridgeClient {
     #[uniffi::constructor]
-    fn new(app_config: AppConfigRecord, host_key_handler: Box<dyn HostKeyHandler>) -> Arc<Self> {
+    fn new(
+        app_config: AppConfigRecord,
+        host_key_handler: Box<dyn HostKeyHandler>,
+    ) -> Result<Arc<Self>, DockBridgeError> {
         let known_hosts_path = expand_tilde(PathBuf::from(app_config.known_hosts_path).as_path());
-        let _ = ensure_known_hosts_parent(&known_hosts_path);
+        ensure_known_hosts_parent(&known_hosts_path).map_err(map_error)?;
         let config = AppConfig {
             connection_timeout_secs: app_config.connection_timeout_secs,
             transfer_retry_count: app_config.transfer_retry_count,
             known_hosts_path,
         };
-        let known_hosts = Arc::new(AsyncMutex::new(
-            KnownHostsManager::load(config.known_hosts_path())
-                .expect("failed to load known hosts store"),
-        ));
+        let known_hosts_manager =
+            KnownHostsManager::load(config.known_hosts_path()).map_err(map_error)?;
 
-        Arc::new(Self {
+        Ok(Arc::new(Self {
             transfer_manager: Arc::new(TransferManager::new(&config)),
             config,
-            known_hosts,
+            known_hosts: Arc::new(AsyncMutex::new(known_hosts_manager)),
             host_key_handler: Arc::from(host_key_handler),
             sessions: Arc::new(AsyncMutex::new(HashMap::new())),
             next_session_id: AtomicU64::new(1),
-        })
+        }))
     }
 
     fn connect(&self, profile: ConnectionProfileRecord) -> Result<u64, DockBridgeError> {
@@ -278,12 +281,7 @@ impl DockBridgeClient {
         Ok(())
     }
 
-    fn rename(
-        &self,
-        session_id: u64,
-        from: String,
-        to: String,
-    ) -> Result<(), DockBridgeError> {
+    fn rename(&self, session_id: u64, from: String, to: String) -> Result<(), DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
         block_on(async move {
             let sessions = sessions.lock().await;

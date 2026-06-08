@@ -11,7 +11,7 @@ struct ConnectionListView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(profile.displayName)
                         .font(.headline)
-                    Text("\(profile.username)@\(profile.host):\(profile.port)")
+                    Text(profile.endpointLabel)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

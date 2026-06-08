@@ -237,6 +237,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn load_missing_file_returns_empty_store() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("missing.json");
+
+        let manager = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            manager.check_host_key("localhost", 22, &test_public_key()),
+            HostKeyCheckResult::Unknown
+        );
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn load_empty_entries_array_succeeds() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        fs::write(&path, r#"{"entries":[]}"#).unwrap();
+
+        let manager = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            manager.check_host_key("localhost", 22, &test_public_key()),
+            HostKeyCheckResult::Unknown
+        );
+    }
+
+    #[test]
+    fn load_invalid_empty_object_returns_read_failed() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        fs::write(&path, "{}").unwrap();
+
+        let err = KnownHostsManager::load(&path).unwrap_err();
+        assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
+    }
+
     #[cfg(unix)]
     #[test]
     fn written_file_has_0600_permissions() {

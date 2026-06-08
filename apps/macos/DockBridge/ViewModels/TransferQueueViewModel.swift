@@ -36,7 +36,7 @@ final class TransferQueueViewModel: ObservableObject {
         do {
             tasks = try await bridge.fetchTransferTasks()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.dockBridgeUserMessage
         }
     }
 
@@ -45,7 +45,7 @@ final class TransferQueueViewModel: ObservableObject {
             try await bridge.cancelTransfer(taskId: task.id)
             await refresh()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.dockBridgeUserMessage
         }
     }
 }
