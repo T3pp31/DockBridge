@@ -16,8 +16,10 @@ SCP support may be considered after v1.0.
 # Rust workspace
 cargo build --release
 
-# CLI
+# CLI (development)
 cargo run -p dockbridge-cli -- list --help
+
+The CLI `--password` flag is for development and testing only. It may appear in shell history and process listings. Prefer `--password-stdin` for scripts.
 
 # Rust static lib + Swift bindings
 ./scripts/build-rust.sh

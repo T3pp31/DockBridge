@@ -4,24 +4,28 @@ final class HostKeyStore: @unchecked Sendable {
     static let shared = HostKeyStore()
 
     private let fileName = "known_hosts.json"
+    private let baseDirectory: URL
 
-    private init() {}
-
-    var knownHostsPath: URL {
-        DockBridgePaths.appSupportDirectory.appendingPathComponent(fileName, isDirectory: false)
+    private init() {
+        self.baseDirectory = DockBridgePaths.appSupportDirectory
     }
 
-    func ensureStoreExists() throws {
+    init(baseDirectory: URL) {
+        self.baseDirectory = baseDirectory
+    }
+
+    var knownHostsPath: URL {
+        baseDirectory.appendingPathComponent(fileName, isDirectory: false)
+    }
+
+    func ensureStoreDirectoryExists() throws {
         let path = knownHostsPath
         let parent = path.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
 
-        if !FileManager.default.fileExists(atPath: path.path) {
-            let emptyStore = Data("{}".utf8)
-            try emptyStore.write(to: path, options: .atomic)
+        if FileManager.default.fileExists(atPath: path.path) {
+            try setSecurePermissions(for: path)
         }
-
-        try setSecurePermissions(for: path)
     }
 
     func setSecurePermissions(for url: URL) throws {

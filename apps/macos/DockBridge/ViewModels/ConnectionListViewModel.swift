@@ -99,7 +99,7 @@ final class ConnectionListViewModel: ObservableObject {
             profiles = try store.upsert(updated)
             selectedProfileID = updated.id
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = error.dockBridgeUserMessage
         }
     }
 

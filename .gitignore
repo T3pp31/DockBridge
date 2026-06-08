@@ -1,9 +1,22 @@
+# Rust
 /target/
 target/test-known_hosts.json
-**/*.xcframework/
-**/Generated/
+
+# macOS
 .DS_Store
-*.xcuserstate
+__MACOSX/
+
+# Xcode user state
 xcuserdata/
+*.xcuserstate
 DerivedData/
 build/
+.build/
+
+# Generated UniFFI (policy B: commit Swift bindings only)
+**/*.xcframework/
+apps/macos/DockBridge/Generated/Headers/
+apps/macos/DockBridge/Generated/*.h
+apps/macos/DockBridge/Generated/*.modulemap
+apps/macos/DockBridge/Generated/*.a
+!apps/macos/DockBridge/Generated/DockBridgeUniffi.swift

@@ -31,6 +31,10 @@
 		C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2B8765D556D65748132CE54 /* ErrorAlert.swift */; };
 		B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB9667933C17755C399E575 /* TransferQueueView.swift */; };
 		4D3B078A85CF43E4F57F1AD1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9AED1666CA758F242828EB4F /* Assets.xcassets */; };
+		A1B2C3D4E5F60718293A4B5C /* RemotePath.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */; };
+		C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */; };
+		E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */; };
+		0718293A4B5C6D7E8F901234 /* KeychainServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -62,6 +66,11 @@
 		9AED1666CA758F242828EB4F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		22787F42C6257B4877799DC8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		4D3B24470D299F0C0DA4E563 /* DockBridge.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DockBridge.entitlements; sourceTree = "<group>"; };
+		B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePath.swift; sourceTree = "<group>"; };
+		D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePathTests.swift; sourceTree = "<group>"; };
+		F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyStoreTests.swift; sourceTree = "<group>"; };
+		18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceTests.swift; sourceTree = "<group>"; };
+		293A4B5C6D7E8F9012345678 /* DockBridgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DockBridgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -72,13 +81,31 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		3A4B5C6D7E8F901234567890 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXContainerItemProxy section */
+		4B5C6D7E8F90123456789012 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C80F8E547D6BF728599AA5EE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 01CAD85488C4961FCA9CA750;
+			remoteInfo = DockBridge;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXGroup section */
 		87CDDACCF177318DE5ECAA16 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				F36AE5D06E7F4A5182730282 /* DockBridge.app */,
+				293A4B5C6D7E8F9012345678 /* DockBridgeTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -158,6 +185,7 @@
 				ACD7B5DCE2F20029520D971B /* ConnectionProfile.swift */,
 				85A0E836BF343460B3DC13A2 /* LocalFileItem.swift */,
 				1E7FDBA4ECAABE2550A535FE /* UniFFIExtensions.swift */,
+				B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -221,10 +249,21 @@
 			path = DockBridge;
 			sourceTree = "<group>";
 		};
+		5C6D7E8F9012345678901234 /* DockBridgeTests */ = {
+			isa = PBXGroup;
+			children = (
+				D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */,
+				F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */,
+				18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */,
+			);
+			path = DockBridgeTests;
+			sourceTree = "<group>";
+		};
 		DE99CDF01B2999AFA1EC9582 = {
 			isa = PBXGroup;
 			children = (
 				BAB49F2A1F033AE85B7E9D10 /* DockBridge */,
+				5C6D7E8F9012345678901234 /* DockBridgeTests */,
 				87CDDACCF177318DE5ECAA16 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -250,6 +289,23 @@
 			productReference = F36AE5D06E7F4A5182730282 /* DockBridge.app */;
 			productType = "com.apple.product-type.application";
 		};
+		6D7E8F901234567890123456 /* DockBridgeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7E8F90123456789012345678 /* Build configuration list for PBXNativeTarget "DockBridgeTests" */;
+			buildPhases = (
+				8F9012345678901234567890 /* Sources */,
+				3A4B5C6D7E8F901234567890 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				901234567890123456789012 /* PBXTargetDependency */,
+			);
+			name = DockBridgeTests;
+			productName = DockBridgeTests;
+			productReference = 293A4B5C6D7E8F9012345678 /* DockBridgeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -274,6 +330,7 @@
 			projectRoot = "";
 			targets = (
 				01CAD85488C4961FCA9CA750 /* DockBridge */,
+				6D7E8F901234567890123456 /* DockBridgeTests */,
 			);
 		};
 /* End PBXProject section */
@@ -338,10 +395,29 @@
 				629A59E59C65594C7998652C /* SettingsView.swift in Sources */,
 				C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */,
 				B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* RemotePath.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8F9012345678901234567890 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */,
+				E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */,
+				0718293A4B5C6D7E8F901234 /* KeychainServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		901234567890123456789012 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 01CAD85488C4961FCA9CA750 /* DockBridge */;
+			targetProxy = 4B5C6D7E8F90123456789012 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		C49E773A4DBE96BEB0DD965D /* Debug */ = {
@@ -494,6 +570,46 @@
 			};
 			name = Release;
 		};
+		A123456789012345678901234 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = X2DPB5PSDT;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.dockbridge.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.10;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DockBridge.app/Contents/MacOS/DockBridge";
+			};
+			name = Debug;
+		};
+		B234567890123456789012345 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = X2DPB5PSDT;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.dockbridge.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 5.10;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/DockBridge.app/Contents/MacOS/DockBridge";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -511,6 +627,15 @@
 			buildConfigurations = (
 				192A95BAE54A36AA0E570AD5 /* Debug */,
 				7EEA95CB99DCC50E0CA58A5B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7E8F90123456789012345678 /* Build configuration list for PBXNativeTarget "DockBridgeTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A123456789012345678901234 /* Debug */,
+				B234567890123456789012345 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
