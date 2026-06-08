@@ -13,31 +13,41 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
         self.url = url
         self.name = url.lastPathComponent
 
-        var isDir: ObjCBool = false
-        FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-        self.isDirectory = isDir.boolValue
-
         let values = try? url.resourceValues(forKeys: [
+            .isDirectoryKey,
             .fileSizeKey,
             .contentModificationDateKey,
         ])
+        self.isDirectory = values?.isDirectory ?? false
         self.size = Int64(values?.fileSize ?? 0)
         self.modificationDate = values?.contentModificationDate
+    }
+
+    init(url: URL, resourceValues values: URLResourceValues) {
+        self.url = url
+        self.name = url.lastPathComponent
+        self.isDirectory = values.isDirectory ?? false
+        self.size = Int64(values.fileSize ?? 0)
+        self.modificationDate = values.contentModificationDate
     }
 
     static func list(
         directory: URL,
         showHiddenFiles: Bool
     ) throws -> [LocalFileItem] {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
         let urls = try FileManager.default.contentsOfDirectory(
             at: directory,
-            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey],
+            includingPropertiesForKeys: Array(keys),
             options: showHiddenFiles ? [] : [.skipsHiddenFiles]
         )
 
-        return urls
-            .map(LocalFileItem.init(url:))
-            .sorted { lhs, rhs in
+        let items = try urls.map { url -> LocalFileItem in
+            let values = try url.resourceValues(forKeys: keys)
+            return LocalFileItem(url: url, resourceValues: values)
+        }
+
+        return items.sorted { lhs, rhs in
                 if lhs.isDirectory != rhs.isDirectory {
                     return lhs.isDirectory && !rhs.isDirectory
                 }

@@ -6,6 +6,11 @@ use tokio::io::AsyncWriteExt;
 use crate::error::SftpError;
 use crate::ssh::session::SshSession;
 
+use super::tree::{
+    is_local_directory, join_remote_path, local_entry_name, normalize_remote_path,
+    walk_local_directory, walk_remote_directory,
+};
+
 /// Metadata for a remote file or directory entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteFile {
@@ -152,5 +157,144 @@ impl<'a> SftpClient<'a> {
                 path: remote_path.to_string(),
                 message: err.to_string(),
             })
+    }
+
+    /// Creates a remote directory and any missing parent directories.
+    pub async fn create_directory_all(&self, remote_path: &str) -> Result<(), SftpError> {
+        let normalized = normalize_remote_path(remote_path);
+        if normalized == "/" {
+            return Ok(());
+        }
+
+        let trimmed = normalized.trim_start_matches('/');
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+
+        let mut current = String::from("/");
+        for segment in trimmed.split('/') {
+            if segment.is_empty() {
+                continue;
+            }
+            current = join_remote_path(&current, Path::new(segment));
+            let _ = self.create_directory(&current).await;
+        }
+
+        Ok(())
+    }
+
+    /// Uploads a local file or directory tree into a remote directory.
+    pub async fn upload_entry(
+        &self,
+        local_path: &Path,
+        remote_directory: &str,
+    ) -> Result<(), SftpError> {
+        if is_local_directory(local_path).await? {
+            let directory_name = local_entry_name(local_path);
+            let remote_root = join_remote_path(remote_directory, Path::new(&directory_name));
+            self.create_directory_all(&remote_root).await?;
+
+            let files = walk_local_directory(local_path).await?;
+            for entry in files {
+                let remote_path = join_remote_path(&remote_root, &entry.relative_path);
+                if let Some(parent) = parent_remote_path(&remote_path) {
+                    self.create_directory_all(&parent).await?;
+                }
+                self.upload(&entry.local_path, &remote_path).await?;
+            }
+            return Ok(());
+        }
+
+        let remote_path = join_remote_path(remote_directory, Path::new(&local_entry_name(local_path)));
+        if let Some(parent) = parent_remote_path(&remote_path) {
+            self.create_directory_all(&parent).await?;
+        }
+        self.upload(local_path, &remote_path).await
+    }
+
+    /// Downloads a remote file or directory tree into a local directory.
+    pub async fn download_entry(
+        &self,
+        remote_path: &str,
+        local_directory: &Path,
+    ) -> Result<(), SftpError> {
+        let normalized = normalize_remote_path(remote_path);
+        match self.list_directory(&normalized).await {
+            Ok(entries) => {
+                let directory_name = normalized
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("download");
+                let local_root = local_directory.join(directory_name);
+                tokio::fs::create_dir_all(&local_root).await.map_err(|err| {
+                    SftpError::DownloadFailed {
+                        remote: normalized.clone(),
+                        local: local_root.display().to_string(),
+                        message: err.to_string(),
+                    }
+                })?;
+
+                if entries.is_empty() {
+                    return Ok(());
+                }
+
+                let files = walk_remote_directory(self, &normalized).await?;
+                for entry in files {
+                    let local_path = local_root.join(&entry.relative_path);
+                    if let Some(parent) = local_path.parent() {
+                        tokio::fs::create_dir_all(parent).await.map_err(|err| {
+                            SftpError::DownloadFailed {
+                                remote: entry.remote_path.clone(),
+                                local: local_path.display().to_string(),
+                                message: err.to_string(),
+                            }
+                        })?;
+                    }
+                    self.download(&entry.remote_path, &local_path).await?;
+                }
+                Ok(())
+            }
+            Err(_) => {
+                let file_name = normalized
+                    .rsplit('/')
+                    .next()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("download");
+                let local_path = local_directory.join(file_name);
+                self.download(&normalized, &local_path).await
+            }
+        }
+    }
+}
+
+fn parent_remote_path(remote_path: &str) -> Option<String> {
+    let normalized = normalize_remote_path(remote_path);
+    if normalized == "/" {
+        return None;
+    }
+
+    let trimmed = normalized.trim_end_matches('/');
+    let parent = trimmed.rsplit_once('/')?.0;
+    if parent.is_empty() {
+        Some("/".to_string())
+    } else {
+        Some(parent.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parent_remote_path;
+
+    #[test]
+    fn parent_remote_path_returns_parent_directory() {
+        assert_eq!(
+            parent_remote_path("/remote/dir/file.txt").as_deref(),
+            Some("/remote/dir")
+        );
+        assert_eq!(parent_remote_path("/file.txt").as_deref(), Some("/"));
+        assert_eq!(parent_remote_path("/"), None);
     }
 }

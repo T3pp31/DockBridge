@@ -3,8 +3,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::config::AppConfig;
-use crate::error::TransferError;
-use crate::sftp::SftpClient;
+use crate::error::{SftpError, TransferError};
+use crate::sftp::{
+    is_local_directory, join_remote_path, local_entry_name, normalize_remote_path,
+    walk_local_directory, walk_remote_directory, SftpClient,
+};
 use crate::ssh::SshSession;
 
 /// Direction of a file transfer task.
@@ -184,6 +187,126 @@ impl TransferManager {
         Ok(self.find_task(task.id).unwrap_or(task))
     }
 
+    /// Enqueues and executes upload tasks for a local file or directory tree.
+    pub async fn enqueue_upload_entry(
+        &self,
+        session: &SshSession,
+        local_path: impl AsRef<std::path::Path>,
+        remote_directory: impl Into<String>,
+    ) -> Result<Vec<TransferTask>, TransferError> {
+        let local_path = local_path.as_ref();
+        let remote_directory = remote_directory.into();
+        let client = SftpClient::new(session);
+
+        if is_local_directory(local_path)
+            .await
+            .map_err(transfer_error_from_sftp)?
+        {
+            let directory_name = local_entry_name(local_path);
+            let remote_root = join_remote_path(&remote_directory, std::path::Path::new(&directory_name));
+            client
+                .create_directory_all(&remote_root)
+                .await
+                .map_err(transfer_error_from_sftp)?;
+
+            let files = walk_local_directory(local_path)
+                .await
+                .map_err(transfer_error_from_sftp)?;
+            let mut tasks = Vec::with_capacity(files.len());
+            for entry in files {
+                let remote_path = join_remote_path(&remote_root, &entry.relative_path);
+                if let Some(parent) = parent_remote_path(&remote_path) {
+                    client
+                        .create_directory_all(&parent)
+                        .await
+                        .map_err(transfer_error_from_sftp)?;
+                }
+                let task = self
+                    .enqueue_upload(session, &entry.local_path, remote_path)
+                    .await?;
+                tasks.push(task);
+            }
+            return Ok(tasks);
+        }
+
+        let remote_path = join_remote_path(
+            &remote_directory,
+            std::path::Path::new(&local_entry_name(local_path)),
+        );
+        if let Some(parent) = parent_remote_path(&remote_path) {
+            client
+                .create_directory_all(&parent)
+                .await
+                .map_err(transfer_error_from_sftp)?;
+        }
+        let task = self
+            .enqueue_upload(session, local_path, remote_path)
+            .await?;
+        Ok(vec![task])
+    }
+
+    /// Enqueues and executes download tasks for a remote file or directory tree.
+    pub async fn enqueue_download_entry(
+        &self,
+        session: &SshSession,
+        remote_path: impl Into<String>,
+        local_directory: impl AsRef<std::path::Path>,
+    ) -> Result<Vec<TransferTask>, TransferError> {
+        let remote_path = remote_path.into();
+        let local_directory = local_directory.as_ref();
+        let normalized = normalize_remote_path(&remote_path);
+        let client = SftpClient::new(session);
+
+        match client.list_directory(&normalized).await {
+            Ok(entries) => {
+                let directory_name = normalized
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("download");
+                let local_root = local_directory.join(directory_name);
+                tokio::fs::create_dir_all(&local_root)
+                    .await
+                    .map_err(|err| transfer_error_from_message(err.to_string()))?;
+
+                if entries.is_empty() {
+                    return Ok(Vec::new());
+                }
+
+                let files = walk_remote_directory(&client, &normalized)
+                    .await
+                    .map_err(transfer_error_from_sftp)?;
+                let mut tasks = Vec::with_capacity(files.len());
+                for entry in files {
+                    let local_path = local_root.join(&entry.relative_path);
+                    if let Some(parent) = local_path.parent() {
+                        tokio::fs::create_dir_all(parent)
+                            .await
+                            .map_err(|err| transfer_error_from_message(err.to_string()))?;
+                    }
+                    let task = self
+                        .enqueue_download(session, &entry.remote_path, &local_path)
+                        .await?;
+                    tasks.push(task);
+                }
+                Ok(tasks)
+            }
+            Err(_) => {
+                let file_name = normalized
+                    .rsplit('/')
+                    .next()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or("download");
+                let local_path = local_directory.join(file_name);
+                let task = self
+                    .enqueue_download(session, &normalized, &local_path)
+                    .await?;
+                Ok(vec![task])
+            }
+        }
+    }
+
     async fn run_upload_with_retries(
         &self,
         session: &SshSession,
@@ -250,6 +373,35 @@ impl TransferManager {
             attempts,
             message: last_error,
         })
+    }
+}
+
+fn parent_remote_path(remote_path: &str) -> Option<String> {
+    let normalized = normalize_remote_path(remote_path);
+    if normalized == "/" {
+        return None;
+    }
+
+    let trimmed = normalized.trim_end_matches('/');
+    let parent = trimmed.rsplit_once('/')?.0;
+    if parent.is_empty() {
+        Some("/".to_string())
+    } else {
+        Some(parent.to_string())
+    }
+}
+
+fn transfer_error_from_sftp(error: SftpError) -> TransferError {
+    TransferError::RetriesExhausted {
+        attempts: 1,
+        message: error.to_string(),
+    }
+}
+
+fn transfer_error_from_message(message: String) -> TransferError {
+    TransferError::RetriesExhausted {
+        attempts: 1,
+        message,
     }
 }
 

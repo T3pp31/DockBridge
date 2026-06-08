@@ -36,6 +36,11 @@
 		E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */; };
 		0718293A4B5C6D7E8F901234 /* KeychainServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */; };
 		2A3B4C5D6E7F8091A2B3C4D5 /* KnownHostsErrorMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B4C5D6E7F8091A2B3C4D5E6 /* KnownHostsErrorMessageTests.swift */; };
+		F1D2R3A4G5P6A7Y8L9O0A1D2 /* FileDragPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2R3A4G5P6A7Y8L9O0A1D3 /* FileDragPayload.swift */; };
+		F1D2R3O4P5V6A7L8I9D0A1T2I3 /* FileDropValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2R3O4P5V6A7L8I9D0A1T2I4 /* FileDropValidation.swift */; };
+		F1D2R3O4P5E6R7R8O9R0A1B2C3 /* FileDropError.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2R3O4P5E6R7R8O9R0A1B2C4 /* FileDropError.swift */; };
+		F1I2L3E4D5R6O7P8M9O0D1I2F3 /* FileDropModifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */; };
+		F1D2R3O4P5V6A7L8I9D0T1E2S3T4 /* FileDropValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -73,6 +78,11 @@
 		18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceTests.swift; sourceTree = "<group>"; };
 		3B4C5D6E7F8091A2B3C4D5E6 /* KnownHostsErrorMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnownHostsErrorMessageTests.swift; sourceTree = "<group>"; };
 		293A4B5C6D7E8F9012345678 /* DockBridgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DockBridgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F1D2R3A4G5P6A7Y8L9O0A1D3 /* FileDragPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDragPayload.swift; sourceTree = "<group>"; };
+		F1D2R3O4P5V6A7L8I9D0A1T2I4 /* FileDropValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropValidation.swift; sourceTree = "<group>"; };
+		F1D2R3O4P5E6R7R8O9R0A1B2C4 /* FileDropError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropError.swift; sourceTree = "<group>"; };
+		F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropModifiers.swift; sourceTree = "<group>"; };
+		F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropValidationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -124,6 +134,7 @@
 		C7BC360528F9E33D34270AA4 /* Main */ = {
 			isa = PBXGroup;
 			children = (
+				F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */,
 				B82BEACF7A445BC9ED50F71A /* LocalPaneView.swift */,
 				116D1D17B76FB470390330BC /* MainView.swift */,
 				E1A2E6F8AA6C510156A8DABD /* RemotePaneView.swift */,
@@ -185,6 +196,9 @@
 				09932BA46F7FE81DAD83C80A /* AppConfig.swift */,
 				F3EA1C873F6BA2EA52B40161 /* AuthType.swift */,
 				ACD7B5DCE2F20029520D971B /* ConnectionProfile.swift */,
+				F1D2R3O4P5E6R7R8O9R0A1B2C4 /* FileDropError.swift */,
+				F1D2R3O4P5V6A7L8I9D0A1T2I4 /* FileDropValidation.swift */,
+				F1D2R3A4G5P6A7Y8L9O0A1D3 /* FileDragPayload.swift */,
 				85A0E836BF343460B3DC13A2 /* LocalFileItem.swift */,
 				1E7FDBA4ECAABE2550A535FE /* UniFFIExtensions.swift */,
 				B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */,
@@ -254,6 +268,7 @@
 		5C6D7E8F9012345678901234 /* DockBridgeTests */ = {
 			isa = PBXGroup;
 			children = (
+				F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */,
 				D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */,
 				F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */,
 				18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */,
@@ -417,6 +432,10 @@
 				C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */,
 				B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* RemotePath.swift in Sources */,
+				F1D2R3O4P5E6R7R8O9R0A1B2C3 /* FileDropError.swift in Sources */,
+				F1D2R3O4P5V6A7L8I9D0A1T2I3 /* FileDropValidation.swift in Sources */,
+				F1D2R3A4G5P6A7Y8L9O0A1D2 /* FileDragPayload.swift in Sources */,
+				F1I2L3E4D5R6O7P8M9O0D1I2F3 /* FileDropModifiers.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -424,6 +443,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F1D2R3O4P5V6A7L8I9D0T1E2S3T4 /* FileDropValidationTests.swift in Sources */,
 				C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */,
 				E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */,
 				0718293A4B5C6D7E8F901234 /* KeychainServiceTests.swift in Sources */,

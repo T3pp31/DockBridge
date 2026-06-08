@@ -62,16 +62,24 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
         }
     }
 
-    func upload(localPath: String, remotePath: String) async throws {
+    func upload(localPath: String, remoteDirectory: String) async throws {
         try await runOnBridge { client, sessionId in
-            try client.upload(sessionId: sessionId, localPath: localPath, remotePath: remotePath)
+            try client.uploadEntry(
+                sessionId: sessionId,
+                localPath: localPath,
+                remoteDirectory: remoteDirectory
+            )
         }
         await refreshTransferQueue()
     }
 
-    func download(remotePath: String, localPath: String) async throws {
+    func download(remotePath: String, localDirectory: String) async throws {
         try await runOnBridge { client, sessionId in
-            try client.download(sessionId: sessionId, remotePath: remotePath, localPath: localPath)
+            try client.downloadEntry(
+                sessionId: sessionId,
+                remotePath: remotePath,
+                localDirectory: localDirectory
+            )
         }
         await refreshTransferQueue()
     }
@@ -143,15 +151,6 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
 
     private func refreshTransferQueue() async {
         _ = try? await fetchTransferTasks()
-    }
-
-    private func runOnBridge(
-        _ operation: @escaping @Sendable (DockBridgeClient, UInt64) throws -> Void
-    ) async throws {
-        try await runOnBridge { client, sessionId -> Void in
-            try operation(client, sessionId)
-            return ()
-        }
     }
 
     private func runOnBridge<T: Sendable>(
