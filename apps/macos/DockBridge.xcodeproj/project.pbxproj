@@ -1,0 +1,521 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		17F6636920AF829C015253C3 /* DockBridgeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EE262613766A1275ED11960 /* DockBridgeApp.swift */; };
+		781B711789B9DB6630834C56 /* DockBridgeUniffi.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CABD5AF970617760D8FA6B3 /* DockBridgeUniffi.swift */; };
+		8BDFD143D7160A697BC046C3 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09932BA46F7FE81DAD83C80A /* AppConfig.swift */; };
+		47B65A6DC688402703026ABF /* AuthType.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3EA1C873F6BA2EA52B40161 /* AuthType.swift */; };
+		6D87A264B141B29EB44D1F64 /* ConnectionProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACD7B5DCE2F20029520D971B /* ConnectionProfile.swift */; };
+		A84F06720E0FA6B9EFAC86A9 /* LocalFileItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85A0E836BF343460B3DC13A2 /* LocalFileItem.swift */; };
+		DEAAB69B962239B2FF2B68B5 /* UniFFIExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E7FDBA4ECAABE2550A535FE /* UniFFIExtensions.swift */; };
+		6B586B55FA53102F7DF8BEFE /* AppSettingsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBE43F47539AA08723B7C33A /* AppSettingsService.swift */; };
+		E343B62539FDD93851A20646 /* ConnectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA9B9731537045170D199A2B /* ConnectionStore.swift */; };
+		EBE6C0D78C1B9D2DFB9E66B6 /* HostKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */; };
+		6B644EEA7799402A90D59AAA /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */; };
+		14A839F4D61A1075B5ACF82D /* RustBridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */; };
+		9207DDB127B46575474EC6F5 /* ConnectionListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00EBFBF60D5CB33F46A53DF /* ConnectionListViewModel.swift */; };
+		67E6AD45895AF44CA96D83BB /* MainViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C973CCD1AFF29E5BC535CC /* MainViewModel.swift */; };
+		5061A717EBE8AB1160ED99D1 /* TransferQueueViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD683D1BCC635FB229692D63 /* TransferQueueViewModel.swift */; };
+		E4EF5F2D30150DB88A95D17E /* ConnectionFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B662D1D9B28F3ED6B42DE7F6 /* ConnectionFormView.swift */; };
+		8DF8897F5DCB796CC1AA4A0F /* ConnectionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACFD402808165BB5530BCC09 /* ConnectionListView.swift */; };
+		AEEC8329F755346C8087472D /* LocalPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B82BEACF7A445BC9ED50F71A /* LocalPaneView.swift */; };
+		1855FA75811F909D6558F748 /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116D1D17B76FB470390330BC /* MainView.swift */; };
+		59E97F8DE7D811CC4EA1A6B0 /* RemotePaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A2E6F8AA6C510156A8DABD /* RemotePaneView.swift */; };
+		4F485BCC460E809CBC369F6D /* HostKeyConfirmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCE9B37ED92AB8C2C21CC1E /* HostKeyConfirmView.swift */; };
+		629A59E59C65594C7998652C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 072538B66BFEE10642314E67 /* SettingsView.swift */; };
+		C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2B8765D556D65748132CE54 /* ErrorAlert.swift */; };
+		B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB9667933C17755C399E575 /* TransferQueueView.swift */; };
+		4D3B078A85CF43E4F57F1AD1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9AED1666CA758F242828EB4F /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		F36AE5D06E7F4A5182730282 /* DockBridge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DockBridge.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		2EE262613766A1275ED11960 /* DockBridgeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockBridgeApp.swift; sourceTree = "<group>"; };
+		6CABD5AF970617760D8FA6B3 /* DockBridgeUniffi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockBridgeUniffi.swift; sourceTree = "<group>"; };
+		09932BA46F7FE81DAD83C80A /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
+		F3EA1C873F6BA2EA52B40161 /* AuthType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthType.swift; sourceTree = "<group>"; };
+		ACD7B5DCE2F20029520D971B /* ConnectionProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionProfile.swift; sourceTree = "<group>"; };
+		85A0E836BF343460B3DC13A2 /* LocalFileItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalFileItem.swift; sourceTree = "<group>"; };
+		1E7FDBA4ECAABE2550A535FE /* UniFFIExtensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UniFFIExtensions.swift; sourceTree = "<group>"; };
+		DBE43F47539AA08723B7C33A /* AppSettingsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsService.swift; sourceTree = "<group>"; };
+		AA9B9731537045170D199A2B /* ConnectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStore.swift; sourceTree = "<group>"; };
+		FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyStore.swift; sourceTree = "<group>"; };
+		6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
+		5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridgeService.swift; sourceTree = "<group>"; };
+		D00EBFBF60D5CB33F46A53DF /* ConnectionListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionListViewModel.swift; sourceTree = "<group>"; };
+		29C973CCD1AFF29E5BC535CC /* MainViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewModel.swift; sourceTree = "<group>"; };
+		CD683D1BCC635FB229692D63 /* TransferQueueViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferQueueViewModel.swift; sourceTree = "<group>"; };
+		B662D1D9B28F3ED6B42DE7F6 /* ConnectionFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionFormView.swift; sourceTree = "<group>"; };
+		ACFD402808165BB5530BCC09 /* ConnectionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionListView.swift; sourceTree = "<group>"; };
+		B82BEACF7A445BC9ED50F71A /* LocalPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPaneView.swift; sourceTree = "<group>"; };
+		116D1D17B76FB470390330BC /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
+		E1A2E6F8AA6C510156A8DABD /* RemotePaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePaneView.swift; sourceTree = "<group>"; };
+		FFCE9B37ED92AB8C2C21CC1E /* HostKeyConfirmView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyConfirmView.swift; sourceTree = "<group>"; };
+		072538B66BFEE10642314E67 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		D2B8765D556D65748132CE54 /* ErrorAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorAlert.swift; sourceTree = "<group>"; };
+		BBB9667933C17755C399E575 /* TransferQueueView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferQueueView.swift; sourceTree = "<group>"; };
+		9AED1666CA758F242828EB4F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		22787F42C6257B4877799DC8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		4D3B24470D299F0C0DA4E563 /* DockBridge.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DockBridge.entitlements; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		EA974F75FF97A3F5DEE6C4BE /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		87CDDACCF177318DE5ECAA16 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F36AE5D06E7F4A5182730282 /* DockBridge.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		8D83B1316352364FF005E54E /* Connection */ = {
+			isa = PBXGroup;
+			children = (
+				B662D1D9B28F3ED6B42DE7F6 /* ConnectionFormView.swift */,
+				ACFD402808165BB5530BCC09 /* ConnectionListView.swift */,
+			);
+			path = Connection;
+			sourceTree = "<group>";
+		};
+		C7BC360528F9E33D34270AA4 /* Main */ = {
+			isa = PBXGroup;
+			children = (
+				B82BEACF7A445BC9ED50F71A /* LocalPaneView.swift */,
+				116D1D17B76FB470390330BC /* MainView.swift */,
+				E1A2E6F8AA6C510156A8DABD /* RemotePaneView.swift */,
+			);
+			path = Main;
+			sourceTree = "<group>";
+		};
+		F893CF1118C6E52535C24466 /* Security */ = {
+			isa = PBXGroup;
+			children = (
+				FFCE9B37ED92AB8C2C21CC1E /* HostKeyConfirmView.swift */,
+			);
+			path = Security;
+			sourceTree = "<group>";
+		};
+		CDB38CFA6CE21FAC5EDA57F2 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				072538B66BFEE10642314E67 /* SettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		141E446FF2C7A61E13702B31 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				D2B8765D556D65748132CE54 /* ErrorAlert.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		C887E6561EC056DAA19FA858 /* Transfer */ = {
+			isa = PBXGroup;
+			children = (
+				BBB9667933C17755C399E575 /* TransferQueueView.swift */,
+			);
+			path = Transfer;
+			sourceTree = "<group>";
+		};
+		64B7118BB78101A16549F2E0 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				2EE262613766A1275ED11960 /* DockBridgeApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		F42A07F6A8CAB9C91AA22A75 /* Generated */ = {
+			isa = PBXGroup;
+			children = (
+				6CABD5AF970617760D8FA6B3 /* DockBridgeUniffi.swift */,
+			);
+			path = Generated;
+			sourceTree = "<group>";
+		};
+		3D36BF4FEDAE3131C117398E /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				09932BA46F7FE81DAD83C80A /* AppConfig.swift */,
+				F3EA1C873F6BA2EA52B40161 /* AuthType.swift */,
+				ACD7B5DCE2F20029520D971B /* ConnectionProfile.swift */,
+				85A0E836BF343460B3DC13A2 /* LocalFileItem.swift */,
+				1E7FDBA4ECAABE2550A535FE /* UniFFIExtensions.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		E91B28D0DE8A916C703786B0 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				9AED1666CA758F242828EB4F /* Assets.xcassets */,
+				4D3B24470D299F0C0DA4E563 /* DockBridge.entitlements */,
+				22787F42C6257B4877799DC8 /* Info.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		891E99F91B872FF72792D70B /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				DBE43F47539AA08723B7C33A /* AppSettingsService.swift */,
+				AA9B9731537045170D199A2B /* ConnectionStore.swift */,
+				FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */,
+				6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */,
+				5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		9191B6D823CD022BDDC5A6F5 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				D00EBFBF60D5CB33F46A53DF /* ConnectionListViewModel.swift */,
+				29C973CCD1AFF29E5BC535CC /* MainViewModel.swift */,
+				CD683D1BCC635FB229692D63 /* TransferQueueViewModel.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		9433695122BE5DE72F13526A /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				8D83B1316352364FF005E54E /* Connection */,
+				C7BC360528F9E33D34270AA4 /* Main */,
+				F893CF1118C6E52535C24466 /* Security */,
+				CDB38CFA6CE21FAC5EDA57F2 /* Settings */,
+				141E446FF2C7A61E13702B31 /* Shared */,
+				C887E6561EC056DAA19FA858 /* Transfer */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		BAB49F2A1F033AE85B7E9D10 /* DockBridge */ = {
+			isa = PBXGroup;
+			children = (
+				64B7118BB78101A16549F2E0 /* App */,
+				F42A07F6A8CAB9C91AA22A75 /* Generated */,
+				3D36BF4FEDAE3131C117398E /* Models */,
+				E91B28D0DE8A916C703786B0 /* Resources */,
+				891E99F91B872FF72792D70B /* Services */,
+				9191B6D823CD022BDDC5A6F5 /* ViewModels */,
+				9433695122BE5DE72F13526A /* Views */,
+			);
+			path = DockBridge;
+			sourceTree = "<group>";
+		};
+		DE99CDF01B2999AFA1EC9582 = {
+			isa = PBXGroup;
+			children = (
+				BAB49F2A1F033AE85B7E9D10 /* DockBridge */,
+				87CDDACCF177318DE5ECAA16 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		01CAD85488C4961FCA9CA750 /* DockBridge */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 997FA1398B0E9DF976ECCB47 /* Build configuration list for PBXNativeTarget "DockBridge" */;
+			buildPhases = (
+				2BD1AD603817D01FD437513F /* Generate UniFFI Bindings */,
+				FBA3DE38A25B6160C8CF03A1 /* Sources */,
+				EA974F75FF97A3F5DEE6C4BE /* Frameworks */,
+				ED809E2469EA48300F1D1F35 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = DockBridge;
+			productName = DockBridge;
+			productReference = F36AE5D06E7F4A5182730282 /* DockBridge.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C80F8E547D6BF728599AA5EE /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+			};
+			buildConfigurationList = 6019C0614AA3ED3012D948F0 /* Build configuration list for PBXProject "DockBridge" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = DE99CDF01B2999AFA1EC9582;
+			productRefGroup = 87CDDACCF177318DE5ECAA16 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				01CAD85488C4961FCA9CA750 /* DockBridge */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		ED809E2469EA48300F1D1F35 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4D3B078A85CF43E4F57F1AD1 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		2BD1AD603817D01FD437513F /* Generate UniFFI Bindings */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Generate UniFFI Bindings";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			shellScript = "set -euo pipefail\nROOT=\"${SRCROOT}/../..\"\nif [[ -x \"${ROOT}/scripts/generate-uniffi.sh\" ]]; then\n  \"${ROOT}/scripts/generate-uniffi.sh\" || true\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		FBA3DE38A25B6160C8CF03A1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				17F6636920AF829C015253C3 /* DockBridgeApp.swift in Sources */,
+				781B711789B9DB6630834C56 /* DockBridgeUniffi.swift in Sources */,
+				8BDFD143D7160A697BC046C3 /* AppConfig.swift in Sources */,
+				47B65A6DC688402703026ABF /* AuthType.swift in Sources */,
+				6D87A264B141B29EB44D1F64 /* ConnectionProfile.swift in Sources */,
+				A84F06720E0FA6B9EFAC86A9 /* LocalFileItem.swift in Sources */,
+				DEAAB69B962239B2FF2B68B5 /* UniFFIExtensions.swift in Sources */,
+				6B586B55FA53102F7DF8BEFE /* AppSettingsService.swift in Sources */,
+				E343B62539FDD93851A20646 /* ConnectionStore.swift in Sources */,
+				EBE6C0D78C1B9D2DFB9E66B6 /* HostKeyStore.swift in Sources */,
+				6B644EEA7799402A90D59AAA /* KeychainService.swift in Sources */,
+				14A839F4D61A1075B5ACF82D /* RustBridgeService.swift in Sources */,
+				9207DDB127B46575474EC6F5 /* ConnectionListViewModel.swift in Sources */,
+				67E6AD45895AF44CA96D83BB /* MainViewModel.swift in Sources */,
+				5061A717EBE8AB1160ED99D1 /* TransferQueueViewModel.swift in Sources */,
+				E4EF5F2D30150DB88A95D17E /* ConnectionFormView.swift in Sources */,
+				8DF8897F5DCB796CC1AA4A0F /* ConnectionListView.swift in Sources */,
+				AEEC8329F755346C8087472D /* LocalPaneView.swift in Sources */,
+				1855FA75811F909D6558F748 /* MainView.swift in Sources */,
+				59E97F8DE7D811CC4EA1A6B0 /* RemotePaneView.swift in Sources */,
+				4F485BCC460E809CBC369F6D /* HostKeyConfirmView.swift in Sources */,
+				629A59E59C65594C7998652C /* SettingsView.swift in Sources */,
+				C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */,
+				B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		C49E773A4DBE96BEB0DD965D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = "NO";
+				CLANG_ENABLE_MODULES = "YES";
+				CLANG_ENABLE_OBJC_ARC = "YES";
+				COPY_PHASE_STRIP = "NO";
+				DEBUG_INFORMATION_FORMAT = "dwarf";
+				ENABLE_STRICT_OBJC_MSGSEND = "YES";
+				ENABLE_TESTABILITY = "YES";
+				GCC_DYNAMIC_NO_PIC = "NO";
+				GCC_OPTIMIZATION_LEVEL = "0";
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = "15.0";
+				MTL_ENABLE_DEBUG_INFO = "INCLUDE_SOURCE";
+				ONLY_ACTIVE_ARCH = "YES";
+				SDKROOT = "macosx";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = "5.10";
+			};
+			name = Debug;
+		};
+		9837B9C31DB3FF2E41287685 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = "NO";
+				CLANG_ENABLE_MODULES = "YES";
+				CLANG_ENABLE_OBJC_ARC = "YES";
+				COPY_PHASE_STRIP = "NO";
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = "NO";
+				ENABLE_STRICT_OBJC_MSGSEND = "YES";
+				MACOSX_DEPLOYMENT_TARGET = "15.0";
+				MTL_ENABLE_DEBUG_INFO = "NO";
+				SDKROOT = "macosx";
+				SWIFT_COMPILATION_MODE = "wholemodule";
+				SWIFT_VERSION = "5.10";
+			};
+			name = Release;
+		};
+		192A95BAE54A36AA0E570AD5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = "NO";
+				CLANG_ENABLE_MODULES = "YES";
+				CLANG_ENABLE_OBJC_ARC = "YES";
+				COPY_PHASE_STRIP = "NO";
+				DEBUG_INFORMATION_FORMAT = "dwarf";
+				ENABLE_STRICT_OBJC_MSGSEND = "YES";
+				ENABLE_TESTABILITY = "YES";
+				GCC_DYNAMIC_NO_PIC = "NO";
+				GCC_OPTIMIZATION_LEVEL = "0";
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = "15.0";
+				MTL_ENABLE_DEBUG_INFO = "INCLUDE_SOURCE";
+				ONLY_ACTIVE_ARCH = "YES";
+				SDKROOT = "macosx";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = "5.10";
+				ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon";
+				CODE_SIGN_ENTITLEMENTS = "DockBridge/Resources/DockBridge.entitlements";
+				CODE_SIGN_STYLE = "Automatic";
+				DEVELOPMENT_TEAM = X2DPB5PSDT;
+				COMBINE_HIDPI_IMAGES = "YES";
+				CURRENT_PROJECT_VERSION = "1";
+				ENABLE_USER_SCRIPT_SANDBOXING = "NO";
+				GENERATE_INFOPLIST_FILE = "NO";
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
+				INFOPLIST_FILE = "DockBridge/Resources/Info.plist";
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../../target/debug",
+					"$(PROJECT_DIR)/../../target/release",
+					"$(PROJECT_DIR)/../../target/aarch64-apple-darwin/debug",
+					"$(PROJECT_DIR)/../../target/aarch64-apple-darwin/release",
+					"$(PROJECT_DIR)/../../target/x86_64-apple-darwin/debug",
+					"$(PROJECT_DIR)/../../target/x86_64-apple-darwin/release",
+				);
+				MARKETING_VERSION = "0.1.0";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ldockbridge_uniffi",
+					"-lc++",
+					"-framework",
+					"Security",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.dockbridge.app";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = "complete";
+			};
+			name = Debug;
+		};
+		7EEA95CB99DCC50E0CA58A5B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = "NO";
+				CLANG_ENABLE_MODULES = "YES";
+				CLANG_ENABLE_OBJC_ARC = "YES";
+				COPY_PHASE_STRIP = "NO";
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = "NO";
+				ENABLE_STRICT_OBJC_MSGSEND = "YES";
+				MACOSX_DEPLOYMENT_TARGET = "15.0";
+				MTL_ENABLE_DEBUG_INFO = "NO";
+				SDKROOT = "macosx";
+				SWIFT_COMPILATION_MODE = "wholemodule";
+				SWIFT_VERSION = "5.10";
+				ASSETCATALOG_COMPILER_APPICON_NAME = "AppIcon";
+				CODE_SIGN_ENTITLEMENTS = "DockBridge/Resources/DockBridge.entitlements";
+				CODE_SIGN_STYLE = "Automatic";
+				DEVELOPMENT_TEAM = X2DPB5PSDT;
+				COMBINE_HIDPI_IMAGES = "YES";
+				CURRENT_PROJECT_VERSION = "1";
+				ENABLE_USER_SCRIPT_SANDBOXING = "NO";
+				GENERATE_INFOPLIST_FILE = "NO";
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
+				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
+				INFOPLIST_FILE = "DockBridge/Resources/Info.plist";
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/../../target/debug",
+					"$(PROJECT_DIR)/../../target/release",
+					"$(PROJECT_DIR)/../../target/aarch64-apple-darwin/debug",
+					"$(PROJECT_DIR)/../../target/aarch64-apple-darwin/release",
+					"$(PROJECT_DIR)/../../target/x86_64-apple-darwin/debug",
+					"$(PROJECT_DIR)/../../target/x86_64-apple-darwin/release",
+				);
+				MARKETING_VERSION = "0.1.0";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ldockbridge_uniffi",
+					"-lc++",
+					"-framework",
+					"Security",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.dockbridge.app";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = "complete";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		6019C0614AA3ED3012D948F0 /* Build configuration list for PBXProject "DockBridge" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C49E773A4DBE96BEB0DD965D /* Debug */,
+				9837B9C31DB3FF2E41287685 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		997FA1398B0E9DF976ECCB47 /* Build configuration list for PBXNativeTarget "DockBridge" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				192A95BAE54A36AA0E570AD5 /* Debug */,
+				7EEA95CB99DCC50E0CA58A5B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = C80F8E547D6BF728599AA5EE /* Project object */;
+}

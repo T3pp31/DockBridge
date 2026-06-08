@@ -1,0 +1,23 @@
+[package]
+name = "dockbridge-uniffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DockBridge UniFFI bridge for Swift/macOS"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "lib"]
+name = "dockbridge_uniffi"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+dockbridge-core = { path = "../core" }
+tokio.workspace = true
+uniffi = { workspace = true, features = ["cli"] }
+
+[build-dependencies]
+uniffi = { workspace = true, features = ["build"] }

@@ -1,0 +1,9 @@
+/target/
+target/test-known_hosts.json
+**/*.xcframework/
+**/Generated/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+DerivedData/
+build/

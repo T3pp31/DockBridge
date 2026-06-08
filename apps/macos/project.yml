@@ -1,0 +1,72 @@
+name: DockBridge
+options:
+  bundleIdPrefix: com.dockbridge
+  deploymentTarget:
+    macOS: "15.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+packages: {}
+targets:
+  DockBridge:
+    type: application
+    platform: macOS
+    sources:
+      - path: DockBridge
+        excludes:
+          - Generated/Headers
+    settings:
+      base:
+        PRODUCT_NAME: DockBridge
+        PRODUCT_BUNDLE_IDENTIFIER: com.dockbridge.app
+        INFOPLIST_FILE: DockBridge/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: DockBridge/Resources/DockBridge.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: DOCKBRIDGE_FFI_STUB
+        LIBRARY_SEARCH_PATHS:
+          - $(inherited)
+          - $(PROJECT_DIR)/../../target/debug
+          - $(PROJECT_DIR)/../../target/release
+          - $(PROJECT_DIR)/../../target/aarch64-apple-darwin/release
+          - $(PROJECT_DIR)/../../target/aarch64-apple-darwin/debug
+          - $(PROJECT_DIR)/../../target/x86_64-apple-darwin/release
+          - $(PROJECT_DIR)/../../target/x86_64-apple-darwin/debug
+        OTHER_LDFLAGS:
+          - $(inherited)
+          - -ldockbridge_uniffi
+          - -lc++
+          - -framework
+          - Security
+        HEADER_SEARCH_PATHS:
+          - $(PROJECT_DIR)/DockBridge/Generated/Headers
+    preBuildScripts:
+      - name: Generate UniFFI Bindings
+        shell: /bin/bash
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          ROOT="${SRCROOT}/../.."
+          GEN_DIR="${SRCROOT}/DockBridge/Generated"
+          if [[ -x "${ROOT}/scripts/generate-uniffi.sh" ]]; then
+            if [[ -f "${ROOT}/target/aarch64-apple-darwin/release/libdockbridge_uniffi.a" ]] \
+              || [[ -f "${ROOT}/target/aarch64-apple-darwin/debug/libdockbridge_uniffi.a" ]]; then
+              "${ROOT}/scripts/generate-uniffi.sh" || true
+            fi
+          fi
+          if ls "${GEN_DIR}"/dockbridge_uniffi.swift >/dev/null 2>&1; then
+            echo "Using generated UniFFI Swift bindings"
+          else
+            echo "Using DockBridgeFFIStub.swift until bindings are generated"
+          fi
+schemes:
+  DockBridge:
+    build:
+      targets:
+        DockBridge: all
+    run:
+      config: Debug

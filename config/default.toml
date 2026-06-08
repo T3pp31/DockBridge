@@ -1,0 +1,6 @@
+# DockBridge CLI default configuration.
+# The macOS app builds AppConfig in Swift and passes it via UniFFI.
+
+connection_timeout_secs = 30
+transfer_retry_count = 3
+known_hosts_path = "~/.dockbridge/known_hosts.json"

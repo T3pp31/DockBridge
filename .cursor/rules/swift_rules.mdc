@@ -1,0 +1,183 @@
+---
+
+description: "Swift / SwiftUI / iOS・macOSアプリの実装、修正、リファクタリング、レビュー時に適用するルール"
+globs:
+
+* "**/*.swift"
+  alwaysApply: false
+
+---
+
+# Swift Coding Rules
+
+## 基本方針
+
+* 既存のアーキテクチャ、命名、ディレクトリ構成、依存関係、テスト方針を最優先で尊重する。
+* 指示されていない大規模リファクタリング、不要な抽象化、関係ない整形変更は行わない。
+* 変更は小さく、意図が明確で、レビューしやすい差分にする。
+* 実装前に、関連する既存コード・テスト・型定義・エラー処理・画面状態を確認する。
+* 不明点がある場合は、推測で実装せず、前提・仮定・未確認事項を明示する。
+* サンプルコードではなく、プロダクションで使える堅牢なSwiftを書く。
+
+## Swiftスタイル
+
+* Swift API Design Guidelinesに従い、呼び出し側で読みやすいAPIにする。
+* 型、protocol、enum、struct、classは`UpperCamelCase`にする。
+* 変数、関数、プロパティ、caseは`lowerCamelCase`にする。
+* 省略語や曖昧な名前を避け、役割が分かる名前にする。
+* 型情報を繰り返すだけの名前は避ける。
+
+  * 悪い例: `userModelData`
+  * 良い例: `user`, `profile`, `account`
+* 可能な限り`let`を使い、状態変更が必要な場合だけ`var`を使う。
+* 継承が不要なclassは`final`にする。
+* 値として扱えるデータは、原則として`struct`または`enum`を優先する。
+* アクセス制御は必要最小限にし、外部公開が不要なものは`private`または`fileprivate`にする。
+* `extension`は責務ごとに分ける。protocol conformanceは専用extensionに分離する。
+
+## Optional / Error Handling
+
+* `!`によるforce unwrapは原則禁止する。
+* `as!`によるforce castは原則禁止する。
+* `try!`はテストコードまたは絶対に失敗しないことが明確な局所用途以外では使わない。
+* Optionalは`guard let`、`if let`、`nil coalescing`を使って安全に扱う。
+* エラーを握りつぶさない。`catch {}`を空にしない。
+* `try?`は「失敗してもnilとして扱う」ことが仕様上明確な場合だけ使う。
+* ドメインエラーは必要に応じて`enum`で表現し、`LocalizedError`や表示用メッセージへの変換を適切に行う。
+
+## Swift Concurrency
+
+* 非同期処理は原則として`async/await`を優先する。
+* 新規コードでは、不要なCompletion HandlerベースのAPIを増やさない。
+* UI更新は`@MainActor`上で行う。
+* ViewModelやUI状態を持つObservableな型は、必要に応じて`@MainActor`を付与する。
+* `Task {}`を乱用しない。呼び出し元のキャンセル、ライフサイクル、エラー伝播を考慮する。
+* `Task.detached`は原則使わない。使う場合はactor isolation、Sendable、安全性の理由を明確にする。
+* 共有可変状態は避ける。必要な場合は`actor`、`MainActor`、または明確な同期機構で保護する。
+* Swift 6またはStrict Concurrency環境では、`Sendable`警告を無視せず、型設計を見直す。
+* `@unchecked Sendable`は最終手段とし、安全性の根拠をコメントで明示する。
+
+## SwiftUI
+
+* Viewは表示責務に集中させ、ビジネスロジックを直接持たせない。
+* Viewが肥大化する場合は、小さなprivate subview、computed property、ViewModelに分割する。
+* `body`内に複雑な条件分岐や副作用を置かない。
+* 状態管理は用途に応じて使い分ける。
+
+  * View内部だけの状態: `@State`
+  * 親から渡される状態: `@Binding`
+  * 参照型の画面状態: `@StateObject` / `@ObservedObject`
+  * 環境依存: `@Environment`
+* `onAppear`で重い処理を直接実行しない。非同期処理は`.task`やViewModel経由を検討する。
+* Previewを壊さない。可能であれば主要な状態のPreviewを用意する。
+* 画面表示文言、日付、通貨、数値はローカライズ・フォーマットを考慮する。
+
+## UIKit / AppKit
+
+* ViewControllerにビジネスロジックを詰め込まない。
+* レイアウト、状態管理、イベント処理、データ取得の責務を分離する。
+* DelegateやDataSourceは必要に応じてextensionで分ける。
+* UI更新は必ずメインアクター・メインスレッドで行う。
+* 再利用セルでは、`prepareForReuse()`で状態を適切にリセットする。
+* クロージャで`self`をキャプチャする場合は、循環参照を確認する。
+* `weak self`を機械的に使わず、ライフタイム要件に応じて判断する。
+
+## Architecture
+
+* 既存プロジェクトの設計パターンを尊重する。
+
+  * MVVM
+  * MVC
+  * Clean Architecture
+  * TCA
+  * Redux-like architecture
+  * Coordinator
+  * Repository
+  * UseCase / Interactor
+* 新しい層やprotocolは、テスト容易性・依存逆転・責務分離に明確な利点がある場合だけ追加する。
+* 小さな機能に過度な抽象化を導入しない。
+* 外部依存を直接ViewやViewControllerに持ち込まない。
+* Dependency Injectionは既存の方針に合わせる。
+* グローバル状態、Singleton、静的可変プロパティは最小限にする。
+
+## Networking / Persistence
+
+* ネットワーク層では、HTTPステータス、デコード失敗、通信失敗、キャンセルを区別する。
+* APIレスポンスDTOとドメインモデルを必要に応じて分離する。
+* `Codable`のキー変換や日付デコード戦略は既存設定に合わせる。
+* 永続化処理はUI層から分離する。
+* Keychain、UserDefaults、ファイル、DBの使い分けを明確にする。
+* 秘密情報、トークン、APIキーをコードに直書きしない。
+
+## Testing
+
+* 既存のテストフレームワークに合わせる。
+
+  * XCTest
+  * Swift Testing
+  * Snapshot testing
+  * UI testing
+* 新しいロジックを追加・変更した場合は、対応するテストを提案または追加する。
+* テスト名は「条件・操作・期待結果」が分かる名前にする。
+* 非同期テストでは、固定sleepに頼らず、async/awaitやexpectationを適切に使う。
+* 外部API、時刻、乱数、永続化、ユーザー設定はモック・スタブ・DIで制御可能にする。
+* バグ修正では、可能な限り再発防止テストを追加する。
+
+## Performance
+
+* 不要な再描画、重いcomputed property、巨大なView bodyを避ける。
+* メインスレッド上で重い処理、同期I/O、大量JSON処理を行わない。
+* Collection操作では、不要な中間配列を作らない。
+* 大量データ表示では、Lazy系View、差分更新、ページングを検討する。
+* メモリリークの可能性があるクロージャ、Notification、Timer、Combine購読、Taskのライフサイクルを確認する。
+
+## Security / Privacy
+
+* 個人情報、トークン、認証情報をログ出力しない。
+* DebugログとProductionログを区別する。
+* ユーザー入力、URL、Deep Link、外部データは信頼しない。
+* Keychainに保存すべき情報をUserDefaultsに保存しない。
+* 権限要求は必要なタイミングで行い、用途説明と失敗時の導線を考慮する。
+
+## Dependencies
+
+* 新しいライブラリを追加する前に、標準ライブラリ・Foundation・既存依存で解決できるか確認する。
+* 依存追加が必要な場合は、理由、代替案、影響範囲を明示する。
+* Package.swift、SPM、CocoaPods、Carthage、Xcode projectの既存運用に合わせる。
+* 依存バージョンを不用意に上げない。
+
+## Formatting / Lint
+
+* SwiftFormat、SwiftLint、Xcode formatterなど、既存の設定がある場合は必ず従う。
+* 既存設定がない場合でも、不要な空白変更や大規模な並び替えを避ける。
+* Lint警告を無視するコメントは最小限にし、理由を明示する。
+* 生成コードや外部コードは原則編集しない。
+
+## コメント / ドキュメント
+
+* コメントは「何をしているか」ではなく「なぜそうしているか」を説明する。
+* 自明なコメントを追加しない。
+* Public API、複雑な仕様、非自明な制約にはドキュメントコメントを付ける。
+* TODOを追加する場合は、理由・完了条件・必要ならIssue番号を添える。
+
+## レビュー時の観点
+
+コードレビューでは以下を確認する。
+
+* 既存仕様を壊していないか
+* Optional、Error、Concurrencyの扱いが安全か
+* UI更新がMainActor上で行われているか
+* テストが追加・更新されているか
+* 命名が利用箇所で明確か
+* 責務が適切に分離されているか
+* 不要な抽象化や副作用がないか
+* メモリリークや循環参照がないか
+* セキュリティ・プライバシー上の問題がないか
+
+## 出力ルール
+
+* 変更提案では、まず要点を短く説明する。
+* コードを提示する場合は、差し替え対象ファイル名または追加場所を明示する。
+* 既存コードに影響がある場合は、影響範囲を説明する。
+* 実装後に実行すべきテスト、ビルド、lintコマンドを提示する。
+* 破壊的変更や仕様変更を含む場合は、明確に警告する。

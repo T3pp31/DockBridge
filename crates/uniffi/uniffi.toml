@@ -1,0 +1,5 @@
+[bindings.swift]
+cdylib_name = "dockbridge_uniffi"
+module_name = "DockBridgeUniffi"
+ffi_module_name = "dockbridge_uniffiFFI"
+generate_module_map = true
