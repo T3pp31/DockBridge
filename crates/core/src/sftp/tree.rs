@@ -55,11 +55,13 @@ pub fn normalize_remote_path(path: &str) -> String {
 
 /// Recursively walks a local directory and returns all files with relative paths.
 pub async fn walk_local_directory(root: &Path) -> Result<Vec<LocalFileEntry>, SftpError> {
-    let metadata = tokio::fs::metadata(root).await.map_err(|err| SftpError::UploadFailed {
-        local: root.display().to_string(),
-        remote: String::new(),
-        message: err.to_string(),
-    })?;
+    let metadata = tokio::fs::metadata(root)
+        .await
+        .map_err(|err| SftpError::UploadFailed {
+            local: root.display().to_string(),
+            remote: String::new(),
+            message: err.to_string(),
+        })?;
 
     if metadata.is_file() {
         let file_name = root
@@ -84,27 +86,34 @@ pub async fn walk_local_directory(root: &Path) -> Result<Vec<LocalFileEntry>, Sf
     let mut pending = vec![root.to_path_buf()];
 
     while let Some(current) = pending.pop() {
-        let mut read_dir = tokio::fs::read_dir(&current).await.map_err(|err| {
-            SftpError::UploadFailed {
-                local: current.display().to_string(),
-                remote: String::new(),
-                message: err.to_string(),
-            }
-        })?;
+        let mut read_dir =
+            tokio::fs::read_dir(&current)
+                .await
+                .map_err(|err| SftpError::UploadFailed {
+                    local: current.display().to_string(),
+                    remote: String::new(),
+                    message: err.to_string(),
+                })?;
 
-        while let Some(entry) = read_dir.next_entry().await.map_err(|err| {
-            SftpError::UploadFailed {
-                local: current.display().to_string(),
-                remote: String::new(),
-                message: err.to_string(),
-            }
-        })? {
+        while let Some(entry) =
+            read_dir
+                .next_entry()
+                .await
+                .map_err(|err| SftpError::UploadFailed {
+                    local: current.display().to_string(),
+                    remote: String::new(),
+                    message: err.to_string(),
+                })?
+        {
             let path = entry.path();
-            let file_type = entry.file_type().await.map_err(|err| SftpError::UploadFailed {
-                local: path.display().to_string(),
-                remote: String::new(),
-                message: err.to_string(),
-            })?;
+            let file_type = entry
+                .file_type()
+                .await
+                .map_err(|err| SftpError::UploadFailed {
+                    local: path.display().to_string(),
+                    remote: String::new(),
+                    message: err.to_string(),
+                })?;
 
             if file_type.is_dir() {
                 pending.push(path);
@@ -169,11 +178,13 @@ pub async fn walk_remote_directory<'a>(
 
 /// Returns `true` when `path` is a local directory.
 pub async fn is_local_directory(path: &Path) -> Result<bool, SftpError> {
-    let metadata = tokio::fs::metadata(path).await.map_err(|err| SftpError::UploadFailed {
-        local: path.display().to_string(),
-        remote: String::new(),
-        message: err.to_string(),
-    })?;
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|err| SftpError::UploadFailed {
+            local: path.display().to_string(),
+            remote: String::new(),
+            message: err.to_string(),
+        })?;
     Ok(metadata.is_dir())
 }
 
@@ -200,10 +211,7 @@ mod tests {
 
     #[test]
     fn join_remote_path_handles_root() {
-        assert_eq!(
-            join_remote_path("/", Path::new("file.txt")),
-            "/file.txt"
-        );
+        assert_eq!(join_remote_path("/", Path::new("file.txt")), "/file.txt");
     }
 
     #[test]

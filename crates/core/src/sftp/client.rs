@@ -205,7 +205,8 @@ impl<'a> SftpClient<'a> {
             return Ok(());
         }
 
-        let remote_path = join_remote_path(remote_directory, Path::new(&local_entry_name(local_path)));
+        let remote_path =
+            join_remote_path(remote_directory, Path::new(&local_entry_name(local_path)));
         if let Some(parent) = parent_remote_path(&remote_path) {
             self.create_directory_all(&parent).await?;
         }
@@ -228,13 +229,13 @@ impl<'a> SftpClient<'a> {
                     .filter(|name| !name.is_empty())
                     .unwrap_or("download");
                 let local_root = local_directory.join(directory_name);
-                tokio::fs::create_dir_all(&local_root).await.map_err(|err| {
-                    SftpError::DownloadFailed {
+                tokio::fs::create_dir_all(&local_root)
+                    .await
+                    .map_err(|err| SftpError::DownloadFailed {
                         remote: normalized.clone(),
                         local: local_root.display().to_string(),
                         message: err.to_string(),
-                    }
-                })?;
+                    })?;
 
                 if entries.is_empty() {
                     return Ok(());

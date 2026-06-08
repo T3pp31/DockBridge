@@ -203,7 +203,8 @@ impl TransferManager {
             .map_err(transfer_error_from_sftp)?
         {
             let directory_name = local_entry_name(local_path);
-            let remote_root = join_remote_path(&remote_directory, std::path::Path::new(&directory_name));
+            let remote_root =
+                join_remote_path(&remote_directory, std::path::Path::new(&directory_name));
             client
                 .create_directory_all(&remote_root)
                 .await
