@@ -124,9 +124,8 @@ fn resolve_password(
         return Ok(Zeroizing::new(trimmed));
     }
 
-    let password = password.ok_or_else(|| {
-        anyhow::anyhow!("either --password or --password-stdin is required")
-    })?;
+    let password = password
+        .ok_or_else(|| anyhow::anyhow!("either --password or --password-stdin is required"))?;
     Ok(Zeroizing::new(password))
 }
 
@@ -163,10 +162,7 @@ async fn main() -> anyhow::Result<()> {
     let prompt = Arc::new(CliHostKeyPrompt);
 
     match cli.command {
-        Commands::List {
-            connection,
-            path,
-        } => {
+        Commands::List { connection, path } => {
             let session = connect(connection.into_profile()?, &config, known_hosts, prompt).await?;
 
             let client = SftpClient::new(&session);

@@ -15,7 +15,10 @@ final class HostKeyStore: @unchecked Sendable {
     }
 
     var knownHostsPath: URL {
-        baseDirectory.appendingPathComponent(fileName, isDirectory: false)
+        if baseDirectory == DockBridgePaths.appSupportDirectory {
+            return DockBridgePaths.knownHostsFile
+        }
+        return baseDirectory.appendingPathComponent(fileName, isDirectory: false)
     }
 
     func ensureStoreDirectoryExists() throws {

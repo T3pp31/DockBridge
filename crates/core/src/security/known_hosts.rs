@@ -270,10 +270,7 @@ mod tests {
         fs::write(&path, "{}").unwrap();
 
         let err = KnownHostsManager::load(&path).unwrap_err();
-        assert!(matches!(
-            err,
-            SecurityError::KnownHostsReadFailed { .. }
-        ));
+        assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
     }
 
     #[cfg(unix)]

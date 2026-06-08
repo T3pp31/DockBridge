@@ -24,9 +24,7 @@ pub trait HostKeyPrompt: Send + Sync {
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub enum AuthType {
     /// Password-based authentication.
-    Password {
-        password: SecretPassword,
-    },
+    Password { password: SecretPassword },
     /// Private key file authentication.
     PrivateKey {
         #[zeroize(skip)]

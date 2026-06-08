@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct DockBridgeApp: App {
+    @State private var settingsConfig = AppConfig.default
+
     var body: some Scene {
         WindowGroup {
             MainView()
@@ -11,9 +13,14 @@ struct DockBridgeApp: App {
         }
 
         Settings {
-            SettingsView(config: AppSettingsService.shared.loadConfig()) { config in
+            SettingsView(config: settingsConfig) { config in
                 AppSettingsService.shared.saveConfig(config)
+                settingsConfig = config
             }
         }
+    }
+
+    init() {
+        _settingsConfig = State(initialValue: AppSettingsService.shared.loadConfig())
     }
 }

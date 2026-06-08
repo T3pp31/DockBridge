@@ -9,6 +9,10 @@ enum DockBridgePaths {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }
+
+    static var knownHostsFile: URL {
+        appSupportDirectory.appendingPathComponent("known_hosts.json", isDirectory: false)
+    }
 }
 
 enum AppSettingsKeys {
@@ -64,6 +68,6 @@ final class AppSettingsService: @unchecked Sendable {
 
     func buildAppConfigRecord() -> AppConfigRecord {
         let config = loadConfig()
-        return config.toRecord(knownHostsPath: HostKeyStore.shared.knownHostsPath.path)
+        return config.toRecord(knownHostsPath: DockBridgePaths.knownHostsFile.path)
     }
 }

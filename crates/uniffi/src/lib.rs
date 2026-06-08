@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use dockbridge_core::{
-    expand_tilde, ensure_known_hosts_parent, AppConfig, AuthType, ConnectionProfile,
-    HostKeyPrompt, KnownHostsManager, RemoteFile, SecretPassword, SftpClient, SshSession,
-    TransferDirection, TransferManager, TransferStatus, TransferTask,
+    ensure_known_hosts_parent, expand_tilde, AppConfig, AuthType, ConnectionProfile, HostKeyPrompt,
+    KnownHostsManager, RemoteFile, SecretPassword, SftpClient, SshSession, TransferDirection,
+    TransferManager, TransferStatus, TransferTask,
 };
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -40,7 +40,9 @@ pub struct AppConfigRecord {
 /// Authentication method for a connection profile.
 #[derive(uniffi::Enum)]
 pub enum AuthTypeRecord {
-    Password { password: String },
+    Password {
+        password: String,
+    },
     PrivateKey {
         key_path: String,
         passphrase: Option<String>,
@@ -279,12 +281,7 @@ impl DockBridgeClient {
         Ok(())
     }
 
-    fn rename(
-        &self,
-        session_id: u64,
-        from: String,
-        to: String,
-    ) -> Result<(), DockBridgeError> {
+    fn rename(&self, session_id: u64, from: String, to: String) -> Result<(), DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
         block_on(async move {
             let sessions = sessions.lock().await;

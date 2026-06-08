@@ -67,15 +67,15 @@ impl<'a> SftpClient<'a> {
                 message: err.to_string(),
             })?;
 
-        let mut remote_file = self
-            .sftp()
-            .create(remote_path)
-            .await
-            .map_err(|err| SftpError::UploadFailed {
-                local: local_path.display().to_string(),
-                remote: remote_path.to_string(),
-                message: err.to_string(),
-            })?;
+        let mut remote_file =
+            self.sftp()
+                .create(remote_path)
+                .await
+                .map_err(|err| SftpError::UploadFailed {
+                    local: local_path.display().to_string(),
+                    remote: remote_path.to_string(),
+                    message: err.to_string(),
+                })?;
 
         remote_file
             .write_all(&data)
