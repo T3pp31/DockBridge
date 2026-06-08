@@ -8,9 +8,13 @@ enum KeychainServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .encodingFailed:
-            "Failed to encode secret for Keychain storage."
+            return "Failed to encode secret for Keychain storage."
         case .unexpectedStatus(let status):
-            "Keychain operation failed with status \(status)."
+            if status >= 100_000, status < 200_000 {
+                let errno = status - 100_000
+                return "Keychain operation failed (errno \(errno)). Ensure the app is signed with your Development Team in Xcode (Signing & Capabilities), then rebuild."
+            }
+            return "Keychain operation failed with status \(status). Ensure the app is signed with your Development Team in Xcode, then rebuild."
         }
     }
 }

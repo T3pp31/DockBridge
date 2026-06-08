@@ -28,17 +28,10 @@ targets:
         CODE_SIGN_ENTITLEMENTS: DockBridge/Resources/DockBridge.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: DOCKBRIDGE_FFI_STUB
-        LIBRARY_SEARCH_PATHS:
-          - $(inherited)
-          - $(PROJECT_DIR)/../../target/debug
-          - $(PROJECT_DIR)/../../target/release
-          - $(PROJECT_DIR)/../../target/aarch64-apple-darwin/release
-          - $(PROJECT_DIR)/../../target/aarch64-apple-darwin/debug
-          - $(PROJECT_DIR)/../../target/x86_64-apple-darwin/release
-          - $(PROJECT_DIR)/../../target/x86_64-apple-darwin/debug
         OTHER_LDFLAGS:
           - $(inherited)
-          - -ldockbridge_uniffi
+          - -force_load
+          - $(PROJECT_DIR)/../../target/release/libdockbridge_uniffi.a
           - -lc++
           - -framework
           - Security
@@ -50,19 +43,10 @@ targets:
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
+          export PATH="${HOME}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
           ROOT="${SRCROOT}/../.."
-          GEN_DIR="${SRCROOT}/DockBridge/Generated"
-          if [[ -x "${ROOT}/scripts/generate-uniffi.sh" ]]; then
-            if [[ -f "${ROOT}/target/aarch64-apple-darwin/release/libdockbridge_uniffi.a" ]] \
-              || [[ -f "${ROOT}/target/aarch64-apple-darwin/debug/libdockbridge_uniffi.a" ]]; then
-              "${ROOT}/scripts/generate-uniffi.sh" || true
-            fi
-          fi
-          if ls "${GEN_DIR}"/dockbridge_uniffi.swift >/dev/null 2>&1; then
-            echo "Using generated UniFFI Swift bindings"
-          else
-            echo "Using DockBridgeFFIStub.swift until bindings are generated"
-          fi
+          "${ROOT}/scripts/build-rust.sh" "" release
+          "${ROOT}/scripts/generate-uniffi.sh" "" release
     postBuildScripts:
       - name: Generate Dock App Icon icns
         shell: /bin/bash

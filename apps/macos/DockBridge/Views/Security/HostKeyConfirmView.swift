@@ -11,7 +11,7 @@ struct HostKeyConfirmView: View {
                 .font(.title2)
                 .bold()
 
-            Text("The authenticity of host \(challenge.host):\(challenge.port) can't be established.")
+            Text("The authenticity of host \(challenge.host):\(challenge.port.portLabel) can't be established.")
                 .fixedSize(horizontal: false, vertical: true)
 
             GroupBox("SHA256 Fingerprint") {

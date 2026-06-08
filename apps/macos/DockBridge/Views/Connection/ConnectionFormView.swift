@@ -29,7 +29,7 @@ struct ConnectionFormView: View {
             Section("General") {
                 TextField("Name", text: $profile.name)
                 TextField("Host", text: $profile.host)
-                TextField("Port", value: $profile.port, format: .number)
+                TextField("Port", value: $profile.port, format: .number.grouping(.never))
                 TextField("Username", text: $profile.username)
             }
 

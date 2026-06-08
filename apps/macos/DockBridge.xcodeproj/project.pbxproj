@@ -366,7 +366,7 @@
 			);
 			outputPaths = (
 			);
-			shellScript = "set -euo pipefail\nROOT=\"${SRCROOT}/../..\"\nif [[ -x \"${ROOT}/scripts/generate-uniffi.sh\" ]]; then\n  \"${ROOT}/scripts/generate-uniffi.sh\" || true\nfi\n";
+			shellScript = "set -euo pipefail\nexport PATH=\"${HOME}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}\"\nROOT=\"${SRCROOT}/../..\"\n\"${ROOT}/scripts/build-rust.sh\" \"\" release\n\"${ROOT}/scripts/generate-uniffi.sh\" \"\" release\n";
 		};
 		A1B2C3D4E5F60718293A4B5D /* Generate Dock App Icon icns */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -520,19 +520,11 @@
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
 				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
 				INFOPLIST_FILE = "DockBridge/Resources/Info.plist";
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/../../target/debug",
-					"$(PROJECT_DIR)/../../target/release",
-					"$(PROJECT_DIR)/../../target/aarch64-apple-darwin/debug",
-					"$(PROJECT_DIR)/../../target/aarch64-apple-darwin/release",
-					"$(PROJECT_DIR)/../../target/x86_64-apple-darwin/debug",
-					"$(PROJECT_DIR)/../../target/x86_64-apple-darwin/release",
-				);
 				MARKETING_VERSION = "0.1.0";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-ldockbridge_uniffi",
+					"-force_load",
+					"$(PROJECT_DIR)/../../target/release/libdockbridge_uniffi.a",
 					"-lc++",
 					"-framework",
 					"Security",
@@ -569,19 +561,11 @@
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
 				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
 				INFOPLIST_FILE = "DockBridge/Resources/Info.plist";
-				LIBRARY_SEARCH_PATHS = (
-					"$(inherited)",
-					"$(PROJECT_DIR)/../../target/debug",
-					"$(PROJECT_DIR)/../../target/release",
-					"$(PROJECT_DIR)/../../target/aarch64-apple-darwin/debug",
-					"$(PROJECT_DIR)/../../target/aarch64-apple-darwin/release",
-					"$(PROJECT_DIR)/../../target/x86_64-apple-darwin/debug",
-					"$(PROJECT_DIR)/../../target/x86_64-apple-darwin/release",
-				);
 				MARKETING_VERSION = "0.1.0";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-ldockbridge_uniffi",
+					"-force_load",
+					"$(PROJECT_DIR)/../../target/release/libdockbridge_uniffi.a",
 					"-lc++",
 					"-framework",
 					"Security",
