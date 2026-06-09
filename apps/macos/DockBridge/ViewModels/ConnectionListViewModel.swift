@@ -13,6 +13,8 @@ final class ConnectionListViewModel: ObservableObject {
     private let bridge: RustBridgeService
 
     var isConnected: Bool { bridge.isConnected }
+    var connectionStatus: ConnectionStatus { bridge.connectionStatus }
+    var connectedProfileID: UUID? { bridge.connectedProfileID }
 
     init(
         store: ConnectionStore = .shared,

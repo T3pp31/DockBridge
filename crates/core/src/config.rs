@@ -9,6 +9,8 @@ use crate::error::{ConfigError, SecurityError};
 pub struct AppConfig {
     /// SSH connection timeout in seconds.
     pub connection_timeout_secs: u64,
+    /// Interval between background SFTP health checks for active sessions.
+    pub session_health_check_interval_secs: u64,
     /// Number of retries for failed transfers.
     pub transfer_retry_count: u32,
     /// Path to the DockBridge known hosts JSON store.
@@ -19,6 +21,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             connection_timeout_secs: 30,
+            session_health_check_interval_secs: 10,
             transfer_retry_count: 3,
             known_hosts_path: default_known_hosts_path(),
         }

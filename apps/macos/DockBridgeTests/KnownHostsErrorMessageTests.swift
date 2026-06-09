@@ -7,6 +7,20 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         XCTAssertTrue(message.contains("切断"))
     }
 
+    func testConnectionLostMessageDetection() {
+        XCTAssertTrue(DockBridgeError.isConnectionLostMessage("session closed"))
+        XCTAssertTrue(DockBridgeError.isConnectionLostMessage("Connection reset by peer"))
+        XCTAssertFalse(DockBridgeError.isConnectionLostMessage("permission denied"))
+    }
+
+    func testConnectionStatusTitles() {
+        XCTAssertEqual(ConnectionStatus.disconnected.statusTitle, "未接続")
+        XCTAssertEqual(
+            ConnectionStatus.connected(endpoint: "user@host:22").statusTitle,
+            "接続中: user@host:22"
+        )
+    }
+
     func testPermissionDeniedErrorMessageMentionsRemoteDirectory() {
         let message = DockBridgeError.friendlyMessage(for: "failed to upload: permission denied")
         XCTAssertTrue(message.contains("リモート"))

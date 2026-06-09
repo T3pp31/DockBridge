@@ -41,6 +41,8 @@
 		F1D2R3O4P5E6R7R8O9R0A1B2C3 /* FileDropError.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2R3O4P5E6R7R8O9R0A1B2C4 /* FileDropError.swift */; };
 		F1I2L3E4D5R6O7P8M9O0D1I2F3 /* FileDropModifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */; };
 		F1D2R3O4P5V6A7L8I9D0T1E2S3T4 /* FileDropValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */; };
+		C0NN3CT10N5T4TU5B4R1N5RC3 /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */; };
+		C0NN3CT10N5T4TU5M0D3L1N5RC /* ConnectionStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -83,6 +85,8 @@
 		F1D2R3O4P5E6R7R8O9R0A1B2C4 /* FileDropError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropError.swift; sourceTree = "<group>"; };
 		F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropModifiers.swift; sourceTree = "<group>"; };
 		F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropValidationTests.swift; sourceTree = "<group>"; };
+		C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusBar.swift; sourceTree = "<group>"; };
+		C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatus.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -161,6 +165,7 @@
 		141E446FF2C7A61E13702B31 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */,
 				D2B8765D556D65748132CE54 /* ErrorAlert.swift */,
 			);
 			path = Shared;
@@ -194,6 +199,7 @@
 			isa = PBXGroup;
 			children = (
 				09932BA46F7FE81DAD83C80A /* AppConfig.swift */,
+				C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */,
 				F3EA1C873F6BA2EA52B40161 /* AuthType.swift */,
 				ACD7B5DCE2F20029520D971B /* ConnectionProfile.swift */,
 				F1D2R3O4P5E6R7R8O9R0A1B2C4 /* FileDropError.swift */,
@@ -429,6 +435,8 @@
 				59E97F8DE7D811CC4EA1A6B0 /* RemotePaneView.swift in Sources */,
 				4F485BCC460E809CBC369F6D /* HostKeyConfirmView.swift in Sources */,
 				629A59E59C65594C7998652C /* SettingsView.swift in Sources */,
+				C0NN3CT10N5T4TU5B4R1N5RC3 /* ConnectionStatusBar.swift in Sources */,
+				C0NN3CT10N5T4TU5M0D3L1N5RC /* ConnectionStatus.swift in Sources */,
 				C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */,
 				B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* RemotePath.swift in Sources */,

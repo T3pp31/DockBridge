@@ -51,6 +51,11 @@ impl<'a> SftpClient<'a> {
         self.canonicalize_path(".").await
     }
 
+    /// Verifies that the SFTP session is still responsive.
+    pub async fn check_alive(&self) -> Result<(), SftpError> {
+        self.canonicalize_path(".").await.map(|_| ())
+    }
+
     /// Lists entries in a remote directory.
     pub async fn list_directory(&self, path: &str) -> Result<Vec<RemoteFile>, SftpError> {
         let mut read_dir =

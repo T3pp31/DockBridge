@@ -8,12 +8,16 @@ struct ConnectionListView: View {
     var body: some View {
         List(selection: $viewModel.selectedProfileID) {
             ForEach(viewModel.profiles) { profile in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(profile.displayName)
-                        .font(.headline)
-                    Text(profile.endpointLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    connectionIndicator(for: profile)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(profile.displayName)
+                            .font(.headline)
+                        Text(profile.endpointLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .tag(profile.id)
                 .contextMenu {
@@ -42,12 +46,12 @@ struct ConnectionListView: View {
                     Button("Connect") {
                         viewModel.requestConnect(profile: selected)
                     }
-                    .disabled(viewModel.isConnected)
+                    .disabled(viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting)
 
                     Button("Disconnect") {
                         Task { await viewModel.disconnect() }
                     }
-                    .disabled(!viewModel.isConnected)
+                    .disabled(!viewModel.connectionStatus.isConnected)
                 }
             }
         }
@@ -62,5 +66,23 @@ struct ConnectionListView: View {
             Text("Connecting as root is discouraged. Continue only if you understand the risks.")
         }
         .errorAlert(message: $viewModel.errorMessage)
+    }
+
+    @ViewBuilder
+    private func connectionIndicator(for profile: ConnectionProfile) -> some View {
+        if viewModel.connectedProfileID == profile.id, viewModel.connectionStatus.isConnected {
+            Circle()
+                .fill(.green)
+                .frame(width: 8, height: 8)
+                .accessibilityLabel("Connected")
+        } else if viewModel.connectedProfileID == profile.id, viewModel.connectionStatus.isConnecting {
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityLabel("Connecting")
+        } else {
+            Circle()
+                .fill(.clear)
+                .frame(width: 8, height: 8)
+        }
     }
 }

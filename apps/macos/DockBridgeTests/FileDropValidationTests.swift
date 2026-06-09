@@ -23,6 +23,22 @@ final class FileDropValidationTests: XCTestCase {
         XCTAssertTrue(FileDropValidation.canMoveLocalItem(from: source, to: directory))
     }
 
+    func testCanUploadLocalItemRequiresExistingReadableFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+        let fileURL = directory.appendingPathComponent("file-drop-upload-validation.txt")
+        FileManager.default.createFile(atPath: fileURL.path, contents: Data("upload".utf8))
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+
+        XCTAssertTrue(FileDropValidation.canUploadLocalItem(at: fileURL))
+        XCTAssertFalse(
+            FileDropValidation.canUploadLocalItem(
+                at: directory.appendingPathComponent("missing-upload-file.txt")
+            )
+        )
+    }
+
     func testRejectsMovingRemoteItemIntoSameDirectory() {
         XCTAssertFalse(
             FileDropValidation.canMoveRemoteItem(

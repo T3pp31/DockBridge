@@ -38,7 +38,7 @@ struct TransferQueueView: View {
                         Text(statusLabel(for: task.status))
                     }
                     TableColumn("") { task in
-                        if case .pending = task.status {
+                        if canCancel(task: task) {
                             Button("Cancel") {
                                 Task { await viewModel.cancel(task: task) }
                             }
@@ -50,6 +50,15 @@ struct TransferQueueView: View {
         }
         .padding(12)
         .errorAlert(message: $viewModel.errorMessage)
+    }
+
+    private func canCancel(task: TransferTaskRecord) -> Bool {
+        switch task.status {
+        case .pending, .inProgress:
+            return true
+        case .completed, .failed, .cancelled:
+            return false
+        }
     }
 
     private func statusLabel(for status: TransferStatusRecord) -> String {

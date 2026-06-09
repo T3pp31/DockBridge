@@ -1,12 +1,16 @@
 import Foundation
 
 @MainActor
-final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
-    @Published private(set) var isConnected = false
+final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, ConnectionEventHandler {
+    @Published private(set) var connectionStatus: ConnectionStatus = .disconnected
+    @Published private(set) var connectedProfileID: UUID?
+    @Published private(set) var lastDisconnectReason: String?
     @Published private(set) var initialRemoteDirectory: String?
     @Published private(set) var connectedUsername: String?
     @Published var pendingHostKeyChallenge: HostKeyChallenge?
     @Published var hostKeyContinuation: CheckedContinuation<Bool, Never>?
+
+    var isConnected: Bool { connectionStatus.isConnected }
 
     private var client: DockBridgeClient?
     private var sessionId: UInt64?
@@ -25,7 +29,11 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
     func prepareClient() throws {
         try hostKeyStore.ensureStoreDirectoryExists()
         let record = settings.buildAppConfigRecord()
-        client = try DockBridgeClient(appConfig: record, hostKeyHandler: self)
+        client = try DockBridgeClient(
+            appConfig: record,
+            hostKeyHandler: self,
+            connectionEventHandler: self
+        )
     }
 
     func connect(
@@ -40,27 +48,36 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
             throw DockBridgeError.Generic(message: "Rust client is not initialized.")
         }
 
-        let record = profile.toRecord(password: password, passphrase: passphrase)
-        let newSessionId = try await Task.detached(priority: .userInitiated) {
-            try client.connect(profile: record)
-        }.value
+        connectedProfileID = profile.id
+        connectionStatus = .connecting(endpoint: profile.endpointLabel)
+        lastDisconnectReason = nil
 
-        let rawInitialDirectory = try await Task.detached(priority: .userInitiated) {
-            try client.getInitialDirectory(sessionId: newSessionId)
-        }.value
+        do {
+            let record = profile.toRecord(password: password, passphrase: passphrase)
+            let newSessionId = try await Task.detached(priority: .userInitiated) {
+                try client.connect(profile: record)
+            }.value
 
-        let resolvedDirectory = try await resolveWorkingDirectory(
-            rawInitialDirectory,
-            username: profile.username,
-            isRootUser: profile.isRootUser,
-            client: client,
-            sessionId: newSessionId
-        )
+            let rawInitialDirectory = try await Task.detached(priority: .userInitiated) {
+                try client.getInitialDirectory(sessionId: newSessionId)
+            }.value
 
-        sessionId = newSessionId
-        connectedUsername = profile.username
-        initialRemoteDirectory = resolvedDirectory
-        isConnected = true
+            let resolvedDirectory = try await resolveWorkingDirectory(
+                rawInitialDirectory,
+                username: profile.username,
+                isRootUser: profile.isRootUser,
+                client: client,
+                sessionId: newSessionId
+            )
+
+            sessionId = newSessionId
+            connectedUsername = profile.username
+            initialRemoteDirectory = resolvedDirectory
+            connectionStatus = .connected(endpoint: profile.endpointLabel)
+        } catch {
+            clearConnectionState()
+            throw error
+        }
     }
 
     func disconnect() async throws {
@@ -68,10 +85,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
         try await Task.detached(priority: .userInitiated) {
             try client.disconnect(sessionId: sessionId)
         }.value
-        self.sessionId = nil
-        initialRemoteDirectory = nil
-        connectedUsername = nil
-        isConnected = false
+        clearConnectionState()
     }
 
     func getInitialDirectory() async throws -> String {
@@ -173,6 +187,32 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
         return decision.accepted
     }
 
+    // MARK: - ConnectionEventHandler
+
+    nonisolated func onSessionDisconnected(sessionId: UInt64, reason: String) {
+        Task { @MainActor in
+            guard self.sessionId == sessionId else { return }
+            self.handleImplicitDisconnect(reason: reason)
+        }
+    }
+
+    private func handleImplicitDisconnect(reason: String) {
+        guard connectionStatus.isConnected || connectionStatus.isConnecting else { return }
+        lastDisconnectReason = reason
+        sessionId = nil
+        initialRemoteDirectory = nil
+        connectedUsername = nil
+        connectionStatus = .disconnected
+    }
+
+    private func clearConnectionState() {
+        sessionId = nil
+        initialRemoteDirectory = nil
+        connectedUsername = nil
+        connectedProfileID = nil
+        connectionStatus = .disconnected
+    }
+
     private func refreshTransferQueue() async {
         _ = try? await fetchTransferTasks()
     }
@@ -213,8 +253,16 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler {
         guard let client, let sessionId else {
             throw DockBridgeError.Generic(message: "Not connected to a remote host.")
         }
-        return try await Task.detached(priority: .userInitiated) {
-            try operation(client, sessionId)
-        }.value
+
+        do {
+            return try await Task.detached(priority: .userInitiated) {
+                try operation(client, sessionId)
+            }.value
+        } catch {
+            if error.isConnectionLost {
+                handleImplicitDisconnect(reason: error.dockBridgeUserMessage)
+            }
+            throw error
+        }
     }
 }

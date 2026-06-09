@@ -51,6 +51,7 @@ prepare_config() {
   rm -f "$KNOWN_HOSTS"
   cat >"$CONFIG" <<EOF
 connection_timeout_secs = 30
+session_health_check_interval_secs = 10
 transfer_retry_count = 3
 known_hosts_path = "$KNOWN_HOSTS"
 EOF

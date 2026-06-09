@@ -35,7 +35,9 @@ final class TransferQueueViewModel: ObservableObject {
 
         do {
             tasks = try await bridge.fetchTransferTasks()
+            errorMessage = nil
         } catch {
+            tasks = []
             errorMessage = error.dockBridgeUserMessage
         }
     }

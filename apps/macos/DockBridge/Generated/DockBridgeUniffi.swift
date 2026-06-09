@@ -593,12 +593,13 @@ open class DockBridgeClient: DockBridgeClientProtocol, @unchecked Sendable {
     public func uniffiClonePointer() -> UnsafeMutableRawPointer {
         return try! rustCall { uniffi_dockbridge_uniffi_fn_clone_dockbridgeclient(self.pointer, $0) }
     }
-public convenience init(appConfig: AppConfigRecord, hostKeyHandler: HostKeyHandler)throws  {
+public convenience init(appConfig: AppConfigRecord, hostKeyHandler: HostKeyHandler, connectionEventHandler: ConnectionEventHandler)throws  {
     let pointer =
         try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
     uniffi_dockbridge_uniffi_fn_constructor_dockbridgeclient_new(
         FfiConverterTypeAppConfigRecord_lower(appConfig),
-        FfiConverterCallbackInterfaceHostKeyHandler_lower(hostKeyHandler),$0
+        FfiConverterCallbackInterfaceHostKeyHandler_lower(hostKeyHandler),
+        FfiConverterCallbackInterfaceConnectionEventHandler_lower(connectionEventHandler),$0
     )
 }
     self.init(unsafeFromRawPointer: pointer)
@@ -783,13 +784,15 @@ public func FfiConverterTypeDockBridgeClient_lower(_ value: DockBridgeClient) ->
  */
 public struct AppConfigRecord {
     public var connectionTimeoutSecs: UInt64
+    public var sessionHealthCheckIntervalSecs: UInt64
     public var transferRetryCount: UInt32
     public var knownHostsPath: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(connectionTimeoutSecs: UInt64, transferRetryCount: UInt32, knownHostsPath: String) {
+    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, knownHostsPath: String) {
         self.connectionTimeoutSecs = connectionTimeoutSecs
+        self.sessionHealthCheckIntervalSecs = sessionHealthCheckIntervalSecs
         self.transferRetryCount = transferRetryCount
         self.knownHostsPath = knownHostsPath
     }
@@ -805,6 +808,9 @@ extension AppConfigRecord: Equatable, Hashable {
         if lhs.connectionTimeoutSecs != rhs.connectionTimeoutSecs {
             return false
         }
+        if lhs.sessionHealthCheckIntervalSecs != rhs.sessionHealthCheckIntervalSecs {
+            return false
+        }
         if lhs.transferRetryCount != rhs.transferRetryCount {
             return false
         }
@@ -816,6 +822,7 @@ extension AppConfigRecord: Equatable, Hashable {
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(connectionTimeoutSecs)
+        hasher.combine(sessionHealthCheckIntervalSecs)
         hasher.combine(transferRetryCount)
         hasher.combine(knownHostsPath)
     }
@@ -831,6 +838,7 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
         return
             try AppConfigRecord(
                 connectionTimeoutSecs: FfiConverterUInt64.read(from: &buf), 
+                sessionHealthCheckIntervalSecs: FfiConverterUInt64.read(from: &buf), 
                 transferRetryCount: FfiConverterUInt32.read(from: &buf), 
                 knownHostsPath: FfiConverterString.read(from: &buf)
         )
@@ -838,6 +846,7 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
 
     public static func write(_ value: AppConfigRecord, into buf: inout [UInt8]) {
         FfiConverterUInt64.write(value.connectionTimeoutSecs, into: &buf)
+        FfiConverterUInt64.write(value.sessionHealthCheckIntervalSecs, into: &buf)
         FfiConverterUInt32.write(value.transferRetryCount, into: &buf)
         FfiConverterString.write(value.knownHostsPath, into: &buf)
     }
@@ -1547,6 +1556,127 @@ extension TransferStatusRecord: Equatable, Hashable {}
 
 
 /**
+ * Callback invoked when an active SSH/SFTP session is lost.
+ */
+public protocol ConnectionEventHandler: AnyObject, Sendable {
+    
+    func onSessionDisconnected(sessionId: UInt64, reason: String) 
+    
+}
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceConnectionEventHandler {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceConnectionEventHandler] = [UniffiVTableCallbackInterfaceConnectionEventHandler(
+        onSessionDisconnected: { (
+            uniffiHandle: UInt64,
+            sessionId: UInt64,
+            reason: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceConnectionEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onSessionDisconnected(
+                     sessionId: try FfiConverterUInt64.lift(sessionId),
+                     reason: try FfiConverterString.lift(reason)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            let result = try? FfiConverterCallbackInterfaceConnectionEventHandler.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface ConnectionEventHandler: handle missing in uniffiFree")
+            }
+        }
+    )]
+}
+
+private func uniffiCallbackInitConnectionEventHandler() {
+    uniffi_dockbridge_uniffi_fn_init_callback_vtable_connectioneventhandler(UniffiCallbackInterfaceConnectionEventHandler.vtable)
+}
+
+// FfiConverter protocol for callback interfaces
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterCallbackInterfaceConnectionEventHandler {
+    fileprivate static let handleMap = UniffiHandleMap<ConnectionEventHandler>()
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+extension FfiConverterCallbackInterfaceConnectionEventHandler : FfiConverter {
+    typealias SwiftType = ConnectionEventHandler
+    typealias FfiType = UInt64
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceConnectionEventHandler_lift(_ handle: UInt64) throws -> ConnectionEventHandler {
+    return try FfiConverterCallbackInterfaceConnectionEventHandler.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceConnectionEventHandler_lower(_ v: ConnectionEventHandler) -> UInt64 {
+    return FfiConverterCallbackInterfaceConnectionEventHandler.lower(v)
+}
+
+
+
+
+/**
  * Callback invoked when a host key is not yet trusted.
  */
 public protocol HostKeyHandler: AnyObject, Sendable {
@@ -1790,13 +1920,17 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload_entry() != 14643) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_constructor_dockbridgeclient_new() != 44284) {
+    if (uniffi_dockbridge_uniffi_checksum_constructor_dockbridgeclient_new() != 5215) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_connectioneventhandler_on_session_disconnected() != 54402) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_hostkeyhandler_prompt_unknown_host() != 7522) {
         return InitializationResult.apiChecksumMismatch
     }
 
+    uniffiCallbackInitConnectionEventHandler()
     uniffiCallbackInitHostKeyHandler()
     return InitializationResult.ok
 }()

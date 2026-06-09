@@ -34,6 +34,10 @@ struct MainView: View {
             .frame(minWidth: 240)
         } detail: {
             VStack(spacing: 0) {
+                ConnectionStatusBar(status: bridge.connectionStatus)
+
+                Divider()
+
                 HSplitView {
                     LocalPaneView(viewModel: viewModel)
                         .frame(minWidth: 280)

@@ -14,6 +14,15 @@ extension DockBridgeError {
         }
     }
 
+    static func isConnectionLostMessage(_ message: String) -> Bool {
+        let lowercased = message.lowercased()
+        return lowercased.contains("session closed")
+            || lowercased.contains("connection reset")
+            || lowercased.contains("broken pipe")
+            || lowercased.contains("connection refused")
+            || lowercased.contains("eof")
+    }
+
     static func friendlyMessage(for message: String) -> String {
         let lowercased = message.lowercased()
 
@@ -61,5 +70,12 @@ extension Error {
             return error.userFriendlyMessage
         }
         return localizedDescription
+    }
+
+    var isConnectionLost: Bool {
+        if let error = self as? DockBridgeError, case .Generic(let message) = error {
+            return DockBridgeError.isConnectionLostMessage(message)
+        }
+        return false
     }
 }

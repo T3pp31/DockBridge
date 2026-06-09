@@ -1,6 +1,14 @@
 import Foundation
 
 enum FileDropValidation {
+    static func canUploadLocalItem(at url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            return false
+        }
+        return FileManager.default.isReadableFile(atPath: url.path)
+    }
+
     static func canMoveLocalItem(from source: URL, to directory: URL) -> Bool {
         let sourcePath = normalizedLocalPath(source)
         let directoryPath = normalizedLocalPath(directory)
