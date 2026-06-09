@@ -107,7 +107,6 @@ final class MainViewModel: ObservableObject {
         } catch {
             errorMessage = error.dockBridgeUserMessage
         }
-        await reloadRemote()
     }
 
     func prepareRemoteWorkingDirectory() async throws {
@@ -122,29 +121,31 @@ final class MainViewModel: ObservableObject {
         do {
             remotePath = try await bridge.getInitialDirectory()
         } catch {
-            if let fallback = fallbackHomePath() {
+            if let fallback = await verifiedFallbackHomePath() {
                 remotePath = fallback
             } else {
                 throw error
             }
         }
 
-        if remotePath == "/", let fallback = fallbackHomePath() {
+        if remotePath == "/", let fallback = await verifiedFallbackHomePath() {
             remotePath = fallback
         }
     }
 
-    private func fallbackHomePath() -> String? {
-        if let username = bridge.connectedUsername, !username.isEmpty, username != "root" {
-            return "/home/\(username)"
+    private func verifiedFallbackHomePath() async -> String? {
+        if let username = bridge.connectedUsername,
+           !username.isEmpty,
+           username != "root" {
+            return await bridge.firstExistingHomeDirectoryCandidate(for: username)
         }
         guard let profileID = connectionList.selectedProfileID,
-              let profile = connectionList.profiles.first(where: { $0.id == profileID })
+              let profile = connectionList.profiles.first(where: { $0.id == profileID }),
+              !profile.isRootUser
         else {
             return nil
         }
-        guard !profile.isRootUser else { return nil }
-        return "/home/\(profile.username)"
+        return await bridge.firstExistingHomeDirectoryCandidate(for: profile.username)
     }
 
     func reloadRemote() async {

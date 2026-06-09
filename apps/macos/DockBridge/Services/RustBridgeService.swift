@@ -100,6 +100,19 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
         }
     }
 
+    func firstExistingHomeDirectoryCandidate(for username: String) async -> String? {
+        guard let client, let sessionId, isConnected else { return nil }
+        for candidate in Self.homeDirectoryCandidates(for: username) {
+            let exists = await Task.detached(priority: .userInitiated) {
+                (try? client.listDirectory(sessionId: sessionId, path: candidate)) != nil
+            }.value
+            if exists {
+                return candidate
+            }
+        }
+        return nil
+    }
+
     func upload(localPath: String, remoteDirectory: String) async throws {
         try await runOnBridge { client, sessionId in
             try client.uploadEntry(
@@ -238,7 +251,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
             }
         }
 
-        return "/home/\(username)"
+        return rawDirectory
     }
 
     private static func homeDirectoryCandidates(for username: String) -> [String] {
@@ -261,7 +274,10 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
             }.value
         } catch {
             if error.isConnectionLost {
-                handleImplicitDisconnect(reason: error.dockBridgeUserMessage)
+                let reason = error.dockBridgeUserMessage
+                Task { @MainActor in
+                    self.handleImplicitDisconnect(reason: reason)
+                }
             }
             throw error
         }

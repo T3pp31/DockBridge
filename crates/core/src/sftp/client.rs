@@ -198,7 +198,14 @@ impl<'a> SftpClient<'a> {
                 continue;
             }
             current = join_remote_path(&current, Path::new(segment));
-            let _ = self.create_directory(&current).await;
+            if let Err(SftpError::MkdirFailed { path, message }) =
+                self.create_directory(&current).await
+            {
+                if is_mkdir_already_exists_message(&message) {
+                    continue;
+                }
+                return Err(SftpError::MkdirFailed { path, message });
+            }
         }
 
         Ok(())
@@ -291,6 +298,13 @@ impl<'a> SftpClient<'a> {
     }
 }
 
+fn is_mkdir_already_exists_message(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("already exists")
+        || lower.contains("file exists")
+        || lower.contains("failure")
+}
+
 fn parent_remote_path(remote_path: &str) -> Option<String> {
     let normalized = normalize_remote_path(remote_path);
     if normalized == "/" {
@@ -308,7 +322,7 @@ fn parent_remote_path(remote_path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parent_remote_path;
+    use super::{is_mkdir_already_exists_message, parent_remote_path};
 
     #[test]
     fn parent_remote_path_returns_parent_directory() {
@@ -318,5 +332,14 @@ mod tests {
         );
         assert_eq!(parent_remote_path("/file.txt").as_deref(), Some("/"));
         assert_eq!(parent_remote_path("/"), None);
+    }
+
+    #[test]
+    fn mkdir_already_exists_messages_are_recognized() {
+        assert!(is_mkdir_already_exists_message("Failure"));
+        assert!(is_mkdir_already_exists_message("File already exists"));
+        assert!(is_mkdir_already_exists_message("file exists"));
+        assert!(!is_mkdir_already_exists_message("Permission denied"));
+        assert!(!is_mkdir_already_exists_message("No such file"));
     }
 }

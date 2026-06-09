@@ -1,25 +1,13 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-private enum DropOperationSync {
-    static func run<T: Sendable>(_ operation: @escaping @MainActor () async -> T) -> T {
-        if Thread.isMainThread {
-            var result: T!
-            let semaphore = DispatchSemaphore(value: 0)
-            Task { @MainActor in
-                result = await operation()
-                semaphore.signal()
-            }
-            while semaphore.wait(timeout: .now()) == .timedOut {
-                RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.001))
-            }
-            return result!
-        }
-
-        return DispatchQueue.main.sync {
-            run(operation)
-        }
+private func enqueueAsyncDropOperation(
+    operation: @escaping @MainActor () async -> Void
+) -> Bool {
+    Task { @MainActor in
+        await operation()
     }
+    return true
 }
 
 struct LocalPaneDropModifier: ViewModifier {
@@ -42,17 +30,13 @@ struct LocalPaneDropModifier: ViewModifier {
     private func acceptRemoteDownloads(_ items: [RemoteFileDragPayload]) -> Bool {
         guard !items.isEmpty else { return false }
 
-        return DropOperationSync.run { @MainActor in
-            var anySucceeded = false
+        return enqueueAsyncDropOperation {
             for item in items {
-                if await viewModel.download(
+                _ = await viewModel.download(
                     remotePath: item.path,
                     toLocalDirectory: viewModel.localPath
-                ) {
-                    anySucceeded = true
-                }
+                )
             }
-            return anySucceeded
         }
     }
 
@@ -107,17 +91,13 @@ struct RemotePaneDropModifier: ViewModifier {
         let validURLs = urls.filter { FileDropValidation.canUploadLocalItem(at: $0) }
         guard !validURLs.isEmpty else { return false }
 
-        return DropOperationSync.run { @MainActor in
-            var anySucceeded = false
+        return enqueueAsyncDropOperation {
             for url in validURLs {
-                if await viewModel.upload(
+                _ = await viewModel.upload(
                     localURL: url,
                     toRemoteDirectory: viewModel.remotePath
-                ) {
-                    anySucceeded = true
-                }
+                )
             }
-            return anySucceeded
         }
     }
 
@@ -127,17 +107,13 @@ struct RemotePaneDropModifier: ViewModifier {
         }
         guard !validItems.isEmpty else { return false }
 
-        return DropOperationSync.run { @MainActor in
-            var anySucceeded = false
+        return enqueueAsyncDropOperation {
             for item in validItems {
-                if await viewModel.moveRemoteItem(
+                _ = await viewModel.moveRemoteItem(
                     from: item.path,
                     toDirectory: viewModel.remotePath
-                ) {
-                    anySucceeded = true
-                }
+                )
             }
-            return anySucceeded
         }
     }
 }
@@ -150,6 +126,10 @@ struct LocalFileTable: View {
             TableColumn("Name") { item in
                 Label(item.name, systemImage: item.isDirectory ? "folder" : "doc")
             }
+            .width(
+                min: FileTableColumnLayout.nameMinWidth,
+                ideal: FileTableColumnLayout.nameIdealWidth
+            )
             TableColumn("Size") { item in
                 Text(item.isDirectory ? "—" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
             }
@@ -177,6 +157,10 @@ struct RemoteFileTable: View {
             TableColumn("Name") { item in
                 Label(item.name, systemImage: item.isDirectory ? "folder" : "doc")
             }
+            .width(
+                min: FileTableColumnLayout.nameMinWidth,
+                ideal: FileTableColumnLayout.nameIdealWidth
+            )
             TableColumn("Size") { item in
                 Text(remoteSizeLabel(for: item))
             }

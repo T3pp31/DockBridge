@@ -35,4 +35,20 @@ final class KnownHostsErrorMessageTests: XCTestCase {
             "Expected known hosts guidance, got: \(message)"
         )
     }
+
+    func testMkdirFailedErrorMessageMentionsRemoteDirectory() {
+        let message = DockBridgeError.friendlyMessage(
+            for: "failed to create directory '/home/demo': Permission denied"
+        )
+        XCTAssertTrue(message.contains("リモート"))
+        XCTAssertTrue(message.contains("作業ディレクトリ"))
+    }
+
+    func testUploadNoSuchFileErrorMessageMentionsRemoteDirectory() {
+        let message = DockBridgeError.friendlyMessage(
+            for: "failed to upload '/tmp/file.pdf' to '/home/demo/file.pdf': No such file: No such file"
+        )
+        XCTAssertTrue(message.contains("リモート"))
+        XCTAssertTrue(message.contains("保存先"))
+    }
 }

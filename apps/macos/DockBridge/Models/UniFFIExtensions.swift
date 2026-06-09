@@ -56,6 +56,14 @@ extension DockBridgeError {
             return "リモート先への書き込み権限がありません。リモートの作業ディレクトリを確認してください。"
         }
 
+        if lowercased.contains("failed to create directory") {
+            return "リモートの作業ディレクトリを作成できません。パスと書き込み権限を確認してください。"
+        }
+
+        if lowercased.contains("failed to upload") && lowercased.contains("no such file") {
+            return "リモートの保存先ディレクトリが存在しません。リモートペインで有効なディレクトリに移動してから再試行してください。"
+        }
+
         if lowercased.contains("not found") {
             return "ファイルまたはディレクトリが見つかりません。"
         }
