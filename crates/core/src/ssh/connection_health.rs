@@ -17,7 +17,9 @@ mod tests {
         // Given: a typical SFTP session closed message
         // When: checked for connection loss
         // Then: it is treated as disconnected
-        assert!(is_connection_lost_message("failed to upload: session closed"));
+        assert!(is_connection_lost_message(
+            "failed to upload: session closed"
+        ));
     }
 
     #[test]
