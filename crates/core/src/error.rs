@@ -100,6 +100,9 @@ pub enum SftpError {
     #[error("failed to create directory '{path}': {message}")]
     MkdirFailed { path: String, message: String },
 
+    #[error("failed to canonicalize remote path '{path}': {message}")]
+    CanonicalizeFailed { path: String, message: String },
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

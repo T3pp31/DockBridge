@@ -536,6 +536,10 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
     
     func download(sessionId: UInt64, remotePath: String, localPath: String) throws 
     
+    func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String) throws 
+    
+    func getInitialDirectory(sessionId: UInt64) throws  -> String
+    
     func getTransferQueue()  -> [TransferTaskRecord]
     
     func listDirectory(sessionId: UInt64, path: String) throws  -> [RemoteFileRecord]
@@ -543,6 +547,8 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
     func rename(sessionId: UInt64, from: String, to: String) throws 
     
     func upload(sessionId: UInt64, localPath: String, remotePath: String) throws 
+    
+    func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String) throws 
     
 }
 /**
@@ -656,6 +662,23 @@ open func download(sessionId: UInt64, remotePath: String, localPath: String)thro
 }
 }
     
+open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download_entry(self.uniffiClonePointer(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterString.lower(remotePath),
+        FfiConverterString.lower(localDirectory),$0
+    )
+}
+}
+    
+open func getInitialDirectory(sessionId: UInt64)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_get_initial_directory(self.uniffiClonePointer(),
+        FfiConverterUInt64.lower(sessionId),$0
+    )
+})
+}
+    
 open func getTransferQueue() -> [TransferTaskRecord]  {
     return try!  FfiConverterSequenceTypeTransferTaskRecord.lift(try! rustCall() {
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_get_transfer_queue(self.uniffiClonePointer(),$0
@@ -686,6 +709,15 @@ open func upload(sessionId: UInt64, localPath: String, remotePath: String)throws
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(localPath),
         FfiConverterString.lower(remotePath),$0
+    )
+}
+}
+    
+open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload_entry(self.uniffiClonePointer(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterString.lower(localPath),
+        FfiConverterString.lower(remoteDirectory),$0
     )
 }
 }
@@ -1737,6 +1769,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download() != 58889) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download_entry() != 36929) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_initial_directory() != 10511) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_transfer_queue() != 62228) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1747,6 +1785,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload() != 54637) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload_entry() != 14643) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_constructor_dockbridgeclient_new() != 44284) {

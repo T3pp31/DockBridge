@@ -2,14 +2,48 @@ import SwiftUI
 
 struct RemotePaneView: View {
     @ObservedObject var viewModel: MainViewModel
+    @State private var isDropTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             pathBar
 
-            remoteFileTable
+            RemoteFileTable(viewModel: viewModel)
+                .contextMenu(forSelectionType: String.self) { ids in
+                    if let item = singleSelectedRemoteItem(from: ids) {
+                        Button("Download") {
+                            viewModel.selectedRemoteItemID = item.id
+                            Task { await viewModel.downloadSelected() }
+                        }
+                        Button("Rename") {
+                            viewModel.beginRename(item: item)
+                        }
+                        Button("Delete", role: .destructive) {
+                            viewModel.requestDeleteRemote(item: item)
+                        }
+                    }
+                } primaryAction: { ids in
+                    if let item = singleSelectedRemoteItem(from: ids) ?? viewModel.selectedRemoteItem,
+                       item.isDirectory {
+                        viewModel.navigateRemote(into: item)
+                    }
+                }
+                .onKeyPress(.return) {
+                    if let item = viewModel.selectedRemoteItem, item.isDirectory {
+                        viewModel.navigateRemote(into: item)
+                        return .handled
+                    }
+                    return .ignored
+                }
         }
         .padding(12)
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.accentColor, lineWidth: 2)
+            }
+        }
+        .modifier(RemotePaneDropModifier(viewModel: viewModel, isTargeted: $isDropTargeted))
         .task(id: viewModel.remotePath) {
             await viewModel.reloadRemote()
         }
@@ -46,49 +80,6 @@ struct RemotePaneView: View {
         }
     }
 
-    private var remoteFileTable: some View {
-        Table(viewModel.remoteItems, selection: $viewModel.selectedRemoteItemID) {
-            TableColumn("Name") { (item: RemoteFileRecord) in
-                Label(item.name, systemImage: item.isDirectory ? "folder" : "doc")
-            }
-            TableColumn("Size") { (item: RemoteFileRecord) in
-                Text(remoteSizeLabel(for: item))
-            }
-            TableColumn("Path") { (item: RemoteFileRecord) in
-                Text(item.path)
-                    .lineLimit(1)
-                    .help(item.path)
-            }
-        }
-        .contextMenu(forSelectionType: String.self) { ids in
-            if let item = singleSelectedRemoteItem(from: ids) {
-                if !item.isDirectory {
-                    Button("Download") {
-                        viewModel.selectedRemoteItemID = item.id
-                        Task { await viewModel.downloadSelected() }
-                    }
-                }
-                Button("Rename") {
-                    viewModel.beginRename(item: item)
-                }
-                Button("Delete", role: .destructive) {
-                    viewModel.requestDeleteRemote(item: item)
-                }
-            }
-        } primaryAction: { ids in
-            if let item = singleSelectedRemoteItem(from: ids), item.isDirectory {
-                viewModel.navigateRemote(into: item)
-            }
-        }
-    }
-
-    private func remoteSizeLabel(for item: RemoteFileRecord) -> String {
-        if item.isDirectory {
-            return "—"
-        }
-        return ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file)
-    }
-
     private func singleSelectedRemoteItem(from ids: Set<String>) -> RemoteFileRecord? {
         guard ids.count == 1, let id = ids.first else { return nil }
         return viewModel.remoteItems.first { $0.id == id }
@@ -118,7 +109,7 @@ struct RemotePaneView: View {
             } label: {
                 Label("Download", systemImage: "square.and.arrow.down")
             }
-            .disabled(viewModel.selectedRemoteItem == nil || viewModel.selectedRemoteItem?.isDirectory == true || !viewModel.bridge.isConnected)
+            .disabled(viewModel.selectedRemoteItem == nil || !viewModel.bridge.isConnected)
             Button {
                 viewModel.showMkdirPrompt = true
             } label: {

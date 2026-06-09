@@ -39,8 +39,12 @@ extension DockBridgeError {
             return "接続先・ポート・ネットワークを確認してください。"
         }
 
+        if lowercased.contains("session closed") {
+            return "接続が切断されました。再接続してから再試行してください。"
+        }
+
         if lowercased.contains("permission denied") {
-            return "アクセス権限がありません。"
+            return "リモート先への書き込み権限がありません。リモートの作業ディレクトリを確認してください。"
         }
 
         if lowercased.contains("not found") {

@@ -205,6 +205,20 @@ impl DockBridgeClient {
         Ok(())
     }
 
+    fn get_initial_directory(&self, session_id: u64) -> Result<String, DockBridgeError> {
+        let sessions = Arc::clone(&self.sessions);
+        block_on(async move {
+            let sessions = sessions.lock().await;
+            let session = sessions
+                .get(&session_id)
+                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+            SftpClient::new(session)
+                .initial_directory()
+                .await
+                .map_err(map_error)
+        })
+    }
+
     fn list_directory(
         &self,
         session_id: u64,
@@ -230,19 +244,7 @@ impl DockBridgeClient {
         local_path: String,
         remote_path: String,
     ) -> Result<(), DockBridgeError> {
-        let sessions = Arc::clone(&self.sessions);
-        let transfer_manager = Arc::clone(&self.transfer_manager);
-        block_on(async move {
-            let sessions = sessions.lock().await;
-            let session = sessions
-                .get(&session_id)
-                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
-            transfer_manager
-                .enqueue_upload(session, &local_path, remote_path)
-                .await
-                .map_err(map_error)
-        })?;
-        Ok(())
+        self.upload_entry(session_id, local_path, remote_path)
     }
 
     fn download(
@@ -250,6 +252,15 @@ impl DockBridgeClient {
         session_id: u64,
         remote_path: String,
         local_path: String,
+    ) -> Result<(), DockBridgeError> {
+        self.download_entry(session_id, remote_path, local_path)
+    }
+
+    fn upload_entry(
+        &self,
+        session_id: u64,
+        local_path: String,
+        remote_directory: String,
     ) -> Result<(), DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
         let transfer_manager = Arc::clone(&self.transfer_manager);
@@ -259,9 +270,32 @@ impl DockBridgeClient {
                 .get(&session_id)
                 .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
             transfer_manager
-                .enqueue_download(session, remote_path, &local_path)
+                .enqueue_upload_entry(session, &local_path, remote_directory)
                 .await
-                .map_err(map_error)
+                .map_err(map_error)?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    fn download_entry(
+        &self,
+        session_id: u64,
+        remote_path: String,
+        local_directory: String,
+    ) -> Result<(), DockBridgeError> {
+        let sessions = Arc::clone(&self.sessions);
+        let transfer_manager = Arc::clone(&self.transfer_manager);
+        block_on(async move {
+            let sessions = sessions.lock().await;
+            let session = sessions
+                .get(&session_id)
+                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+            transfer_manager
+                .enqueue_download_entry(session, remote_path, &local_directory)
+                .await
+                .map_err(map_error)?;
+            Ok(())
         })?;
         Ok(())
     }
