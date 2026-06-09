@@ -42,21 +42,18 @@ struct LocalPaneDropModifier: ViewModifier {
     private func acceptRemoteDownloads(_ items: [RemoteFileDragPayload]) -> Bool {
         guard !items.isEmpty else { return false }
 
-        let accepted = DropOperationSync.run { @MainActor in
+        return DropOperationSync.run { @MainActor in
             var anySucceeded = false
             for item in items {
-                let success = await viewModel.download(
+                if await viewModel.download(
                     remotePath: item.path,
                     toLocalDirectory: viewModel.localPath
-                )
-                if success {
+                ) {
                     anySucceeded = true
                 }
             }
             return anySucceeded
         }
-
-        return accepted
     }
 
     private func acceptLocalMoves(_ items: [LocalFileDragPayload]) -> Bool {
@@ -99,45 +96,29 @@ struct RemotePaneDropModifier: ViewModifier {
     }
 
     private func acceptLocalUploads(_ items: [LocalFileDragPayload]) -> Bool {
-        let validItems = items.filter { FileDropValidation.canUploadLocalItem(at: $0.url) }
-        guard !validItems.isEmpty else { return false }
-
-        let accepted = DropOperationSync.run { @MainActor in
-            var anySucceeded = false
-            for item in validItems {
-                let success = await viewModel.upload(
-                    localURL: item.url,
-                    toRemoteDirectory: viewModel.remotePath
-                )
-                if success {
-                    anySucceeded = true
-                }
-            }
-            return anySucceeded
-        }
-
-        return accepted
+        acceptUploads(urls: items.map(\.url))
     }
 
     private func acceptExternalUploads(_ urls: [URL]) -> Bool {
+        acceptUploads(urls: urls)
+    }
+
+    private func acceptUploads(urls: [URL]) -> Bool {
         let validURLs = urls.filter { FileDropValidation.canUploadLocalItem(at: $0) }
         guard !validURLs.isEmpty else { return false }
 
-        let accepted = DropOperationSync.run { @MainActor in
+        return DropOperationSync.run { @MainActor in
             var anySucceeded = false
             for url in validURLs {
-                let success = await viewModel.upload(
+                if await viewModel.upload(
                     localURL: url,
                     toRemoteDirectory: viewModel.remotePath
-                )
-                if success {
+                ) {
                     anySucceeded = true
                 }
             }
             return anySucceeded
         }
-
-        return accepted
     }
 
     private func acceptRemoteMoves(_ items: [RemoteFileDragPayload]) -> Bool {
@@ -146,21 +127,18 @@ struct RemotePaneDropModifier: ViewModifier {
         }
         guard !validItems.isEmpty else { return false }
 
-        let accepted = DropOperationSync.run { @MainActor in
+        return DropOperationSync.run { @MainActor in
             var anySucceeded = false
             for item in validItems {
-                let success = await viewModel.moveRemoteItem(
+                if await viewModel.moveRemoteItem(
                     from: item.path,
                     toDirectory: viewModel.remotePath
-                )
-                if success {
+                ) {
                     anySucceeded = true
                 }
             }
             return anySucceeded
         }
-
-        return accepted
     }
 }
 

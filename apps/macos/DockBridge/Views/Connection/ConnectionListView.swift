@@ -70,12 +70,14 @@ struct ConnectionListView: View {
 
     @ViewBuilder
     private func connectionIndicator(for profile: ConnectionProfile) -> some View {
-        if viewModel.connectedProfileID == profile.id, viewModel.connectionStatus.isConnected {
+        let isActiveProfile = viewModel.connectedProfileID == profile.id
+
+        if isActiveProfile, viewModel.connectionStatus.isConnected {
             Circle()
                 .fill(.green)
                 .frame(width: 8, height: 8)
                 .accessibilityLabel("Connected")
-        } else if viewModel.connectedProfileID == profile.id, viewModel.connectionStatus.isConnecting {
+        } else if isActiveProfile, viewModel.connectionStatus.isConnecting {
             ProgressView()
                 .controlSize(.small)
                 .accessibilityLabel("Connecting")

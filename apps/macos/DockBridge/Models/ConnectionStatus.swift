@@ -6,17 +6,11 @@ enum ConnectionStatus: Equatable {
     case connected(endpoint: String)
 
     var isConnected: Bool {
-        if case .connected = self {
-            return true
-        }
-        return false
+        if case .connected = self { true } else { false }
     }
 
     var isConnecting: Bool {
-        if case .connecting = self {
-            return true
-        }
-        return false
+        if case .connecting = self { true } else { false }
     }
 
     var endpointLabel: String? {

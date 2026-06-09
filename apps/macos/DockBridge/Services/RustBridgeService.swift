@@ -199,17 +199,18 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
     private func handleImplicitDisconnect(reason: String) {
         guard connectionStatus.isConnected || connectionStatus.isConnecting else { return }
         lastDisconnectReason = reason
-        sessionId = nil
-        initialRemoteDirectory = nil
-        connectedUsername = nil
-        connectionStatus = .disconnected
+        resetSessionFields()
     }
 
     private func clearConnectionState() {
+        resetSessionFields()
+        connectedProfileID = nil
+    }
+
+    private func resetSessionFields() {
         sessionId = nil
         initialRemoteDirectory = nil
         connectedUsername = nil
-        connectedProfileID = nil
         connectionStatus = .disconnected
     }
 

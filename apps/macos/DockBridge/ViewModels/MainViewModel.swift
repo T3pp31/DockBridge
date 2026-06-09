@@ -93,19 +93,19 @@ final class MainViewModel: ObservableObject {
     }
 
     func onConnectionChanged(isConnected: Bool) async {
-        if isConnected {
-            do {
-                try await prepareRemoteWorkingDirectory()
-            } catch {
-                errorMessage = error.dockBridgeUserMessage
-            }
-        } else {
+        guard isConnected else {
             remotePath = "/"
             remoteItems = []
             if let reason = bridge.lastDisconnectReason {
                 errorMessage = DockBridgeError.friendlyMessage(for: reason)
             }
             return
+        }
+
+        do {
+            try await prepareRemoteWorkingDirectory()
+        } catch {
+            errorMessage = error.dockBridgeUserMessage
         }
         await reloadRemote()
     }

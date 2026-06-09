@@ -430,8 +430,8 @@ impl DockBridgeClient {
     fn spawn_health_monitor(&self, session_id: u64) {
         let interval_secs = self.config.session_health_check_interval_secs.max(1);
         let sessions = Arc::clone(&self.sessions);
-        let monitors_for_task = Arc::clone(&self.monitors);
-        let monitors_for_insert = Arc::clone(&self.monitors);
+        let monitors = Arc::clone(&self.monitors);
+        let monitors_in_task = Arc::clone(&monitors);
         let connection_event_handler = Arc::clone(&self.connection_event_handler);
 
         let monitor_task = runtime().spawn(async move {
@@ -451,7 +451,7 @@ impl DockBridgeClient {
                 if let Err(error) = check_result {
                     let message = error.to_string();
                     if is_connection_lost_message(&message) {
-                        if let Some(handle) = monitors_for_task.lock().await.remove(&session_id) {
+                        if let Some(handle) = monitors_in_task.lock().await.remove(&session_id) {
                             handle.abort();
                         }
                         sessions.lock().await.remove(&session_id);
@@ -463,10 +463,7 @@ impl DockBridgeClient {
         });
 
         block_on(async {
-            monitors_for_insert
-                .lock()
-                .await
-                .insert(session_id, monitor_task);
+            monitors.lock().await.insert(session_id, monitor_task);
         });
     }
 }
