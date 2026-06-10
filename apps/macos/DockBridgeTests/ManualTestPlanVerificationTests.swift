@@ -55,6 +55,62 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         XCTAssertEqual(try keychain.loadPassword(account: account), "dockbridge-e2e")
     }
 
+    func testCancelInProgressLargeFileUpload() async throws {
+        try await prepareBridge()
+        guard let bridge else {
+            return XCTFail("Bridge should be connected")
+        }
+
+        let remoteDirectory = try await resolveRemoteDirectory()
+        let localFile = tempDirectory!.appendingPathComponent("large-cancel-test.bin")
+        let fileSize = 32 * 1024 * 1024
+        try Data(repeating: 0xAB, count: fileSize).write(to: localFile)
+
+        let transferQueue = TransferQueueViewModel(bridge: bridge)
+        let uploadTask = Task {
+            try await bridge.upload(localPath: localFile.path, remoteDirectory: remoteDirectory)
+        }
+
+        var inProgressTask: TransferTaskRecord?
+        for _ in 0..<100 {
+            await transferQueue.refresh()
+            inProgressTask = transferQueue.tasks.first { task in
+                if case .inProgress = task.status {
+                    return true
+                }
+                return false
+            }
+            if inProgressTask != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        guard let inProgressTask else {
+            uploadTask.cancel()
+            _ = await uploadTask.result
+            return XCTFail("Expected an in-progress transfer task before upload completed")
+        }
+
+        await transferQueue.cancel(task: inProgressTask)
+        XCTAssertNil(transferQueue.errorMessage, "Cancel should succeed without error")
+
+        var reachedCancelled = false
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline {
+            await transferQueue.refresh()
+            if let task = transferQueue.tasks.first(where: { $0.id == inProgressTask.id }),
+               case .cancelled = task.status {
+                reachedCancelled = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertTrue(reachedCancelled, "Transfer task should reach cancelled status")
+
+        _ = await uploadTask.result
+    }
+
     func testDisconnectsWithinHealthCheckIntervalAfterSshdKill() async throws {
         try await prepareBridge()
         XCTAssertTrue(bridge?.isConnected == true)

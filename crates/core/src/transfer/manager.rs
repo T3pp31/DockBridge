@@ -144,7 +144,14 @@ impl TransferManager {
         task_id: u64,
         result: Result<(), TransferError>,
     ) -> Result<(), TransferError> {
+        let was_cancelled = self.is_cancelled(task_id);
         self.remove_cancellation_flag(task_id);
+
+        if was_cancelled {
+            self.update_task_status(task_id, TransferStatus::Cancelled);
+            return Err(TransferError::Cancelled);
+        }
+
         match result {
             Ok(()) => {
                 self.update_task_status(task_id, TransferStatus::Completed);
@@ -623,6 +630,30 @@ mod tests {
         manager.request_cancellation(10);
 
         assert!(manager.is_cancelled(10));
+    }
+
+    #[test]
+    fn finalize_task_result_honours_cancel_after_successful_transfer() {
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 11,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::InProgress,
+        };
+
+        manager.insert_task(task);
+        manager.register_cancellation_flag(11);
+        manager.request_cancellation(11);
+
+        let err = manager
+            .finalize_task_result(11, Ok(()))
+            .expect_err("cancelled task should not finalize as completed");
+
+        assert!(matches!(err, TransferError::Cancelled));
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].status, TransferStatus::Cancelled);
     }
 
     #[test]
