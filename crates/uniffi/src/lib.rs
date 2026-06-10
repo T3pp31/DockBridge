@@ -173,6 +173,7 @@ impl DockBridgeClient {
             connection_timeout_secs: app_config.connection_timeout_secs,
             session_health_check_interval_secs: app_config.session_health_check_interval_secs,
             transfer_retry_count: app_config.transfer_retry_count,
+            transfer_chunk_size_bytes: AppConfig::default().transfer_chunk_size_bytes,
             known_hosts_path,
         };
         let known_hosts_manager =

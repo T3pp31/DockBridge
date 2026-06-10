@@ -42,6 +42,7 @@ pub struct TransferTask {
 pub struct TransferManager {
     next_id: AtomicU64,
     retry_count: u32,
+    chunk_size: usize,
     tasks: Mutex<Vec<TransferTask>>,
     cancellation_flags: Mutex<HashMap<u64, Arc<AtomicBool>>>,
 }
@@ -52,6 +53,7 @@ impl TransferManager {
         Self {
             next_id: AtomicU64::new(1),
             retry_count: config.transfer_retry_count,
+            chunk_size: config.transfer_chunk_size_bytes,
             tasks: Mutex::new(Vec::new()),
             cancellation_flags: Mutex::new(HashMap::new()),
         }
@@ -382,8 +384,14 @@ impl TransferManager {
             }
 
             attempt = current;
-            match client.upload(local_path, remote_path).await {
+            match client
+                .upload_cancellable(local_path, remote_path, self.chunk_size, || {
+                    self.is_cancelled(task_id)
+                })
+                .await
+            {
                 Ok(()) => return Ok(()),
+                Err(SftpError::Cancelled) => return Err(TransferError::Cancelled),
                 Err(err) => {
                     last_error = err.to_string();
                     if is_non_retryable_transfer_error(&last_error) {
@@ -425,8 +433,14 @@ impl TransferManager {
             }
 
             attempt = current;
-            match client.download(remote_path, local_path).await {
+            match client
+                .download_cancellable(remote_path, local_path, self.chunk_size, || {
+                    self.is_cancelled(task_id)
+                })
+                .await
+            {
                 Ok(()) => return Ok(()),
+                Err(SftpError::Cancelled) => return Err(TransferError::Cancelled),
                 Err(err) => {
                     last_error = err.to_string();
                     if is_non_retryable_transfer_error(&last_error) {
@@ -477,9 +491,12 @@ pub(crate) fn is_non_retryable_transfer_error(message: &str) -> bool {
 }
 
 fn transfer_error_from_sftp(error: SftpError) -> TransferError {
-    TransferError::RetriesExhausted {
-        attempts: 1,
-        message: error.to_string(),
+    match error {
+        SftpError::Cancelled => TransferError::Cancelled,
+        other => TransferError::RetriesExhausted {
+            attempts: 1,
+            message: other.to_string(),
+        },
     }
 }
 
@@ -581,6 +598,12 @@ mod tests {
         assert!(manager.is_cancelled(8));
         let queue = manager.get_transfer_queue();
         assert_eq!(queue[0].status, TransferStatus::Cancelled);
+    }
+
+    #[test]
+    fn sftp_cancelled_maps_to_transfer_cancelled() {
+        let err = transfer_error_from_sftp(SftpError::Cancelled);
+        assert!(matches!(err, TransferError::Cancelled));
     }
 
     #[test]

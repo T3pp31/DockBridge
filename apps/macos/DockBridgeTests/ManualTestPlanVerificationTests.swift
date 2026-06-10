@@ -65,7 +65,8 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         }
 
         let remoteDirectory = try await resolveRemoteDirectory()
-        let localFile = tempDirectory!.appendingPathComponent("large-cancel-test.bin")
+        let remoteFileName = "large-cancel-\(UUID().uuidString).bin"
+        let localFile = tempDirectory!.appendingPathComponent(remoteFileName)
         let fileSize = 32 * 1024 * 1024
         try Data(repeating: 0xAB, count: fileSize).write(to: localFile)
 
@@ -111,7 +112,26 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         }
         XCTAssertTrue(reachedCancelled, "Transfer task should reach cancelled status")
 
-        _ = await uploadTask.result
+        let uploadResult = await uploadTask.result
+        switch uploadResult {
+        case .success:
+            XCTFail("Upload should fail after cancel, not succeed")
+        case .failure(let error):
+            XCTAssertTrue(
+                error.localizedDescription.lowercased().contains("cancel"),
+                "Upload error should mention cancellation, got: \(error.localizedDescription)"
+            )
+        }
+
+        let remoteItems = try await bridge.listDirectory(path: remoteDirectory)
+        let remoteItem = remoteItems.first { $0.name == remoteFileName }
+        if let remoteItem {
+            XCTAssertLessThan(
+                remoteItem.size,
+                UInt64(fileSize),
+                "Cancelled upload must not leave a complete remote file (remote=\(remoteItem.size), local=\(fileSize))"
+            )
+        }
     }
 
     func testDisconnectsWithinHealthCheckIntervalAfterSshdKill() async throws {

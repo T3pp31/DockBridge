@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub session_health_check_interval_secs: u64,
     /// Number of retries for failed transfers.
     pub transfer_retry_count: u32,
+    /// Read/write chunk size for cancellable SFTP transfers.
+    pub transfer_chunk_size_bytes: usize,
     /// Path to the DockBridge known hosts JSON store.
     pub known_hosts_path: PathBuf,
 }
@@ -23,6 +25,7 @@ impl Default for AppConfig {
             connection_timeout_secs: 30,
             session_health_check_interval_secs: 10,
             transfer_retry_count: 3,
+            transfer_chunk_size_bytes: default_transfer_chunk_size_bytes(),
             known_hosts_path: default_known_hosts_path(),
         }
     }
@@ -88,6 +91,10 @@ fn home_dir() -> Option<PathBuf> {
 
 fn default_known_hosts_path() -> PathBuf {
     expand_tilde(Path::new("~/.dockbridge/known_hosts.json"))
+}
+
+fn default_transfer_chunk_size_bytes() -> usize {
+    262_144
 }
 
 /// Ensures the parent directory for the known hosts file exists.
