@@ -55,6 +55,9 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         XCTAssertEqual(try keychain.loadPassword(account: account), "dockbridge-e2e")
     }
 
+    /// Automated check for manual test plan:
+    /// "大きなファイル転送中に Transfer Queue の Cancel ボタンで中断できること"
+    /// Run: `./scripts/verify-transfer-cancel.sh` from the repository root.
     func testCancelInProgressLargeFileUpload() async throws {
         try await prepareBridge()
         guard let bridge else {

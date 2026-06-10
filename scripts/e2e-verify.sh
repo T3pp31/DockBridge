@@ -135,6 +135,10 @@ swift_corrupted_known_hosts_message() {
     >/dev/null 2>&1
 }
 
+transfer_cancel_in_progress() {
+  "$ROOT/scripts/verify-transfer-cancel.sh" >/dev/null 2>&1
+}
+
 main() {
   ensure_container
   prepare_config
@@ -147,6 +151,7 @@ main() {
   check "transfer queue lifecycle tests pass" transfer_queue_states
   check "corrupted known_hosts returns readable error (CLI)" corrupted_known_hosts_errors
   check "corrupted known_hosts user-facing message (Swift)" swift_corrupted_known_hosts_message
+  check "in-progress large upload can be cancelled (Transfer Queue)" transfer_cancel_in_progress
 
   log "SUMMARY: $pass passed, $fail failed"
   log "Log: $LOG"

@@ -28,6 +28,33 @@ Policy B (v0.1): commit `DockBridge/Generated/DockBridgeUniffi.swift` only. Do n
 1. Build the Rust library (above).
 2. Open the Xcode project and press Cmd+R.
 
+## Verify transfer cancel (Issue #3)
+
+### Automated (recommended)
+
+Requires Docker. Starts `dockbridge-e2e` on port 2222 if needed, then runs the E2E test that mirrors the Transfer Queue Cancel flow:
+
+```bash
+./scripts/verify-transfer-cancel.sh
+```
+
+This is also included in the full E2E suite:
+
+```bash
+./scripts/e2e-verify.sh
+```
+
+### Manual UI check
+
+1. Start Docker SFTP: `docker run -d --name dockbridge-e2e -p 2222:22 -e SFTP_USER=demo atmoz/sftp demo:password:::upload`
+2. Build Rust (`./scripts/build-rust.sh`) and run the app in Xcode (Cmd+R).
+3. Connect to `127.0.0.1:2222` as `demo` / `password`; accept the host key.
+4. Upload a large local file (32 MB or more) to the remote pane.
+5. Open **Transfer Queue**, confirm the task shows **In Progress** with a **Cancel** button.
+6. Click **Cancel**; the task status should change to **Cancelled**.
+
+Note: SFTP read/write cannot be interrupted mid-stream in v0.1. Cancel takes effect after the current transfer attempt finishes or before the next retry.
+
 ## Architecture
 
 - Swift builds `AppConfigRecord` and passes it to Rust via UniFFI.
