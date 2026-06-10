@@ -300,9 +300,7 @@ impl<'a> SftpClient<'a> {
 
 fn is_mkdir_already_exists_message(message: &str) -> bool {
     let lower = message.to_lowercase();
-    lower.contains("already exists")
-        || lower.contains("file exists")
-        || lower.contains("failure")
+    lower.contains("already exists") || lower.contains("file exists") || lower.contains("failure")
 }
 
 fn parent_remote_path(remote_path: &str) -> Option<String> {
