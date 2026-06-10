@@ -93,18 +93,20 @@ final class MainViewModel: ObservableObject {
     }
 
     func onConnectionChanged(isConnected: Bool) async {
-        if isConnected {
-            do {
-                try await prepareRemoteWorkingDirectory()
-            } catch {
-                errorMessage = error.dockBridgeUserMessage
-            }
-        } else {
+        guard isConnected else {
             remotePath = "/"
             remoteItems = []
+            if let reason = bridge.lastDisconnectReason {
+                errorMessage = DockBridgeError.friendlyMessage(for: reason)
+            }
             return
         }
-        await reloadRemote()
+
+        do {
+            try await prepareRemoteWorkingDirectory()
+        } catch {
+            errorMessage = error.dockBridgeUserMessage
+        }
     }
 
     func prepareRemoteWorkingDirectory() async throws {
@@ -119,29 +121,31 @@ final class MainViewModel: ObservableObject {
         do {
             remotePath = try await bridge.getInitialDirectory()
         } catch {
-            if let fallback = fallbackHomePath() {
+            if let fallback = await verifiedFallbackHomePath() {
                 remotePath = fallback
             } else {
                 throw error
             }
         }
 
-        if remotePath == "/", let fallback = fallbackHomePath() {
+        if remotePath == "/", let fallback = await verifiedFallbackHomePath() {
             remotePath = fallback
         }
     }
 
-    private func fallbackHomePath() -> String? {
-        if let username = bridge.connectedUsername, !username.isEmpty, username != "root" {
-            return "/home/\(username)"
+    private func verifiedFallbackHomePath() async -> String? {
+        if let username = bridge.connectedUsername,
+           !username.isEmpty,
+           username != "root" {
+            return await bridge.firstExistingHomeDirectoryCandidate(for: username)
         }
         guard let profileID = connectionList.selectedProfileID,
-              let profile = connectionList.profiles.first(where: { $0.id == profileID })
+              let profile = connectionList.profiles.first(where: { $0.id == profileID }),
+              !profile.isRootUser
         else {
             return nil
         }
-        guard !profile.isRootUser else { return nil }
-        return "/home/\(profile.username)"
+        return await bridge.firstExistingHomeDirectoryCandidate(for: profile.username)
     }
 
     func reloadRemote() async {
@@ -161,6 +165,9 @@ final class MainViewModel: ObservableObject {
         } catch {
             guard generation == remoteLoadGeneration else { return }
             errorMessage = error.dockBridgeUserMessage
+            if error.isConnectionLost {
+                remoteItems = []
+            }
         }
     }
 
@@ -186,10 +193,11 @@ final class MainViewModel: ObservableObject {
         await download(remotePath: item.path, toLocalDirectory: localPath)
     }
 
-    func upload(localURL: URL, toRemoteDirectory: String) async {
+    @discardableResult
+    func upload(localURL: URL, toRemoteDirectory: String) async -> Bool {
         guard bridge.isConnected else {
             errorMessage = "Not connected to a remote host."
-            return
+            return false
         }
 
         do {
@@ -198,23 +206,28 @@ final class MainViewModel: ObservableObject {
             try await bridge.upload(localPath: localURL.path, remoteDirectory: directory)
             await transferQueue.refresh()
             await reloadRemote()
+            return true
         } catch {
             errorMessage = error.dockBridgeUserMessage
+            return false
         }
     }
 
-    func download(remotePath: String, toLocalDirectory: URL) async {
+    @discardableResult
+    func download(remotePath: String, toLocalDirectory: URL) async -> Bool {
         guard bridge.isConnected else {
             errorMessage = "Not connected to a remote host."
-            return
+            return false
         }
 
         do {
             try await bridge.download(remotePath: remotePath, localDirectory: toLocalDirectory.path)
             await transferQueue.refresh()
             reloadLocal()
+            return true
         } catch {
             errorMessage = error.dockBridgeUserMessage
+            return false
         }
     }
 
@@ -228,15 +241,16 @@ final class MainViewModel: ObservableObject {
         reloadLocal()
     }
 
-    func moveRemoteItem(from source: String, toDirectory directory: String) async {
+    @discardableResult
+    func moveRemoteItem(from source: String, toDirectory directory: String) async -> Bool {
         guard bridge.isConnected else {
             errorMessage = "Not connected to a remote host."
-            return
+            return false
         }
 
         guard FileDropValidation.canMoveRemoteItem(from: source, to: directory) else {
             errorMessage = FileDropError.invalidMove.localizedDescription
-            return
+            return false
         }
 
         let name = (source as NSString).lastPathComponent
@@ -245,8 +259,10 @@ final class MainViewModel: ObservableObject {
         do {
             try await bridge.renameRemote(from: source, to: destination)
             await reloadRemote()
+            return true
         } catch {
             errorMessage = error.dockBridgeUserMessage
+            return false
         }
     }
 

@@ -13,5 +13,8 @@ pub use error::{
 };
 pub use security::{fingerprint_sha256, HostKeyCheckResult, KnownHostsManager};
 pub use sftp::{RemoteFile, SftpClient};
-pub use ssh::{AuthType, ConnectionProfile, HostKeyPrompt, SecretPassword, SshSession};
+pub use ssh::{
+    is_connection_lost_message, AuthType, ConnectionProfile, HostKeyPrompt, SecretPassword,
+    SshSession,
+};
 pub use transfer::{TransferDirection, TransferManager, TransferStatus, TransferTask};

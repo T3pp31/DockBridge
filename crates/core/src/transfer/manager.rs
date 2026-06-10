@@ -405,9 +405,11 @@ fn parent_remote_path(remote_path: &str) -> Option<String> {
 /// Returns `true` when retrying the same transfer is unlikely to succeed.
 pub(crate) fn is_non_retryable_transfer_error(message: &str) -> bool {
     let lower = message.to_lowercase();
-    lower.contains("session closed")
+    crate::ssh::is_connection_lost_message(message)
         || lower.contains("permission denied")
         || lower.contains("failure")
+        || lower.contains("no such file")
+        || lower.contains("failed to create directory")
 }
 
 fn transfer_error_from_sftp(error: SftpError) -> TransferError {
@@ -520,7 +522,13 @@ mod tests {
             "failed to upload '/a' to '/b': Permission denied"
         ));
         assert!(is_non_retryable_transfer_error("SFTP failure"));
-        assert!(!is_non_retryable_transfer_error("connection reset"));
+        assert!(is_non_retryable_transfer_error("connection reset"));
+        assert!(is_non_retryable_transfer_error(
+            "failed to upload '/a' to '/b': No such file: No such file"
+        ));
+        assert!(is_non_retryable_transfer_error(
+            "failed to create directory '/home/demo': Permission denied"
+        ));
     }
 
     #[test]

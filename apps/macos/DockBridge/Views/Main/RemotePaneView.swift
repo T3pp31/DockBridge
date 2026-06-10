@@ -8,33 +8,42 @@ struct RemotePaneView: View {
         VStack(alignment: .leading, spacing: 8) {
             pathBar
 
-            RemoteFileTable(viewModel: viewModel)
-                .contextMenu(forSelectionType: String.self) { ids in
-                    if let item = singleSelectedRemoteItem(from: ids) {
-                        Button("Download") {
-                            viewModel.selectedRemoteItemID = item.id
-                            Task { await viewModel.downloadSelected() }
+            if viewModel.bridge.isConnected {
+                RemoteFileTable(viewModel: viewModel)
+                    .contextMenu(forSelectionType: String.self) { ids in
+                        if let item = singleSelectedRemoteItem(from: ids) {
+                            Button("Download") {
+                                viewModel.selectedRemoteItemID = item.id
+                                Task { await viewModel.downloadSelected() }
+                            }
+                            Button("Rename") {
+                                viewModel.beginRename(item: item)
+                            }
+                            Button("Delete", role: .destructive) {
+                                viewModel.requestDeleteRemote(item: item)
+                            }
                         }
-                        Button("Rename") {
-                            viewModel.beginRename(item: item)
-                        }
-                        Button("Delete", role: .destructive) {
-                            viewModel.requestDeleteRemote(item: item)
+                    } primaryAction: { ids in
+                        if let item = singleSelectedRemoteItem(from: ids) ?? viewModel.selectedRemoteItem,
+                           item.isDirectory {
+                            viewModel.navigateRemote(into: item)
                         }
                     }
-                } primaryAction: { ids in
-                    if let item = singleSelectedRemoteItem(from: ids) ?? viewModel.selectedRemoteItem,
-                       item.isDirectory {
-                        viewModel.navigateRemote(into: item)
+                    .onKeyPress(.return) {
+                        if let item = viewModel.selectedRemoteItem, item.isDirectory {
+                            viewModel.navigateRemote(into: item)
+                            return .handled
+                        }
+                        return .ignored
                     }
-                }
-                .onKeyPress(.return) {
-                    if let item = viewModel.selectedRemoteItem, item.isDirectory {
-                        viewModel.navigateRemote(into: item)
-                        return .handled
-                    }
-                    return .ignored
-                }
+            } else {
+                ContentUnavailableView(
+                    "リモートホストに接続していません",
+                    systemImage: "network.slash",
+                    description: Text("接続プロファイルを選択して Connect を押してください。")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .padding(12)
         .overlay {

@@ -17,6 +17,7 @@ enum DockBridgePaths {
 
 enum AppSettingsKeys {
     static let connectionTimeoutSecs = "connectionTimeoutSecs"
+    static let sessionHealthCheckIntervalSecs = "sessionHealthCheckIntervalSecs"
     static let transferRetryCount = "transferRetryCount"
     static let defaultLocalPath = "defaultLocalPath"
     static let confirmBeforeDelete = "confirmBeforeDelete"
@@ -36,6 +37,7 @@ final class AppSettingsService: @unchecked Sendable {
     private func registerDefaults() {
         defaults.register(defaults: [
             AppSettingsKeys.connectionTimeoutSecs: Int(AppConfig.default.connectionTimeoutSecs),
+            AppSettingsKeys.sessionHealthCheckIntervalSecs: Int(AppConfig.default.sessionHealthCheckIntervalSecs),
             AppSettingsKeys.transferRetryCount: Int(AppConfig.default.transferRetryCount),
             AppSettingsKeys.defaultLocalPath: AppConfig.default.defaultLocalPath,
             AppSettingsKeys.confirmBeforeDelete: AppConfig.default.confirmBeforeDelete,
@@ -50,6 +52,9 @@ final class AppSettingsService: @unchecked Sendable {
     func loadConfig() -> AppConfig {
         AppConfig(
             connectionTimeoutSecs: UInt64(defaults.integer(forKey: AppSettingsKeys.connectionTimeoutSecs)),
+            sessionHealthCheckIntervalSecs: UInt64(
+                defaults.integer(forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs)
+            ),
             transferRetryCount: UInt32(defaults.integer(forKey: AppSettingsKeys.transferRetryCount)),
             defaultLocalPath: defaults.string(forKey: AppSettingsKeys.defaultLocalPath)
                 ?? AppConfig.default.defaultLocalPath,
@@ -60,6 +65,7 @@ final class AppSettingsService: @unchecked Sendable {
 
     func saveConfig(_ config: AppConfig) {
         defaults.set(Int(config.connectionTimeoutSecs), forKey: AppSettingsKeys.connectionTimeoutSecs)
+        defaults.set(Int(config.sessionHealthCheckIntervalSecs), forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs)
         defaults.set(Int(config.transferRetryCount), forKey: AppSettingsKeys.transferRetryCount)
         defaults.set(config.defaultLocalPath, forKey: AppSettingsKeys.defaultLocalPath)
         defaults.set(config.confirmBeforeDelete, forKey: AppSettingsKeys.confirmBeforeDelete)

@@ -4,13 +4,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use dockbridge_core::{
-    ensure_known_hosts_parent, expand_tilde, AppConfig, AuthType, ConnectionProfile, HostKeyPrompt,
-    KnownHostsManager, RemoteFile, SecretPassword, SftpClient, SshSession, TransferDirection,
-    TransferManager, TransferStatus, TransferTask,
+    ensure_known_hosts_parent, expand_tilde, is_connection_lost_message, AppConfig, AuthType,
+    ConnectionProfile, HostKeyPrompt, KnownHostsManager, RemoteFile, SecretPassword, SftpClient,
+    SshSession, TransferDirection, TransferManager, TransferStatus, TransferTask,
 };
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::task::JoinHandle;
 
 uniffi::include_scaffolding!("dockbridge_uniffi");
 
@@ -33,6 +35,7 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
 #[derive(uniffi::Record)]
 pub struct AppConfigRecord {
     pub connection_timeout_secs: u64,
+    pub session_health_check_interval_secs: u64,
     pub transfer_retry_count: u32,
     pub known_hosts_path: String,
 }
@@ -123,6 +126,12 @@ pub trait HostKeyHandler: Send + Sync {
     fn prompt_unknown_host(&self, challenge: HostKeyChallenge) -> bool;
 }
 
+/// Callback invoked when an active SSH/SFTP session is lost.
+#[uniffi::export(callback_interface)]
+pub trait ConnectionEventHandler: Send + Sync {
+    fn on_session_disconnected(&self, session_id: u64, reason: String);
+}
+
 struct UniffiHostKeyPrompt {
     handler: Arc<dyn HostKeyHandler>,
 }
@@ -143,7 +152,9 @@ pub struct DockBridgeClient {
     config: AppConfig,
     known_hosts: Arc<AsyncMutex<KnownHostsManager>>,
     host_key_handler: Arc<dyn HostKeyHandler>,
+    connection_event_handler: Arc<dyn ConnectionEventHandler>,
     sessions: Arc<AsyncMutex<HashMap<u64, SshSession>>>,
+    monitors: Arc<AsyncMutex<HashMap<u64, JoinHandle<()>>>>,
     next_session_id: AtomicU64,
     transfer_manager: Arc<TransferManager>,
 }
@@ -154,11 +165,13 @@ impl DockBridgeClient {
     fn new(
         app_config: AppConfigRecord,
         host_key_handler: Box<dyn HostKeyHandler>,
+        connection_event_handler: Box<dyn ConnectionEventHandler>,
     ) -> Result<Arc<Self>, DockBridgeError> {
         let known_hosts_path = expand_tilde(PathBuf::from(app_config.known_hosts_path).as_path());
         ensure_known_hosts_parent(&known_hosts_path).map_err(map_error)?;
         let config = AppConfig {
             connection_timeout_secs: app_config.connection_timeout_secs,
+            session_health_check_interval_secs: app_config.session_health_check_interval_secs,
             transfer_retry_count: app_config.transfer_retry_count,
             known_hosts_path,
         };
@@ -170,7 +183,9 @@ impl DockBridgeClient {
             config,
             known_hosts: Arc::new(AsyncMutex::new(known_hosts_manager)),
             host_key_handler: Arc::from(host_key_handler),
+            connection_event_handler: Arc::from(connection_event_handler),
             sessions: Arc::new(AsyncMutex::new(HashMap::new())),
+            monitors: Arc::new(AsyncMutex::new(HashMap::new())),
             next_session_id: AtomicU64::new(1),
         }))
     }
@@ -195,28 +210,30 @@ impl DockBridgeClient {
         block_on(async {
             self.sessions.lock().await.insert(session_id, session);
         });
+        self.spawn_health_monitor(session_id);
         Ok(session_id)
     }
 
     fn disconnect(&self, session_id: u64) -> Result<(), DockBridgeError> {
-        block_on(async {
-            self.sessions.lock().await.remove(&session_id);
-        });
+        self.remove_session(session_id, false, String::new());
         Ok(())
     }
 
     fn get_initial_directory(&self, session_id: u64) -> Result<String, DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
-        block_on(async move {
-            let sessions = sessions.lock().await;
-            let session = sessions
-                .get(&session_id)
-                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
-            SftpClient::new(session)
-                .initial_directory()
-                .await
-                .map_err(map_error)
-        })
+        self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let sessions = sessions.lock().await;
+                let session = sessions
+                    .get(&session_id)
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                SftpClient::new(session)
+                    .initial_directory()
+                    .await
+                    .map_err(map_error)
+            }),
+        )
     }
 
     fn list_directory(
@@ -225,16 +242,19 @@ impl DockBridgeClient {
         path: String,
     ) -> Result<Vec<RemoteFileRecord>, DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
-        let files = block_on(async move {
-            let sessions = sessions.lock().await;
-            let session = sessions
-                .get(&session_id)
-                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
-            SftpClient::new(session)
-                .list_directory(&path)
-                .await
-                .map_err(map_error)
-        })?;
+        let files = self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let sessions = sessions.lock().await;
+                let session = sessions
+                    .get(&session_id)
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                SftpClient::new(session)
+                    .list_directory(&path)
+                    .await
+                    .map_err(map_error)
+            }),
+        )?;
         Ok(files.into_iter().map(to_remote_file_record).collect())
     }
 
@@ -264,17 +284,20 @@ impl DockBridgeClient {
     ) -> Result<(), DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
         let transfer_manager = Arc::clone(&self.transfer_manager);
-        block_on(async move {
-            let sessions = sessions.lock().await;
-            let session = sessions
-                .get(&session_id)
-                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
-            transfer_manager
-                .enqueue_upload_entry(session, &local_path, remote_directory)
-                .await
-                .map_err(map_error)?;
-            Ok(())
-        })?;
+        self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let sessions = sessions.lock().await;
+                let session = sessions
+                    .get(&session_id)
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                transfer_manager
+                    .enqueue_upload_entry(session, &local_path, remote_directory)
+                    .await
+                    .map_err(map_error)?;
+                Ok(())
+            }),
+        )?;
         Ok(())
     }
 
@@ -286,47 +309,56 @@ impl DockBridgeClient {
     ) -> Result<(), DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
         let transfer_manager = Arc::clone(&self.transfer_manager);
-        block_on(async move {
-            let sessions = sessions.lock().await;
-            let session = sessions
-                .get(&session_id)
-                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
-            transfer_manager
-                .enqueue_download_entry(session, remote_path, &local_directory)
-                .await
-                .map_err(map_error)?;
-            Ok(())
-        })?;
+        self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let sessions = sessions.lock().await;
+                let session = sessions
+                    .get(&session_id)
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                transfer_manager
+                    .enqueue_download_entry(session, remote_path, &local_directory)
+                    .await
+                    .map_err(map_error)?;
+                Ok(())
+            }),
+        )?;
         Ok(())
     }
 
     fn delete(&self, session_id: u64, remote_path: String) -> Result<(), DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
-        block_on(async move {
-            let sessions = sessions.lock().await;
-            let session = sessions
-                .get(&session_id)
-                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
-            SftpClient::new(session)
-                .delete(&remote_path)
-                .await
-                .map_err(map_error)
-        })?;
+        self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let sessions = sessions.lock().await;
+                let session = sessions
+                    .get(&session_id)
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                SftpClient::new(session)
+                    .delete(&remote_path)
+                    .await
+                    .map_err(map_error)
+            }),
+        )?;
         Ok(())
     }
 
     fn rename(&self, session_id: u64, from: String, to: String) -> Result<(), DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
-        block_on(async move {
-            let sessions = sessions.lock().await;
-            let session = sessions
-                .get(&session_id)
-                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
-            SftpClient::new(session)
-                .rename(&from, &to)
-                .await
-                .map_err(map_error)
-        })?;
+        self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let sessions = sessions.lock().await;
+                let session = sessions
+                    .get(&session_id)
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                SftpClient::new(session)
+                    .rename(&from, &to)
+                    .await
+                    .map_err(map_error)
+            }),
+        )?;
         Ok(())
     }
 
@@ -336,16 +368,19 @@ impl DockBridgeClient {
         remote_path: String,
     ) -> Result<(), DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
-        block_on(async move {
-            let sessions = sessions.lock().await;
-            let session = sessions
-                .get(&session_id)
-                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
-            SftpClient::new(session)
-                .create_directory(&remote_path)
-                .await
-                .map_err(map_error)
-        })?;
+        self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let sessions = sessions.lock().await;
+                let session = sessions
+                    .get(&session_id)
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                SftpClient::new(session)
+                    .create_directory(&remote_path)
+                    .await
+                    .map_err(map_error)
+            }),
+        )?;
         Ok(())
     }
 
@@ -361,6 +396,75 @@ impl DockBridgeClient {
         self.transfer_manager
             .cancel_transfer(task_id)
             .map_err(map_error)
+    }
+}
+
+impl DockBridgeClient {
+    fn remove_session(&self, session_id: u64, notify: bool, reason: String) {
+        block_on(async {
+            if let Some(handle) = self.monitors.lock().await.remove(&session_id) {
+                handle.abort();
+            }
+            self.sessions.lock().await.remove(&session_id);
+        });
+
+        if notify {
+            self.connection_event_handler
+                .on_session_disconnected(session_id, reason);
+        }
+    }
+
+    fn handle_session_result<T>(
+        &self,
+        session_id: u64,
+        result: Result<T, DockBridgeError>,
+    ) -> Result<T, DockBridgeError> {
+        if let Err(DockBridgeError::Generic { ref message }) = result {
+            if is_connection_lost_message(message) {
+                self.remove_session(session_id, true, message.clone());
+            }
+        }
+        result
+    }
+
+    fn spawn_health_monitor(&self, session_id: u64) {
+        let interval_secs = self.config.session_health_check_interval_secs.max(1);
+        let sessions = Arc::clone(&self.sessions);
+        let monitors = Arc::clone(&self.monitors);
+        let monitors_in_task = Arc::clone(&monitors);
+        let connection_event_handler = Arc::clone(&self.connection_event_handler);
+
+        let monitor_task = runtime().spawn(async move {
+            let interval = Duration::from_secs(interval_secs);
+
+            loop {
+                tokio::time::sleep(interval).await;
+
+                let check_result = {
+                    let sessions = sessions.lock().await;
+                    match sessions.get(&session_id) {
+                        Some(session) => SftpClient::new(session).check_alive().await,
+                        None => return,
+                    }
+                };
+
+                if let Err(error) = check_result {
+                    let message = error.to_string();
+                    if is_connection_lost_message(&message) {
+                        if let Some(handle) = monitors_in_task.lock().await.remove(&session_id) {
+                            handle.abort();
+                        }
+                        sessions.lock().await.remove(&session_id);
+                        connection_event_handler.on_session_disconnected(session_id, message);
+                        break;
+                    }
+                }
+            }
+        });
+
+        block_on(async {
+            monitors.lock().await.insert(session_id, monitor_task);
+        });
     }
 }
 

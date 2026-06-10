@@ -32,4 +32,11 @@ final class KeychainServiceTests: XCTestCase {
         try keychain.savePassword("second", account: account)
         XCTAssertEqual(try keychain.loadPassword(account: account), "second")
     }
+
+    func testSaveOverwritesAfterDelete() throws {
+        try keychain.savePassword("initial", account: account)
+        try keychain.deletePassword(account: account)
+        try keychain.savePassword("replacement", account: account)
+        XCTAssertEqual(try keychain.loadPassword(account: account), "replacement")
+    }
 }

@@ -1,3 +1,4 @@
 connection_timeout_secs = 30
+session_health_check_interval_secs = 10
 transfer_retry_count = 3
 known_hosts_path = "target/test-known_hosts.json"

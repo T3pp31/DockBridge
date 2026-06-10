@@ -41,6 +41,10 @@
 		F1D2R3O4P5E6R7R8O9R0A1B2C3 /* FileDropError.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2R3O4P5E6R7R8O9R0A1B2C4 /* FileDropError.swift */; };
 		F1I2L3E4D5R6O7P8M9O0D1I2F3 /* FileDropModifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */; };
 		F1D2R3O4P5V6A7L8I9D0T1E2S3T4 /* FileDropValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */; };
+		C0NN3CT10N5T4TU5B4R1N5RC3 /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */; };
+		C0NN3CT10N5T4TU5M0D3L1N5RC /* ConnectionStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */; };
+		T4BL3C0L7MN8L4Y0U7T1F2B3 /* TableColumnLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */; };
+		M4NU4LT3STP14N5V3R1F1C4T5 /* ManualTestPlanVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = M4NU4LT3STP14N5V3R1F1C4T6 /* ManualTestPlanVerificationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -83,6 +87,10 @@
 		F1D2R3O4P5E6R7R8O9R0A1B2C4 /* FileDropError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropError.swift; sourceTree = "<group>"; };
 		F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropModifiers.swift; sourceTree = "<group>"; };
 		F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropValidationTests.swift; sourceTree = "<group>"; };
+		C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusBar.swift; sourceTree = "<group>"; };
+		C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatus.swift; sourceTree = "<group>"; };
+		T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableColumnLayout.swift; sourceTree = "<group>"; };
+		M4NU4LT3STP14N5V3R1F1C4T6 /* ManualTestPlanVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualTestPlanVerificationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -161,6 +169,7 @@
 		141E446FF2C7A61E13702B31 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */,
 				D2B8765D556D65748132CE54 /* ErrorAlert.swift */,
 			);
 			path = Shared;
@@ -194,6 +203,7 @@
 			isa = PBXGroup;
 			children = (
 				09932BA46F7FE81DAD83C80A /* AppConfig.swift */,
+				C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */,
 				F3EA1C873F6BA2EA52B40161 /* AuthType.swift */,
 				ACD7B5DCE2F20029520D971B /* ConnectionProfile.swift */,
 				F1D2R3O4P5E6R7R8O9R0A1B2C4 /* FileDropError.swift */,
@@ -251,6 +261,14 @@
 			path = Views;
 			sourceTree = "<group>";
 		};
+		T4BL3C0L7MN8L4Y0U7T1F2G5 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
 		BAB49F2A1F033AE85B7E9D10 /* DockBridge */ = {
 			isa = PBXGroup;
 			children = (
@@ -259,6 +277,7 @@
 				3D36BF4FEDAE3131C117398E /* Models */,
 				E91B28D0DE8A916C703786B0 /* Resources */,
 				891E99F91B872FF72792D70B /* Services */,
+				T4BL3C0L7MN8L4Y0U7T1F2G5 /* UI */,
 				9191B6D823CD022BDDC5A6F5 /* ViewModels */,
 				9433695122BE5DE72F13526A /* Views */,
 			);
@@ -273,6 +292,7 @@
 				F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */,
 				18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */,
 				3B4C5D6E7F8091A2B3C4D5E6 /* KnownHostsErrorMessageTests.swift */,
+				M4NU4LT3STP14N5V3R1F1C4T6 /* ManualTestPlanVerificationTests.swift */,
 			);
 			path = DockBridgeTests;
 			sourceTree = "<group>";
@@ -429,6 +449,8 @@
 				59E97F8DE7D811CC4EA1A6B0 /* RemotePaneView.swift in Sources */,
 				4F485BCC460E809CBC369F6D /* HostKeyConfirmView.swift in Sources */,
 				629A59E59C65594C7998652C /* SettingsView.swift in Sources */,
+				C0NN3CT10N5T4TU5B4R1N5RC3 /* ConnectionStatusBar.swift in Sources */,
+				C0NN3CT10N5T4TU5M0D3L1N5RC /* ConnectionStatus.swift in Sources */,
 				C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */,
 				B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* RemotePath.swift in Sources */,
@@ -436,6 +458,7 @@
 				F1D2R3O4P5V6A7L8I9D0A1T2I3 /* FileDropValidation.swift in Sources */,
 				F1D2R3A4G5P6A7Y8L9O0A1D2 /* FileDragPayload.swift in Sources */,
 				F1I2L3E4D5R6O7P8M9O0D1I2F3 /* FileDropModifiers.swift in Sources */,
+				T4BL3C0L7MN8L4Y0U7T1F2B3 /* TableColumnLayout.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -448,6 +471,7 @@
 				E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */,
 				0718293A4B5C6D7E8F901234 /* KeychainServiceTests.swift in Sources */,
 				2A3B4C5D6E7F8091A2B3C4D5 /* KnownHostsErrorMessageTests.swift in Sources */,
+				M4NU4LT3STP14N5V3R1F1C4T5 /* ManualTestPlanVerificationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -7,6 +7,20 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         XCTAssertTrue(message.contains("切断"))
     }
 
+    func testConnectionLostMessageDetection() {
+        XCTAssertTrue(DockBridgeError.isConnectionLostMessage("session closed"))
+        XCTAssertTrue(DockBridgeError.isConnectionLostMessage("Connection reset by peer"))
+        XCTAssertFalse(DockBridgeError.isConnectionLostMessage("permission denied"))
+    }
+
+    func testConnectionStatusTitles() {
+        XCTAssertEqual(ConnectionStatus.disconnected.statusTitle, "未接続")
+        XCTAssertEqual(
+            ConnectionStatus.connected(endpoint: "user@host:22").statusTitle,
+            "接続中: user@host:22"
+        )
+    }
+
     func testPermissionDeniedErrorMessageMentionsRemoteDirectory() {
         let message = DockBridgeError.friendlyMessage(for: "failed to upload: permission denied")
         XCTAssertTrue(message.contains("リモート"))
@@ -20,5 +34,21 @@ final class KnownHostsErrorMessageTests: XCTestCase {
             message.contains("known hosts") || message.contains("ホスト鍵"),
             "Expected known hosts guidance, got: \(message)"
         )
+    }
+
+    func testMkdirFailedErrorMessageMentionsRemoteDirectory() {
+        let message = DockBridgeError.friendlyMessage(
+            for: "failed to create directory '/home/demo': Permission denied"
+        )
+        XCTAssertTrue(message.contains("リモート"))
+        XCTAssertTrue(message.contains("作業ディレクトリ"))
+    }
+
+    func testUploadNoSuchFileErrorMessageMentionsRemoteDirectory() {
+        let message = DockBridgeError.friendlyMessage(
+            for: "failed to upload '/tmp/file.pdf' to '/home/demo/file.pdf': No such file: No such file"
+        )
+        XCTAssertTrue(message.contains("リモート"))
+        XCTAssertTrue(message.contains("保存先"))
     }
 }

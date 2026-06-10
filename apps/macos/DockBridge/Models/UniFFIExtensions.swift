@@ -14,6 +14,15 @@ extension DockBridgeError {
         }
     }
 
+    static func isConnectionLostMessage(_ message: String) -> Bool {
+        let lowercased = message.lowercased()
+        return lowercased.contains("session closed")
+            || lowercased.contains("connection reset")
+            || lowercased.contains("broken pipe")
+            || lowercased.contains("connection refused")
+            || lowercased.contains("eof")
+    }
+
     static func friendlyMessage(for message: String) -> String {
         let lowercased = message.lowercased()
 
@@ -47,6 +56,14 @@ extension DockBridgeError {
             return "リモート先への書き込み権限がありません。リモートの作業ディレクトリを確認してください。"
         }
 
+        if lowercased.contains("failed to create directory") {
+            return "リモートの作業ディレクトリを作成できません。パスと書き込み権限を確認してください。"
+        }
+
+        if lowercased.contains("failed to upload") && lowercased.contains("no such file") {
+            return "リモートの保存先ディレクトリが存在しません。リモートペインで有効なディレクトリに移動してから再試行してください。"
+        }
+
         if lowercased.contains("not found") {
             return "ファイルまたはディレクトリが見つかりません。"
         }
@@ -61,5 +78,12 @@ extension Error {
             return error.userFriendlyMessage
         }
         return localizedDescription
+    }
+
+    var isConnectionLost: Bool {
+        if let error = self as? DockBridgeError, case .Generic(let message) = error {
+            return DockBridgeError.isConnectionLostMessage(message)
+        }
+        return false
     }
 }

@@ -1,6 +1,15 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+private func enqueueAsyncDropOperation(
+    operation: @escaping @MainActor () async -> Void
+) -> Bool {
+    Task { @MainActor in
+        await operation()
+    }
+    return true
+}
+
 struct LocalPaneDropModifier: ViewModifier {
     @ObservedObject var viewModel: MainViewModel
     @Binding var isTargeted: Bool
@@ -9,8 +18,7 @@ struct LocalPaneDropModifier: ViewModifier {
         content
             .dropDestination(for: RemoteFileDragPayload.self) { items, _ in
                 guard viewModel.bridge.isConnected else { return false }
-                let accepted = acceptRemoteDownloads(items)
-                return accepted
+                return acceptRemoteDownloads(items)
             } isTargeted: { targeted in
                 isTargeted = targeted
             }
@@ -20,14 +28,16 @@ struct LocalPaneDropModifier: ViewModifier {
     }
 
     private func acceptRemoteDownloads(_ items: [RemoteFileDragPayload]) -> Bool {
-        var accepted = false
-        for item in items {
-            Task {
-                await viewModel.download(remotePath: item.path, toLocalDirectory: viewModel.localPath)
+        guard !items.isEmpty else { return false }
+
+        return enqueueAsyncDropOperation {
+            for item in items {
+                _ = await viewModel.download(
+                    remotePath: item.path,
+                    toLocalDirectory: viewModel.localPath
+                )
             }
-            accepted = true
         }
-        return accepted
     }
 
     private func acceptLocalMoves(_ items: [LocalFileDragPayload]) -> Bool {
@@ -70,39 +80,41 @@ struct RemotePaneDropModifier: ViewModifier {
     }
 
     private func acceptLocalUploads(_ items: [LocalFileDragPayload]) -> Bool {
-        var accepted = false
-        for item in items {
-            Task {
-                await viewModel.upload(localURL: item.url, toRemoteDirectory: viewModel.remotePath)
-            }
-            accepted = true
-        }
-        return accepted
+        acceptUploads(urls: items.map(\.url))
     }
 
     private func acceptExternalUploads(_ urls: [URL]) -> Bool {
-        var accepted = false
-        for url in urls {
-            Task {
-                await viewModel.upload(localURL: url, toRemoteDirectory: viewModel.remotePath)
+        acceptUploads(urls: urls)
+    }
+
+    private func acceptUploads(urls: [URL]) -> Bool {
+        let validURLs = urls.filter { FileDropValidation.canUploadLocalItem(at: $0) }
+        guard !validURLs.isEmpty else { return false }
+
+        return enqueueAsyncDropOperation {
+            for url in validURLs {
+                _ = await viewModel.upload(
+                    localURL: url,
+                    toRemoteDirectory: viewModel.remotePath
+                )
             }
-            accepted = true
         }
-        return accepted
     }
 
     private func acceptRemoteMoves(_ items: [RemoteFileDragPayload]) -> Bool {
-        var accepted = false
-        for item in items {
-            guard FileDropValidation.canMoveRemoteItem(from: item.path, to: viewModel.remotePath) else {
-                continue
-            }
-            Task {
-                await viewModel.moveRemoteItem(from: item.path, toDirectory: viewModel.remotePath)
-            }
-            accepted = true
+        let validItems = items.filter {
+            FileDropValidation.canMoveRemoteItem(from: $0.path, to: viewModel.remotePath)
         }
-        return accepted
+        guard !validItems.isEmpty else { return false }
+
+        return enqueueAsyncDropOperation {
+            for item in validItems {
+                _ = await viewModel.moveRemoteItem(
+                    from: item.path,
+                    toDirectory: viewModel.remotePath
+                )
+            }
+        }
     }
 }
 
@@ -114,6 +126,10 @@ struct LocalFileTable: View {
             TableColumn("Name") { item in
                 Label(item.name, systemImage: item.isDirectory ? "folder" : "doc")
             }
+            .width(
+                min: FileTableColumnLayout.nameMinWidth,
+                ideal: FileTableColumnLayout.nameIdealWidth
+            )
             TableColumn("Size") { item in
                 Text(item.isDirectory ? "—" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
             }
@@ -141,6 +157,10 @@ struct RemoteFileTable: View {
             TableColumn("Name") { item in
                 Label(item.name, systemImage: item.isDirectory ? "folder" : "doc")
             }
+            .width(
+                min: FileTableColumnLayout.nameMinWidth,
+                ideal: FileTableColumnLayout.nameIdealWidth
+            )
             TableColumn("Size") { item in
                 Text(remoteSizeLabel(for: item))
             }
