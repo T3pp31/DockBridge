@@ -45,6 +45,9 @@
 		C0NN3CT10N5T4TU5M0D3L1N5RC /* ConnectionStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */; };
 		T4BL3C0L7MN8L4Y0U7T1F2B3 /* TableColumnLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */; };
 		M4NU4LT3STP14N5V3R1F1C4T5 /* ManualTestPlanVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = M4NU4LT3STP14N5V3R1F1C4T6 /* ManualTestPlanVerificationTests.swift */; };
+		D5R0P0P3R4T10N5Y5N0C1N5RC /* DropOperationSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */; };
+		D5R0P0P3R4T10N5Y5N0C1T5ST /* DropOperationSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */; };
+		F1L3D3R0P4C3C3P7T4N5C3T5ST /* FileDropAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -91,6 +94,9 @@
 		C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatus.swift; sourceTree = "<group>"; };
 		T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableColumnLayout.swift; sourceTree = "<group>"; };
 		M4NU4LT3STP14N5V3R1F1C4T6 /* ManualTestPlanVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualTestPlanVerificationTests.swift; sourceTree = "<group>"; };
+		D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropOperationSync.swift; sourceTree = "<group>"; };
+		D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropOperationSyncTests.swift; sourceTree = "<group>"; };
+		F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropAcceptanceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -264,6 +270,7 @@
 		T4BL3C0L7MN8L4Y0U7T1F2G5 /* UI */ = {
 			isa = PBXGroup;
 			children = (
+				D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */,
 				T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */,
 			);
 			path = UI;
@@ -287,6 +294,8 @@
 		5C6D7E8F9012345678901234 /* DockBridgeTests */ = {
 			isa = PBXGroup;
 			children = (
+				D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */,
+				F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */,
 				F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */,
 				D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */,
 				F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */,
@@ -458,6 +467,7 @@
 				F1D2R3O4P5V6A7L8I9D0A1T2I3 /* FileDropValidation.swift in Sources */,
 				F1D2R3A4G5P6A7Y8L9O0A1D2 /* FileDragPayload.swift in Sources */,
 				F1I2L3E4D5R6O7P8M9O0D1I2F3 /* FileDropModifiers.swift in Sources */,
+				D5R0P0P3R4T10N5Y5N0C1N5RC /* DropOperationSync.swift in Sources */,
 				T4BL3C0L7MN8L4Y0U7T1F2B3 /* TableColumnLayout.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -466,6 +476,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D5R0P0P3R4T10N5Y5N0C1T5ST /* DropOperationSyncTests.swift in Sources */,
+				F1L3D3R0P4C3C3P7T4N5C3T5ST /* FileDropAcceptanceTests.swift in Sources */,
 				F1D2R3O4P5V6A7L8I9D0T1E2S3T4 /* FileDropValidationTests.swift in Sources */,
 				C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */,
 				E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */,

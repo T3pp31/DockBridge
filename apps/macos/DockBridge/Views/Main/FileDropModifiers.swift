@@ -1,15 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-private func enqueueAsyncDropOperation(
-    operation: @escaping @MainActor () async -> Void
-) -> Bool {
-    Task { @MainActor in
-        await operation()
-    }
-    return true
-}
-
 struct LocalPaneDropModifier: ViewModifier {
     @ObservedObject var viewModel: MainViewModel
     @Binding var isTargeted: Bool
@@ -30,13 +21,17 @@ struct LocalPaneDropModifier: ViewModifier {
     private func acceptRemoteDownloads(_ items: [RemoteFileDragPayload]) -> Bool {
         guard !items.isEmpty else { return false }
 
-        return enqueueAsyncDropOperation {
+        return DropOperationSync.run { @MainActor in
+            var anySucceeded = false
             for item in items {
-                _ = await viewModel.download(
+                if await viewModel.download(
                     remotePath: item.path,
                     toLocalDirectory: viewModel.localPath
-                )
+                ) {
+                    anySucceeded = true
+                }
             }
+            return anySucceeded
         }
     }
 
@@ -91,13 +86,17 @@ struct RemotePaneDropModifier: ViewModifier {
         let validURLs = urls.filter { FileDropValidation.canUploadLocalItem(at: $0) }
         guard !validURLs.isEmpty else { return false }
 
-        return enqueueAsyncDropOperation {
+        return DropOperationSync.run { @MainActor in
+            var anySucceeded = false
             for url in validURLs {
-                _ = await viewModel.upload(
+                if await viewModel.upload(
                     localURL: url,
                     toRemoteDirectory: viewModel.remotePath
-                )
+                ) {
+                    anySucceeded = true
+                }
             }
+            return anySucceeded
         }
     }
 
@@ -107,13 +106,17 @@ struct RemotePaneDropModifier: ViewModifier {
         }
         guard !validItems.isEmpty else { return false }
 
-        return enqueueAsyncDropOperation {
+        return DropOperationSync.run { @MainActor in
+            var anySucceeded = false
             for item in validItems {
-                _ = await viewModel.moveRemoteItem(
+                if await viewModel.moveRemoteItem(
                     from: item.path,
                     toDirectory: viewModel.remotePath
-                )
+                ) {
+                    anySucceeded = true
+                }
             }
+            return anySucceeded
         }
     }
 }
