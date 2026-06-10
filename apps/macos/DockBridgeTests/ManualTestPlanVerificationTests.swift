@@ -55,6 +55,85 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         XCTAssertEqual(try keychain.loadPassword(account: account), "dockbridge-e2e")
     }
 
+    /// Automated check for manual test plan:
+    /// "大きなファイル転送中に Transfer Queue の Cancel ボタンで中断できること"
+    /// Run: `./scripts/verify-transfer-cancel.sh` from the repository root.
+    func testCancelInProgressLargeFileUpload() async throws {
+        try await prepareBridge()
+        guard let bridge else {
+            return XCTFail("Bridge should be connected")
+        }
+
+        let remoteDirectory = try await resolveRemoteDirectory()
+        let remoteFileName = "large-cancel-\(UUID().uuidString).bin"
+        let localFile = tempDirectory!.appendingPathComponent(remoteFileName)
+        let fileSize = 32 * 1024 * 1024
+        try Data(repeating: 0xAB, count: fileSize).write(to: localFile)
+
+        let transferQueue = TransferQueueViewModel(bridge: bridge)
+        let uploadTask = Task {
+            try await bridge.upload(localPath: localFile.path, remoteDirectory: remoteDirectory)
+        }
+
+        var inProgressTask: TransferTaskRecord?
+        for _ in 0..<100 {
+            await transferQueue.refresh()
+            inProgressTask = transferQueue.tasks.first { task in
+                if case .inProgress = task.status {
+                    return true
+                }
+                return false
+            }
+            if inProgressTask != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        guard let inProgressTask else {
+            uploadTask.cancel()
+            _ = await uploadTask.result
+            return XCTFail("Expected an in-progress transfer task before upload completed")
+        }
+
+        await transferQueue.cancel(task: inProgressTask)
+        XCTAssertNil(transferQueue.errorMessage, "Cancel should succeed without error")
+
+        var reachedCancelled = false
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline {
+            await transferQueue.refresh()
+            if let task = transferQueue.tasks.first(where: { $0.id == inProgressTask.id }),
+               case .cancelled = task.status {
+                reachedCancelled = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertTrue(reachedCancelled, "Transfer task should reach cancelled status")
+
+        let uploadResult = await uploadTask.result
+        switch uploadResult {
+        case .success:
+            XCTFail("Upload should fail after cancel, not succeed")
+        case .failure(let error):
+            XCTAssertTrue(
+                error.localizedDescription.lowercased().contains("cancel"),
+                "Upload error should mention cancellation, got: \(error.localizedDescription)"
+            )
+        }
+
+        let remoteItems = try await bridge.listDirectory(path: remoteDirectory)
+        let remoteItem = remoteItems.first { $0.name == remoteFileName }
+        if let remoteItem {
+            XCTAssertLessThan(
+                remoteItem.size,
+                UInt64(fileSize),
+                "Cancelled upload must not leave a complete remote file (remote=\(remoteItem.size), local=\(fileSize))"
+            )
+        }
+    }
+
     func testDisconnectsWithinHealthCheckIntervalAfterSshdKill() async throws {
         try await prepareBridge()
         XCTAssertTrue(bridge?.isConnected == true)

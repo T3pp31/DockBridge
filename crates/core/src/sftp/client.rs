@@ -1,7 +1,8 @@
 use std::path::Path;
 
+use russh_sftp::client::fs::File as RemoteFileHandle;
 use russh_sftp::client::SftpSession;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::SftpError;
 use crate::ssh::session::SshSession;
@@ -85,30 +86,77 @@ impl<'a> SftpClient<'a> {
 
     /// Uploads a local file to a remote path.
     pub async fn upload(&self, local_path: &Path, remote_path: &str) -> Result<(), SftpError> {
-        let data = tokio::fs::read(local_path)
+        self.upload_cancellable(local_path, remote_path, default_chunk_size(), || false)
             .await
-            .map_err(|err| SftpError::UploadFailed {
-                local: local_path.display().to_string(),
-                remote: remote_path.to_string(),
-                message: err.to_string(),
-            })?;
+    }
+
+    /// Uploads a local file in chunks, checking `is_cancelled` before each chunk.
+    pub async fn upload_cancellable(
+        &self,
+        local_path: &Path,
+        remote_path: &str,
+        chunk_size: usize,
+        is_cancelled: impl Fn() -> bool + Send,
+    ) -> Result<(), SftpError> {
+        let local = local_path.display().to_string();
+        let remote = remote_path.to_string();
+        let chunk_size = normalize_chunk_size(chunk_size);
+
+        let mut local_file =
+            tokio::fs::File::open(local_path)
+                .await
+                .map_err(|err| SftpError::UploadFailed {
+                    local: local.clone(),
+                    remote: remote.clone(),
+                    message: err.to_string(),
+                })?;
 
         let mut remote_file =
             self.sftp()
                 .create(remote_path)
                 .await
                 .map_err(|err| SftpError::UploadFailed {
-                    local: local_path.display().to_string(),
-                    remote: remote_path.to_string(),
+                    local: local.clone(),
+                    remote: remote.clone(),
                     message: err.to_string(),
                 })?;
 
+        let mut buffer = vec![0_u8; chunk_size];
+        loop {
+            if is_cancelled() {
+                cleanup_cancelled_upload(self, &mut remote_file, remote_path).await;
+                return Err(SftpError::Cancelled);
+            }
+
+            let bytes_read =
+                local_file
+                    .read(&mut buffer)
+                    .await
+                    .map_err(|err| SftpError::UploadFailed {
+                        local: local.clone(),
+                        remote: remote.clone(),
+                        message: err.to_string(),
+                    })?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            remote_file
+                .write_all(&buffer[..bytes_read])
+                .await
+                .map_err(|err| SftpError::UploadFailed {
+                    local: local.clone(),
+                    remote: remote.clone(),
+                    message: err.to_string(),
+                })?;
+        }
+
         remote_file
-            .write_all(&data)
+            .shutdown()
             .await
             .map_err(|err| SftpError::UploadFailed {
-                local: local_path.display().to_string(),
-                remote: remote_path.to_string(),
+                local,
+                remote,
                 message: err.to_string(),
             })?;
 
@@ -117,33 +165,91 @@ impl<'a> SftpClient<'a> {
 
     /// Downloads a remote file to a local path.
     pub async fn download(&self, remote_path: &str, local_path: &Path) -> Result<(), SftpError> {
-        let data =
-            self.sftp()
-                .read(remote_path)
-                .await
-                .map_err(|err| SftpError::DownloadFailed {
-                    remote: remote_path.to_string(),
-                    local: local_path.display().to_string(),
-                    message: err.to_string(),
-                })?;
+        self.download_cancellable(remote_path, local_path, default_chunk_size(), || false)
+            .await
+    }
+
+    /// Downloads a remote file in chunks, checking `is_cancelled` before each chunk.
+    pub async fn download_cancellable(
+        &self,
+        remote_path: &str,
+        local_path: &Path,
+        chunk_size: usize,
+        is_cancelled: impl Fn() -> bool + Send,
+    ) -> Result<(), SftpError> {
+        let remote = remote_path.to_string();
+        let local = local_path.display().to_string();
+        let chunk_size = normalize_chunk_size(chunk_size);
 
         if let Some(parent) = local_path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
                 .map_err(|err| SftpError::DownloadFailed {
-                    remote: remote_path.to_string(),
-                    local: local_path.display().to_string(),
+                    remote: remote.clone(),
+                    local: local.clone(),
                     message: err.to_string(),
                 })?;
         }
 
-        tokio::fs::write(local_path, data)
+        let mut remote_file =
+            self.sftp()
+                .open(remote_path)
+                .await
+                .map_err(|err| SftpError::DownloadFailed {
+                    remote: remote.clone(),
+                    local: local.clone(),
+                    message: err.to_string(),
+                })?;
+
+        let mut local_file =
+            tokio::fs::File::create(local_path)
+                .await
+                .map_err(|err| SftpError::DownloadFailed {
+                    remote: remote.clone(),
+                    local: local.clone(),
+                    message: err.to_string(),
+                })?;
+
+        let mut buffer = vec![0_u8; chunk_size];
+        loop {
+            if is_cancelled() {
+                cleanup_cancelled_download(&mut remote_file, local_path).await;
+                return Err(SftpError::Cancelled);
+            }
+
+            let bytes_read =
+                remote_file
+                    .read(&mut buffer)
+                    .await
+                    .map_err(|err| SftpError::DownloadFailed {
+                        remote: remote.clone(),
+                        local: local.clone(),
+                        message: err.to_string(),
+                    })?;
+            if bytes_read == 0 {
+                break;
+            }
+
+            local_file
+                .write_all(&buffer[..bytes_read])
+                .await
+                .map_err(|err| SftpError::DownloadFailed {
+                    remote: remote.clone(),
+                    local: local.clone(),
+                    message: err.to_string(),
+                })?;
+        }
+
+        local_file
+            .flush()
             .await
             .map_err(|err| SftpError::DownloadFailed {
-                remote: remote_path.to_string(),
-                local: local_path.display().to_string(),
+                remote,
+                local,
                 message: err.to_string(),
-            })
+            })?;
+
+        Ok(())
     }
 
     /// Deletes a remote file.
@@ -295,6 +401,36 @@ impl<'a> SftpClient<'a> {
                 self.download(&normalized, &local_path).await
             }
         }
+    }
+}
+
+fn default_chunk_size() -> usize {
+    262_144
+}
+
+fn normalize_chunk_size(chunk_size: usize) -> usize {
+    chunk_size.max(4_096)
+}
+
+async fn cleanup_cancelled_upload(
+    client: &SftpClient<'_>,
+    remote_file: &mut RemoteFileHandle,
+    remote_path: &str,
+) {
+    if let Err(err) = remote_file.shutdown().await {
+        tracing::warn!(remote_path, error = %err, "failed to close remote file after cancel");
+    }
+    if let Err(err) = client.delete(remote_path).await {
+        tracing::warn!(remote_path, error = %err, "failed to delete partial remote file after cancel");
+    }
+}
+
+async fn cleanup_cancelled_download(remote_file: &mut RemoteFileHandle, local_path: &Path) {
+    if let Err(err) = remote_file.shutdown().await {
+        tracing::warn!(local = %local_path.display(), error = %err, "failed to close remote file after cancel");
+    }
+    if let Err(err) = tokio::fs::remove_file(local_path).await {
+        tracing::warn!(local = %local_path.display(), error = %err, "failed to delete partial local file after cancel");
     }
 }
 

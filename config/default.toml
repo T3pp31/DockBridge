@@ -4,4 +4,5 @@
 connection_timeout_secs = 30
 session_health_check_interval_secs = 10
 transfer_retry_count = 3
+transfer_chunk_size_bytes = 262144
 known_hosts_path = "~/.dockbridge/known_hosts.json"

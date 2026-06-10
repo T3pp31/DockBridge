@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::config::AppConfig;
 use crate::error::{SftpError, TransferError};
@@ -41,7 +42,9 @@ pub struct TransferTask {
 pub struct TransferManager {
     next_id: AtomicU64,
     retry_count: u32,
+    chunk_size: usize,
     tasks: Mutex<Vec<TransferTask>>,
+    cancellation_flags: Mutex<HashMap<u64, Arc<AtomicBool>>>,
 }
 
 impl TransferManager {
@@ -50,7 +53,9 @@ impl TransferManager {
         Self {
             next_id: AtomicU64::new(1),
             retry_count: config.transfer_retry_count,
+            chunk_size: config.transfer_chunk_size_bytes,
             tasks: Mutex::new(Vec::new()),
+            cancellation_flags: Mutex::new(HashMap::new()),
         }
     }
 
@@ -62,7 +67,7 @@ impl TransferManager {
             .unwrap_or_default()
     }
 
-    /// Cancels a pending transfer task.
+    /// Cancels a pending or in-progress transfer task.
     pub fn cancel_transfer(&self, task_id: u64) -> Result<(), TransferError> {
         let mut tasks = self
             .tasks
@@ -75,11 +80,11 @@ impl TransferManager {
             .ok_or(TransferError::TaskNotFound { task_id })?;
 
         match task.status {
-            TransferStatus::Pending => {
+            TransferStatus::Pending | TransferStatus::InProgress => {
+                self.request_cancellation(task_id);
                 task.status = TransferStatus::Cancelled;
                 Ok(())
             }
-            TransferStatus::InProgress => Err(TransferError::Cancelled),
             _ => Err(TransferError::TaskNotFound { task_id }),
         }
     }
@@ -105,6 +110,71 @@ impl TransferManager {
             .and_then(|tasks| tasks.iter().find(|task| task.id == task_id).cloned())
     }
 
+    fn register_cancellation_flag(&self, task_id: u64) {
+        if let Ok(mut flags) = self.cancellation_flags.lock() {
+            flags
+                .entry(task_id)
+                .or_insert_with(|| Arc::new(AtomicBool::new(false)));
+        }
+    }
+
+    fn remove_cancellation_flag(&self, task_id: u64) {
+        if let Ok(mut flags) = self.cancellation_flags.lock() {
+            flags.remove(&task_id);
+        }
+    }
+
+    fn request_cancellation(&self, task_id: u64) {
+        if let Ok(mut flags) = self.cancellation_flags.lock() {
+            let flag = flags
+                .entry(task_id)
+                .or_insert_with(|| Arc::new(AtomicBool::new(false)));
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn is_cancelled(&self, task_id: u64) -> bool {
+        self.cancellation_flags
+            .lock()
+            .ok()
+            .and_then(|flags| flags.get(&task_id).map(|flag| flag.load(Ordering::Relaxed)))
+            .unwrap_or(false)
+    }
+
+    fn finalize_task_result(
+        &self,
+        task_id: u64,
+        result: Result<(), TransferError>,
+    ) -> Result<(), TransferError> {
+        let was_cancelled = self.is_cancelled(task_id);
+        self.remove_cancellation_flag(task_id);
+
+        if was_cancelled {
+            self.update_task_status(task_id, TransferStatus::Cancelled);
+            return Err(TransferError::Cancelled);
+        }
+
+        match result {
+            Ok(()) => {
+                self.update_task_status(task_id, TransferStatus::Completed);
+                Ok(())
+            }
+            Err(TransferError::Cancelled) => {
+                self.update_task_status(task_id, TransferStatus::Cancelled);
+                Err(TransferError::Cancelled)
+            }
+            Err(err) => {
+                self.update_task_status(
+                    task_id,
+                    TransferStatus::Failed {
+                        message: err.to_string(),
+                    },
+                );
+                Err(err)
+            }
+        }
+    }
+
     /// Enqueues and immediately executes a single upload task.
     pub async fn enqueue_upload(
         &self,
@@ -124,24 +194,18 @@ impl TransferManager {
         };
 
         self.insert_task(task.clone());
+        self.register_cancellation_flag(task.id);
         self.update_task_status(task.id, TransferStatus::InProgress);
+
+        if self.is_cancelled(task.id) {
+            self.finalize_task_result(task.id, Err(TransferError::Cancelled))?;
+        }
 
         let result = self
             .run_upload_with_retries(session, task.id, &local_path, &remote_path)
             .await;
 
-        match result {
-            Ok(()) => self.update_task_status(task.id, TransferStatus::Completed),
-            Err(err) => {
-                self.update_task_status(
-                    task.id,
-                    TransferStatus::Failed {
-                        message: err.to_string(),
-                    },
-                );
-                return Err(err);
-            }
-        }
+        self.finalize_task_result(task.id, result)?;
 
         Ok(self.find_task(task.id).unwrap_or(task))
     }
@@ -165,24 +229,18 @@ impl TransferManager {
         };
 
         self.insert_task(task.clone());
+        self.register_cancellation_flag(task.id);
         self.update_task_status(task.id, TransferStatus::InProgress);
+
+        if self.is_cancelled(task.id) {
+            self.finalize_task_result(task.id, Err(TransferError::Cancelled))?;
+        }
 
         let result = self
             .run_download_with_retries(session, task.id, &remote_path, &local_path)
             .await;
 
-        match result {
-            Ok(()) => self.update_task_status(task.id, TransferStatus::Completed),
-            Err(err) => {
-                self.update_task_status(
-                    task.id,
-                    TransferStatus::Failed {
-                        message: err.to_string(),
-                    },
-                );
-                return Err(err);
-            }
-        }
+        self.finalize_task_result(task.id, result)?;
 
         Ok(self.find_task(task.id).unwrap_or(task))
     }
@@ -321,9 +379,19 @@ impl TransferManager {
         let mut attempt = 0;
 
         for current in 1..=attempts {
+            if self.is_cancelled(task_id) {
+                return Err(TransferError::Cancelled);
+            }
+
             attempt = current;
-            match client.upload(local_path, remote_path).await {
+            match client
+                .upload_cancellable(local_path, remote_path, self.chunk_size, || {
+                    self.is_cancelled(task_id)
+                })
+                .await
+            {
                 Ok(()) => return Ok(()),
+                Err(SftpError::Cancelled) => return Err(TransferError::Cancelled),
                 Err(err) => {
                     last_error = err.to_string();
                     if is_non_retryable_transfer_error(&last_error) {
@@ -360,9 +428,19 @@ impl TransferManager {
         let mut attempt = 0;
 
         for current in 1..=attempts {
+            if self.is_cancelled(task_id) {
+                return Err(TransferError::Cancelled);
+            }
+
             attempt = current;
-            match client.download(remote_path, local_path).await {
+            match client
+                .download_cancellable(remote_path, local_path, self.chunk_size, || {
+                    self.is_cancelled(task_id)
+                })
+                .await
+            {
                 Ok(()) => return Ok(()),
+                Err(SftpError::Cancelled) => return Err(TransferError::Cancelled),
                 Err(err) => {
                     last_error = err.to_string();
                     if is_non_retryable_transfer_error(&last_error) {
@@ -413,9 +491,12 @@ pub(crate) fn is_non_retryable_transfer_error(message: &str) -> bool {
 }
 
 fn transfer_error_from_sftp(error: SftpError) -> TransferError {
-    TransferError::RetriesExhausted {
-        attempts: 1,
-        message: error.to_string(),
+    match error {
+        SftpError::Cancelled => TransferError::Cancelled,
+        other => TransferError::RetriesExhausted {
+            attempts: 1,
+            message: other.to_string(),
+        },
     }
 }
 
@@ -500,7 +581,7 @@ mod tests {
     }
 
     #[test]
-    fn cancel_in_progress_task_is_rejected() {
+    fn cancel_in_progress_task_sets_cancel_flag() {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 8,
@@ -511,7 +592,17 @@ mod tests {
         };
 
         manager.insert_task(task);
-        let err = manager.cancel_transfer(8).unwrap_err();
+        manager.register_cancellation_flag(8);
+        manager.cancel_transfer(8).unwrap();
+
+        assert!(manager.is_cancelled(8));
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].status, TransferStatus::Cancelled);
+    }
+
+    #[test]
+    fn sftp_cancelled_maps_to_transfer_cancelled() {
+        let err = transfer_error_from_sftp(SftpError::Cancelled);
         assert!(matches!(err, TransferError::Cancelled));
     }
 
@@ -532,8 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn status_transitions_to_in_progress_before_external_poll_can_observe_pending() {
-        // Documents bug: enqueue_upload sets Pending then immediately InProgress (lines 126-127)
+    fn in_progress_task_can_be_cancelled() {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 99,
@@ -543,12 +633,50 @@ mod tests {
             status: TransferStatus::Pending,
         };
         manager.insert_task(task.clone());
+        manager.register_cancellation_flag(task.id);
         manager.update_task_status(task.id, TransferStatus::InProgress);
+
         let queue = manager.get_transfer_queue();
         assert_eq!(queue[0].status, TransferStatus::InProgress);
-        // UI only shows Cancel for Pending status
-        let cancel_result = manager.cancel_transfer(99);
-        assert!(matches!(cancel_result, Err(TransferError::Cancelled)));
+
+        manager.cancel_transfer(99).unwrap();
+        assert!(manager.is_cancelled(99));
+
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].status, TransferStatus::Cancelled);
+    }
+
+    #[test]
+    fn cancelled_task_is_detected_before_retry_attempt() {
+        let manager = TransferManager::new(&AppConfig::default());
+        manager.register_cancellation_flag(10);
+        manager.request_cancellation(10);
+
+        assert!(manager.is_cancelled(10));
+    }
+
+    #[test]
+    fn finalize_task_result_honours_cancel_after_successful_transfer() {
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 11,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::InProgress,
+        };
+
+        manager.insert_task(task);
+        manager.register_cancellation_flag(11);
+        manager.request_cancellation(11);
+
+        let err = manager
+            .finalize_task_result(11, Ok(()))
+            .expect_err("cancelled task should not finalize as completed");
+
+        assert!(matches!(err, TransferError::Cancelled));
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].status, TransferStatus::Cancelled);
     }
 
     #[test]
