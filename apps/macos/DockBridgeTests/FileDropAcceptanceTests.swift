@@ -1,0 +1,270 @@
+import XCTest
+@testable import DockBridge
+
+/// Verifies D&D accept outcomes using the same ViewModel operations as `FileDropModifiers`.
+@MainActor
+final class FileDropAcceptanceTests: XCTestCase {
+    private var tempDirectory: URL?
+    private var bridge: RustBridgeService?
+    private var viewModel: MainViewModel?
+
+    override func tearDown() async throws {
+        if let bridge, bridge.isConnected {
+            try? await bridge.disconnect()
+        }
+        if let tempDirectory {
+            try? FileManager.default.removeItem(at: tempDirectory)
+        }
+        bridge = nil
+        viewModel = nil
+        tempDirectory = nil
+        try await super.tearDown()
+    }
+
+    func testUploadToReadOnlyRemoteDirectoryRejectsDrop() async throws {
+        try await prepareViewModel()
+        guard let viewModel else { return XCTFail("Missing view model") }
+
+        let localFile = tempDirectory!.appendingPathComponent("readonly-upload.txt")
+        try "readonly upload".write(to: localFile, atomically: true, encoding: .utf8)
+        viewModel.remotePath = "/readonly"
+
+        let accepted = await viewModel.upload(
+            localURL: localFile,
+            toRemoteDirectory: viewModel.remotePath
+        )
+
+        XCTAssertFalse(accepted, "Drop should be rejected when upload fails")
+        XCTAssertNotNil(viewModel.errorMessage, "Error message should be shown")
+    }
+
+    func testUploadToWritableRemoteDirectoryAcceptsDrop() async throws {
+        try await prepareViewModel()
+        guard let viewModel else { return XCTFail("Missing view model") }
+
+        let localFile = tempDirectory!.appendingPathComponent("writable-upload.txt")
+        try "writable upload".write(to: localFile, atomically: true, encoding: .utf8)
+        viewModel.remotePath = try await resolveWritableRemoteDirectory()
+
+        let accepted = await viewModel.upload(
+            localURL: localFile,
+            toRemoteDirectory: viewModel.remotePath
+        )
+
+        XCTAssertTrue(accepted, "Drop should be accepted when upload succeeds")
+        XCTAssertNil(viewModel.errorMessage)
+
+        let items = try await bridge?.listDirectory(path: viewModel.remotePath) ?? []
+        XCTAssertTrue(items.contains { $0.name == localFile.lastPathComponent })
+    }
+
+    func testRemoteDownloadAcceptsOnSuccess() async throws {
+        try await prepareViewModel()
+        guard let viewModel else { return XCTFail("Missing view model") }
+
+        let remoteDirectory = try await resolveWritableRemoteDirectory()
+        viewModel.remotePath = remoteDirectory
+
+        let localFile = tempDirectory!.appendingPathComponent("download-source.txt")
+        try "download me".write(to: localFile, atomically: true, encoding: .utf8)
+        try await bridge?.upload(localPath: localFile.path, remoteDirectory: remoteDirectory)
+
+        let remotePath = RemotePath.join(remoteDirectory, localFile.lastPathComponent)
+        let downloadDirectory = tempDirectory!.appendingPathComponent("downloads", isDirectory: true)
+        try FileManager.default.createDirectory(at: downloadDirectory, withIntermediateDirectories: true)
+        viewModel.localPath = downloadDirectory
+
+        let accepted = await viewModel.download(
+            remotePath: remotePath,
+            toLocalDirectory: viewModel.localPath
+        )
+
+        XCTAssertTrue(accepted)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: downloadDirectory.appendingPathComponent(localFile.lastPathComponent).path
+            )
+        )
+    }
+
+    func testExternalUploadAcceptsOnSuccess() async throws {
+        try await prepareViewModel()
+        guard let viewModel else { return XCTFail("Missing view model") }
+
+        let localFile = tempDirectory!.appendingPathComponent("external-upload.txt")
+        try "external upload".write(to: localFile, atomically: true, encoding: .utf8)
+        viewModel.remotePath = try await resolveWritableRemoteDirectory()
+
+        let accepted = await viewModel.upload(
+            localURL: localFile,
+            toRemoteDirectory: viewModel.remotePath
+        )
+
+        XCTAssertTrue(accepted)
+        let items = try await bridge?.listDirectory(path: viewModel.remotePath) ?? []
+        XCTAssertTrue(items.contains { $0.name == localFile.lastPathComponent })
+    }
+
+    func testRemoteMoveAcceptsOnSuccess() async throws {
+        try await prepareViewModel()
+        guard let viewModel, let bridge else { return XCTFail("Missing view model") }
+
+        let remoteDirectory = try await resolveWritableRemoteDirectory()
+        let moveTarget = RemotePath.join(remoteDirectory, "drop-move-target")
+        try await bridge.mkdirRemote(path: moveTarget)
+
+        let localFile = tempDirectory!.appendingPathComponent("move-me.txt")
+        try "move me".write(to: localFile, atomically: true, encoding: .utf8)
+        try await bridge.upload(localPath: localFile.path, remoteDirectory: remoteDirectory)
+
+        let sourcePath = RemotePath.join(remoteDirectory, localFile.lastPathComponent)
+        viewModel.remotePath = moveTarget
+
+        let accepted = await viewModel.moveRemoteItem(
+            from: sourcePath,
+            toDirectory: viewModel.remotePath
+        )
+
+        XCTAssertTrue(accepted)
+        let movedItems = try await bridge.listDirectory(path: moveTarget)
+        XCTAssertTrue(movedItems.contains { $0.name == localFile.lastPathComponent })
+    }
+
+    func testLocalMoveAcceptsOnSuccess() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("local-drop-\(UUID().uuidString)", isDirectory: true)
+        let sourceDirectory = root.appendingPathComponent("source", isDirectory: true)
+        let destinationDirectory = root.appendingPathComponent("destination", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+
+        let sourceFile = sourceDirectory.appendingPathComponent("moved.txt")
+        try "local move".write(to: sourceFile, atomically: true, encoding: .utf8)
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bridge-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let bridge = RustBridgeService(hostKeyStore: HostKeyStore(baseDirectory: directory))
+        let transferQueue = TransferQueueViewModel(bridge: bridge)
+        let connectionList = ConnectionListViewModel(bridge: bridge)
+        let viewModel = MainViewModel(
+            bridge: bridge,
+            connectionList: connectionList,
+            transferQueue: transferQueue
+        )
+        viewModel.localPath = destinationDirectory
+
+        var accepted = false
+        guard FileDropValidation.canMoveLocalItem(from: sourceFile, to: viewModel.localPath) else {
+            return XCTFail("Expected valid local move")
+        }
+        try viewModel.moveLocalItem(from: sourceFile, toDirectory: viewModel.localPath)
+        accepted = true
+
+        XCTAssertTrue(accepted)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: destinationDirectory.appendingPathComponent("moved.txt").path
+            )
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sourceFile.path))
+    }
+
+    // MARK: - E2E setup
+
+    private func prepareViewModel() async throws {
+        try XCTSkipUnless(Self.isDockerE2EAvailable(), "Docker SFTP (dockbridge-e2e on :2222) is required")
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("file-drop-accept-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        tempDirectory = directory
+
+        let service = RustBridgeService(hostKeyStore: HostKeyStore(baseDirectory: directory))
+        try service.prepareClient()
+        bridge = service
+
+        let acceptTask = Task { @MainActor in
+            for _ in 0..<200 {
+                if service.pendingHostKeyChallenge != nil {
+                    service.respondToHostKeyChallenge(accepted: true)
+                    return
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        defer { acceptTask.cancel() }
+
+        try await service.connect(
+            profile: Self.e2eProfile,
+            password: "password",
+            passphrase: nil
+        )
+
+        let transferQueue = TransferQueueViewModel(bridge: service)
+        let connectionList = ConnectionListViewModel(bridge: service)
+        viewModel = MainViewModel(
+            bridge: service,
+            connectionList: connectionList,
+            transferQueue: transferQueue
+        )
+        viewModel?.localPath = directory
+    }
+
+    private func resolveWritableRemoteDirectory() async throws -> String {
+        let candidates = [
+            bridge?.initialRemoteDirectory,
+            try? await bridge?.getInitialDirectory(),
+            "/upload",
+        ]
+        for candidate in candidates.compactMap({ $0 }).filter({ $0 != "/" }) {
+            if (try? await bridge?.listDirectory(path: candidate)) != nil {
+                return candidate
+            }
+        }
+        throw XCTSkip("No writable remote directory found for Docker E2E")
+    }
+
+    private static var e2eProfile: ConnectionProfile {
+        ConnectionProfile(
+            name: "E2E",
+            host: "127.0.0.1",
+            port: 2222,
+            username: "demo",
+            authType: .password
+        )
+    }
+
+    private static var dockerExecutable: String {
+        for candidate in ["/usr/local/bin/docker", "/opt/homebrew/bin/docker", "/usr/bin/docker"] {
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return "/usr/local/bin/docker"
+    }
+
+    private static func isDockerE2EAvailable() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: dockerExecutable)
+        process.arguments = [
+            "ps",
+            "--filter", "name=dockbridge-e2e",
+            "--filter", "status=running",
+            "--format", "{{.Names}}",
+        ]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        guard (try? process.run()) != nil else { return false }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return false }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return output == "dockbridge-e2e"
+    }
+}

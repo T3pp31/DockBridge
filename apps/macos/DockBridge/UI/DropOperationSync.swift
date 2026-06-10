@@ -5,9 +5,12 @@ enum DropOperationSync {
         if Thread.isMainThread {
             var result: T!
             let semaphore = DispatchSemaphore(value: 0)
-            Task { @MainActor in
-                result = await operation()
-                semaphore.signal()
+            // Schedule from a background queue so the main RunLoop can pump @MainActor work.
+            DispatchQueue.global(qos: .userInitiated).async {
+                Task { @MainActor in
+                    result = await operation()
+                    semaphore.signal()
+                }
             }
             while semaphore.wait(timeout: .now()) == .timedOut {
                 RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.001))
