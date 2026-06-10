@@ -34,7 +34,12 @@ final class TransferQueueViewModel: ObservableObject {
         }
 
         do {
-            tasks = try await bridge.fetchTransferTasks()
+            let fetched = try await bridge.fetchTransferTasks()
+            guard bridge.isConnected else {
+                tasks = []
+                return
+            }
+            tasks = fetched
             errorMessage = nil
         } catch {
             tasks = []
