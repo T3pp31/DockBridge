@@ -293,10 +293,9 @@ impl DockBridgeClient {
             block_on(async move {
                 let session = {
                     let sessions = sessions.lock().await;
-                    sessions
-                        .get(&session_id)
-                        .cloned()
-                        .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?
+                    sessions.get(&session_id).cloned().ok_or_else(|| {
+                        map_error_string(format!("session {session_id} not found"))
+                    })?
                 };
                 transfer_manager
                     .enqueue_upload_entry(session.as_ref(), &local_path, remote_directory)
@@ -321,10 +320,9 @@ impl DockBridgeClient {
             block_on(async move {
                 let session = {
                     let sessions = sessions.lock().await;
-                    sessions
-                        .get(&session_id)
-                        .cloned()
-                        .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?
+                    sessions.get(&session_id).cloned().ok_or_else(|| {
+                        map_error_string(format!("session {session_id} not found"))
+                    })?
                 };
                 transfer_manager
                     .enqueue_download_entry(session.as_ref(), remote_path, &local_directory)
