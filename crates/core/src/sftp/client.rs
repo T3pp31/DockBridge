@@ -1,9 +1,10 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use russh_sftp::client::fs::File as RemoteFileHandle;
 use russh_sftp::client::SftpSession;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::config::{clamp_transfer_chunk_size, DEFAULT_TRANSFER_CHUNK_SIZE_BYTES};
 use crate::error::SftpError;
 use crate::ssh::session::SshSession;
 
@@ -100,7 +101,8 @@ impl<'a> SftpClient<'a> {
     ) -> Result<(), SftpError> {
         let local = local_path.display().to_string();
         let remote = remote_path.to_string();
-        let chunk_size = normalize_chunk_size(chunk_size);
+        let chunk_size = clamp_transfer_chunk_size(chunk_size);
+        let partial_remote_path = partial_remote_path(remote_path);
 
         let mut local_file =
             tokio::fs::File::open(local_path)
@@ -111,20 +113,20 @@ impl<'a> SftpClient<'a> {
                     message: err.to_string(),
                 })?;
 
-        let mut remote_file =
-            self.sftp()
-                .create(remote_path)
-                .await
-                .map_err(|err| SftpError::UploadFailed {
-                    local: local.clone(),
-                    remote: remote.clone(),
-                    message: err.to_string(),
-                })?;
+        let mut remote_file = self
+            .sftp()
+            .create(&partial_remote_path)
+            .await
+            .map_err(|err| SftpError::UploadFailed {
+                local: local.clone(),
+                remote: remote.clone(),
+                message: err.to_string(),
+            })?;
 
         let mut buffer = vec![0_u8; chunk_size];
         loop {
             if is_cancelled() {
-                cleanup_cancelled_upload(self, &mut remote_file, remote_path).await;
+                cleanup_cancelled_upload(self, &mut remote_file, &partial_remote_path).await?;
                 return Err(SftpError::Cancelled);
             }
 
@@ -155,10 +157,15 @@ impl<'a> SftpClient<'a> {
             .shutdown()
             .await
             .map_err(|err| SftpError::UploadFailed {
-                local,
-                remote,
+                local: local.clone(),
+                remote: remote.clone(),
                 message: err.to_string(),
             })?;
+
+        if let Err(err) = self.rename(&partial_remote_path, remote_path).await {
+            let _ = self.delete(&partial_remote_path).await;
+            return Err(err);
+        }
 
         Ok(())
     }
@@ -179,7 +186,8 @@ impl<'a> SftpClient<'a> {
     ) -> Result<(), SftpError> {
         let remote = remote_path.to_string();
         let local = local_path.display().to_string();
-        let chunk_size = normalize_chunk_size(chunk_size);
+        let chunk_size = clamp_transfer_chunk_size(chunk_size);
+        let partial_local_path = partial_local_path(local_path);
 
         if let Some(parent) = local_path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -201,19 +209,18 @@ impl<'a> SftpClient<'a> {
                     message: err.to_string(),
                 })?;
 
-        let mut local_file =
-            tokio::fs::File::create(local_path)
-                .await
-                .map_err(|err| SftpError::DownloadFailed {
-                    remote: remote.clone(),
-                    local: local.clone(),
-                    message: err.to_string(),
-                })?;
+        let mut local_file = tokio::fs::File::create(&partial_local_path)
+            .await
+            .map_err(|err| SftpError::DownloadFailed {
+                remote: remote.clone(),
+                local: local.clone(),
+                message: err.to_string(),
+            })?;
 
         let mut buffer = vec![0_u8; chunk_size];
         loop {
             if is_cancelled() {
-                cleanup_cancelled_download(&mut remote_file, local_path).await;
+                cleanup_cancelled_download(&mut remote_file, &partial_local_path).await?;
                 return Err(SftpError::Cancelled);
             }
 
@@ -244,10 +251,21 @@ impl<'a> SftpClient<'a> {
             .flush()
             .await
             .map_err(|err| SftpError::DownloadFailed {
+                remote: remote.clone(),
+                local: local.clone(),
+                message: err.to_string(),
+            })?;
+
+        drop(local_file);
+
+        if let Err(err) = tokio::fs::rename(&partial_local_path, local_path).await {
+            let _ = tokio::fs::remove_file(&partial_local_path).await;
+            return Err(SftpError::DownloadFailed {
                 remote,
                 local,
                 message: err.to_string(),
-            })?;
+            });
+        }
 
         Ok(())
     }
@@ -405,33 +423,66 @@ impl<'a> SftpClient<'a> {
 }
 
 fn default_chunk_size() -> usize {
-    262_144
+    DEFAULT_TRANSFER_CHUNK_SIZE_BYTES
 }
 
-fn normalize_chunk_size(chunk_size: usize) -> usize {
-    chunk_size.max(4_096)
+fn partial_remote_path(remote_path: &str) -> String {
+    let parent = parent_remote_path(remote_path).unwrap_or_else(|| "/".to_string());
+    let nanos = partial_path_nanos();
+    join_remote_path(&parent, Path::new(&format!(".dockbridge-{nanos}.partial")))
+}
+
+fn partial_local_path(local_path: &Path) -> PathBuf {
+    let parent = local_path.parent().unwrap_or_else(|| Path::new("."));
+    let nanos = partial_path_nanos();
+    parent.join(format!(".dockbridge-{nanos}.partial"))
+}
+
+fn partial_path_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
 }
 
 async fn cleanup_cancelled_upload(
     client: &SftpClient<'_>,
     remote_file: &mut RemoteFileHandle,
-    remote_path: &str,
-) {
+    partial_remote_path: &str,
+) -> Result<(), SftpError> {
     if let Err(err) = remote_file.shutdown().await {
-        tracing::warn!(remote_path, error = %err, "failed to close remote file after cancel");
+        tracing::warn!(
+            partial_remote_path,
+            error = %err,
+            "failed to close partial remote file after cancel"
+        );
     }
-    if let Err(err) = client.delete(remote_path).await {
-        tracing::warn!(remote_path, error = %err, "failed to delete partial remote file after cancel");
-    }
+    client
+        .delete(partial_remote_path)
+        .await
+        .map_err(|err| SftpError::CleanupFailed {
+            path: partial_remote_path.to_string(),
+            message: err.to_string(),
+        })
 }
 
-async fn cleanup_cancelled_download(remote_file: &mut RemoteFileHandle, local_path: &Path) {
+async fn cleanup_cancelled_download(
+    remote_file: &mut RemoteFileHandle,
+    partial_local_path: &Path,
+) -> Result<(), SftpError> {
     if let Err(err) = remote_file.shutdown().await {
-        tracing::warn!(local = %local_path.display(), error = %err, "failed to close remote file after cancel");
+        tracing::warn!(
+            local = %partial_local_path.display(),
+            error = %err,
+            "failed to close remote file after cancel"
+        );
     }
-    if let Err(err) = tokio::fs::remove_file(local_path).await {
-        tracing::warn!(local = %local_path.display(), error = %err, "failed to delete partial local file after cancel");
-    }
+    tokio::fs::remove_file(partial_local_path)
+        .await
+        .map_err(|err| SftpError::CleanupFailed {
+            path: partial_local_path.display().to_string(),
+            message: err.to_string(),
+        })
 }
 
 fn is_mkdir_already_exists_message(message: &str) -> bool {
@@ -456,7 +507,10 @@ fn parent_remote_path(remote_path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_mkdir_already_exists_message, parent_remote_path};
+    use super::{
+        is_mkdir_already_exists_message, parent_remote_path, partial_local_path,
+        partial_remote_path,
+    };
 
     #[test]
     fn parent_remote_path_returns_parent_directory() {
@@ -475,5 +529,31 @@ mod tests {
         assert!(is_mkdir_already_exists_message("file exists"));
         assert!(!is_mkdir_already_exists_message("Permission denied"));
         assert!(!is_mkdir_already_exists_message("No such file"));
+    }
+
+    #[test]
+    fn partial_remote_path_uses_parent_directory_and_suffix() {
+        // Given: a remote file path
+        // When: partial_remote_path is called
+        // Then: the path is under the parent with a .dockbridge-*.partial suffix
+        let partial = partial_remote_path("/a/b.txt");
+        assert!(partial.starts_with("/a/"));
+        assert!(partial.contains(".dockbridge-"));
+        assert!(partial.ends_with(".partial"));
+    }
+
+    #[test]
+    fn partial_local_path_uses_parent_directory_and_suffix() {
+        // Given: a local file path
+        // When: partial_local_path is called
+        // Then: the path is under the parent with a .dockbridge-*.partial suffix
+        let partial = partial_local_path(std::path::Path::new("/tmp/a/b.txt"));
+        assert_eq!(partial.parent().and_then(|p| p.to_str()), Some("/tmp/a"));
+        let file_name = partial
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        assert!(file_name.starts_with(".dockbridge-"));
+        assert!(file_name.ends_with(".partial"));
     }
 }

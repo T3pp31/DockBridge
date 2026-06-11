@@ -106,6 +106,9 @@ pub enum SftpError {
     #[error("transfer was cancelled")]
     Cancelled,
 
+    #[error("failed to clean up partial file at '{path}': {message}")]
+    CleanupFailed { path: String, message: String },
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -152,6 +155,15 @@ pub enum ConfigError {
 
     #[error("config file not found at {path}")]
     NotFound { path: String },
+
+    #[error(
+        "invalid transfer_chunk_size_bytes {value}: must be between {min} and {max} bytes inclusive"
+    )]
+    InvalidTransferChunkSize {
+        value: usize,
+        min: usize,
+        max: usize,
+    },
 }
 
 impl AppError {

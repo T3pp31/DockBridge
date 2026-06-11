@@ -4,6 +4,13 @@ use serde::Deserialize;
 
 use crate::error::{ConfigError, SecurityError};
 
+/// Minimum read/write chunk size for cancellable SFTP transfers.
+pub const MIN_TRANSFER_CHUNK_SIZE_BYTES: usize = 4_096;
+/// Maximum read/write chunk size for cancellable SFTP transfers.
+pub const MAX_TRANSFER_CHUNK_SIZE_BYTES: usize = 8 * 1024 * 1024;
+/// Default read/write chunk size for cancellable SFTP transfers.
+pub const DEFAULT_TRANSFER_CHUNK_SIZE_BYTES: usize = 262_144;
+
 /// Runtime configuration passed into DockBridge core.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
@@ -25,7 +32,7 @@ impl Default for AppConfig {
             connection_timeout_secs: 30,
             session_health_check_interval_secs: 10,
             transfer_retry_count: 3,
-            transfer_chunk_size_bytes: default_transfer_chunk_size_bytes(),
+            transfer_chunk_size_bytes: DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
             known_hosts_path: default_known_hosts_path(),
         }
     }
@@ -55,6 +62,8 @@ impl AppConfig {
             })?;
 
         config.known_hosts_path = expand_tilde(&config.known_hosts_path);
+        config.transfer_chunk_size_bytes =
+            validate_transfer_chunk_size(config.transfer_chunk_size_bytes)?;
         Ok(config)
     }
 
@@ -62,6 +71,26 @@ impl AppConfig {
     pub fn known_hosts_path(&self) -> &Path {
         &self.known_hosts_path
     }
+}
+
+/// Validates a transfer chunk size from configuration.
+///
+/// Values below [`MIN_TRANSFER_CHUNK_SIZE_BYTES`] are raised to the minimum.
+/// Values above [`MAX_TRANSFER_CHUNK_SIZE_BYTES`] are rejected.
+pub fn validate_transfer_chunk_size(bytes: usize) -> Result<usize, ConfigError> {
+    if bytes > MAX_TRANSFER_CHUNK_SIZE_BYTES {
+        return Err(ConfigError::InvalidTransferChunkSize {
+            value: bytes,
+            min: MIN_TRANSFER_CHUNK_SIZE_BYTES,
+            max: MAX_TRANSFER_CHUNK_SIZE_BYTES,
+        });
+    }
+    Ok(bytes.max(MIN_TRANSFER_CHUNK_SIZE_BYTES))
+}
+
+/// Clamps a validated transfer chunk size to the allowed range.
+pub fn clamp_transfer_chunk_size(bytes: usize) -> usize {
+    bytes.clamp(MIN_TRANSFER_CHUNK_SIZE_BYTES, MAX_TRANSFER_CHUNK_SIZE_BYTES)
 }
 
 /// Expands a leading `~` to the user's home directory.
@@ -93,10 +122,6 @@ fn default_known_hosts_path() -> PathBuf {
     expand_tilde(Path::new("~/.dockbridge/known_hosts.json"))
 }
 
-fn default_transfer_chunk_size_bytes() -> usize {
-    262_144
-}
-
 /// Ensures the parent directory for the known hosts file exists.
 pub fn ensure_known_hosts_parent(path: &Path) -> Result<(), SecurityError> {
     if let Some(parent) = path.parent() {
@@ -120,5 +145,95 @@ mod tests {
             expanded,
             PathBuf::from("/tmp/home/.dockbridge/known_hosts.json")
         );
+    }
+
+    #[test]
+    fn validate_transfer_chunk_size_clamps_below_minimum() {
+        // Given: values below the minimum chunk size
+        // When: validate_transfer_chunk_size is called
+        // Then: the minimum chunk size is returned
+        assert_eq!(
+            validate_transfer_chunk_size(0).unwrap(),
+            MIN_TRANSFER_CHUNK_SIZE_BYTES
+        );
+        assert_eq!(
+            validate_transfer_chunk_size(100).unwrap(),
+            MIN_TRANSFER_CHUNK_SIZE_BYTES
+        );
+    }
+
+    #[test]
+    fn validate_transfer_chunk_size_accepts_maximum() {
+        // Given: the maximum allowed chunk size
+        // When: validate_transfer_chunk_size is called
+        // Then: the value is accepted unchanged
+        assert_eq!(
+            validate_transfer_chunk_size(MAX_TRANSFER_CHUNK_SIZE_BYTES).unwrap(),
+            MAX_TRANSFER_CHUNK_SIZE_BYTES
+        );
+    }
+
+    #[test]
+    fn validate_transfer_chunk_size_rejects_above_maximum() {
+        // Given: a chunk size above the maximum
+        // When: validate_transfer_chunk_size is called
+        // Then: InvalidTransferChunkSize is returned
+        let err = validate_transfer_chunk_size(MAX_TRANSFER_CHUNK_SIZE_BYTES + 1).unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidTransferChunkSize {
+                value,
+                min,
+                max
+            } if value == MAX_TRANSFER_CHUNK_SIZE_BYTES + 1
+                && min == MIN_TRANSFER_CHUNK_SIZE_BYTES
+                && max == MAX_TRANSFER_CHUNK_SIZE_BYTES
+        ));
+    }
+
+    #[test]
+    fn clamp_transfer_chunk_size_enforces_bounds() {
+        // Given: chunk sizes at and beyond the allowed range
+        // When: clamp_transfer_chunk_size is called
+        // Then: values are clamped to the allowed range
+        assert_eq!(clamp_transfer_chunk_size(0), MIN_TRANSFER_CHUNK_SIZE_BYTES);
+        assert_eq!(
+            clamp_transfer_chunk_size(100),
+            MIN_TRANSFER_CHUNK_SIZE_BYTES
+        );
+        assert_eq!(
+            clamp_transfer_chunk_size(MAX_TRANSFER_CHUNK_SIZE_BYTES),
+            MAX_TRANSFER_CHUNK_SIZE_BYTES
+        );
+        assert_eq!(
+            clamp_transfer_chunk_size(MAX_TRANSFER_CHUNK_SIZE_BYTES + 1),
+            MAX_TRANSFER_CHUNK_SIZE_BYTES
+        );
+    }
+
+    #[test]
+    fn from_toml_file_rejects_oversized_chunk_size() {
+        // Given: a TOML config with an oversized transfer chunk size
+        // When: AppConfig::from_toml_file is called
+        // Then: InvalidTransferChunkSize is returned
+        let dir =
+            std::env::temp_dir().join(format!("dockbridge-config-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("invalid.toml");
+        std::fs::write(
+            &path,
+            format!(
+                "connection_timeout_secs = 30\n\
+                 session_health_check_interval_secs = 10\n\
+                 transfer_retry_count = 3\n\
+                 transfer_chunk_size_bytes = {}\n\
+                 known_hosts_path = \"~/.dockbridge/known_hosts.json\"\n",
+                MAX_TRANSFER_CHUNK_SIZE_BYTES + 1
+            ),
+        )
+        .unwrap();
+
+        let err = AppConfig::from_toml_file(&path).unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidTransferChunkSize { .. }));
     }
 }

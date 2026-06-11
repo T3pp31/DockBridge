@@ -133,6 +133,98 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         }
     }
 
+    func testCancelOverwriteUploadPreservesOriginalFile() async throws {
+        try await prepareBridge()
+        guard let bridge else {
+            return XCTFail("Bridge should be connected")
+        }
+
+        let remoteDirectory = try await resolveRemoteDirectory()
+        let remoteFileName = "overwrite-cancel-\(UUID().uuidString).txt"
+        let originalContent = "ORIGINAL-CONTENT-12345"
+        let originalLocal = tempDirectory!.appendingPathComponent(remoteFileName)
+        try originalContent.write(to: originalLocal, atomically: true, encoding: .utf8)
+
+        try await bridge.upload(localPath: originalLocal.path, remoteDirectory: remoteDirectory)
+
+        let originalRemoteItems = try await bridge.listDirectory(path: remoteDirectory)
+        guard let originalRemoteItem = originalRemoteItems.first(where: { $0.name == remoteFileName }) else {
+            return XCTFail("Expected original remote file to exist before overwrite upload")
+        }
+        XCTAssertEqual(originalRemoteItem.size, UInt64(originalContent.utf8.count))
+
+        let fileSize = 32 * 1024 * 1024
+        try Data(repeating: 0xFE, count: fileSize).write(to: originalLocal)
+
+        let transferQueue = TransferQueueViewModel(bridge: bridge)
+        let uploadTask = Task {
+            try await bridge.upload(localPath: originalLocal.path, remoteDirectory: remoteDirectory)
+        }
+
+        var inProgressTask: TransferTaskRecord?
+        for _ in 0..<100 {
+            await transferQueue.refresh()
+            inProgressTask = transferQueue.tasks.first { task in
+                if case .inProgress = task.status {
+                    return true
+                }
+                return false
+            }
+            if inProgressTask != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        guard let inProgressTask else {
+            uploadTask.cancel()
+            _ = await uploadTask.result
+            return XCTFail("Expected an in-progress overwrite upload before completion")
+        }
+
+        await transferQueue.cancel(task: inProgressTask)
+
+        var reachedCancelled = false
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline {
+            await transferQueue.refresh()
+            if let task = transferQueue.tasks.first(where: { $0.id == inProgressTask.id }),
+               case .cancelled = task.status {
+                reachedCancelled = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertTrue(reachedCancelled, "Overwrite upload should reach cancelled status")
+
+        _ = await uploadTask.result
+
+        let remoteItemsAfterCancel = try await bridge.listDirectory(path: remoteDirectory)
+        guard let remoteItemAfterCancel = remoteItemsAfterCancel.first(where: { $0.name == remoteFileName }) else {
+            return XCTFail("Remote file should still exist after cancelled overwrite upload")
+        }
+        XCTAssertEqual(
+            remoteItemAfterCancel.size,
+            UInt64(originalContent.utf8.count),
+            "Cancelled overwrite upload must preserve the original remote file size"
+        )
+
+        let verifyDirectory = tempDirectory!.appendingPathComponent("verify", isDirectory: true)
+        try FileManager.default.createDirectory(at: verifyDirectory, withIntermediateDirectories: true)
+        let remotePath = remoteDirectory.hasSuffix("/")
+            ? "\(remoteDirectory)\(remoteFileName)"
+            : "\(remoteDirectory)/\(remoteFileName)"
+        try await bridge.download(remotePath: remotePath, localDirectory: verifyDirectory.path)
+
+        let downloadedPath = verifyDirectory.appendingPathComponent(remoteFileName)
+        let downloadedContent = try String(contentsOf: downloadedPath, encoding: .utf8)
+        XCTAssertEqual(
+            downloadedContent,
+            originalContent,
+            "Cancelled overwrite upload must preserve the original remote file content"
+        )
+    }
+
     func testDisconnectsWithinHealthCheckIntervalAfterSshdKill() async throws {
         try await prepareBridge()
         XCTAssertTrue(bridge?.isConnected == true)

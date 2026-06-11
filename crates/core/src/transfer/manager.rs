@@ -150,8 +150,27 @@ impl TransferManager {
         self.remove_cancellation_flag(task_id);
 
         if was_cancelled {
-            self.update_task_status(task_id, TransferStatus::Cancelled);
-            return Err(TransferError::Cancelled);
+            return match result {
+                Ok(()) | Err(TransferError::Cancelled) => {
+                    self.update_task_status(task_id, TransferStatus::Cancelled);
+                    Err(TransferError::Cancelled)
+                }
+                Err(err) => {
+                    let message = format!(
+                        "転送はキャンセルされましたが、部分ファイルの削除に失敗しました: {err}"
+                    );
+                    self.update_task_status(
+                        task_id,
+                        TransferStatus::Failed {
+                            message: message.clone(),
+                        },
+                    );
+                    Err(TransferError::RetriesExhausted {
+                        attempts: 1,
+                        message,
+                    })
+                }
+            };
         }
 
         match result {
@@ -392,6 +411,14 @@ impl TransferManager {
             {
                 Ok(()) => return Ok(()),
                 Err(SftpError::Cancelled) => return Err(TransferError::Cancelled),
+                Err(SftpError::CleanupFailed { message, .. }) if self.is_cancelled(task_id) => {
+                    return Err(TransferError::RetriesExhausted {
+                        attempts: 1,
+                        message: format!(
+                            "転送はキャンセルされましたが、部分ファイルの削除に失敗しました: {message}"
+                        ),
+                    });
+                }
                 Err(err) => {
                     last_error = err.to_string();
                     if is_non_retryable_transfer_error(&last_error) {
@@ -441,6 +468,14 @@ impl TransferManager {
             {
                 Ok(()) => return Ok(()),
                 Err(SftpError::Cancelled) => return Err(TransferError::Cancelled),
+                Err(SftpError::CleanupFailed { message, .. }) if self.is_cancelled(task_id) => {
+                    return Err(TransferError::RetriesExhausted {
+                        attempts: 1,
+                        message: format!(
+                            "転送はキャンセルされましたが、部分ファイルの削除に失敗しました: {message}"
+                        ),
+                    });
+                }
                 Err(err) => {
                     last_error = err.to_string();
                     if is_non_retryable_transfer_error(&last_error) {

@@ -53,7 +53,11 @@ This is also included in the full E2E suite:
 5. Open **Transfer Queue**, confirm the task shows **In Progress** with a **Cancel** button.
 6. Click **Cancel**; the task status should change to **Cancelled**.
 
-Note: SFTP read/write cannot be interrupted mid-stream in v0.1. Cancel takes effect after the current transfer attempt finishes or before the next retry.
+Cancel is checked between read/write chunks, so large transfers can be interrupted at chunk boundaries (default chunk size: 256 KiB).
+
+When cancelling an upload that would overwrite an existing remote file, the original remote file is preserved. Transfers write to a temporary `.dockbridge-<timestamp>.partial` file in the same directory and atomically rename it on success; cancel removes only the partial file.
+
+If cancel succeeds but partial-file cleanup fails, the Transfer Queue shows **Failed** with a message that a partial file may remain on the server or locally. Remove any leftover `.dockbridge-*.partial` files manually if needed.
 
 ## Architecture
 
