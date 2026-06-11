@@ -7,9 +7,10 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use dockbridge_core::{
-    ensure_known_hosts_parent, expand_tilde, is_connection_lost_message, AppConfig, AuthType,
-    ConnectionProfile, HostKeyPrompt, KnownHostsManager, RemoteFile, SecretPassword, SftpClient,
-    SshSession, TransferDirection, TransferManager, TransferStatus, TransferTask,
+    ensure_known_hosts_parent, expand_tilde, is_connection_lost_message,
+    validate_transfer_chunk_size, AppConfig, AuthType, ConnectionProfile, HostKeyPrompt,
+    KnownHostsManager, RemoteFile, SecretPassword, SftpClient, SshSession, TransferDirection,
+    TransferManager, TransferStatus, TransferTask,
 };
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
@@ -37,6 +38,7 @@ pub struct AppConfigRecord {
     pub connection_timeout_secs: u64,
     pub session_health_check_interval_secs: u64,
     pub transfer_retry_count: u32,
+    pub transfer_chunk_size_bytes: u64,
     pub known_hosts_path: String,
 }
 
@@ -169,11 +171,14 @@ impl DockBridgeClient {
     ) -> Result<Arc<Self>, DockBridgeError> {
         let known_hosts_path = expand_tilde(PathBuf::from(app_config.known_hosts_path).as_path());
         ensure_known_hosts_parent(&known_hosts_path).map_err(map_error)?;
+        let transfer_chunk_size_bytes =
+            validate_transfer_chunk_size(app_config.transfer_chunk_size_bytes as usize)
+                .map_err(map_error)?;
         let config = AppConfig {
             connection_timeout_secs: app_config.connection_timeout_secs,
             session_health_check_interval_secs: app_config.session_health_check_interval_secs,
             transfer_retry_count: app_config.transfer_retry_count,
-            transfer_chunk_size_bytes: AppConfig::default().transfer_chunk_size_bytes,
+            transfer_chunk_size_bytes,
             known_hosts_path,
         };
         let known_hosts_manager =

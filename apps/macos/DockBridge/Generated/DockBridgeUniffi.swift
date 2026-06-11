@@ -786,14 +786,16 @@ public struct AppConfigRecord {
     public var connectionTimeoutSecs: UInt64
     public var sessionHealthCheckIntervalSecs: UInt64
     public var transferRetryCount: UInt32
+    public var transferChunkSizeBytes: UInt64
     public var knownHostsPath: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, knownHostsPath: String) {
+    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, knownHostsPath: String) {
         self.connectionTimeoutSecs = connectionTimeoutSecs
         self.sessionHealthCheckIntervalSecs = sessionHealthCheckIntervalSecs
         self.transferRetryCount = transferRetryCount
+        self.transferChunkSizeBytes = transferChunkSizeBytes
         self.knownHostsPath = knownHostsPath
     }
 }
@@ -814,6 +816,9 @@ extension AppConfigRecord: Equatable, Hashable {
         if lhs.transferRetryCount != rhs.transferRetryCount {
             return false
         }
+        if lhs.transferChunkSizeBytes != rhs.transferChunkSizeBytes {
+            return false
+        }
         if lhs.knownHostsPath != rhs.knownHostsPath {
             return false
         }
@@ -824,6 +829,7 @@ extension AppConfigRecord: Equatable, Hashable {
         hasher.combine(connectionTimeoutSecs)
         hasher.combine(sessionHealthCheckIntervalSecs)
         hasher.combine(transferRetryCount)
+        hasher.combine(transferChunkSizeBytes)
         hasher.combine(knownHostsPath)
     }
 }
@@ -840,6 +846,7 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
                 connectionTimeoutSecs: FfiConverterUInt64.read(from: &buf), 
                 sessionHealthCheckIntervalSecs: FfiConverterUInt64.read(from: &buf), 
                 transferRetryCount: FfiConverterUInt32.read(from: &buf), 
+                transferChunkSizeBytes: FfiConverterUInt64.read(from: &buf), 
                 knownHostsPath: FfiConverterString.read(from: &buf)
         )
     }
@@ -848,6 +855,7 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.connectionTimeoutSecs, into: &buf)
         FfiConverterUInt64.write(value.sessionHealthCheckIntervalSecs, into: &buf)
         FfiConverterUInt32.write(value.transferRetryCount, into: &buf)
+        FfiConverterUInt64.write(value.transferChunkSizeBytes, into: &buf)
         FfiConverterString.write(value.knownHostsPath, into: &buf)
     }
 }
