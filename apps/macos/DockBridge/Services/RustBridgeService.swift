@@ -28,7 +28,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
 
     func prepareClient() throws {
         try hostKeyStore.ensureStoreDirectoryExists()
-        let record = settings.buildAppConfigRecord()
+        let record = settings.loadConfig().toRecord(knownHostsPath: hostKeyStore.knownHostsPath.path)
         client = try DockBridgeClient(
             appConfig: record,
             hostKeyHandler: self,
@@ -182,7 +182,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
     }
 
     @MainActor
-    private func awaitHostKeyDecision(for challenge: HostKeyChallenge) async -> Bool {
+    func awaitHostKeyDecision(for challenge: HostKeyChallenge) async -> Bool {
         if pendingHostKeyChallenge != nil {
             respondToHostKeyChallenge(accepted: false)
         }
@@ -198,7 +198,11 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
             }
 
             group.addTask { @MainActor in
-                try? await Task.sleep(for: .seconds(timeoutSecs))
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + TimeInterval(timeoutSecs)) {
+                        continuation.resume()
+                    }
+                }
                 self.respondToHostKeyChallenge(accepted: false)
                 return false
             }

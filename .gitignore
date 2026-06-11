@@ -16,6 +16,10 @@ DerivedData/
 build/
 .build/
 
+# Local test artifacts (xcodebuild / E2E runs)
+*.xcresult/
+*-test*.log
+
 # Generated UniFFI (policy B: commit Swift bindings only)
 **/*.xcframework/
 apps/macos/DockBridge/Generated/Headers/
