@@ -17,6 +17,7 @@ build/
 .build/
 
 # Local test artifacts (xcodebuild / E2E runs)
+.derivedData-*/
 *.xcresult/
 *.log
 
