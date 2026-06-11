@@ -5,10 +5,7 @@ import XCTest
 final class ManualTestPlanVerificationTests: XCTestCase {
     private var tempDirectory: URL?
     private var bridge: RustBridgeService?
-    private var hostKeyAcceptTask: Task<Void, Never>?
-
     override func tearDown() async throws {
-        stopHostKeyAutoAccept()
         if let bridge, bridge.isConnected {
             try? await bridge.disconnect()
         }
@@ -155,26 +152,20 @@ final class ManualTestPlanVerificationTests: XCTestCase {
             return XCTFail("Bridge should be initialized")
         }
 
-        let acceptTask = Task { @MainActor in
-            for _ in 0..<200 {
-                if let challenge = service.pendingHostKeyChallenge {
-                    XCTAssertNotNil(challenge)
-                    XCTAssertEqual(challenge.host, Self.e2eProfile.host)
-                    XCTAssertEqual(challenge.port, Self.e2eProfile.port)
-                    service.respondToHostKeyChallenge(accepted: true)
-                    return
-                }
-                try await Task.sleep(for: .milliseconds(50))
-            }
-            XCTFail("Expected host key challenge before accept")
-        }
-        defer { acceptTask.cancel() }
-
-        try await service.connect(
+        async let connect: Void = service.connect(
             profile: Self.e2eProfile,
             password: "password",
             passphrase: nil
         )
+
+        try await waitForHostKeyChallenge(on: service, timeout: .seconds(30))
+        if let challenge = service.pendingHostKeyChallenge {
+            XCTAssertEqual(challenge.host, Self.e2eProfile.host)
+            XCTAssertEqual(challenge.port, Self.e2eProfile.port)
+        }
+        service.respondToHostKeyChallenge(accepted: true)
+
+        try await connect
         XCTAssertTrue(service.isConnected)
     }
 
@@ -316,32 +307,31 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         try service.prepareClient()
         bridge = service
 
-        startHostKeyAutoAccept(on: service)
-        defer { stopHostKeyAutoAccept() }
-
-        try await service.connect(
+        async let connect: Void = service.connect(
             profile: Self.e2eProfile,
             password: "password",
             passphrase: nil
         )
+
+        try await waitForHostKeyChallenge(on: service, timeout: .seconds(30))
+        service.respondToHostKeyChallenge(accepted: true)
+
+        try await connect
     }
 
-    private func startHostKeyAutoAccept(on service: RustBridgeService) {
-        stopHostKeyAutoAccept()
-        hostKeyAcceptTask = Task { @MainActor in
-            for _ in 0..<200 {
-                if service.pendingHostKeyChallenge != nil {
-                    service.respondToHostKeyChallenge(accepted: true)
-                    return
-                }
-                try? await Task.sleep(for: .milliseconds(50))
+    private func waitForHostKeyChallenge(
+        on service: RustBridgeService,
+        timeout: Duration
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if let challenge = service.pendingHostKeyChallenge {
+                XCTAssertNotNil(challenge)
+                return
             }
+            try await Task.sleep(for: .milliseconds(50))
         }
-    }
-
-    private func stopHostKeyAutoAccept() {
-        hostKeyAcceptTask?.cancel()
-        hostKeyAcceptTask = nil
+        XCTFail("Expected host key challenge before timeout")
     }
 
     private func resolveRemoteDirectory() async throws -> String {
