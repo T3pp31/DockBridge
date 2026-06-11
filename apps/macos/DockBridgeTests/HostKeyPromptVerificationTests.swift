@@ -14,32 +14,25 @@ final class HostKeyPromptVerificationTests: XCTestCase {
 
     @MainActor
     func testHostKeyPromptShowsChallengeAndAcceptReturnsTrue() async throws {
-        let bridge = try makeBridge(connectionTimeoutSecs: 30)
+        let bridge = try makeBridge(connectionTimeoutSecs: 5)
         let challenge = HostKeyChallenge(
             host: "127.0.0.1",
             port: 2222,
             fingerprintSha256: "SHA256:unit-test-fingerprint"
         )
 
-        let decisionTask = Task { @MainActor in
-            await bridge.awaitHostKeyDecision(for: challenge)
-        }
+        async let decision = bridge.awaitHostKeyDecision(for: challenge)
 
-        var sawChallenge = false
-        for _ in 0..<200 {
-            if let pending = bridge.pendingHostKeyChallenge {
-                XCTAssertEqual(pending.host, challenge.host)
-                XCTAssertEqual(pending.port, challenge.port)
-                XCTAssertEqual(pending.fingerprintSha256, challenge.fingerprintSha256)
-                sawChallenge = true
-                bridge.respondToHostKeyChallenge(accepted: true)
-                break
-            }
-            try await Task.sleep(for: .milliseconds(25))
+        try await Task.sleep(for: .milliseconds(50))
+        guard let pending = bridge.pendingHostKeyChallenge else {
+            return XCTFail("Expected host key challenge to appear")
         }
+        XCTAssertEqual(pending.host, challenge.host)
+        XCTAssertEqual(pending.port, challenge.port)
+        XCTAssertEqual(pending.fingerprintSha256, challenge.fingerprintSha256)
+        bridge.respondToHostKeyChallenge(accepted: true)
 
-        XCTAssertTrue(sawChallenge, "Expected host key challenge to appear")
-        let accepted = await decisionTask.value
+        let accepted = await decision
         XCTAssertTrue(accepted)
         XCTAssertNil(bridge.pendingHostKeyChallenge)
     }

@@ -17,8 +17,9 @@ build/
 .build/
 
 # Local test artifacts (xcodebuild / E2E runs)
+.derivedData-*/
 *.xcresult/
-*-test*.log
+*.log
 
 # Generated UniFFI (policy B: commit Swift bindings only)
 **/*.xcframework/
