@@ -96,6 +96,7 @@ final class MainViewModel: ObservableObject {
         guard isConnected else {
             remotePath = "/"
             remoteItems = []
+            await transferQueue.refresh()
             if let reason = bridge.lastDisconnectReason {
                 errorMessage = DockBridgeError.friendlyMessage(for: reason)
             }

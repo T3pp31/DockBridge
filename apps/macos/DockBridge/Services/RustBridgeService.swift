@@ -28,7 +28,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
 
     func prepareClient() throws {
         try hostKeyStore.ensureStoreDirectoryExists()
-        let record = settings.buildAppConfigRecord()
+        let record = settings.loadConfig().toRecord(knownHostsPath: hostKeyStore.knownHostsPath.path)
         client = try DockBridgeClient(
             appConfig: record,
             hostKeyHandler: self,
@@ -168,36 +168,53 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
 
     func respondToHostKeyChallenge(accepted: Bool) {
         pendingHostKeyChallenge = nil
-        hostKeyContinuation?.resume(returning: accepted)
+        guard let continuation = hostKeyContinuation else { return }
         hostKeyContinuation = nil
+        continuation.resume(returning: accepted)
     }
 
     // MARK: - HostKeyHandler
 
     nonisolated func promptUnknownHost(challenge: HostKeyChallenge) -> Bool {
-        let semaphore = DispatchSemaphore(value: 0)
-        final class Decision: @unchecked Sendable {
-            var accepted = false
+        DropOperationSync.run { @MainActor in
+            await self.awaitHostKeyDecision(for: challenge)
         }
-        let decision = Decision()
+    }
 
-        Task { @MainActor in
-            if self.pendingHostKeyChallenge != nil {
-                self.hostKeyContinuation?.resume(returning: false)
-                self.hostKeyContinuation = nil
-            }
-
-            self.pendingHostKeyChallenge = challenge
-            decision.accepted = await withCheckedContinuation { continuation in
-                self.hostKeyContinuation = continuation
-            }
-            self.pendingHostKeyChallenge = nil
-            self.hostKeyContinuation = nil
-            semaphore.signal()
+    @MainActor
+    func awaitHostKeyDecision(for challenge: HostKeyChallenge) async -> Bool {
+        if pendingHostKeyChallenge != nil {
+            respondToHostKeyChallenge(accepted: false)
         }
 
-        semaphore.wait()
-        return decision.accepted
+        pendingHostKeyChallenge = challenge
+        let timeoutSecs = settings.loadConfig().connectionTimeoutSecs
+
+        let decision = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { @MainActor in
+                await withCheckedContinuation { continuation in
+                    self.hostKeyContinuation = continuation
+                }
+            }
+
+            group.addTask { @MainActor in
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + TimeInterval(timeoutSecs)) {
+                        continuation.resume()
+                    }
+                }
+                self.respondToHostKeyChallenge(accepted: false)
+                return false
+            }
+
+            let result = await group.next()!
+            group.cancelAll()
+            return result
+        }
+
+        pendingHostKeyChallenge = nil
+        hostKeyContinuation = nil
+        return decision
     }
 
     // MARK: - ConnectionEventHandler

@@ -5,8 +5,10 @@ import XCTest
 final class ManualTestPlanVerificationTests: XCTestCase {
     private var tempDirectory: URL?
     private var bridge: RustBridgeService?
+    private var hostKeyAcceptTask: Task<Void, Never>?
 
     override func tearDown() async throws {
+        stopHostKeyAutoAccept()
         if let bridge, bridge.isConnected {
             try? await bridge.disconnect()
         }
@@ -147,6 +149,161 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         XCTAssertEqual(bridge?.connectionStatus.statusTitle, "未接続")
     }
 
+    func testUnknownHostFirstConnectionShowsPromptAndContinuesAfterAccept() async throws {
+        try prepareBridgeWithoutAutoAccept()
+        guard let service = bridge else {
+            return XCTFail("Bridge should be initialized")
+        }
+
+        let acceptTask = Task { @MainActor in
+            for _ in 0..<200 {
+                if let challenge = service.pendingHostKeyChallenge {
+                    XCTAssertNotNil(challenge)
+                    XCTAssertEqual(challenge.host, Self.e2eProfile.host)
+                    XCTAssertEqual(challenge.port, Self.e2eProfile.port)
+                    service.respondToHostKeyChallenge(accepted: true)
+                    return
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            XCTFail("Expected host key challenge before accept")
+        }
+        defer { acceptTask.cancel() }
+
+        try await service.connect(
+            profile: Self.e2eProfile,
+            password: "password",
+            passphrase: nil
+        )
+        XCTAssertTrue(service.isConnected)
+    }
+
+    func testUnknownHostPromptTimesOutAndRejectsConnection() async throws {
+        try prepareBridgeWithoutAutoAccept(connectionTimeoutSecs: 2)
+        guard let service = bridge else {
+            return XCTFail("Bridge should be initialized")
+        }
+
+        do {
+            try await service.connect(
+                profile: Self.e2eProfile,
+                password: "password",
+                passphrase: nil
+            )
+            XCTFail("Expected connection to fail when host key prompt times out")
+        } catch {
+            XCTAssertFalse(service.isConnected)
+        }
+    }
+
+    func testTransferQueueClearsImmediatelyOnDisconnect() async throws {
+        try await prepareBridge()
+        guard let bridge else {
+            return XCTFail("Bridge should be connected")
+        }
+
+        let transferQueue = TransferQueueViewModel(bridge: bridge)
+        let connectionList = ConnectionListViewModel(bridge: bridge)
+        let viewModel = MainViewModel(
+            bridge: bridge,
+            connectionList: connectionList,
+            transferQueue: transferQueue
+        )
+
+        let remoteDirectory = try await resolveRemoteDirectory()
+        let localFile = tempDirectory!.appendingPathComponent("disconnect-clear-\(UUID().uuidString).bin")
+        let fileSize = 32 * 1024 * 1024
+        try Data(repeating: 0xCD, count: fileSize).write(to: localFile)
+
+        let uploadTask = Task {
+            try await bridge.upload(localPath: localFile.path, remoteDirectory: remoteDirectory)
+        }
+
+        var sawTasks = false
+        for _ in 0..<100 {
+            await transferQueue.refresh()
+            if !transferQueue.tasks.isEmpty {
+                sawTasks = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(sawTasks, "Expected transfer queue tasks before disconnect")
+
+        try await bridge.disconnect()
+        await viewModel.onConnectionChanged(isConnected: false)
+        XCTAssertTrue(transferQueue.tasks.isEmpty)
+
+        uploadTask.cancel()
+        _ = await uploadTask.result
+    }
+
+    func testTransferQueueDoesNotRetainStaleTasksAfterDisconnect() async throws {
+        try await prepareBridge()
+        guard let bridge else {
+            return XCTFail("Bridge should be connected")
+        }
+
+        let transferQueue = TransferQueueViewModel(bridge: bridge)
+        let connectionList = ConnectionListViewModel(bridge: bridge)
+        let viewModel = MainViewModel(
+            bridge: bridge,
+            connectionList: connectionList,
+            transferQueue: transferQueue
+        )
+
+        let remoteDirectory = try await resolveRemoteDirectory()
+        let localFile = tempDirectory!.appendingPathComponent("stale-queue-\(UUID().uuidString).bin")
+        let fileSize = 32 * 1024 * 1024
+        try Data(repeating: 0xEF, count: fileSize).write(to: localFile)
+
+        let uploadTask = Task {
+            try await bridge.upload(localPath: localFile.path, remoteDirectory: remoteDirectory)
+        }
+
+        var sawTasks = false
+        for _ in 0..<100 {
+            await transferQueue.refresh()
+            if !transferQueue.tasks.isEmpty {
+                sawTasks = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(sawTasks, "Expected transfer queue tasks while connected")
+
+        try await bridge.disconnect()
+        await viewModel.onConnectionChanged(isConnected: false)
+        XCTAssertTrue(transferQueue.tasks.isEmpty)
+
+        await transferQueue.refresh()
+        XCTAssertTrue(transferQueue.tasks.isEmpty)
+
+        uploadTask.cancel()
+        _ = await uploadTask.result
+    }
+
+    private func prepareBridgeWithoutAutoAccept(connectionTimeoutSecs: UInt64? = nil) throws {
+        try XCTSkipUnless(Self.isDockerE2EAvailable(), "Docker SFTP (dockbridge-e2e on :2222) is required")
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("manual-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        tempDirectory = directory
+
+        let defaults = UserDefaults(suiteName: "ManualTestPlanVerificationTests.\(UUID().uuidString)")!
+        if let connectionTimeoutSecs {
+            defaults.set(Int(connectionTimeoutSecs), forKey: AppSettingsKeys.connectionTimeoutSecs)
+        }
+        let settings = AppSettingsService(defaults: defaults)
+        let service = RustBridgeService(
+            settings: settings,
+            hostKeyStore: HostKeyStore(baseDirectory: directory)
+        )
+        try service.prepareClient()
+        bridge = service
+    }
+
     private func prepareBridge() async throws {
         try XCTSkipUnless(Self.isDockerE2EAvailable(), "Docker SFTP (dockbridge-e2e on :2222) is required")
 
@@ -159,22 +316,32 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         try service.prepareClient()
         bridge = service
 
-        let acceptTask = Task { @MainActor in
-            for _ in 0..<200 {
-                if service.pendingHostKeyChallenge != nil {
-                    service.respondToHostKeyChallenge(accepted: true)
-                    return
-                }
-                try await Task.sleep(for: .milliseconds(50))
-            }
-        }
-        defer { acceptTask.cancel() }
+        startHostKeyAutoAccept(on: service)
+        defer { stopHostKeyAutoAccept() }
 
         try await service.connect(
             profile: Self.e2eProfile,
             password: "password",
             passphrase: nil
         )
+    }
+
+    private func startHostKeyAutoAccept(on service: RustBridgeService) {
+        stopHostKeyAutoAccept()
+        hostKeyAcceptTask = Task { @MainActor in
+            for _ in 0..<200 {
+                if service.pendingHostKeyChallenge != nil {
+                    service.respondToHostKeyChallenge(accepted: true)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+    }
+
+    private func stopHostKeyAutoAccept() {
+        hostKeyAcceptTask?.cancel()
+        hostKeyAcceptTask = nil
     }
 
     private func resolveRemoteDirectory() async throws -> String {
