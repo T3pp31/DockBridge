@@ -11,6 +11,7 @@ final class ConnectionListViewModel: ObservableObject {
     private let store: ConnectionStore
     private let keychain: KeychainService
     private let bridge: RustBridgeService
+    private let bookmarkService: SecurityScopedBookmarkService
 
     var isConnected: Bool { bridge.isConnected }
     var connectionStatus: ConnectionStatus { bridge.connectionStatus }
@@ -19,10 +20,12 @@ final class ConnectionListViewModel: ObservableObject {
     init(
         store: ConnectionStore = .shared,
         keychain: KeychainService = .shared,
+        bookmarkService: SecurityScopedBookmarkService = .shared,
         bridge: RustBridgeService
     ) {
         self.store = store
         self.keychain = keychain
+        self.bookmarkService = bookmarkService
         self.bridge = bridge
     }
 
@@ -86,15 +89,23 @@ final class ConnectionListViewModel: ObservableObject {
 
     func connect(profile: ConnectionProfile) async {
         do {
+            var connectProfile = profile
+            if profile.authType == .privateKey {
+                guard let resolvedProfile = resolvePrivateKeyProfile(profile) else {
+                    return
+                }
+                connectProfile = resolvedProfile
+            }
+
             let account = keychain.keychainAccount(for: profile.id, kind: "profile")
-            let password = profile.authType == .password
+            let password = connectProfile.authType == .password
                 ? try keychain.loadPassword(account: account)
                 : nil
-            let passphrase = profile.authType == .privateKey
+            let passphrase = connectProfile.authType == .privateKey
                 ? try keychain.loadPassphrase(account: account)
                 : nil
 
-            try await bridge.connect(profile: profile, password: password, passphrase: passphrase)
+            try await bridge.connect(profile: connectProfile, password: password, passphrase: passphrase)
 
             var updated = profile
             updated.lastConnectedAt = Date()
@@ -103,6 +114,30 @@ final class ConnectionListViewModel: ObservableObject {
         } catch {
             errorMessage = error.dockBridgeUserMessage
         }
+    }
+
+    private func resolvePrivateKeyProfile(_ profile: ConnectionProfile) -> ConnectionProfile? {
+        if let bookmark = profile.privateKeyBookmark {
+            do {
+                let keyURL = try bookmarkService.resolveBookmark(bookmark)
+                var resolved = profile
+                resolved.privateKeyPath = keyURL.path
+                return resolved
+            } catch {
+                errorMessage = error.localizedDescription
+                return nil
+            }
+        }
+
+        if let path = profile.privateKeyPath,
+           FileManager.default.isReadableFile(atPath: path) {
+            return profile
+        }
+
+        errorMessage = """
+        秘密鍵へのアクセス権がありません。接続設定を開き、秘密鍵を再選択してください。
+        """
+        return nil
     }
 
     func disconnect() async {

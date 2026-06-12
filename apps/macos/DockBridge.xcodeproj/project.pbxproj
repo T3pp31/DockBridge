@@ -49,6 +49,8 @@
 		D5R0P0P3R4T10N5Y5N0C1N5RC /* DropOperationSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */; };
 		D5R0P0P3R4T10N5Y5N0C1T5ST /* DropOperationSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */; };
 		F1L3D3R0P4C3C3P7T4N5C3T5ST /* FileDropAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */; };
+		S3C8K0P3B00KM4RKS3RV1C3SW1 /* SecurityScopedBookmarkService.swift in Sources */ = {isa = PBXBuildFile; fileRef = S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */; };
+		S3C8K0P3B00KM4RKS3RV1C3T1 /* SecurityScopedBookmarkServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = S3C8K0P3B00KM4RKS3RV1C3T2 /* SecurityScopedBookmarkServiceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -99,6 +101,8 @@
 		D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropOperationSync.swift; sourceTree = "<group>"; };
 		D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropOperationSyncTests.swift; sourceTree = "<group>"; };
 		F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropAcceptanceTests.swift; sourceTree = "<group>"; };
+		S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityScopedBookmarkService.swift; sourceTree = "<group>"; };
+		S3C8K0P3B00KM4RKS3RV1C3T2 /* SecurityScopedBookmarkServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityScopedBookmarkServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -242,6 +246,7 @@
 				FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */,
 				6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */,
 				5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */,
+				S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -305,6 +310,7 @@
 				3B4C5D6E7F8091A2B3C4D5E6 /* KnownHostsErrorMessageTests.swift */,
 				M4NU4LT3STP14N5V3R1F1C4T6 /* ManualTestPlanVerificationTests.swift */,
 				H0STK3YPR0MPTV3R1F1C4T6 /* HostKeyPromptVerificationTests.swift */,
+				S3C8K0P3B00KM4RKS3RV1C3T2 /* SecurityScopedBookmarkServiceTests.swift */,
 			);
 			path = DockBridgeTests;
 			sourceTree = "<group>";
@@ -451,6 +457,7 @@
 				EBE6C0D78C1B9D2DFB9E66B6 /* HostKeyStore.swift in Sources */,
 				6B644EEA7799402A90D59AAA /* KeychainService.swift in Sources */,
 				14A839F4D61A1075B5ACF82D /* RustBridgeService.swift in Sources */,
+				S3C8K0P3B00KM4RKS3RV1C3SW1 /* SecurityScopedBookmarkService.swift in Sources */,
 				9207DDB127B46575474EC6F5 /* ConnectionListViewModel.swift in Sources */,
 				67E6AD45895AF44CA96D83BB /* MainViewModel.swift in Sources */,
 				5061A717EBE8AB1160ED99D1 /* TransferQueueViewModel.swift in Sources */,
@@ -488,6 +495,7 @@
 				2A3B4C5D6E7F8091A2B3C4D5 /* KnownHostsErrorMessageTests.swift in Sources */,
 				M4NU4LT3STP14N5V3R1F1C4T5 /* ManualTestPlanVerificationTests.swift in Sources */,
 				H0STK3YPR0MPTV3R1F1C4T5 /* HostKeyPromptVerificationTests.swift in Sources */,
+				S3C8K0P3B00KM4RKS3RV1C3T1 /* SecurityScopedBookmarkServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -633,6 +641,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "com.dockbridge.app";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_STRICT_CONCURRENCY = "complete";
+				ENABLE_HARDENED_RUNTIME = YES;
 			};
 			name = Release;
 		};

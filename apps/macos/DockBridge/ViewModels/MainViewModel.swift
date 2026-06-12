@@ -31,20 +31,42 @@ final class MainViewModel: ObservableObject {
     let transferQueue: TransferQueueViewModel
 
     private let settings: AppSettingsService
+    private let bookmarkService: SecurityScopedBookmarkService
+    private var defaultLocalAccessURL: URL?
     private var localLoadGeneration = 0
     private var remoteLoadGeneration = 0
 
     init(
         settings: AppSettingsService = .shared,
+        bookmarkService: SecurityScopedBookmarkService = .shared,
         bridge: RustBridgeService,
         connectionList: ConnectionListViewModel,
         transferQueue: TransferQueueViewModel
     ) {
         self.settings = settings
+        self.bookmarkService = bookmarkService
         self.bridge = bridge
         self.connectionList = connectionList
         self.transferQueue = transferQueue
-        self.localPath = URL(fileURLWithPath: settings.loadConfig().defaultLocalPath, isDirectory: true)
+        let config = settings.loadConfig()
+        let resolved = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
+        self.defaultLocalAccessURL = config.defaultLocalBookmark == nil ? nil : resolved
+        self.localPath = resolved
+    }
+
+    func applyDefaultLocalConfig(_ config: AppConfig) {
+        if let previous = defaultLocalAccessURL {
+            bookmarkService.stopAccessing(previous)
+            defaultLocalAccessURL = nil
+        }
+
+        let resolved = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
+        if config.defaultLocalBookmark != nil {
+            defaultLocalAccessURL = resolved
+        }
+        localPath = resolved
+        selectedLocalItemID = nil
+        reloadLocal()
     }
 
     func onAppear() {
@@ -54,6 +76,10 @@ final class MainViewModel: ObservableObject {
 
     func onDisappear() {
         transferQueue.stopPolling()
+        if let scopedURL = defaultLocalAccessURL {
+            bookmarkService.stopAccessing(scopedURL)
+            defaultLocalAccessURL = nil
+        }
     }
 
     func reloadLocal() {
