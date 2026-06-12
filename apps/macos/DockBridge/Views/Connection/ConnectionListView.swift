@@ -55,6 +55,26 @@ struct ConnectionListView: View {
                 }
             }
         }
+        .alert(
+            "Connection endpoint changed",
+            isPresented: $viewModel.showEndpointChangeWarning,
+            presenting: viewModel.pendingEndpointChange
+        ) { change in
+            Button("Restore Previous", role: .cancel) {
+                viewModel.restoreTrustedEndpoint()
+            }
+            Button("Keep New Endpoint", role: .destructive) {
+                viewModel.acceptEndpointChange()
+            }
+        } message: { change in
+            Text(
+                """
+                The profile "\(change.profileName)" now points to \(change.currentEndpointLabel). \
+                It previously used \(change.trustedEndpointLabel). \
+                If you did not make this change, restore the previous endpoint.
+                """
+            )
+        }
         .alert("Connect as root?", isPresented: $viewModel.showRootWarning) {
             Button("Cancel", role: .cancel) {
                 viewModel.pendingConnectProfile = nil
