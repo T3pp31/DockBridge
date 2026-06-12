@@ -1140,9 +1140,9 @@ public func FfiConverterTypeTransferTaskRecord_lower(_ value: TransferTaskRecord
 
 public enum AuthTypeRecord: Equatable, Hashable {
     
-    case password(password: String
+    case password(password: SecretCredential
     )
-    case privateKey(keyPath: String, passphrase: String?
+    case privateKey(keyPath: String, passphrase: SecretCredential?
     )
 
 
@@ -1165,10 +1165,10 @@ public struct FfiConverterTypeAuthTypeRecord: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
         
-        case 1: return .password(password: try FfiConverterString.read(from: &buf)
+        case 1: return .password(password: try FfiConverterTypeSecretCredential.read(from: &buf)
         )
         
-        case 2: return .privateKey(keyPath: try FfiConverterString.read(from: &buf), passphrase: try FfiConverterOptionString.read(from: &buf)
+        case 2: return .privateKey(keyPath: try FfiConverterString.read(from: &buf), passphrase: try FfiConverterOptionTypeSecretCredential.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -1181,13 +1181,13 @@ public struct FfiConverterTypeAuthTypeRecord: FfiConverterRustBuffer {
         
         case let .password(password):
             writeInt(&buf, Int32(1))
-            FfiConverterString.write(password, into: &buf)
+            FfiConverterTypeSecretCredential.write(password, into: &buf)
             
         
         case let .privateKey(keyPath,passphrase):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(keyPath, into: &buf)
-            FfiConverterOptionString.write(passphrase, into: &buf)
+            FfiConverterOptionTypeSecretCredential.write(passphrase, into: &buf)
             
         }
     }
@@ -1723,8 +1723,8 @@ public func FfiConverterCallbackInterfaceHostKeyHandler_lower(_ v: HostKeyHandle
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
-    typealias SwiftType = String?
+fileprivate struct FfiConverterOptionTypeSecretCredential: FfiConverterRustBuffer {
+    typealias SwiftType = SecretCredential?
 
     public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         guard let value = value else {
@@ -1732,13 +1732,13 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
             return
         }
         writeInt(&buf, Int8(1))
-        FfiConverterString.write(value, into: &buf)
+        FfiConverterTypeSecretCredential.write(value, into: &buf)
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
-        case 1: return try FfiConverterString.read(from: &buf)
+        case 1: return try FfiConverterTypeSecretCredential.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -1793,6 +1793,50 @@ fileprivate struct FfiConverterSequenceTypeTransferTaskRecord: FfiConverterRustB
         return seq
     }
 }
+
+
+/**
+ * Typealias from the type name used in the UDL file to the builtin type.  This
+ * is needed because the UDL type name is used in function/method signatures.
+ */
+public typealias SecretCredential = String
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSecretCredential: FfiConverter {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SecretCredential {
+        return try FfiConverterString.read(from: &buf)
+    }
+
+    public static func write(_ value: SecretCredential, into buf: inout [UInt8]) {
+        return FfiConverterString.write(value, into: &buf)
+    }
+
+    public static func lift(_ value: RustBuffer) throws -> SecretCredential {
+        return try FfiConverterString.lift(value)
+    }
+
+    public static func lower(_ value: SecretCredential) -> RustBuffer {
+        return FfiConverterString.lower(value)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSecretCredential_lift(_ value: RustBuffer) throws -> SecretCredential {
+    return try FfiConverterTypeSecretCredential.lift(value)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSecretCredential_lower(_ value: SecretCredential) -> RustBuffer {
+    return FfiConverterTypeSecretCredential.lower(value)
+}
+
 
 private enum InitializationResult {
     case ok
