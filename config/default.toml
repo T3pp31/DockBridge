@@ -7,3 +7,5 @@ transfer_retry_count = 3
 # Allowed range: 4096 bytes (4 KiB) to 8388608 bytes (8 MiB).
 transfer_chunk_size_bytes = 262144
 known_hosts_path = "~/.dockbridge/known_hosts.json"
+openssh_known_hosts_path = "~/.ssh/known_hosts"
+merge_openssh_known_hosts_on_connect = true

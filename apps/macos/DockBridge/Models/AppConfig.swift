@@ -9,6 +9,9 @@ struct AppConfig: Codable, Equatable, Sendable {
     var defaultLocalBookmark: Data?
     var confirmBeforeDelete: Bool
     var showHiddenFiles: Bool
+    var mergeOpensshKnownHostsOnConnect: Bool
+    var opensshKnownHostsPath: String
+    var opensshKnownHostsBookmark: Data?
 
     static let `default` = AppConfig(
         connectionTimeoutSecs: 30,
@@ -18,16 +21,21 @@ struct AppConfig: Codable, Equatable, Sendable {
         defaultLocalPath: DefaultLocalPathResolver.containerHomeURL().path,
         defaultLocalBookmark: nil,
         confirmBeforeDelete: true,
-        showHiddenFiles: false
+        showHiddenFiles: false,
+        mergeOpensshKnownHostsOnConnect: true,
+        opensshKnownHostsPath: "~/.ssh/known_hosts",
+        opensshKnownHostsBookmark: nil
     )
 
-    func toRecord(knownHostsPath: String) -> AppConfigRecord {
+    func toRecord(knownHostsPath: String, opensshKnownHostsPath: String) -> AppConfigRecord {
         AppConfigRecord(
             connectionTimeoutSecs: connectionTimeoutSecs,
             sessionHealthCheckIntervalSecs: sessionHealthCheckIntervalSecs,
             transferRetryCount: transferRetryCount,
             transferChunkSizeBytes: transferChunkSizeBytes,
-            knownHostsPath: knownHostsPath
+            knownHostsPath: knownHostsPath,
+            opensshKnownHostsPath: opensshKnownHostsPath,
+            mergeOpensshKnownHostsOnConnect: mergeOpensshKnownHostsOnConnect
         )
     }
 }

@@ -18,6 +18,25 @@ use crate::security::{fingerprint_sha256, HostKeyCheckResult, KnownHostsManager}
 pub trait HostKeyPrompt: Send + Sync {
     /// Prompts the user to accept or reject an unknown host key.
     fn prompt_unknown_host(&self, host: &str, port: u16, fingerprint_sha256: &str) -> bool;
+
+    /// Prompts the user to accept or reject a changed host key.
+    ///
+    /// The default implementation rejects mismatches.
+    fn prompt_mismatch_host(
+        &self,
+        host: &str,
+        port: u16,
+        expected_fingerprint_sha256: &str,
+        actual_fingerprint_sha256: &str,
+    ) -> bool {
+        let _ = (
+            host,
+            port,
+            expected_fingerprint_sha256,
+            actual_fingerprint_sha256,
+        );
+        false
+    }
 }
 
 /// SSH authentication method.
@@ -148,13 +167,30 @@ impl client::Handler for SshClientHandler {
             HostKeyCheckResult::Mismatch {
                 expected_fingerprint,
                 actual_fingerprint,
-            } => Err(SecurityError::HostKeyMismatch {
-                host: self.host.clone(),
-                port: self.port,
-                expected: expected_fingerprint,
-                actual: actual_fingerprint,
+            } => {
+                let accept = self.prompt.prompt_mismatch_host(
+                    &self.host,
+                    self.port,
+                    &expected_fingerprint,
+                    &actual_fingerprint,
+                );
+
+                if !accept {
+                    return Err(SecurityError::HostKeyMismatch {
+                        host: self.host.clone(),
+                        port: self.port,
+                        expected: expected_fingerprint,
+                        actual: actual_fingerprint,
+                    }
+                    .into());
+                }
+
+                let mut manager = self.known_hosts.lock().await;
+                manager
+                    .accept_host_key(&self.host, self.port, server_public_key)
+                    .map_err(ConnectionError::from)?;
+                Ok(true)
             }
-            .into()),
             HostKeyCheckResult::Unknown => {
                 let accept = self
                     .prompt
@@ -195,6 +231,11 @@ impl SshSession {
         let host = profile.host.clone();
         let port = profile.port;
         let username = profile.username.clone();
+
+        {
+            let mut manager = known_hosts.lock().await;
+            manager.merge_openssh_on_connect(config)?;
+        }
 
         let russh_config = build_client_config(config.connection_timeout_secs);
 

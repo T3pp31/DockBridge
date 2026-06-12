@@ -50,7 +50,10 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
             defaultLocalPath: "/tmp/unreachable-without-bookmark",
             defaultLocalBookmark: nil,
             confirmBeforeDelete: true,
-            showHiddenFiles: false
+            showHiddenFiles: false,
+            mergeOpensshKnownHostsOnConnect: true,
+            opensshKnownHostsPath: "~/.ssh/known_hosts",
+            opensshKnownHostsBookmark: nil
         )
 
         let resolved = DefaultLocalPathResolver.resolve(config: config, bookmarkService: service)

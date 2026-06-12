@@ -46,13 +46,41 @@ struct SettingsView: View {
                 Toggle("Show hidden files", isOn: $config.showHiddenFiles)
             }
 
+            Section("OpenSSH known_hosts") {
+                Toggle(
+                    "Import OpenSSH known_hosts on connect",
+                    isOn: $config.mergeOpensshKnownHostsOnConnect
+                )
+
+                HStack {
+                    Text(displayOpensshKnownHostsPath)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Choose File…") {
+                        pickOpensshKnownHostsFile()
+                    }
+                }
+
+                Text(
+                    """
+                    The sandboxed app cannot read ~/.ssh/known_hosts directly. \
+                    Select your OpenSSH known_hosts file here to merge trusted keys before connecting. \
+                    @cert-authority entries are imported but not used for host trust.
+                    """
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("Safety") {
                 Toggle("Confirm before delete", isOn: $config.confirmBeforeDelete)
             }
         }
         .formStyle(.grouped)
         .padding()
-        .frame(minWidth: 420, minHeight: 320)
+        .frame(minWidth: 420, minHeight: 400)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
@@ -60,7 +88,7 @@ struct SettingsView: View {
                 }
             }
         }
-        .alert("Folder Selection", isPresented: Binding(
+        .alert("File Selection", isPresented: Binding(
             get: { pickerErrorMessage != nil },
             set: { if !$0 { pickerErrorMessage = nil } }
         )) {
@@ -68,6 +96,13 @@ struct SettingsView: View {
         } message: {
             Text(pickerErrorMessage ?? "")
         }
+    }
+
+    private var displayOpensshKnownHostsPath: String {
+        if config.opensshKnownHostsBookmark != nil {
+            return config.opensshKnownHostsPath
+        }
+        return NSString(string: config.opensshKnownHostsPath).expandingTildeInPath
     }
 
     private func pickDefaultLocalFolder() {
@@ -82,6 +117,24 @@ struct SettingsView: View {
         do {
             config.defaultLocalBookmark = try SecurityScopedBookmarkService.shared.createBookmark(for: url)
             config.defaultLocalPath = url.path
+        } catch {
+            pickerErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func pickOpensshKnownHostsFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Select"
+        panel.message = "Select your OpenSSH known_hosts file"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            config.opensshKnownHostsBookmark = try SecurityScopedBookmarkService.shared.createBookmark(for: url)
+            config.opensshKnownHostsPath = url.path
         } catch {
             pickerErrorMessage = error.localizedDescription
         }
