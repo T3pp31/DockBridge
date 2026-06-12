@@ -316,16 +316,14 @@ async fn authenticate(
                     }
                 })?;
             drop(key_contents);
-            let rsa_hash = handle
-                .best_supported_rsa_hash()
-                .await
-                .map_err(|err| ConnectionError::ConnectFailed {
+            let rsa_hash = handle.best_supported_rsa_hash().await.map_err(|err| {
+                ConnectionError::ConnectFailed {
                     host: host.to_string(),
                     port,
                     message: err.to_string(),
-                })?;
-            let signing_key =
-                PrivateKeyWithHashAlg::new(Arc::new(private_key), rsa_hash.flatten());
+                }
+            })?;
+            let signing_key = PrivateKeyWithHashAlg::new(Arc::new(private_key), rsa_hash.flatten());
             handle
                 .authenticate_publickey(username, signing_key)
                 .await
