@@ -51,11 +51,15 @@ final class ConnectionListViewModel: ObservableObject {
                 try keychain.deletePassphrase(account: account)
                 if let password, !password.isEmpty {
                     try keychain.savePassword(password, account: account)
+                } else {
+                    try keychain.deletePassword(account: account)
                 }
             case .privateKey:
                 try keychain.deletePassword(account: account)
                 if let passphrase, !passphrase.isEmpty {
                     try keychain.savePassphrase(passphrase, account: account)
+                } else {
+                    try keychain.deletePassphrase(account: account)
                 }
             }
         } catch {
