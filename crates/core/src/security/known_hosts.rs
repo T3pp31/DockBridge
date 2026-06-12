@@ -482,7 +482,7 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::rngs::OsRng;
+    use rand_core::OsRng;
     use russh::keys::PrivateKey;
     use ssh_key::Algorithm;
     use tempfile::tempdir;
