@@ -6,8 +6,8 @@ struct ConnectionFormView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var profile: ConnectionProfile
-    @State private var password = ""
-    @State private var passphrase = ""
+    @State private var password = SensitiveString()
+    @State private var passphrase = SensitiveString()
     @State private var saveSecrets = true
 
     let onSave: (ConnectionProfile, String?, String?) -> Void
@@ -42,7 +42,7 @@ struct ConnectionFormView: View {
                 .pickerStyle(.segmented)
 
                 if profile.authType == .password {
-                    SecureField("Password", text: $password)
+                    SecureField("Password", text: $password.text)
                 } else {
                     HStack {
                         TextField("Private key path", text: Binding(
@@ -51,7 +51,7 @@ struct ConnectionFormView: View {
                         ))
                         Button("Browse…") { pickPrivateKey() }
                     }
-                    SecureField("Passphrase (optional)", text: $passphrase)
+                    SecureField("Passphrase (optional)", text: $passphrase.text)
                 }
 
                 Toggle("Save credentials in Keychain", isOn: $saveSecrets)
@@ -62,7 +62,7 @@ struct ConnectionFormView: View {
         .frame(minWidth: 460, minHeight: 380)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { closeForm() }
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") { save() }
@@ -76,9 +76,15 @@ struct ConnectionFormView: View {
     }
 
     private func save() {
-        let savedPassword = saveSecrets && profile.authType == .password ? password : nil
-        let savedPassphrase = saveSecrets && profile.authType == .privateKey ? passphrase : nil
+        let savedPassword = saveSecrets && profile.authType == .password ? password.text : nil
+        let savedPassphrase = saveSecrets && profile.authType == .privateKey ? passphrase.text : nil
         onSave(profile, savedPassword, savedPassphrase)
+        closeForm()
+    }
+
+    private func closeForm() {
+        password.clear()
+        passphrase.clear()
         dismiss()
     }
 
