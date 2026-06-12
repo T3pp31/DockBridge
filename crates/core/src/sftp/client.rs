@@ -102,7 +102,7 @@ impl<'a> SftpClient<'a> {
         let local = local_path.display().to_string();
         let remote = remote_path.to_string();
         let chunk_size = clamp_transfer_chunk_size(chunk_size);
-        let partial_remote_path = partial_remote_path(remote_path);
+        let partial_remote_path = partial_remote_path(remote_path)?;
 
         let mut local_file =
             tokio::fs::File::open(local_path)
@@ -306,7 +306,7 @@ impl<'a> SftpClient<'a> {
 
     /// Creates a remote directory and any missing parent directories.
     pub async fn create_directory_all(&self, remote_path: &str) -> Result<(), SftpError> {
-        let normalized = normalize_remote_path(remote_path);
+        let normalized = normalize_remote_path(remote_path)?;
         if normalized == "/" {
             return Ok(());
         }
@@ -321,7 +321,7 @@ impl<'a> SftpClient<'a> {
             if segment.is_empty() {
                 continue;
             }
-            current = join_remote_path(&current, Path::new(segment));
+            current = join_remote_path(&current, Path::new(segment))?;
             if let Err(SftpError::MkdirFailed { path, message }) =
                 self.create_directory(&current).await
             {
@@ -343,13 +343,13 @@ impl<'a> SftpClient<'a> {
     ) -> Result<(), SftpError> {
         if is_local_directory(local_path).await? {
             let directory_name = local_entry_name(local_path);
-            let remote_root = join_remote_path(remote_directory, Path::new(&directory_name));
+            let remote_root = join_remote_path(remote_directory, Path::new(&directory_name))?;
             self.create_directory_all(&remote_root).await?;
 
             let files = walk_local_directory(local_path).await?;
             for entry in files {
-                let remote_path = join_remote_path(&remote_root, &entry.relative_path);
-                if let Some(parent) = parent_remote_path(&remote_path) {
+                let remote_path = join_remote_path(&remote_root, &entry.relative_path)?;
+                if let Some(parent) = parent_remote_path(&remote_path)? {
                     self.create_directory_all(&parent).await?;
                 }
                 self.upload(&entry.local_path, &remote_path).await?;
@@ -358,8 +358,8 @@ impl<'a> SftpClient<'a> {
         }
 
         let remote_path =
-            join_remote_path(remote_directory, Path::new(&local_entry_name(local_path)));
-        if let Some(parent) = parent_remote_path(&remote_path) {
+            join_remote_path(remote_directory, Path::new(&local_entry_name(local_path)))?;
+        if let Some(parent) = parent_remote_path(&remote_path)? {
             self.create_directory_all(&parent).await?;
         }
         self.upload(local_path, &remote_path).await
@@ -371,7 +371,7 @@ impl<'a> SftpClient<'a> {
         remote_path: &str,
         local_directory: &Path,
     ) -> Result<(), SftpError> {
-        let normalized = normalize_remote_path(remote_path);
+        let normalized = normalize_remote_path(remote_path)?;
         match self.list_directory(&normalized).await {
             Ok(entries) => {
                 let directory_name = normalized
@@ -426,8 +426,8 @@ fn default_chunk_size() -> usize {
     DEFAULT_TRANSFER_CHUNK_SIZE_BYTES
 }
 
-fn partial_remote_path(remote_path: &str) -> String {
-    let parent = parent_remote_path(remote_path).unwrap_or_else(|| "/".to_string());
+fn partial_remote_path(remote_path: &str) -> Result<String, SftpError> {
+    let parent = parent_remote_path(remote_path)?.unwrap_or_else(|| "/".to_string());
     let nanos = partial_path_nanos();
     join_remote_path(&parent, Path::new(&format!(".dockbridge-{nanos}.partial")))
 }
@@ -490,19 +490,21 @@ fn is_mkdir_already_exists_message(message: &str) -> bool {
     lower.contains("already exists") || lower.contains("file exists") || lower.contains("failure")
 }
 
-fn parent_remote_path(remote_path: &str) -> Option<String> {
-    let normalized = normalize_remote_path(remote_path);
+fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
+    let normalized = normalize_remote_path(remote_path)?;
     if normalized == "/" {
-        return None;
+        return Ok(None);
     }
 
     let trimmed = normalized.trim_end_matches('/');
-    let parent = trimmed.rsplit_once('/')?.0;
-    if parent.is_empty() {
-        Some("/".to_string())
+    let Some((parent, _)) = trimmed.rsplit_once('/') else {
+        return Ok(None);
+    };
+    Ok(Some(if parent.is_empty() {
+        "/".to_string()
     } else {
-        Some(parent.to_string())
-    }
+        parent.to_string()
+    }))
 }
 
 #[cfg(test)]
@@ -515,11 +517,16 @@ mod tests {
     #[test]
     fn parent_remote_path_returns_parent_directory() {
         assert_eq!(
-            parent_remote_path("/remote/dir/file.txt").as_deref(),
+            parent_remote_path("/remote/dir/file.txt")
+                .unwrap()
+                .as_deref(),
             Some("/remote/dir")
         );
-        assert_eq!(parent_remote_path("/file.txt").as_deref(), Some("/"));
-        assert_eq!(parent_remote_path("/"), None);
+        assert_eq!(
+            parent_remote_path("/file.txt").unwrap().as_deref(),
+            Some("/")
+        );
+        assert_eq!(parent_remote_path("/").unwrap(), None);
     }
 
     #[test]
@@ -536,7 +543,7 @@ mod tests {
         // Given: a remote file path
         // When: partial_remote_path is called
         // Then: the path is under the parent with a .dockbridge-*.partial suffix
-        let partial = partial_remote_path("/a/b.txt");
+        let partial = partial_remote_path("/a/b.txt").unwrap();
         assert!(partial.starts_with("/a/"));
         assert!(partial.contains(".dockbridge-"));
         assert!(partial.ends_with(".partial"));
