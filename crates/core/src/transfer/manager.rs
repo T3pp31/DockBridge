@@ -281,7 +281,8 @@ impl TransferManager {
         {
             let directory_name = local_entry_name(local_path);
             let remote_root =
-                join_remote_path(&remote_directory, std::path::Path::new(&directory_name));
+                join_remote_path(&remote_directory, std::path::Path::new(&directory_name))
+                    .map_err(transfer_error_from_sftp)?;
             client
                 .create_directory_all(&remote_root)
                 .await
@@ -292,8 +293,11 @@ impl TransferManager {
                 .map_err(transfer_error_from_sftp)?;
             let mut tasks = Vec::with_capacity(files.len());
             for entry in files {
-                let remote_path = join_remote_path(&remote_root, &entry.relative_path);
-                if let Some(parent) = parent_remote_path(&remote_path) {
+                let remote_path = join_remote_path(&remote_root, &entry.relative_path)
+                    .map_err(transfer_error_from_sftp)?;
+                if let Some(parent) =
+                    parent_remote_path(&remote_path).map_err(transfer_error_from_sftp)?
+                {
                     client
                         .create_directory_all(&parent)
                         .await
@@ -310,8 +314,9 @@ impl TransferManager {
         let remote_path = join_remote_path(
             &remote_directory,
             std::path::Path::new(&local_entry_name(local_path)),
-        );
-        if let Some(parent) = parent_remote_path(&remote_path) {
+        )
+        .map_err(transfer_error_from_sftp)?;
+        if let Some(parent) = parent_remote_path(&remote_path).map_err(transfer_error_from_sftp)? {
             client
                 .create_directory_all(&parent)
                 .await
@@ -332,7 +337,7 @@ impl TransferManager {
     ) -> Result<Vec<TransferTask>, TransferError> {
         let remote_path = remote_path.into();
         let local_directory = local_directory.as_ref();
-        let normalized = normalize_remote_path(&remote_path);
+        let normalized = normalize_remote_path(&remote_path).map_err(transfer_error_from_sftp)?;
         let client = SftpClient::new(session);
 
         match client.list_directory(&normalized).await {
@@ -500,19 +505,21 @@ impl TransferManager {
     }
 }
 
-fn parent_remote_path(remote_path: &str) -> Option<String> {
-    let normalized = normalize_remote_path(remote_path);
+fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
+    let normalized = normalize_remote_path(remote_path)?;
     if normalized == "/" {
-        return None;
+        return Ok(None);
     }
 
     let trimmed = normalized.trim_end_matches('/');
-    let parent = trimmed.rsplit_once('/')?.0;
-    if parent.is_empty() {
-        Some("/".to_string())
+    let Some((parent, _)) = trimmed.rsplit_once('/') else {
+        return Ok(None);
+    };
+    Ok(Some(if parent.is_empty() {
+        "/".to_string()
     } else {
-        Some(parent.to_string())
-    }
+        parent.to_string()
+    }))
 }
 
 /// Returns `true` when retrying the same transfer is unlikely to succeed.

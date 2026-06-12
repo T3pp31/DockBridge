@@ -18,9 +18,18 @@ pub struct RemoteFileEntry {
     pub relative_path: PathBuf,
 }
 
+fn reject_parent_dir_segment(path: &str) -> Result<(), SftpError> {
+    if path.split('/').any(|segment| segment == "..") {
+        return Err(SftpError::InvalidRemotePath {
+            path: path.to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Joins a remote base path with a relative path using POSIX separators.
-pub fn join_remote_path(base: &str, relative: &Path) -> String {
-    let mut result = normalize_remote_path(base);
+pub fn join_remote_path(base: &str, relative: &Path) -> Result<String, SftpError> {
+    let mut result = normalize_remote_path(base)?;
     for component in relative.components() {
         match component {
             Component::Normal(name) => {
@@ -35,14 +44,21 @@ pub fn join_remote_path(base: &str, relative: &Path) -> String {
                 }
             }
             Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {}
+            Component::ParentDir => {
+                return Err(SftpError::InvalidRemotePath {
+                    path: relative.display().to_string(),
+                });
+            }
+            Component::RootDir | Component::Prefix(_) => {}
         }
     }
-    result
+    Ok(result)
 }
 
 /// Normalizes a remote path to an absolute POSIX path.
-pub fn normalize_remote_path(path: &str) -> String {
+pub fn normalize_remote_path(path: &str) -> Result<String, SftpError> {
+    reject_parent_dir_segment(path)?;
+
     let mut value = path.replace("//", "/");
     if value.is_empty() {
         value = "/".to_string();
@@ -50,7 +66,7 @@ pub fn normalize_remote_path(path: &str) -> String {
     if !value.starts_with('/') {
         value = format!("/{value}");
     }
-    value
+    Ok(value)
 }
 
 /// Recursively walks a local directory and returns all files with relative paths.
@@ -141,7 +157,7 @@ pub async fn walk_remote_directory<'a>(
     client: &SftpClient<'a>,
     root: &str,
 ) -> Result<Vec<RemoteFileEntry>, SftpError> {
-    let normalized_root = normalize_remote_path(root);
+    let normalized_root = normalize_remote_path(root)?;
     let _entries = client.list_directory(&normalized_root).await?;
     let mut files = Vec::new();
     let mut pending = vec![(normalized_root, PathBuf::new())];
@@ -204,20 +220,48 @@ mod tests {
     #[test]
     fn join_remote_path_appends_segments() {
         assert_eq!(
-            join_remote_path("/remote/dir", Path::new("child/file.txt")),
+            join_remote_path("/remote/dir", Path::new("child/file.txt")).unwrap(),
             "/remote/dir/child/file.txt"
         );
     }
 
     #[test]
     fn join_remote_path_handles_root() {
-        assert_eq!(join_remote_path("/", Path::new("file.txt")), "/file.txt");
+        assert_eq!(
+            join_remote_path("/", Path::new("file.txt")).unwrap(),
+            "/file.txt"
+        );
+    }
+
+    #[test]
+    fn join_remote_path_rejects_parent_dir() {
+        let err = join_remote_path("/remote/dir", Path::new("../secret")).unwrap_err();
+        assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
     }
 
     #[test]
     fn normalize_remote_path_adds_leading_slash() {
-        assert_eq!(normalize_remote_path("remote/dir"), "/remote/dir");
-        assert_eq!(normalize_remote_path(""), "/");
+        assert_eq!(normalize_remote_path("remote/dir").unwrap(), "/remote/dir");
+        assert_eq!(normalize_remote_path("").unwrap(), "/");
+    }
+
+    #[test]
+    fn normalize_remote_path_rejects_parent_dir_segments() {
+        for path in ["/foo/../bar", "../secret", "foo/..", ".."] {
+            let err = normalize_remote_path(path).unwrap_err();
+            assert!(
+                matches!(err, SftpError::InvalidRemotePath { .. }),
+                "expected InvalidRemotePath for {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_remote_path_allows_non_traversal_dots() {
+        assert_eq!(
+            normalize_remote_path("/foo..bar/baz").unwrap(),
+            "/foo..bar/baz"
+        );
     }
 
     #[tokio::test]
