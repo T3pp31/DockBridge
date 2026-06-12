@@ -10,6 +10,7 @@ use russh_sftp::client::SftpSession;
 use tokio::sync::Mutex;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
+use super::algorithm_policy::build_client_config;
 use crate::config::AppConfig;
 use crate::error::{AuthError, ConnectionError, SecurityError, SftpError};
 use crate::security::{fingerprint_sha256, HostKeyCheckResult, KnownHostsManager};
@@ -197,10 +198,7 @@ impl SshSession {
         let port = profile.port;
         let username = profile.username.clone();
 
-        let russh_config = client::Config {
-            inactivity_timeout: Some(Duration::from_secs(config.connection_timeout_secs)),
-            ..Default::default()
-        };
+        let russh_config = build_client_config(config.connection_timeout_secs);
 
         let handler = SshClientHandler {
             host: host.clone(),
