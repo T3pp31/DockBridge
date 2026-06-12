@@ -32,11 +32,13 @@
 		B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB9667933C17755C399E575 /* TransferQueueView.swift */; };
 		4D3B078A85CF43E4F57F1AD1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9AED1666CA758F242828EB4F /* Assets.xcassets */; };
 		A1B2C3D4E5F60718293A4B5C /* RemotePath.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */; };
+		7B93DBDFA0EAC7D859065E1B /* SensitiveString.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A40063842C3BF02492D35D4 /* SensitiveString.swift */; };
 		C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */; };
 		E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */; };
 		C0NN3CT10N5T0R3T3ST5RC3 /* ConnectionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T0R3T3ST5RC4 /* ConnectionStoreTests.swift */; };
 		C0NN3CT10NL15TV13W0D3LT3STRC3 /* ConnectionListViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10NL15TV13W0D3LT3STRC4 /* ConnectionListViewModelTests.swift */; };
 		0718293A4B5C6D7E8F901234 /* KeychainServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */; };
+		S3NS1T1V3STR1NGT3ST5RC1 /* SensitiveStringTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = S3NS1T1V3STR1NGT3ST5RC2 /* SensitiveStringTests.swift */; };
 		2A3B4C5D6E7F8091A2B3C4D5 /* KnownHostsErrorMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B4C5D6E7F8091A2B3C4D5E6 /* KnownHostsErrorMessageTests.swift */; };
 		F1D2R3A4G5P6A7Y8L9O0A1D2 /* FileDragPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2R3A4G5P6A7Y8L9O0A1D3 /* FileDragPayload.swift */; };
 		F1D2R3O4P5V6A7L8I9D0A1T2I3 /* FileDropValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2R3O4P5V6A7L8I9D0A1T2I4 /* FileDropValidation.swift */; };
@@ -85,11 +87,13 @@
 		22787F42C6257B4877799DC8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		4D3B24470D299F0C0DA4E563 /* DockBridge.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DockBridge.entitlements; sourceTree = "<group>"; };
 		B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePath.swift; sourceTree = "<group>"; };
+		0A40063842C3BF02492D35D4 /* SensitiveString.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensitiveString.swift; sourceTree = "<group>"; };
 		D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePathTests.swift; sourceTree = "<group>"; };
 		F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyStoreTests.swift; sourceTree = "<group>"; };
 		C0NN3CT10N5T0R3T3ST5RC4 /* ConnectionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStoreTests.swift; sourceTree = "<group>"; };
 		C0NN3CT10NL15TV13W0D3LT3STRC4 /* ConnectionListViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionListViewModelTests.swift; sourceTree = "<group>"; };
 		18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceTests.swift; sourceTree = "<group>"; };
+		S3NS1T1V3STR1NGT3ST5RC2 /* SensitiveStringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensitiveStringTests.swift; sourceTree = "<group>"; };
 		3B4C5D6E7F8091A2B3C4D5E6 /* KnownHostsErrorMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnownHostsErrorMessageTests.swift; sourceTree = "<group>"; };
 		293A4B5C6D7E8F9012345678 /* DockBridgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DockBridgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F1D2R3A4G5P6A7Y8L9O0A1D3 /* FileDragPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDragPayload.swift; sourceTree = "<group>"; };
@@ -228,6 +232,7 @@
 				85A0E836BF343460B3DC13A2 /* LocalFileItem.swift */,
 				1E7FDBA4ECAABE2550A535FE /* UniFFIExtensions.swift */,
 				B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */,
+				0A40063842C3BF02492D35D4 /* SensitiveString.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -317,6 +322,7 @@
 				M4NU4LT3STP14N5V3R1F1C4T6 /* ManualTestPlanVerificationTests.swift */,
 				H0STK3YPR0MPTV3R1F1C4T6 /* HostKeyPromptVerificationTests.swift */,
 				S3C8K0P3B00KM4RKS3RV1C3T2 /* SecurityScopedBookmarkServiceTests.swift */,
+				S3NS1T1V3STR1NGT3ST5RC2 /* SensitiveStringTests.swift */,
 			);
 			path = DockBridgeTests;
 			sourceTree = "<group>";
@@ -479,6 +485,7 @@
 				C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */,
 				B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* RemotePath.swift in Sources */,
+				7B93DBDFA0EAC7D859065E1B /* SensitiveString.swift in Sources */,
 				F1D2R3O4P5E6R7R8O9R0A1B2C3 /* FileDropError.swift in Sources */,
 				F1D2R3O4P5V6A7L8I9D0A1T2I3 /* FileDropValidation.swift in Sources */,
 				F1D2R3A4G5P6A7Y8L9O0A1D2 /* FileDragPayload.swift in Sources */,
@@ -504,6 +511,7 @@
 				M4NU4LT3STP14N5V3R1F1C4T5 /* ManualTestPlanVerificationTests.swift in Sources */,
 				H0STK3YPR0MPTV3R1F1C4T5 /* HostKeyPromptVerificationTests.swift in Sources */,
 				S3C8K0P3B00KM4RKS3RV1C3T1 /* SecurityScopedBookmarkServiceTests.swift in Sources */,
+				S3NS1T1V3STR1NGT3ST5RC1 /* SensitiveStringTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
