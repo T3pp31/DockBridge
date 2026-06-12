@@ -325,8 +325,13 @@ final class MainViewModel: ObservableObject {
 
     func commitRename() async {
         guard let target = renameTarget else { return }
+        let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard RemotePath.isValidEntryName(name) else {
+            errorMessage = RemoteEntryNameError.invalidCharacters.localizedDescription
+            return
+        }
         let parent = RemotePath.parent(of: target.path)
-        let newPath = RemotePath.join(parent, renameText)
+        let newPath = RemotePath.join(parent, name)
 
         do {
             try await bridge.renameRemote(from: target.path, to: newPath)
@@ -340,7 +345,10 @@ final class MainViewModel: ObservableObject {
 
     func commitMkdir() async {
         let name = mkdirName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { return }
+        guard RemotePath.isValidEntryName(name) else {
+            errorMessage = RemoteEntryNameError.invalidCharacters.localizedDescription
+            return
+        }
         let path = RemotePath.join(remotePath, name)
 
         do {

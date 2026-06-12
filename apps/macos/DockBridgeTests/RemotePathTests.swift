@@ -29,4 +29,29 @@ final class RemotePathTests: XCTestCase {
     func testDirectoryPathAddsTrailingSlash() {
         XCTAssertEqual(RemotePath.directoryPath("/var/www"), "/var/www/")
     }
+
+    func testIsValidEntryNameAcceptsSimpleNames() {
+        XCTAssertTrue(RemotePath.isValidEntryName("file.txt"))
+        XCTAssertTrue(RemotePath.isValidEntryName("my-folder"))
+        XCTAssertTrue(RemotePath.isValidEntryName("."))
+    }
+
+    func testIsValidEntryNameRejectsEmptyName() {
+        XCTAssertFalse(RemotePath.isValidEntryName(""))
+    }
+
+    func testIsValidEntryNameRejectsPathSeparator() {
+        XCTAssertFalse(RemotePath.isValidEntryName("foo/bar"))
+        XCTAssertFalse(RemotePath.isValidEntryName("/absolute"))
+        XCTAssertFalse(RemotePath.isValidEntryName("../../sensitive"))
+    }
+
+    func testIsValidEntryNameRejectsParentReference() {
+        XCTAssertFalse(RemotePath.isValidEntryName(".."))
+        XCTAssertFalse(RemotePath.isValidEntryName("foo..bar"))
+    }
+
+    func testIsValidEntryNameRejectsNullCharacter() {
+        XCTAssertFalse(RemotePath.isValidEntryName("foo\0bar"))
+    }
 }
