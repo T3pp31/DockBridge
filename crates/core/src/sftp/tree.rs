@@ -69,8 +69,26 @@ pub fn normalize_remote_path(path: &str) -> Result<String, SftpError> {
     Ok(value)
 }
 
+/// Options for [`walk_local_directory_with_options`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WalkLocalDirectoryOptions {
+    /// When `true`, symlinks are followed during traversal. Defaults to `false` for security.
+    pub follow_symlinks: bool,
+}
+
 /// Recursively walks a local directory and returns all files with relative paths.
+///
+/// Symlinks are not followed by default to avoid uploading unintended files outside the
+/// selected directory tree.
 pub async fn walk_local_directory(root: &Path) -> Result<Vec<LocalFileEntry>, SftpError> {
+    walk_local_directory_with_options(root, WalkLocalDirectoryOptions::default()).await
+}
+
+/// Recursively walks a local directory with configurable symlink handling.
+pub async fn walk_local_directory_with_options(
+    root: &Path,
+    options: WalkLocalDirectoryOptions,
+) -> Result<Vec<LocalFileEntry>, SftpError> {
     let metadata = tokio::fs::metadata(root)
         .await
         .map_err(|err| SftpError::UploadFailed {
@@ -130,6 +148,39 @@ pub async fn walk_local_directory(root: &Path) -> Result<Vec<LocalFileEntry>, Sf
                     remote: String::new(),
                     message: err.to_string(),
                 })?;
+
+            if file_type.is_symlink() {
+                if !options.follow_symlinks {
+                    continue;
+                }
+
+                let target_metadata =
+                    tokio::fs::metadata(&path)
+                        .await
+                        .map_err(|err| SftpError::UploadFailed {
+                            local: path.display().to_string(),
+                            remote: String::new(),
+                            message: err.to_string(),
+                        })?;
+
+                if target_metadata.is_dir() {
+                    pending.push(path);
+                } else if target_metadata.is_file() {
+                    let relative_path =
+                        path.strip_prefix(root).map(PathBuf::from).map_err(|err| {
+                            SftpError::UploadFailed {
+                                local: path.display().to_string(),
+                                remote: String::new(),
+                                message: err.to_string(),
+                            }
+                        })?;
+                    entries.push(LocalFileEntry {
+                        local_path: path,
+                        relative_path,
+                    });
+                }
+                continue;
+            }
 
             if file_type.is_dir() {
                 pending.push(path);
@@ -299,5 +350,81 @@ mod tests {
         let dir = tempdir().unwrap();
         let entries = walk_local_directory(dir.path()).await.unwrap();
         assert!(entries.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_local_directory_skips_symlinks_by_default() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("secret.txt"), b"secret").unwrap();
+        fs::write(root.join("normal.txt"), b"ok").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), root.join("link.txt"))
+            .unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("link_dir")).unwrap();
+
+        let entries = walk_local_directory(root).await.unwrap();
+        let relatives: Vec<_> = entries
+            .iter()
+            .map(|entry| entry.relative_path.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(entries.len(), 1);
+        assert!(relatives.contains(&"normal.txt".to_string()));
+        assert!(!relatives.iter().any(|path| path.contains("secret")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_local_directory_follows_symlinks_when_enabled() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("linked.txt"), b"linked").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("linked.txt"), root.join("link.txt"))
+            .unwrap();
+
+        let entries = walk_local_directory_with_options(
+            root,
+            WalkLocalDirectoryOptions {
+                follow_symlinks: true,
+            },
+        )
+        .await
+        .unwrap();
+        let relatives: Vec<_> = entries
+            .iter()
+            .map(|entry| entry.relative_path.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(entries.len(), 1);
+        assert!(relatives.contains(&"link.txt".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_local_directory_follows_directory_symlinks_when_enabled() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("nested.txt"), b"nested").unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("link_dir")).unwrap();
+
+        let entries = walk_local_directory_with_options(
+            root,
+            WalkLocalDirectoryOptions {
+                follow_symlinks: true,
+            },
+        )
+        .await
+        .unwrap();
+        let relatives: Vec<_> = entries
+            .iter()
+            .map(|entry| entry.relative_path.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(entries.len(), 1);
+        assert!(relatives.contains(&"link_dir/nested.txt".to_string()));
     }
 }
