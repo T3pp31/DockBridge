@@ -13,6 +13,7 @@
 ## v0.2
 
 - OpenSSH known_hosts compatibility
+- `profiles.json` tamper warnings (Issue #27)
 - External editor integration
 - Auto-upload on save
 - Drag and drop
@@ -27,6 +28,7 @@
 
 - Developer ID signing + Notarization
 - Stable SFTP feature set
+- Evaluate encrypted profile storage (Keychain or encrypted blob) for high-assurance deployments — see [security.md](security.md#encrypted-storage-migration-under-consideration)
 
 ## After 1.0
 
