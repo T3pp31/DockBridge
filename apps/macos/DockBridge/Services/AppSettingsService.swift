@@ -24,15 +24,23 @@ enum AppSettingsKeys {
     static let defaultLocalBookmark = "defaultLocalBookmark"
     static let confirmBeforeDelete = "confirmBeforeDelete"
     static let showHiddenFiles = "showHiddenFiles"
+    static let mergeOpensshKnownHostsOnConnect = "mergeOpensshKnownHostsOnConnect"
+    static let opensshKnownHostsPath = "opensshKnownHostsPath"
+    static let opensshKnownHostsBookmark = "opensshKnownHostsBookmark"
 }
 
 final class AppSettingsService: @unchecked Sendable {
     static let shared = AppSettingsService()
 
     private let defaults: UserDefaults
+    private let bookmarkService: SecurityScopedBookmarkService
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        bookmarkService: SecurityScopedBookmarkService = .shared
+    ) {
         self.defaults = defaults
+        self.bookmarkService = bookmarkService
         registerDefaults()
     }
 
@@ -45,6 +53,8 @@ final class AppSettingsService: @unchecked Sendable {
             AppSettingsKeys.defaultLocalPath: AppConfig.default.defaultLocalPath,
             AppSettingsKeys.confirmBeforeDelete: AppConfig.default.confirmBeforeDelete,
             AppSettingsKeys.showHiddenFiles: AppConfig.default.showHiddenFiles,
+            AppSettingsKeys.mergeOpensshKnownHostsOnConnect: AppConfig.default.mergeOpensshKnownHostsOnConnect,
+            AppSettingsKeys.opensshKnownHostsPath: AppConfig.default.opensshKnownHostsPath,
         ])
     }
 
@@ -67,7 +77,13 @@ final class AppSettingsService: @unchecked Sendable {
                 ?? AppConfig.default.defaultLocalPath,
             defaultLocalBookmark: defaults.data(forKey: AppSettingsKeys.defaultLocalBookmark),
             confirmBeforeDelete: defaults.bool(forKey: AppSettingsKeys.confirmBeforeDelete),
-            showHiddenFiles: defaults.bool(forKey: AppSettingsKeys.showHiddenFiles)
+            showHiddenFiles: defaults.bool(forKey: AppSettingsKeys.showHiddenFiles),
+            mergeOpensshKnownHostsOnConnect: defaults.object(
+                forKey: AppSettingsKeys.mergeOpensshKnownHostsOnConnect
+            ) as? Bool ?? AppConfig.default.mergeOpensshKnownHostsOnConnect,
+            opensshKnownHostsPath: defaults.string(forKey: AppSettingsKeys.opensshKnownHostsPath)
+                ?? AppConfig.default.opensshKnownHostsPath,
+            opensshKnownHostsBookmark: defaults.data(forKey: AppSettingsKeys.opensshKnownHostsBookmark)
         )
     }
 
@@ -80,10 +96,24 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(config.defaultLocalBookmark, forKey: AppSettingsKeys.defaultLocalBookmark)
         defaults.set(config.confirmBeforeDelete, forKey: AppSettingsKeys.confirmBeforeDelete)
         defaults.set(config.showHiddenFiles, forKey: AppSettingsKeys.showHiddenFiles)
+        defaults.set(config.mergeOpensshKnownHostsOnConnect, forKey: AppSettingsKeys.mergeOpensshKnownHostsOnConnect)
+        defaults.set(config.opensshKnownHostsPath, forKey: AppSettingsKeys.opensshKnownHostsPath)
+        defaults.set(config.opensshKnownHostsBookmark, forKey: AppSettingsKeys.opensshKnownHostsBookmark)
     }
 
-    func buildAppConfigRecord() -> AppConfigRecord {
+    func resolvedOpensshKnownHostsPath(for config: AppConfig) -> String {
+        if let bookmark = config.opensshKnownHostsBookmark,
+           let url = try? bookmarkService.resolveBookmark(bookmark) {
+            return url.path
+        }
+        return NSString(string: config.opensshKnownHostsPath).expandingTildeInPath
+    }
+
+    func buildAppConfigRecord(knownHostsPath: String) -> AppConfigRecord {
         let config = loadConfig()
-        return config.toRecord(knownHostsPath: DockBridgePaths.knownHostsFile.path)
+        return config.toRecord(
+            knownHostsPath: knownHostsPath,
+            opensshKnownHostsPath: resolvedOpensshKnownHostsPath(for: config)
+        )
     }
 }

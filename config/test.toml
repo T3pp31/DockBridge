@@ -3,3 +3,7 @@ session_health_check_interval_secs = 10
 transfer_retry_count = 3
 transfer_chunk_size_bytes = 262144
 known_hosts_path = "target/test-known_hosts.json"
+openssh_known_hosts_path = "target/test-openssh-known_hosts"
+merge_openssh_known_hosts_on_connect = true
+openssh_known_hosts_path = "target/test-openssh-known_hosts"
+merge_openssh_known_hosts_on_connect = false

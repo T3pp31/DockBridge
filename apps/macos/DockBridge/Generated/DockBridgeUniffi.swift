@@ -813,15 +813,19 @@ public struct AppConfigRecord: Equatable, Hashable {
     public var transferRetryCount: UInt32
     public var transferChunkSizeBytes: UInt64
     public var knownHostsPath: String
+    public var opensshKnownHostsPath: String
+    public var mergeOpensshKnownHostsOnConnect: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, knownHostsPath: String) {
+    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool) {
         self.connectionTimeoutSecs = connectionTimeoutSecs
         self.sessionHealthCheckIntervalSecs = sessionHealthCheckIntervalSecs
         self.transferRetryCount = transferRetryCount
         self.transferChunkSizeBytes = transferChunkSizeBytes
         self.knownHostsPath = knownHostsPath
+        self.opensshKnownHostsPath = opensshKnownHostsPath
+        self.mergeOpensshKnownHostsOnConnect = mergeOpensshKnownHostsOnConnect
     }
 
     
@@ -844,7 +848,9 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
                 sessionHealthCheckIntervalSecs: FfiConverterUInt64.read(from: &buf), 
                 transferRetryCount: FfiConverterUInt32.read(from: &buf), 
                 transferChunkSizeBytes: FfiConverterUInt64.read(from: &buf), 
-                knownHostsPath: FfiConverterString.read(from: &buf)
+                knownHostsPath: FfiConverterString.read(from: &buf), 
+                opensshKnownHostsPath: FfiConverterString.read(from: &buf), 
+                mergeOpensshKnownHostsOnConnect: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -854,6 +860,8 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.transferRetryCount, into: &buf)
         FfiConverterUInt64.write(value.transferChunkSizeBytes, into: &buf)
         FfiConverterString.write(value.knownHostsPath, into: &buf)
+        FfiConverterString.write(value.opensshKnownHostsPath, into: &buf)
+        FfiConverterBool.write(value.mergeOpensshKnownHostsOnConnect, into: &buf)
     }
 }
 
@@ -945,13 +953,15 @@ public struct HostKeyChallenge: Equatable, Hashable {
     public var host: String
     public var port: UInt16
     public var fingerprintSha256: String
+    public var expectedFingerprintSha256: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(host: String, port: UInt16, fingerprintSha256: String) {
+    public init(host: String, port: UInt16, fingerprintSha256: String, expectedFingerprintSha256: String?) {
         self.host = host
         self.port = port
         self.fingerprintSha256 = fingerprintSha256
+        self.expectedFingerprintSha256 = expectedFingerprintSha256
     }
 
     
@@ -972,7 +982,8 @@ public struct FfiConverterTypeHostKeyChallenge: FfiConverterRustBuffer {
             try HostKeyChallenge(
                 host: FfiConverterString.read(from: &buf), 
                 port: FfiConverterUInt16.read(from: &buf), 
-                fingerprintSha256: FfiConverterString.read(from: &buf)
+                fingerprintSha256: FfiConverterString.read(from: &buf), 
+                expectedFingerprintSha256: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -980,6 +991,7 @@ public struct FfiConverterTypeHostKeyChallenge: FfiConverterRustBuffer {
         FfiConverterString.write(value.host, into: &buf)
         FfiConverterUInt16.write(value.port, into: &buf)
         FfiConverterString.write(value.fingerprintSha256, into: &buf)
+        FfiConverterOptionString.write(value.expectedFingerprintSha256, into: &buf)
     }
 }
 
@@ -1718,6 +1730,30 @@ public func FfiConverterCallbackInterfaceHostKeyHandler_lift(_ handle: UInt64) t
 #endif
 public func FfiConverterCallbackInterfaceHostKeyHandler_lower(_ v: HostKeyHandler) -> UInt64 {
     return FfiConverterCallbackInterfaceHostKeyHandler.lower(v)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
+    typealias SwiftType = String?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterString.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
 }
 
 #if swift(>=5.8)

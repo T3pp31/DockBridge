@@ -28,7 +28,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
 
     func prepareClient() throws {
         try hostKeyStore.ensureStoreDirectoryExists()
-        let record = settings.loadConfig().toRecord(knownHostsPath: hostKeyStore.knownHostsPath.path)
+        let record = settings.buildAppConfigRecord(knownHostsPath: hostKeyStore.knownHostsPath.path)
         client = try DockBridgeClient(
             appConfig: record,
             hostKeyHandler: self,

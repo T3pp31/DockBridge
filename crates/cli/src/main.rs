@@ -125,16 +125,36 @@ impl HostKeyPrompt for CliHostKeyPrompt {
     fn prompt_unknown_host(&self, host: &str, port: u16, fingerprint_sha256: &str) -> bool {
         eprintln!("The authenticity of host '{host}:{port}' can't be established.");
         eprintln!("Host key fingerprint is {fingerprint_sha256}.");
-        eprint!("Are you sure you want to continue connecting (yes/no)? ");
-        let _ = std::io::stderr().flush();
-
-        let mut input = String::new();
-        if std::io::stdin().read_line(&mut input).is_err() {
-            return false;
-        }
-
-        matches!(input.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+        prompt_yes_no("Are you sure you want to continue connecting (yes/no)? ")
     }
+
+    fn prompt_mismatch_host(
+        &self,
+        host: &str,
+        port: u16,
+        expected_fingerprint_sha256: &str,
+        actual_fingerprint_sha256: &str,
+    ) -> bool {
+        eprintln!("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+        eprintln!("@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @");
+        eprintln!("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+        eprintln!("Host key for '{host}:{port}' has changed.");
+        eprintln!("Expected fingerprint: {expected_fingerprint_sha256}");
+        eprintln!("Received fingerprint: {actual_fingerprint_sha256}");
+        prompt_yes_no("Are you sure you want to continue connecting (yes/no)? ")
+    }
+}
+
+fn prompt_yes_no(prompt: &str) -> bool {
+    eprint!("{prompt}");
+    let _ = std::io::stderr().flush();
+
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_err() {
+        return false;
+    }
+
+    input.trim().eq_ignore_ascii_case("yes")
 }
 
 #[tokio::main]

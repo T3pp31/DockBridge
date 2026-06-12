@@ -6,8 +6,11 @@
 - User accept/reject for unknown host keys
 - Trusted keys stored in DockBridge `known_hosts.json` (0600)
 - Hostname/IP alias normalization: same port and fingerprint are trusted across identifiers (OpenSSH-style comma-separated hosts)
-- OpenSSH `known_hosts` import/export helpers on `KnownHostsManager` (hashed entries skipped)
-- Connection blocked on host key mismatch
+- OpenSSH `known_hosts` import/export helpers on `KnownHostsManager`
+- Automatic merge with OpenSSH `known_hosts` on connect (configurable; see macOS Settings)
+- Hashed host entry (`|1|...`) import and matching
+- `@revoked` entries reject matching keys; `@cert-authority` entries are imported but not used for host trust (host certificate authentication is not supported)
+- Host key mismatch prompts with previous and new SHA256 fingerprints (explicit accept required)
 - Passwords and key passphrases stored in Keychain only
 - Private key files are referenced by path, never copied into the app bundle
 - No passwords, keys, or passphrases in logs
@@ -103,12 +106,15 @@ For environments that require stronger confidentiality than plaintext JSON plus 
 
 No migration is planned for v0.1. See [roadmap.md](roadmap.md) for tracking. Implementation would include a one-time upgrade path from existing `profiles.json` files and documentation for operators who export or back up profiles.
 
-## v0.2 planned
+### OpenSSH known_hosts merge (macOS Sandbox)
 
-- Automatic merge with `~/.ssh/known_hosts` on connect
-- Hashed host entry (`|1|...`) import and matching
-- `@revoked` / `@cert-authority` marker handling
-- Stricter host key change warnings
+The macOS app runs in App Sandbox and cannot read `~/.ssh/known_hosts` without explicit user consent. To merge OpenSSH trust on connect:
+
+1. Enable **Merge OpenSSH known_hosts on connect** in Settings.
+2. Use **Choose…** to select your `known_hosts` file (security-scoped bookmark is saved).
+3. If no file is selected or the path is unreadable, merge is skipped silently and connections continue.
+
+The CLI and non-sandboxed environments use `openssh_known_hosts_path` from `config/default.toml` (default: `~/.ssh/known_hosts`).
 
 ## macOS App Sandbox
 

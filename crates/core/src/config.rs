@@ -24,6 +24,12 @@ pub struct AppConfig {
     pub transfer_chunk_size_bytes: usize,
     /// Path to the DockBridge known hosts JSON store.
     pub known_hosts_path: PathBuf,
+    /// Path to the OpenSSH `known_hosts` file merged on connect.
+    #[serde(default = "default_openssh_known_hosts_path")]
+    pub openssh_known_hosts_path: PathBuf,
+    /// When true, merges [`openssh_known_hosts_path`] into the DockBridge store before connecting.
+    #[serde(default = "default_merge_openssh_known_hosts_on_connect")]
+    pub merge_openssh_known_hosts_on_connect: bool,
 }
 
 impl Default for AppConfig {
@@ -34,6 +40,8 @@ impl Default for AppConfig {
             transfer_retry_count: 3,
             transfer_chunk_size_bytes: DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
             known_hosts_path: default_known_hosts_path(),
+            openssh_known_hosts_path: default_openssh_known_hosts_path(),
+            merge_openssh_known_hosts_on_connect: true,
         }
     }
 }
@@ -62,6 +70,7 @@ impl AppConfig {
             })?;
 
         config.known_hosts_path = expand_tilde(&config.known_hosts_path);
+        config.openssh_known_hosts_path = expand_tilde(&config.openssh_known_hosts_path);
         config.transfer_chunk_size_bytes =
             validate_transfer_chunk_size(config.transfer_chunk_size_bytes)?;
         Ok(config)
@@ -120,6 +129,14 @@ fn home_dir() -> Option<PathBuf> {
 
 fn default_known_hosts_path() -> PathBuf {
     expand_tilde(Path::new("~/.dockbridge/known_hosts.json"))
+}
+
+fn default_openssh_known_hosts_path() -> PathBuf {
+    expand_tilde(Path::new("~/.ssh/known_hosts"))
+}
+
+fn default_merge_openssh_known_hosts_on_connect() -> bool {
+    true
 }
 
 /// Ensures the parent directory for the known hosts file exists.
