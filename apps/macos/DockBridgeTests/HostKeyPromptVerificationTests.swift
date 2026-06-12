@@ -127,7 +127,10 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         settings.saveConfig(config)
 
         let record = settings.buildAppConfigRecord(knownHostsPath: directory.appendingPathComponent("store.json").path)
-        XCTAssertEqual(record.opensshKnownHostsPath, knownHostsFile.path)
+        XCTAssertEqual(
+            URL(fileURLWithPath: record.opensshKnownHostsPath).standardizedFileURL.path,
+            knownHostsFile.standardizedFileURL.path
+        )
         XCTAssertFalse(record.mergeOpensshKnownHostsOnConnect)
     }
 
