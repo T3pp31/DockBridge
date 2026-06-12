@@ -122,3 +122,44 @@ Entitlements not granted include `network.server`, `temporary-exception.files.ab
 
 - Hardened Runtime enabled for Release builds
 - Notarization is not yet in CI (planned for v1.0); required before Developer ID distribution outside the Mac App Store
+
+## Dependency vulnerability management
+
+### Automated scanning
+
+- **CI (`cargo audit`)**: Every push to `main` and every pull request runs `rustsec/audit-check` against `Cargo.lock`. The job fails when a new advisory is reported.
+- **Dependabot**: Weekly pull requests for `cargo` and `github-actions` dependency updates (see `.github/dependabot.yml`).
+
+### Response workflow when a vulnerability is detected
+
+1. **Triage** — Read the advisory (ID, CVSS severity, affected crate/version, upstream fix).
+2. **Assess exposure** — Determine whether DockBridge uses the vulnerable code path (direct vs transitive dependency, client vs server role).
+3. **Remediate** — Prefer, in order:
+   - Merge a Dependabot PR or run `cargo update -p <crate>`.
+   - Bump the direct dependency version in `Cargo.toml` and run tests.
+   - If no fix exists, document the accepted risk (see step 4).
+4. **Document exceptions** — When remediation is blocked (no upstream fix, major-version migration, toolchain requirement), add the advisory ID to `.cargo/audit.toml` with an inline comment explaining the blocker and link a tracking issue. Remove the entry once fixed.
+5. **Verify** — Run `cargo audit` locally and confirm CI passes before merging.
+
+### Severity targets
+
+| CVSS | Target response |
+|------|-----------------|
+| Critical / High | Fix or document exception within one release cycle |
+| Medium | Fix in next planned dependency update |
+| Low / Info | Track via Dependabot; fix when convenient |
+
+### Currently tracked exceptions
+
+| Advisory | Crate | Severity | Status |
+|----------|-------|----------|--------|
+| RUSTSEC-2026-0153 | russh-cryptovec | High (7.5) | Upgrade to `russh >=0.60.3` when Rust toolchain supports 1.85+ |
+| RUSTSEC-2026-0154 | russh | High (7.5) | Same as above |
+| RUSTSEC-2023-0071 | rsa | Medium (5.9) | No fixed upgrade available; transitive via `russh` / `ssh-key` |
+
+Run `cargo audit` locally to match CI (`.cargo/audit.toml` applies tracked exceptions):
+
+```bash
+cargo install cargo-audit --locked
+cargo audit
+```
