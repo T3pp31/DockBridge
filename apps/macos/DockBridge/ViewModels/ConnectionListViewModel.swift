@@ -177,12 +177,16 @@ final class ConnectionListViewModel: ObservableObject {
             }
 
             let account = keychain.keychainAccount(for: profile.id, kind: "profile")
-            let password = connectProfile.authType == .password
+            var password = connectProfile.authType == .password
                 ? try keychain.loadPassword(account: account)
                 : nil
-            let passphrase = connectProfile.authType == .privateKey
+            var passphrase = connectProfile.authType == .privateKey
                 ? try keychain.loadPassphrase(account: account)
                 : nil
+            defer {
+                SensitiveString.clear(&password)
+                SensitiveString.clear(&passphrase)
+            }
 
             try await bridge.connect(profile: connectProfile, password: password, passphrase: passphrase)
 
