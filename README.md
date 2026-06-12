@@ -23,7 +23,18 @@ cargo build --release
 # CLI (development)
 cargo run -p dockbridge-cli -- list --help
 
-The CLI `--password` flag is for development and testing only. It may appear in shell history and process listings. Prefer `--password-stdin` for scripts.
+### CLI password authentication
+
+Prefer `--password-stdin` for scripts, CI, and production. The password is not stored in argv, shell history, or `ps` output:
+
+```bash
+printf '%s\n' "$PASSWORD" | cargo run -q -p dockbridge-cli -- list \
+  --host 127.0.0.1 --user demo --password-stdin --path upload
+```
+
+The `--password` flag is for local development and testing only. Passwords on the command line may appear in shell history and process listings (CWE-214). In CI and release builds, the CLI prints a warning when `--password` is used.
+
+To remove `--password` entirely, build with `--features disable-cli-password` on `dockbridge-cli`.
 
 # Rust static lib + Swift bindings
 ./scripts/build-rust.sh

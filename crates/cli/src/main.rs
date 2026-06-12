@@ -1,4 +1,6 @@
-use std::io::{self, Write};
+mod password;
+
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -9,13 +11,17 @@ use dockbridge_core::{
 };
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
-use zeroize::Zeroizing;
 
 #[derive(Parser, Debug)]
 #[command(
     name = "dockbridge",
     about = "DockBridge SFTP CLI",
-    after_help = "Password options:\n  --password is for development and testing only. It may appear in shell history and process listings.\n  Prefer --password-stdin for scripts."
+    after_help = "\
+Password authentication:\n  \
+Prefer --password-stdin for scripts, CI, and production. Example:\n  \
+  printf '%s\\n' \"$PASSWORD\" | dockbridge list --host HOST --user USER --password-stdin\n\n  \
+--password is for local development and testing only. Passwords passed on the \
+command line may appear in argv, shell history, and process listings (CWE-214)."
 )]
 struct Cli {
     /// Path to TOML config file.
@@ -86,17 +92,22 @@ struct ConnectionArgs {
     port: u16,
     #[arg(long)]
     user: String,
-    /// Password for development and testing only. May appear in shell history and process listings.
+    /// Password for local development and testing only (insecure: visible in argv, history, and ps).
+    #[cfg(not(feature = "disable-cli-password"))]
     #[arg(long, conflicts_with = "password_stdin")]
     password: Option<String>,
-    /// Read password from standard input instead of the command line.
+    /// Read password from standard input (recommended for scripts, CI, and production).
     #[arg(long)]
     password_stdin: bool,
 }
 
 impl ConnectionArgs {
     fn into_profile(self) -> anyhow::Result<ConnectionProfile> {
-        let password = resolve_password(self.password, self.password_stdin)?;
+        let password = password::resolve_password(
+            #[cfg(not(feature = "disable-cli-password"))]
+            self.password,
+            self.password_stdin,
+        )?;
         Ok(ConnectionProfile {
             host: self.host,
             port: self.port,
@@ -108,27 +119,6 @@ impl ConnectionArgs {
     }
 }
 
-fn resolve_password(
-    password: Option<String>,
-    password_stdin: bool,
-) -> anyhow::Result<Zeroizing<String>> {
-    if password_stdin {
-        let mut buffer = String::new();
-        io::stdin()
-            .read_line(&mut buffer)
-            .map_err(|err| anyhow::anyhow!("failed to read password from stdin: {err}"))?;
-        let trimmed = buffer.trim_end_matches(['\r', '\n']).to_string();
-        if trimmed.is_empty() {
-            anyhow::bail!("password read from stdin was empty");
-        }
-        return Ok(Zeroizing::new(trimmed));
-    }
-
-    let password = password
-        .ok_or_else(|| anyhow::anyhow!("either --password or --password-stdin is required"))?;
-    Ok(Zeroizing::new(password))
-}
-
 struct CliHostKeyPrompt;
 
 impl HostKeyPrompt for CliHostKeyPrompt {
@@ -136,10 +126,10 @@ impl HostKeyPrompt for CliHostKeyPrompt {
         eprintln!("The authenticity of host '{host}:{port}' can't be established.");
         eprintln!("Host key fingerprint is {fingerprint_sha256}.");
         eprint!("Are you sure you want to continue connecting (yes/no)? ");
-        let _ = io::stderr().flush();
+        let _ = std::io::stderr().flush();
 
         let mut input = String::new();
-        if io::stdin().read_line(&mut input).is_err() {
+        if std::io::stdin().read_line(&mut input).is_err() {
             return false;
         }
 
