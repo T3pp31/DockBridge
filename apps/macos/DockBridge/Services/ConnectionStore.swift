@@ -15,15 +15,26 @@ enum ConnectionStoreError: LocalizedError {
 final class ConnectionStore: @unchecked Sendable {
     static let shared = ConnectionStore()
 
-    private let settings: AppSettingsService
+    private let profilesBaseDirectory: URL
     private let fileName = "profiles.json"
 
     init(settings: AppSettingsService = .shared) {
-        self.settings = settings
+        self.profilesBaseDirectory = settings.appSupportDirectory
+    }
+
+    init(baseDirectory: URL) {
+        self.profilesBaseDirectory = baseDirectory
     }
 
     private var profilesURL: URL {
-        settings.appSupportDirectory.appendingPathComponent(fileName, isDirectory: false)
+        profilesBaseDirectory.appendingPathComponent(fileName, isDirectory: false)
+    }
+
+    func setSecurePermissions(for url: URL) throws {
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o600))],
+            ofItemAtPath: url.path
+        )
     }
 
     func loadProfiles() throws -> [ConnectionProfile] {
@@ -31,6 +42,8 @@ final class ConnectionStore: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else {
             return []
         }
+
+        try setSecurePermissions(for: url)
 
         do {
             let data = try Data(contentsOf: url)
@@ -53,6 +66,7 @@ final class ConnectionStore: @unchecked Sendable {
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(profiles)
             try data.write(to: url, options: .atomic)
+            try setSecurePermissions(for: url)
         } catch {
             throw ConnectionStoreError.writeFailed(error.localizedDescription)
         }
