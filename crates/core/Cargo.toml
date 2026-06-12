@@ -14,7 +14,6 @@ russh.workspace = true
 russh-keys.workspace = true
 russh-sftp.workspace = true
 serde.workspace = true
-ssh-key = { version = "0.6", features = ["std"] }
 serde_json.workspace = true
 sha2.workspace = true
 ssh-key.workspace = true
@@ -26,5 +25,5 @@ zeroize.workspace = true
 
 [dev-dependencies]
 rand = "0.8"
-ssh-key = "0.6"
+ssh-key.workspace = true
 tempfile = "3"
