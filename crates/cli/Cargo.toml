@@ -10,6 +10,11 @@ description = "DockBridge CLI for SFTP operations"
 name = "dockbridge"
 path = "src/main.rs"
 
+[features]
+default = []
+# Remove the insecure --password CLI flag; only --password-stdin remains.
+disable-cli-password = []
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true

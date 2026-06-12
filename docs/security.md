@@ -9,10 +9,33 @@
 - Passwords and key passphrases stored in Keychain only
 - Private key files are referenced by path, never copied into the app bundle
 - No passwords, keys, or passphrases in logs
-- CLI `--password` is for development and testing only; prefer `--password-stdin` in scripts
 - Rust secrets use `Debug` redaction and `zeroize` where applicable
 - Delete confirmation for destructive operations
 - Warning when connecting as root
+
+## CLI password authentication
+
+Password-based CLI connections support two mechanisms:
+
+| Flag | Use case | Risk |
+|------|----------|------|
+| `--password-stdin` | Scripts, CI, production | Recommended; password is not visible in argv or `ps` |
+| `--password` | Local development and testing only | Visible in argv, shell history, and process listings ([CWE-214](https://cwe.mitre.org/data/definitions/214.html)) |
+
+Example (recommended):
+
+```bash
+printf '%s\n' "$PASSWORD" | dockbridge list \
+  --host example.com --user demo --password-stdin --path .
+```
+
+When `CI=true` or in release builds, the CLI prints a warning if `--password` is used. Set `DOCKBRIDGE_SUPPRESS_PASSWORD_WARNING=1` only when you accept the risk (for example, a one-off local test in CI).
+
+For hardened deployments, build the CLI without the flag:
+
+```bash
+cargo build -p dockbridge-cli --release --features disable-cli-password
+```
 
 ## v0.2 planned
 
