@@ -352,19 +352,29 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
 }
+// Initial value and increment amount for handles. 
+// These ensure that SWIFT handles always have the lowest bit set
+fileprivate let UNIFFI_HANDLEMAP_INITIAL: UInt64 = 1
+fileprivate let UNIFFI_HANDLEMAP_DELTA: UInt64 = 2
+
 fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
     // All mutation happens with this lock held, which is why we implement @unchecked Sendable.
     private let lock = NSLock()
     private var map: [UInt64: T] = [:]
-    private var currentHandle: UInt64 = 1
+    private var currentHandle: UInt64 = UNIFFI_HANDLEMAP_INITIAL
 
     func insert(obj: T) -> UInt64 {
         lock.withLock {
-            let handle = currentHandle
-            currentHandle += 1
-            map[handle] = obj
-            return handle
+            return doInsert(obj)
         }
+    }
+
+    // Low-level insert function, this assumes `lock` is held.
+    private func doInsert(_ obj: T) -> UInt64 {
+        let handle = currentHandle
+        currentHandle += UNIFFI_HANDLEMAP_DELTA
+        map[handle] = obj
+        return handle
     }
 
      func get(handle: UInt64) throws -> T {
@@ -373,6 +383,15 @@ fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
                 throw UniffiInternalError.unexpectedStaleHandle
             }
             return obj
+        }
+    }
+
+     func clone(handle: UInt64) throws -> UInt64 {
+        try lock.withLock {
+            guard let obj = map[handle] else {
+                throw UniffiInternalError.unexpectedStaleHandle
+            }
+            return doInsert(obj)
         }
     }
 
@@ -555,13 +574,13 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
  * Main DockBridge client exposed to Swift.
  */
 open class DockBridgeClient: DockBridgeClientProtocol, @unchecked Sendable {
-    fileprivate let pointer: UnsafeMutableRawPointer!
+    fileprivate let handle: UInt64
 
-    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public struct NoPointer {
+    public struct NoHandle {
         public init() {}
     }
 
@@ -571,30 +590,30 @@ open class DockBridgeClient: DockBridgeClientProtocol, @unchecked Sendable {
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
-        self.pointer = pointer
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
     }
 
     // This constructor can be used to instantiate a fake object.
-    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
     //
     // - Warning:
-    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public init(noPointer: NoPointer) {
-        self.pointer = nil
+    public init(noHandle: NoHandle) {
+        self.handle = 0
     }
 
 #if swift(>=5.8)
     @_documentation(visibility: private)
 #endif
-    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
-        return try! rustCall { uniffi_dockbridge_uniffi_fn_clone_dockbridgeclient(self.pointer, $0) }
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_dockbridge_uniffi_fn_clone_dockbridgeclient(self.handle, $0) }
     }
 public convenience init(appConfig: AppConfigRecord, hostKeyHandler: HostKeyHandler, connectionEventHandler: ConnectionEventHandler)throws  {
-    let pointer =
+    let handle =
         try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
     uniffi_dockbridge_uniffi_fn_constructor_dockbridgeclient_new(
         FfiConverterTypeAppConfigRecord_lower(appConfig),
@@ -602,22 +621,24 @@ public convenience init(appConfig: AppConfigRecord, hostKeyHandler: HostKeyHandl
         FfiConverterCallbackInterfaceConnectionEventHandler_lower(connectionEventHandler),$0
     )
 }
-    self.init(unsafeFromRawPointer: pointer)
+    self.init(unsafeFromHandle: handle)
 }
 
     deinit {
-        guard let pointer = pointer else {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
             return
         }
 
-        try! rustCall { uniffi_dockbridge_uniffi_fn_free_dockbridgeclient(pointer, $0) }
+        try! rustCall { uniffi_dockbridge_uniffi_fn_free_dockbridgeclient(handle, $0) }
     }
 
     
 
     
 open func cancelTransfer(taskId: UInt64)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
-    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_cancel_transfer(self.uniffiClonePointer(),
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_cancel_transfer(
+            self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(taskId),$0
     )
 }
@@ -625,14 +646,16 @@ open func cancelTransfer(taskId: UInt64)throws   {try rustCallWithError(FfiConve
     
 open func connect(profile: ConnectionProfileRecord)throws  -> UInt64  {
     return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
-    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_connect(self.uniffiClonePointer(),
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_connect(
+            self.uniffiCloneHandle(),
         FfiConverterTypeConnectionProfileRecord_lower(profile),$0
     )
 })
 }
     
 open func createDirectory(sessionId: UInt64, remotePath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
-    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_create_directory(self.uniffiClonePointer(),
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_create_directory(
+            self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(remotePath),$0
     )
@@ -640,7 +663,8 @@ open func createDirectory(sessionId: UInt64, remotePath: String)throws   {try ru
 }
     
 open func delete(sessionId: UInt64, remotePath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
-    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_delete(self.uniffiClonePointer(),
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_delete(
+            self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(remotePath),$0
     )
@@ -648,14 +672,16 @@ open func delete(sessionId: UInt64, remotePath: String)throws   {try rustCallWit
 }
     
 open func disconnect(sessionId: UInt64)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
-    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_disconnect(self.uniffiClonePointer(),
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_disconnect(
+            self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),$0
     )
 }
 }
     
 open func download(sessionId: UInt64, remotePath: String, localPath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
-    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download(self.uniffiClonePointer(),
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download(
+            self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(remotePath),
         FfiConverterString.lower(localPath),$0
@@ -664,7 +690,8 @@ open func download(sessionId: UInt64, remotePath: String, localPath: String)thro
 }
     
 open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
-    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download_entry(self.uniffiClonePointer(),
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download_entry(
+            self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(remotePath),
         FfiConverterString.lower(localDirectory),$0
@@ -674,7 +701,8 @@ open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: S
     
 open func getInitialDirectory(sessionId: UInt64)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
-    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_get_initial_directory(self.uniffiClonePointer(),
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_get_initial_directory(
+            self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),$0
     )
 })
@@ -682,14 +710,16 @@ open func getInitialDirectory(sessionId: UInt64)throws  -> String  {
     
 open func getTransferQueue() -> [TransferTaskRecord]  {
     return try!  FfiConverterSequenceTypeTransferTaskRecord.lift(try! rustCall() {
-    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_get_transfer_queue(self.uniffiClonePointer(),$0
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_get_transfer_queue(
+            self.uniffiCloneHandle(),$0
     )
 })
 }
     
 open func listDirectory(sessionId: UInt64, path: String)throws  -> [RemoteFileRecord]  {
     return try  FfiConverterSequenceTypeRemoteFileRecord.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
-    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_list_directory(self.uniffiClonePointer(),
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_list_directory(
+            self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(path),$0
     )
@@ -697,7 +727,8 @@ open func listDirectory(sessionId: UInt64, path: String)throws  -> [RemoteFileRe
 }
     
 open func rename(sessionId: UInt64, from: String, to: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
-    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_rename(self.uniffiClonePointer(),
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_rename(
+            self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(from),
         FfiConverterString.lower(to),$0
@@ -706,7 +737,8 @@ open func rename(sessionId: UInt64, from: String, to: String)throws   {try rustC
 }
     
 open func upload(sessionId: UInt64, localPath: String, remotePath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
-    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload(self.uniffiClonePointer(),
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload(
+            self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(localPath),
         FfiConverterString.lower(remotePath),$0
@@ -715,7 +747,8 @@ open func upload(sessionId: UInt64, localPath: String, remotePath: String)throws
 }
     
 open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
-    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload_entry(self.uniffiClonePointer(),
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload_entry(
+            self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(localPath),
         FfiConverterString.lower(remoteDirectory),$0
@@ -724,6 +757,7 @@ open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: Str
 }
     
 
+    
 }
 
 
@@ -731,33 +765,24 @@ open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: Str
 @_documentation(visibility: private)
 #endif
 public struct FfiConverterTypeDockBridgeClient: FfiConverter {
-
-    typealias FfiType = UnsafeMutableRawPointer
+    typealias FfiType = UInt64
     typealias SwiftType = DockBridgeClient
 
-    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> DockBridgeClient {
-        return DockBridgeClient(unsafeFromRawPointer: pointer)
+    public static func lift(_ handle: UInt64) throws -> DockBridgeClient {
+        return DockBridgeClient(unsafeFromHandle: handle)
     }
 
-    public static func lower(_ value: DockBridgeClient) -> UnsafeMutableRawPointer {
-        return value.uniffiClonePointer()
+    public static func lower(_ value: DockBridgeClient) -> UInt64 {
+        return value.uniffiCloneHandle()
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DockBridgeClient {
-        let v: UInt64 = try readInt(&buf)
-        // The Rust code won't compile if a pointer won't fit in a UInt64.
-        // We have to go via `UInt` because that's the thing that's the size of a pointer.
-        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
-        if (ptr == nil) {
-            throw UniffiInternalError.unexpectedNullPointer
-        }
-        return try lift(ptr!)
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
     }
 
     public static func write(_ value: DockBridgeClient, into buf: inout [UInt8]) {
-        // This fiddling is because `Int` is the thing that's the same size as a pointer.
-        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
-        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+        writeInt(&buf, lower(value))
     }
 }
 
@@ -765,14 +790,14 @@ public struct FfiConverterTypeDockBridgeClient: FfiConverter {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeDockBridgeClient_lift(_ pointer: UnsafeMutableRawPointer) throws -> DockBridgeClient {
-    return try FfiConverterTypeDockBridgeClient.lift(pointer)
+public func FfiConverterTypeDockBridgeClient_lift(_ handle: UInt64) throws -> DockBridgeClient {
+    return try FfiConverterTypeDockBridgeClient.lift(handle)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeDockBridgeClient_lower(_ value: DockBridgeClient) -> UnsafeMutableRawPointer {
+public func FfiConverterTypeDockBridgeClient_lower(_ value: DockBridgeClient) -> UInt64 {
     return FfiConverterTypeDockBridgeClient.lower(value)
 }
 
@@ -782,7 +807,7 @@ public func FfiConverterTypeDockBridgeClient_lower(_ value: DockBridgeClient) ->
 /**
  * Application configuration passed from Swift.
  */
-public struct AppConfigRecord {
+public struct AppConfigRecord: Equatable, Hashable {
     public var connectionTimeoutSecs: UInt64
     public var sessionHealthCheckIntervalSecs: UInt64
     public var transferRetryCount: UInt32
@@ -798,43 +823,15 @@ public struct AppConfigRecord {
         self.transferChunkSizeBytes = transferChunkSizeBytes
         self.knownHostsPath = knownHostsPath
     }
+
+    
+
+    
 }
 
 #if compiler(>=6)
 extension AppConfigRecord: Sendable {}
 #endif
-
-
-extension AppConfigRecord: Equatable, Hashable {
-    public static func ==(lhs: AppConfigRecord, rhs: AppConfigRecord) -> Bool {
-        if lhs.connectionTimeoutSecs != rhs.connectionTimeoutSecs {
-            return false
-        }
-        if lhs.sessionHealthCheckIntervalSecs != rhs.sessionHealthCheckIntervalSecs {
-            return false
-        }
-        if lhs.transferRetryCount != rhs.transferRetryCount {
-            return false
-        }
-        if lhs.transferChunkSizeBytes != rhs.transferChunkSizeBytes {
-            return false
-        }
-        if lhs.knownHostsPath != rhs.knownHostsPath {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(connectionTimeoutSecs)
-        hasher.combine(sessionHealthCheckIntervalSecs)
-        hasher.combine(transferRetryCount)
-        hasher.combine(transferChunkSizeBytes)
-        hasher.combine(knownHostsPath)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -879,7 +876,7 @@ public func FfiConverterTypeAppConfigRecord_lower(_ value: AppConfigRecord) -> R
 /**
  * SSH connection parameters passed from Swift.
  */
-public struct ConnectionProfileRecord {
+public struct ConnectionProfileRecord: Equatable, Hashable {
     public var host: String
     public var port: UInt16
     public var username: String
@@ -893,39 +890,15 @@ public struct ConnectionProfileRecord {
         self.username = username
         self.authType = authType
     }
+
+    
+
+    
 }
 
 #if compiler(>=6)
 extension ConnectionProfileRecord: Sendable {}
 #endif
-
-
-extension ConnectionProfileRecord: Equatable, Hashable {
-    public static func ==(lhs: ConnectionProfileRecord, rhs: ConnectionProfileRecord) -> Bool {
-        if lhs.host != rhs.host {
-            return false
-        }
-        if lhs.port != rhs.port {
-            return false
-        }
-        if lhs.username != rhs.username {
-            return false
-        }
-        if lhs.authType != rhs.authType {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(host)
-        hasher.combine(port)
-        hasher.combine(username)
-        hasher.combine(authType)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -968,7 +941,7 @@ public func FfiConverterTypeConnectionProfileRecord_lower(_ value: ConnectionPro
 /**
  * Host key verification challenge presented to Swift.
  */
-public struct HostKeyChallenge {
+public struct HostKeyChallenge: Equatable, Hashable {
     public var host: String
     public var port: UInt16
     public var fingerprintSha256: String
@@ -980,35 +953,15 @@ public struct HostKeyChallenge {
         self.port = port
         self.fingerprintSha256 = fingerprintSha256
     }
+
+    
+
+    
 }
 
 #if compiler(>=6)
 extension HostKeyChallenge: Sendable {}
 #endif
-
-
-extension HostKeyChallenge: Equatable, Hashable {
-    public static func ==(lhs: HostKeyChallenge, rhs: HostKeyChallenge) -> Bool {
-        if lhs.host != rhs.host {
-            return false
-        }
-        if lhs.port != rhs.port {
-            return false
-        }
-        if lhs.fingerprintSha256 != rhs.fingerprintSha256 {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(host)
-        hasher.combine(port)
-        hasher.combine(fingerprintSha256)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1049,7 +1002,7 @@ public func FfiConverterTypeHostKeyChallenge_lower(_ value: HostKeyChallenge) ->
 /**
  * Remote file metadata returned to Swift.
  */
-public struct RemoteFileRecord {
+public struct RemoteFileRecord: Equatable, Hashable {
     public var name: String
     public var path: String
     public var isDirectory: Bool
@@ -1063,39 +1016,15 @@ public struct RemoteFileRecord {
         self.isDirectory = isDirectory
         self.size = size
     }
+
+    
+
+    
 }
 
 #if compiler(>=6)
 extension RemoteFileRecord: Sendable {}
 #endif
-
-
-extension RemoteFileRecord: Equatable, Hashable {
-    public static func ==(lhs: RemoteFileRecord, rhs: RemoteFileRecord) -> Bool {
-        if lhs.name != rhs.name {
-            return false
-        }
-        if lhs.path != rhs.path {
-            return false
-        }
-        if lhs.isDirectory != rhs.isDirectory {
-            return false
-        }
-        if lhs.size != rhs.size {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(name)
-        hasher.combine(path)
-        hasher.combine(isDirectory)
-        hasher.combine(size)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1138,7 +1067,7 @@ public func FfiConverterTypeRemoteFileRecord_lower(_ value: RemoteFileRecord) ->
 /**
  * A queued or completed file transfer operation.
  */
-public struct TransferTaskRecord {
+public struct TransferTaskRecord: Equatable, Hashable {
     public var id: UInt64
     public var direction: TransferDirectionRecord
     public var localPath: String
@@ -1154,43 +1083,15 @@ public struct TransferTaskRecord {
         self.remotePath = remotePath
         self.status = status
     }
+
+    
+
+    
 }
 
 #if compiler(>=6)
 extension TransferTaskRecord: Sendable {}
 #endif
-
-
-extension TransferTaskRecord: Equatable, Hashable {
-    public static func ==(lhs: TransferTaskRecord, rhs: TransferTaskRecord) -> Bool {
-        if lhs.id != rhs.id {
-            return false
-        }
-        if lhs.direction != rhs.direction {
-            return false
-        }
-        if lhs.localPath != rhs.localPath {
-            return false
-        }
-        if lhs.remotePath != rhs.remotePath {
-            return false
-        }
-        if lhs.status != rhs.status {
-            return false
-        }
-        return true
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(direction)
-        hasher.combine(localPath)
-        hasher.combine(remotePath)
-        hasher.combine(status)
-    }
-}
-
-
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1237,14 +1138,18 @@ public func FfiConverterTypeTransferTaskRecord_lower(_ value: TransferTaskRecord
  * Authentication method for a connection profile.
  */
 
-public enum AuthTypeRecord {
+public enum AuthTypeRecord: Equatable, Hashable {
     
-    case password(password: SecretCredential
+    case password(password: String
     )
-    case privateKey(keyPath: String, passphrase: SecretCredential?
+    case privateKey(keyPath: String, passphrase: String?
     )
-}
 
+
+
+
+
+}
 
 #if compiler(>=6)
 extension AuthTypeRecord: Sendable {}
@@ -1260,10 +1165,10 @@ public struct FfiConverterTypeAuthTypeRecord: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
         
-        case 1: return .password(password: try FfiConverterTypeSecretCredential.read(from: &buf)
+        case 1: return .password(password: try FfiConverterString.read(from: &buf)
         )
         
-        case 2: return .privateKey(keyPath: try FfiConverterString.read(from: &buf), passphrase: try FfiConverterOptionTypeSecretCredential.read(from: &buf)
+        case 2: return .privateKey(keyPath: try FfiConverterString.read(from: &buf), passphrase: try FfiConverterOptionString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -1276,13 +1181,13 @@ public struct FfiConverterTypeAuthTypeRecord: FfiConverterRustBuffer {
         
         case let .password(password):
             writeInt(&buf, Int32(1))
-            FfiConverterTypeSecretCredential.write(password, into: &buf)
+            FfiConverterString.write(password, into: &buf)
             
         
         case let .privateKey(keyPath,passphrase):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(keyPath, into: &buf)
-            FfiConverterOptionTypeSecretCredential.write(passphrase, into: &buf)
+            FfiConverterOptionString.write(passphrase, into: &buf)
             
         }
     }
@@ -1304,25 +1209,31 @@ public func FfiConverterTypeAuthTypeRecord_lower(_ value: AuthTypeRecord) -> Rus
 }
 
 
-extension AuthTypeRecord: Equatable, Hashable {}
-
-
-
-
-
-
 
 /**
  * Flat error type exposed to Swift.
  */
-public enum DockBridgeError: Swift.Error {
+public enum DockBridgeError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
     case Generic(message: String)
     
+
+    
+
+    
+
+    
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+    
 }
 
+#if compiler(>=6)
+extension DockBridgeError: Sendable {}
+#endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
@@ -1375,33 +1286,22 @@ public func FfiConverterTypeDockBridgeError_lower(_ value: DockBridgeError) -> R
     return FfiConverterTypeDockBridgeError.lower(value)
 }
 
-
-extension DockBridgeError: Equatable, Hashable {}
-
-
-
-
-extension DockBridgeError: Foundation.LocalizedError {
-    public var errorDescription: String? {
-        String(reflecting: self)
-    }
-}
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Direction of a file transfer task.
  */
 
-public enum TransferDirectionRecord {
+public enum TransferDirectionRecord: Equatable, Hashable {
     
     case upload
     case download
-}
 
+
+
+
+
+}
 
 #if compiler(>=6)
 extension TransferDirectionRecord: Sendable {}
@@ -1456,20 +1356,13 @@ public func FfiConverterTypeTransferDirectionRecord_lower(_ value: TransferDirec
 }
 
 
-extension TransferDirectionRecord: Equatable, Hashable {}
-
-
-
-
-
-
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
  * Lifecycle status of a transfer task.
  */
 
-public enum TransferStatusRecord {
+public enum TransferStatusRecord: Equatable, Hashable {
     
     case pending
     case inProgress
@@ -1477,8 +1370,12 @@ public enum TransferStatusRecord {
     case failed(message: String
     )
     case cancelled
-}
 
+
+
+
+
+}
 
 #if compiler(>=6)
 extension TransferStatusRecord: Sendable {}
@@ -1553,13 +1450,6 @@ public func FfiConverterTypeTransferStatusRecord_lower(_ value: TransferStatusRe
 }
 
 
-extension TransferStatusRecord: Equatable, Hashable {}
-
-
-
-
-
-
 
 
 
@@ -1579,9 +1469,22 @@ fileprivate struct UniffiCallbackInterfaceConnectionEventHandler {
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
     //
-    // This creates 1-element array, since this seems to be the only way to construct a const
-    // pointer that we can pass to the Rust code.
-    static let vtable: [UniffiVTableCallbackInterfaceConnectionEventHandler] = [UniffiVTableCallbackInterfaceConnectionEventHandler(
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceConnectionEventHandler = UniffiVTableCallbackInterfaceConnectionEventHandler(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterCallbackInterfaceConnectionEventHandler.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface ConnectionEventHandler: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterCallbackInterfaceConnectionEventHandler.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface ConnectionEventHandler: handle missing in uniffiClone")
+            }
+        },
         onSessionDisconnected: { (
             uniffiHandle: UInt64,
             sessionId: UInt64,
@@ -1607,18 +1510,20 @@ fileprivate struct UniffiCallbackInterfaceConnectionEventHandler {
                 makeCall: makeCall,
                 writeReturn: writeReturn
             )
-        },
-        uniffiFree: { (uniffiHandle: UInt64) -> () in
-            let result = try? FfiConverterCallbackInterfaceConnectionEventHandler.handleMap.remove(handle: uniffiHandle)
-            if result == nil {
-                print("Uniffi callback interface ConnectionEventHandler: handle missing in uniffiFree")
-            }
         }
-    )]
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceConnectionEventHandler> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceConnectionEventHandler>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
 }
 
 private func uniffiCallbackInitConnectionEventHandler() {
-    uniffi_dockbridge_uniffi_fn_init_callback_vtable_connectioneventhandler(UniffiCallbackInterfaceConnectionEventHandler.vtable)
+    uniffi_dockbridge_uniffi_fn_init_callback_vtable_connectioneventhandler(UniffiCallbackInterfaceConnectionEventHandler.vtablePtr)
 }
 
 // FfiConverter protocol for callback interfaces
@@ -1700,9 +1605,22 @@ fileprivate struct UniffiCallbackInterfaceHostKeyHandler {
     // Create the VTable using a series of closures.
     // Swift automatically converts these into C callback functions.
     //
-    // This creates 1-element array, since this seems to be the only way to construct a const
-    // pointer that we can pass to the Rust code.
-    static let vtable: [UniffiVTableCallbackInterfaceHostKeyHandler] = [UniffiVTableCallbackInterfaceHostKeyHandler(
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceHostKeyHandler = UniffiVTableCallbackInterfaceHostKeyHandler(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterCallbackInterfaceHostKeyHandler.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface HostKeyHandler: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterCallbackInterfaceHostKeyHandler.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface HostKeyHandler: handle missing in uniffiClone")
+            }
+        },
         promptUnknownHost: { (
             uniffiHandle: UInt64,
             challenge: RustBuffer,
@@ -1726,18 +1644,20 @@ fileprivate struct UniffiCallbackInterfaceHostKeyHandler {
                 makeCall: makeCall,
                 writeReturn: writeReturn
             )
-        },
-        uniffiFree: { (uniffiHandle: UInt64) -> () in
-            let result = try? FfiConverterCallbackInterfaceHostKeyHandler.handleMap.remove(handle: uniffiHandle)
-            if result == nil {
-                print("Uniffi callback interface HostKeyHandler: handle missing in uniffiFree")
-            }
         }
-    )]
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceHostKeyHandler> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceHostKeyHandler>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
 }
 
 private func uniffiCallbackInitHostKeyHandler() {
-    uniffi_dockbridge_uniffi_fn_init_callback_vtable_hostkeyhandler(UniffiCallbackInterfaceHostKeyHandler.vtable)
+    uniffi_dockbridge_uniffi_fn_init_callback_vtable_hostkeyhandler(UniffiCallbackInterfaceHostKeyHandler.vtablePtr)
 }
 
 // FfiConverter protocol for callback interfaces
@@ -1803,8 +1723,8 @@ public func FfiConverterCallbackInterfaceHostKeyHandler_lower(_ v: HostKeyHandle
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-fileprivate struct FfiConverterOptionTypeSecretCredential: FfiConverterRustBuffer {
-    typealias SwiftType = SecretCredential?
+fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
+    typealias SwiftType = String?
 
     public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         guard let value = value else {
@@ -1812,13 +1732,13 @@ fileprivate struct FfiConverterOptionTypeSecretCredential: FfiConverterRustBuffe
             return
         }
         writeInt(&buf, Int8(1))
-        FfiConverterTypeSecretCredential.write(value, into: &buf)
+        FfiConverterString.write(value, into: &buf)
     }
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
-        case 1: return try FfiConverterTypeSecretCredential.read(from: &buf)
+        case 1: return try FfiConverterString.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -1874,50 +1794,6 @@ fileprivate struct FfiConverterSequenceTypeTransferTaskRecord: FfiConverterRustB
     }
 }
 
-
-/**
- * Typealias from the type name used in the UDL file to the builtin type.  This
- * is needed because the UDL type name is used in function/method signatures.
- */
-public typealias SecretCredential = String
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public struct FfiConverterTypeSecretCredential: FfiConverter {
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SecretCredential {
-        return try FfiConverterString.read(from: &buf)
-    }
-
-    public static func write(_ value: SecretCredential, into buf: inout [UInt8]) {
-        return FfiConverterString.write(value, into: &buf)
-    }
-
-    public static func lift(_ value: RustBuffer) throws -> SecretCredential {
-        return try FfiConverterString.lift(value)
-    }
-
-    public static func lower(_ value: SecretCredential) -> RustBuffer {
-        return FfiConverterString.lower(value)
-    }
-}
-
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeSecretCredential_lift(_ value: RustBuffer) throws -> SecretCredential {
-    return try FfiConverterTypeSecretCredential.lift(value)
-}
-
-#if swift(>=5.8)
-@_documentation(visibility: private)
-#endif
-public func FfiConverterTypeSecretCredential_lower(_ value: SecretCredential) -> RustBuffer {
-    return FfiConverterTypeSecretCredential.lower(value)
-}
-
-
 private enum InitializationResult {
     case ok
     case contractVersionMismatch
@@ -1927,7 +1803,7 @@ private enum InitializationResult {
 // the code inside is only computed once.
 private let initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
-    let bindings_contract_version = 29
+    let bindings_contract_version = 30
     // Get the scaffolding contract version by calling the into the dylib
     let scaffolding_contract_version = ffi_dockbridge_uniffi_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
