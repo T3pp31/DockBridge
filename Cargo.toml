@@ -23,11 +23,11 @@ sha2 = "0.11"
 ssh-key = "0.6"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
-toml = "0.8"
+toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zeroize = { version = "1", features = ["derive"] }
 russh = "0.48"
-russh-keys = "0.48"
+russh-keys = "0.49"
 russh-sftp = "2.3"
-uniffi = { version = "0.29", features = ["cli"] }
+uniffi = { version = "0.31", features = ["cli"] }
