@@ -77,4 +77,45 @@ final class ConnectionListViewModelTests: XCTestCase {
         XCTAssertNil(try keychain.loadPassphrase(account: account))
         XCTAssertEqual(try keychain.loadPassword(account: account), "secret-password")
     }
+
+    func testSaveDeletesPasswordWhenSaveSecretsDisabled() throws {
+        let profileID = UUID()
+        let profile = ConnectionProfile(
+            id: profileID,
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .password
+        )
+
+        viewModel.save(profile, password: "secret-password", passphrase: nil)
+
+        let account = keychain.keychainAccount(for: profileID, kind: "profile")
+        XCTAssertEqual(try keychain.loadPassword(account: account), "secret-password")
+
+        viewModel.save(profile, password: nil, passphrase: nil)
+
+        XCTAssertNil(try keychain.loadPassword(account: account))
+    }
+
+    func testSaveDeletesPassphraseWhenSaveSecretsDisabled() throws {
+        let profileID = UUID()
+        let profile = ConnectionProfile(
+            id: profileID,
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyPath: "/Users/test/.ssh/id_rsa"
+        )
+
+        viewModel.save(profile, password: nil, passphrase: "key-passphrase")
+
+        let account = keychain.keychainAccount(for: profileID, kind: "profile")
+        XCTAssertEqual(try keychain.loadPassphrase(account: account), "key-passphrase")
+
+        viewModel.save(profile, password: nil, passphrase: nil)
+
+        XCTAssertNil(try keychain.loadPassphrase(account: account))
+    }
 }
