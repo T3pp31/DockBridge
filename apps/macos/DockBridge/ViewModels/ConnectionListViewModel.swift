@@ -46,11 +46,17 @@ final class ConnectionListViewModel: ObservableObject {
             selectedProfileID = profile.id
 
             let account = keychain.keychainAccount(for: profile.id, kind: "profile")
-            if let password, !password.isEmpty {
-                try keychain.savePassword(password, account: account)
-            }
-            if let passphrase, !passphrase.isEmpty {
-                try keychain.savePassphrase(passphrase, account: account)
+            switch profile.authType {
+            case .password:
+                try keychain.deletePassphrase(account: account)
+                if let password, !password.isEmpty {
+                    try keychain.savePassword(password, account: account)
+                }
+            case .privateKey:
+                try keychain.deletePassword(account: account)
+                if let passphrase, !passphrase.isEmpty {
+                    try keychain.savePassphrase(passphrase, account: account)
+                }
             }
         } catch {
             errorMessage = error.localizedDescription
