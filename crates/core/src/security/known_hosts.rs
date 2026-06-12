@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use russh::keys::{HashAlg, PublicKey};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
-use ssh_key::known_hosts::{HostPatterns, KnownHosts as OpenSshKnownHosts, Marker as OpenSshMarker};
+use ssh_key::known_hosts::{
+    HostPatterns, KnownHosts as OpenSshKnownHosts, Marker as OpenSshMarker,
+};
 
 use crate::config::{ensure_known_hosts_parent, AppConfig};
 use crate::error::SecurityError;
@@ -41,6 +43,17 @@ pub enum KnownHostMarker {
     Revoked,
     /// `@cert-authority` — imported for compatibility; not used for host trust in v0.2.
     CertAuthority,
+}
+
+/// Plain host entry parsed from OpenSSH `known_hosts` during import.
+struct ImportedPlainEntry {
+    host: String,
+    port: u16,
+    fingerprint_sha256: String,
+    algorithm: String,
+    public_key_openssh: Option<String>,
+    aliases: Vec<HostAlias>,
+    marker: Option<KnownHostMarker>,
 }
 
 /// A hashed OpenSSH known_hosts entry (`|1|salt|hash`).
@@ -143,11 +156,17 @@ impl KnownHostsManager {
             return fingerprint_check(entry, &actual);
         }
 
-        if self.find_trusted_entry_by_fingerprint(port, &actual).is_some() {
+        if self
+            .find_trusted_entry_by_fingerprint(port, &actual)
+            .is_some()
+        {
             return HostKeyCheckResult::Trust;
         }
 
-        if self.find_matching_hashed_entry(host, port, &actual).is_some() {
+        if self
+            .find_matching_hashed_entry(host, port, &actual)
+            .is_some()
+        {
             return HostKeyCheckResult::Trust;
         }
 
@@ -299,15 +318,15 @@ impl KnownHostsManager {
                         })
                         .collect();
 
-                    if self.merge_imported_entry(
-                        &primary_host,
-                        primary_port,
-                        &fingerprint,
-                        &algorithm,
+                    if self.merge_imported_entry(ImportedPlainEntry {
+                        host: primary_host,
+                        port: primary_port,
+                        fingerprint_sha256: fingerprint,
+                        algorithm,
                         public_key_openssh,
                         aliases,
                         marker,
-                    ) {
+                    }) {
                         merged += 1;
                     }
                 }
@@ -397,11 +416,11 @@ impl KnownHostsManager {
     }
 
     fn is_revoked(&self, host: &str, port: u16, fingerprint: &str) -> bool {
-        if self
-            .entries
-            .values()
-            .any(|entry| entry.marker == Some(KnownHostMarker::Revoked) && entry.fingerprint_sha256 == fingerprint && entry_matches_host(entry, host, port))
-        {
+        if self.entries.values().any(|entry| {
+            entry.marker == Some(KnownHostMarker::Revoked)
+                && entry.fingerprint_sha256 == fingerprint
+                && entry_matches_host(entry, host, port)
+        }) {
             return true;
         }
 
@@ -450,32 +469,33 @@ impl KnownHostsManager {
         true
     }
 
-    fn merge_imported_entry(
-        &mut self,
-        host: &str,
-        port: u16,
-        fingerprint: &str,
-        algorithm: &str,
-        public_key_openssh: Option<String>,
-        aliases: Vec<HostAlias>,
-        marker: Option<KnownHostMarker>,
-    ) -> bool {
+    fn merge_imported_entry(&mut self, imported: ImportedPlainEntry) -> bool {
+        let ImportedPlainEntry {
+            host,
+            port,
+            fingerprint_sha256,
+            algorithm,
+            public_key_openssh,
+            aliases,
+            marker,
+        } = imported;
+
         if marker == Some(KnownHostMarker::Revoked) {
-            if self
-                .entries
-                .values()
-                .any(|entry| entry.marker == Some(KnownHostMarker::Revoked) && entry_matches_host(entry, host, port) && entry.fingerprint_sha256 == fingerprint)
-            {
+            if self.entries.values().any(|entry| {
+                entry.marker == Some(KnownHostMarker::Revoked)
+                    && entry_matches_host(entry, &host, port)
+                    && entry.fingerprint_sha256 == fingerprint_sha256
+            }) {
                 return false;
             }
 
             self.entries.insert(
-                entry_key(host, port),
+                entry_key(&host, port),
                 KnownHostEntry {
-                    host: host.to_string(),
+                    host,
                     port,
-                    fingerprint_sha256: fingerprint.to_string(),
-                    algorithm: algorithm.to_string(),
+                    fingerprint_sha256,
+                    algorithm,
                     aliases,
                     public_key_openssh,
                     marker: Some(KnownHostMarker::Revoked),
@@ -487,19 +507,19 @@ impl KnownHostsManager {
         if marker == Some(KnownHostMarker::CertAuthority) {
             if self.entries.values().any(|entry| {
                 entry.marker == Some(KnownHostMarker::CertAuthority)
-                    && entry_matches_host(entry, host, port)
-                    && entry.fingerprint_sha256 == fingerprint
+                    && entry_matches_host(entry, &host, port)
+                    && entry.fingerprint_sha256 == fingerprint_sha256
             }) {
                 return false;
             }
 
             self.entries.insert(
-                entry_key(host, port),
+                entry_key(&host, port),
                 KnownHostEntry {
-                    host: host.to_string(),
+                    host,
                     port,
-                    fingerprint_sha256: fingerprint.to_string(),
-                    algorithm: algorithm.to_string(),
+                    fingerprint_sha256,
+                    algorithm,
                     aliases,
                     public_key_openssh,
                     marker: Some(KnownHostMarker::CertAuthority),
@@ -508,17 +528,16 @@ impl KnownHostsManager {
             return true;
         }
 
-        if let Some(canonical_key) = self.find_canonical_key_by_fingerprint(port, fingerprint) {
+        if let Some(canonical_key) =
+            self.find_canonical_key_by_fingerprint(port, &fingerprint_sha256)
+        {
             let entry = self
                 .entries
                 .get_mut(&canonical_key)
                 .expect("canonical key must exist");
 
-            if !entry_matches_host(entry, host, port) {
-                entry.aliases.push(HostAlias {
-                    host: host.to_string(),
-                    port,
-                });
+            if !entry_matches_host(entry, &host, port) {
+                entry.aliases.push(HostAlias { host, port });
             }
 
             for alias in aliases {
@@ -534,7 +553,7 @@ impl KnownHostsManager {
             return false;
         }
 
-        if let Some(existing) = self.find_entry(host, port) {
+        if let Some(existing) = self.find_entry(&host, port) {
             if existing.marker == Some(KnownHostMarker::Revoked)
                 || existing.marker == Some(KnownHostMarker::CertAuthority)
             {
@@ -544,7 +563,7 @@ impl KnownHostsManager {
             let canonical_key = entry_key(&existing.host, existing.port);
             let entry = self.entries.get_mut(&canonical_key).expect("entry exists");
 
-            if entry.fingerprint_sha256 != fingerprint {
+            if entry.fingerprint_sha256 != fingerprint_sha256 {
                 return false;
             }
 
@@ -562,12 +581,12 @@ impl KnownHostsManager {
         }
 
         self.entries.insert(
-            entry_key(host, port),
+            entry_key(&host, port),
             KnownHostEntry {
-                host: host.to_string(),
+                host,
                 port,
-                fingerprint_sha256: fingerprint.to_string(),
-                algorithm: algorithm.to_string(),
+                fingerprint_sha256,
+                algorithm,
                 aliases,
                 public_key_openssh,
                 marker: None,
@@ -936,14 +955,10 @@ mod tests {
         manager
             .import_openssh(&{
                 let openssh_path = dir.path().join("known_hosts");
-                let salt_b64 = base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    salt,
-                );
-                let hash_b64 = base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    hash,
-                );
+                let salt_b64 =
+                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, salt);
+                let hash_b64 =
+                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, hash);
                 fs::write(
                     &openssh_path,
                     format!("|1|{salt_b64}|{hash_b64} {openssh_key}\n"),

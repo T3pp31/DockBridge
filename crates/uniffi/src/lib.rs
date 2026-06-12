@@ -224,8 +224,7 @@ impl DockBridgeClient {
             transfer_chunk_size_bytes,
             known_hosts_path,
             openssh_known_hosts_path,
-            merge_openssh_known_hosts_on_connect: app_config
-                .merge_openssh_known_hosts_on_connect,
+            merge_openssh_known_hosts_on_connect: app_config.merge_openssh_known_hosts_on_connect,
         };
         let known_hosts_manager =
             KnownHostsManager::load(config.known_hosts_path()).map_err(map_error)?;
