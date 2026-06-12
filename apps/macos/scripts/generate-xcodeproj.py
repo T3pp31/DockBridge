@@ -343,11 +343,13 @@ def fmt_settings(settings: dict) -> str:
 
 
 lines.append("\n/* Begin XCBuildConfiguration section */")
+release_target_settings = {**target_settings, "ENABLE_HARDENED_RUNTIME": "YES"}
+
 for cfg_id, name, base, extra in [
     (DEBUG_CONFIG, "Debug", common_debug, {}),
     (RELEASE_CONFIG, "Release", common_release, {}),
     (DEBUG_TARGET_CONFIG, "Debug", common_debug, target_settings),
-    (RELEASE_TARGET_CONFIG, "Release", common_release, target_settings),
+    (RELEASE_TARGET_CONFIG, "Release", common_release, release_target_settings),
 ]:
     merged = {**base, **extra}
     lines.append(f"\t\t{cfg_id} /* {name} */ = {{")

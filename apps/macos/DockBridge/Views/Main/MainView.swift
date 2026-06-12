@@ -76,8 +76,7 @@ struct MainView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(config: settingsConfig) { config in
                 AppSettingsService.shared.saveConfig(config)
-                viewModel.localPath = URL(fileURLWithPath: config.defaultLocalPath, isDirectory: true)
-                viewModel.reloadLocal()
+                viewModel.applyDefaultLocalConfig(config)
                 showSettings = false
             }
         }

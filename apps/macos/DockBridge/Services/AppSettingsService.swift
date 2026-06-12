@@ -21,6 +21,7 @@ enum AppSettingsKeys {
     static let transferRetryCount = "transferRetryCount"
     static let transferChunkSizeBytes = "transferChunkSizeBytes"
     static let defaultLocalPath = "defaultLocalPath"
+    static let defaultLocalBookmark = "defaultLocalBookmark"
     static let confirmBeforeDelete = "confirmBeforeDelete"
     static let showHiddenFiles = "showHiddenFiles"
 }
@@ -64,6 +65,7 @@ final class AppSettingsService: @unchecked Sendable {
             ),
             defaultLocalPath: defaults.string(forKey: AppSettingsKeys.defaultLocalPath)
                 ?? AppConfig.default.defaultLocalPath,
+            defaultLocalBookmark: defaults.data(forKey: AppSettingsKeys.defaultLocalBookmark),
             confirmBeforeDelete: defaults.bool(forKey: AppSettingsKeys.confirmBeforeDelete),
             showHiddenFiles: defaults.bool(forKey: AppSettingsKeys.showHiddenFiles)
         )
@@ -75,6 +77,7 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(Int(config.transferRetryCount), forKey: AppSettingsKeys.transferRetryCount)
         defaults.set(Int(config.transferChunkSizeBytes), forKey: AppSettingsKeys.transferChunkSizeBytes)
         defaults.set(config.defaultLocalPath, forKey: AppSettingsKeys.defaultLocalPath)
+        defaults.set(config.defaultLocalBookmark, forKey: AppSettingsKeys.defaultLocalBookmark)
         defaults.set(config.confirmBeforeDelete, forKey: AppSettingsKeys.confirmBeforeDelete)
         defaults.set(config.showHiddenFiles, forKey: AppSettingsKeys.showHiddenFiles)
     }

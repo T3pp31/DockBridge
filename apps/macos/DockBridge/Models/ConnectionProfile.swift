@@ -8,6 +8,7 @@ struct ConnectionProfile: Identifiable, Codable, Equatable, Sendable {
     var username: String
     var authType: AuthType
     var privateKeyPath: String?
+    var privateKeyBookmark: Data?
     var lastConnectedAt: Date?
 
     init(
@@ -18,6 +19,7 @@ struct ConnectionProfile: Identifiable, Codable, Equatable, Sendable {
         username: String,
         authType: AuthType = .password,
         privateKeyPath: String? = nil,
+        privateKeyBookmark: Data? = nil,
         lastConnectedAt: Date? = nil
     ) {
         self.id = id
@@ -27,6 +29,7 @@ struct ConnectionProfile: Identifiable, Codable, Equatable, Sendable {
         self.username = username
         self.authType = authType
         self.privateKeyPath = privateKeyPath
+        self.privateKeyBookmark = privateKeyBookmark
         self.lastConnectedAt = lastConnectedAt
     }
 

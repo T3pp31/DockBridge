@@ -6,6 +6,7 @@ struct AppConfig: Codable, Equatable, Sendable {
     var transferRetryCount: UInt32
     var transferChunkSizeBytes: UInt64
     var defaultLocalPath: String
+    var defaultLocalBookmark: Data?
     var confirmBeforeDelete: Bool
     var showHiddenFiles: Bool
 
@@ -14,7 +15,8 @@ struct AppConfig: Codable, Equatable, Sendable {
         sessionHealthCheckIntervalSecs: 10,
         transferRetryCount: 3,
         transferChunkSizeBytes: 262_144,
-        defaultLocalPath: FileManager.default.homeDirectoryForCurrentUser.path,
+        defaultLocalPath: DefaultLocalPathResolver.containerHomeURL().path,
+        defaultLocalBookmark: nil,
         confirmBeforeDelete: true,
         showHiddenFiles: false
     )

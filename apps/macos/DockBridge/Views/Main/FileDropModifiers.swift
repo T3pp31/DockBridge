@@ -87,8 +87,18 @@ struct RemotePaneDropModifier: ViewModifier {
         guard !validURLs.isEmpty else { return false }
 
         return DropOperationSync.run { @MainActor in
+            var scopedURLs: [URL] = []
+            defer {
+                for url in scopedURLs {
+                    SecurityScopedBookmarkService.shared.stopAccessing(url)
+                }
+            }
+
             var anySucceeded = false
             for url in validURLs {
+                if SecurityScopedBookmarkService.shared.beginAccessing(url) {
+                    scopedURLs.append(url)
+                }
                 if await viewModel.upload(
                     localURL: url,
                     toRemoteDirectory: viewModel.remotePath
