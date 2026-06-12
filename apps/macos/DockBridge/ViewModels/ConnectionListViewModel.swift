@@ -6,12 +6,15 @@ final class ConnectionListViewModel: ObservableObject {
     @Published var selectedProfileID: UUID?
     @Published var errorMessage: String?
     @Published var showRootWarning = false
+    @Published var showEndpointChangeWarning = false
     @Published var pendingConnectProfile: ConnectionProfile?
+    @Published var pendingEndpointChange: ProfileEndpointChange?
 
     private let store: ConnectionStore
     private let keychain: KeychainService
     private let bridge: RustBridgeService
     private let bookmarkService: SecurityScopedBookmarkService
+    private var pendingEndpointChanges: [ProfileEndpointChange] = []
 
     var isConnected: Bool { bridge.isConnected }
     var connectionStatus: ConnectionStatus { bridge.connectionStatus }
@@ -31,9 +34,14 @@ final class ConnectionListViewModel: ObservableObject {
 
     func load() {
         do {
-            profiles = try store.loadProfiles()
+            let result = try store.loadProfilesWithEndpointCheck()
+            profiles = result.profiles
             if selectedProfileID == nil {
                 selectedProfileID = profiles.first?.id
+            }
+            if !result.endpointChanges.isEmpty {
+                pendingEndpointChanges = result.endpointChanges
+                presentNextEndpointChangeWarning()
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -82,12 +90,73 @@ final class ConnectionListViewModel: ObservableObject {
     }
 
     func requestConnect(profile: ConnectionProfile) {
+        do {
+            if let change = try store.endpointChange(for: profile) {
+                pendingConnectProfile = profile
+                pendingEndpointChange = change
+                showEndpointChangeWarning = true
+                return
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+
         if profile.isRootUser {
             pendingConnectProfile = profile
             showRootWarning = true
         } else {
             Task { await connect(profile: profile) }
         }
+    }
+
+    func acceptEndpointChange() {
+        guard let change = pendingEndpointChange else { return }
+
+        do {
+            try store.acceptEndpointChange(change)
+            pendingEndpointChanges.removeAll { $0.id == change.id }
+            pendingEndpointChange = nil
+
+            if pendingEndpointChanges.isEmpty {
+                showEndpointChangeWarning = false
+            } else {
+                presentNextEndpointChangeWarning()
+                return
+            }
+
+            if let profile = pendingConnectProfile {
+                pendingConnectProfile = nil
+                requestConnect(profile: profile)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func restoreTrustedEndpoint() {
+        guard let change = pendingEndpointChange else { return }
+
+        do {
+            profiles = try store.restoreTrustedEndpoint(for: change)
+            pendingEndpointChanges.removeAll { $0.id == change.id }
+            pendingEndpointChange = nil
+            pendingConnectProfile = nil
+
+            if pendingEndpointChanges.isEmpty {
+                showEndpointChangeWarning = false
+            } else {
+                presentNextEndpointChangeWarning()
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func presentNextEndpointChangeWarning() {
+        guard let next = pendingEndpointChanges.first else { return }
+        pendingEndpointChange = next
+        showEndpointChangeWarning = true
     }
 
     func confirmRootConnect() {

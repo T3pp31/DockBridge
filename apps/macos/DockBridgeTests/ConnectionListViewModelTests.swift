@@ -54,6 +54,53 @@ final class ConnectionListViewModelTests: XCTestCase {
         XCTAssertEqual(try keychain.loadPassphrase(account: account), "key-passphrase")
     }
 
+    func testLoadShowsEndpointChangeWarningForTamperedProfile() throws {
+        let profileID = UUID()
+        let profile = ConnectionProfile(
+            id: profileID,
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+
+        try store.saveProfiles([profile])
+        viewModel.load()
+
+        var tampered = profile
+        tampered.host = "evil.example.com"
+        try store.saveProfiles([tampered], updateTrust: false)
+
+        viewModel.load()
+
+        XCTAssertTrue(viewModel.showEndpointChangeWarning)
+        XCTAssertEqual(viewModel.pendingEndpointChange?.current.host, "evil.example.com")
+        XCTAssertEqual(viewModel.pendingEndpointChange?.trusted.host, "example.com")
+    }
+
+    func testAcceptEndpointChangeUpdatesTrustAndClearsWarning() throws {
+        let profileID = UUID()
+        let profile = ConnectionProfile(
+            id: profileID,
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+
+        try store.saveProfiles([profile])
+        _ = try store.loadProfilesWithEndpointCheck()
+
+        var tampered = profile
+        tampered.host = "evil.example.com"
+        try store.saveProfiles([tampered], updateTrust: false)
+        viewModel.load()
+
+        viewModel.acceptEndpointChange()
+
+        XCTAssertFalse(viewModel.showEndpointChangeWarning)
+        XCTAssertNil(viewModel.pendingEndpointChange)
+        XCTAssertTrue(try store.loadProfilesWithEndpointCheck().endpointChanges.isEmpty)
+    }
+
     func testSaveDeletesPassphraseWhenSwitchingToPassword() throws {
         let profileID = UUID()
         var profile = ConnectionProfile(
