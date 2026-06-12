@@ -12,6 +12,8 @@
 - Private key files are referenced by path, never copied into the app bundle
 - No passwords, keys, or passphrases in logs
 - Rust secrets use `Debug` redaction and `zeroize` where applicable
+- UniFFI credentials use a `SecretCredential` custom type that zeroizes on drop after lift
+- Swift clears password/passphrase and `ConnectionProfileRecord` credentials after connect
 - Delete confirmation for destructive operations
 - Warning when connecting as root
 

@@ -52,8 +52,17 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
         connectionStatus = .connecting(endpoint: profile.endpointLabel)
         lastDisconnectReason = nil
 
+        var password = password
+        var passphrase = passphrase
+        defer {
+            SensitiveString.clear(&password)
+            SensitiveString.clear(&passphrase)
+        }
+
         do {
-            let record = profile.toRecord(password: password, passphrase: passphrase)
+            var record = profile.toRecord(password: password, passphrase: passphrase)
+            defer { record.clearCredentials() }
+
             let newSessionId = try await Task.detached(priority: .userInitiated) {
                 try client.connect(profile: record)
             }.value

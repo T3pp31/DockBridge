@@ -10,4 +10,26 @@ struct SensitiveString: Equatable {
     mutating func clear() {
         text = ""
     }
+
+    static func clear(_ value: inout String) {
+        value = ""
+    }
+
+    static func clear(_ value: inout String?) {
+        if var current = value {
+            current = ""
+        }
+        value = nil
+    }
+}
+
+extension ConnectionProfileRecord {
+    mutating func clearCredentials() {
+        switch authType {
+        case .password:
+            authType = .password(password: "")
+        case let .privateKey(keyPath, _):
+            authType = .privateKey(keyPath: keyPath, passphrase: nil)
+        }
+    }
 }
