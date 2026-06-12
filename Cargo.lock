@@ -609,6 +609,7 @@ dependencies = [
  "dockbridge-core",
  "tokio",
  "uniffi",
+ "zeroize",
 ]
 
 [[package]]

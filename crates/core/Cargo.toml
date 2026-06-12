@@ -25,5 +25,5 @@ zeroize.workspace = true
 
 [dev-dependencies]
 rand = "0.8"
-ssh-key = "0.6"
+ssh-key.workspace = true
 tempfile = "3"
