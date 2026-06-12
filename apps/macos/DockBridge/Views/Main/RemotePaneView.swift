@@ -77,6 +77,9 @@ struct RemotePaneView: View {
             Button("Rename") {
                 Task { await viewModel.commitRename() }
             }
+            .disabled(!RemotePath.isValidEntryName(
+                viewModel.renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+            ))
         }
         .alert("New Folder", isPresented: $viewModel.showMkdirPrompt) {
             TextField("Folder name", text: $viewModel.mkdirName)
@@ -86,6 +89,9 @@ struct RemotePaneView: View {
             Button("Create") {
                 Task { await viewModel.commitMkdir() }
             }
+            .disabled(!RemotePath.isValidEntryName(
+                viewModel.mkdirName.trimmingCharacters(in: .whitespacesAndNewlines)
+            ))
         }
     }
 

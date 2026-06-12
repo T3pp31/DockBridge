@@ -8,7 +8,7 @@ use russh::keys::PublicKey;
 use russh_keys::decode_secret_key;
 use russh_sftp::client::SftpSession;
 use tokio::sync::Mutex;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::config::AppConfig;
 use crate::error::{AuthError, ConnectionError, SecurityError, SftpError};
@@ -303,19 +303,22 @@ async fn authenticate(
             key_path,
             passphrase,
         } => {
-            let key_contents = std::fs::read_to_string(key_path).map_err(|err| {
-                AuthError::PrivateKeyLoadFailed {
-                    path: key_path.display().to_string(),
-                    message: err.to_string(),
-                }
-            })?;
+            let key_contents =
+                Zeroizing::new(std::fs::read_to_string(key_path).map_err(|err| {
+                    AuthError::PrivateKeyLoadFailed {
+                        path: key_path.display().to_string(),
+                        message: err.to_string(),
+                    }
+                })?);
             let passphrase = passphrase.as_ref().map(|value| value.expose());
-            let private_key = decode_secret_key(&key_contents, passphrase).map_err(|err| {
-                AuthError::PrivateKeyLoadFailed {
-                    path: key_path.display().to_string(),
-                    message: err.to_string(),
-                }
-            })?;
+            let private_key =
+                decode_secret_key(key_contents.as_str(), passphrase).map_err(|err| {
+                    AuthError::PrivateKeyLoadFailed {
+                        path: key_path.display().to_string(),
+                        message: err.to_string(),
+                    }
+                })?;
+            drop(key_contents);
             handle
                 .authenticate_publickey(username, Arc::new(private_key))
                 .await

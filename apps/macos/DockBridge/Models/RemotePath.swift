@@ -1,6 +1,25 @@
 import Foundation
 
+enum RemoteEntryNameError: LocalizedError {
+    case invalidCharacters
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidCharacters:
+            return "The name cannot contain '/', '..', or null characters."
+        }
+    }
+}
+
 enum RemotePath {
+    static func isValidEntryName(_ name: String) -> Bool {
+        guard !name.isEmpty else { return false }
+        if name.contains("/") { return false }
+        if name.contains("\0") { return false }
+        if name.contains("..") { return false }
+        return true
+    }
+
     static func join(_ base: String, _ name: String) -> String {
         let trimmedName = name.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 

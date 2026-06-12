@@ -37,6 +37,68 @@ For hardened deployments, build the CLI without the flag:
 cargo build -p dockbridge-cli --release --features disable-cli-password
 ```
 
+## Connection profiles (`profiles.json`)
+
+### Storage location and contents
+
+Connection profiles are stored as JSON at:
+
+`~/Library/Application Support/DockBridge/profiles.json`
+
+The file is written with owner-only permissions (`0600`) on every save and load. Passwords and private-key passphrases are **not** stored in this file; they live in the macOS Keychain only.
+
+Fields persisted in plaintext JSON include:
+
+| Field | Sensitivity |
+|-------|-------------|
+| `name`, `host`, `port`, `username` | Infrastructure mapping |
+| `authType` | Reveals authentication method per host |
+| `privateKeyPath` | Path to a private key on disk |
+| `privateKeyBookmark` | Security-scoped bookmark for sandboxed key access |
+| `lastConnectedAt` | Usage metadata |
+
+### Plaintext storage risk
+
+Because profile metadata is not encrypted at the application layer, anyone who can read `profiles.json` can learn which hosts you connect to, under which accounts, and where private keys are referenced. That does not expose passwords or passphrases directly, but it can leak enough context for targeted follow-on attacks (for example, stealing a referenced key file or phishing a specific account).
+
+Relevant classifications:
+
+- [OWASP A02: Cryptographic Failures](https://owasp.org/Top10/A02_2021-Cryptographic_Failures/)
+- [CWE-311: Missing Encryption of Sensitive Data](https://cwe.mitre.org/data/definitions/311.html)
+
+Severity in DockBridge’s threat model: **Low**, assuming the mitigations below are in place.
+
+### Current mitigations
+
+- **File permissions (`0600`)** — only the owning user can read or write `profiles.json`.
+- **App Sandbox** — the app cannot read arbitrary paths; private keys require explicit user selection.
+- **Keychain for secrets** — passwords and passphrases never appear in `profiles.json` or logs.
+- **No secret material in logs** — connection logs must not echo credentials or key contents.
+
+`0600` protects against other OS users and unprivileged processes. It does **not** protect against:
+
+- Malware running as the same user
+- Physical access to an unlocked Mac
+- Disk images or backups copied while the volume is decrypted
+
+### FileVault prerequisite
+
+DockBridge assumes the boot volume is protected with **FileVault** (or equivalent full-disk encryption). FileVault encrypts data at rest so that `profiles.json`, Keychain items, and private key files are not readable from a stolen drive while the Mac is powered off.
+
+Without full-disk encryption, `0600` and App Sandbox reduce casual exposure but do not prevent offline disk extraction. Operators in shared, travel, or compliance-sensitive environments should enable FileVault before storing production connection profiles.
+
+### Encrypted store migration (future consideration)
+
+For environments that require stronger confidentiality than plaintext JSON plus OS-level controls, these approaches are under consideration for a future release:
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Keychain-backed profiles** — store each profile (or profile blob) as a Keychain generic-password item | OS-managed encryption; reuses existing `KeychainService` patterns | Harder to inspect or bulk-edit; migration from JSON; per-item Keychain UX limits |
+| **Encrypted JSON file** — AES-GCM envelope encryption with a master key held in Keychain | Keeps a single portable file; familiar backup/restore shape | Key rotation and migration complexity; must handle corrupt ciphertext gracefully |
+| **Status quo** — plaintext JSON with `0600` + Sandbox + FileVault | Simple, debuggable, sufficient for typical developer workstations | Metadata readable by same-user malware or forensic disk access on an unlocked machine |
+
+No migration is planned for v0.1. See [roadmap.md](roadmap.md) for tracking. Implementation would include a one-time upgrade path from existing `profiles.json` files and documentation for operators who export or back up profiles.
+
 ## v0.2 planned
 
 - OpenSSH `~/.ssh/known_hosts` compatibility

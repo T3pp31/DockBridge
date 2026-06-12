@@ -17,6 +17,7 @@
 - Auto-upload on save
 - Drag and drop
 - chmod, hidden files, symlinks
+- Evaluate encrypted connection-profile storage (Keychain-backed items or AES-GCM file envelope) for high-security deployments — see [security.md](security.md#encrypted-store-migration-future-consideration)
 
 ## v0.3
 
