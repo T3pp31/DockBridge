@@ -2,10 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use russh::client::{self, Handle};
 use russh::keys::PublicKey;
-use russh_keys::decode_secret_key;
+use russh::keys::{decode_secret_key, PrivateKeyWithHashAlg};
 use russh_sftp::client::SftpSession;
 use tokio::sync::Mutex;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -130,7 +129,6 @@ struct SshClientHandler {
     prompt: Arc<dyn HostKeyPrompt>,
 }
 
-#[async_trait]
 impl client::Handler for SshClientHandler {
     type Error = ConnectionError;
 
@@ -296,6 +294,7 @@ async fn authenticate(
                 port,
                 message: err.to_string(),
             })
+            .map(|result| result.success())
             .map_err(Into::into),
         AuthType::PrivateKey {
             key_path,
@@ -317,14 +316,23 @@ async fn authenticate(
                     }
                 })?;
             drop(key_contents);
+            let rsa_hash = handle.best_supported_rsa_hash().await.map_err(|err| {
+                ConnectionError::ConnectFailed {
+                    host: host.to_string(),
+                    port,
+                    message: err.to_string(),
+                }
+            })?;
+            let signing_key = PrivateKeyWithHashAlg::new(Arc::new(private_key), rsa_hash.flatten());
             handle
-                .authenticate_publickey(username, Arc::new(private_key))
+                .authenticate_publickey(username, signing_key)
                 .await
                 .map_err(|err| ConnectionError::ConnectFailed {
                     host: host.to_string(),
                     port,
                     message: err.to_string(),
                 })
+                .map(|result| result.success())
                 .map_err(Into::into)
         }
     }

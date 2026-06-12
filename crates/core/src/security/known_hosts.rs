@@ -482,13 +482,13 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core::OsRng;
+    use rand::rng;
     use russh::keys::PrivateKey;
     use ssh_key::Algorithm;
     use tempfile::tempdir;
 
     fn test_public_key() -> PublicKey {
-        PrivateKey::random(&mut OsRng, Algorithm::Ed25519)
+        PrivateKey::random(&mut rng(), Algorithm::Ed25519)
             .unwrap()
             .public_key()
             .clone()
