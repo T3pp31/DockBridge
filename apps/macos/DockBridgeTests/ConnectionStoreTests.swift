@@ -42,6 +42,53 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertEqual(permissions, Int(0o600))
     }
 
+    func testLoadProfilesWithEndpointCheckDetectsTamperedHost() throws {
+        let profileID = UUID()
+        let profile = ConnectionProfile(
+            id: profileID,
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+
+        try store.saveProfiles([profile])
+        _ = try store.loadProfilesWithEndpointCheck()
+
+        var tampered = profile
+        tampered.host = "evil.example.com"
+        try store.saveProfiles([tampered], updateTrust: false)
+
+        let result = try store.loadProfilesWithEndpointCheck()
+
+        XCTAssertEqual(result.profiles.first?.host, "evil.example.com")
+        XCTAssertEqual(result.endpointChanges.count, 1)
+        XCTAssertEqual(result.endpointChanges[0].trusted.host, "example.com")
+        XCTAssertEqual(result.endpointChanges[0].current.host, "evil.example.com")
+    }
+
+    func testRestoreTrustedEndpointRevertsTamperedProfile() throws {
+        let profileID = UUID()
+        let profile = ConnectionProfile(
+            id: profileID,
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+
+        try store.saveProfiles([profile])
+        _ = try store.loadProfilesWithEndpointCheck()
+
+        var tampered = profile
+        tampered.host = "evil.example.com"
+        try store.saveProfiles([tampered], updateTrust: false)
+
+        let change = try XCTUnwrap(try store.loadProfilesWithEndpointCheck().endpointChanges.first)
+        let restored = try store.restoreTrustedEndpoint(for: change)
+
+        XCTAssertEqual(restored.first?.host, "example.com")
+        XCTAssertTrue(try store.loadProfilesWithEndpointCheck().endpointChanges.isEmpty)
+    }
+
     private var storeProfilesPath: String {
         baseDirectory.appendingPathComponent("profiles.json", isDirectory: false).path
     }

@@ -19,15 +19,14 @@ base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
-ssh-key = "0.6"
+sha2 = "0.11"
+ssh-key = "=0.7.0-rc.10"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
-toml = "0.8"
+toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zeroize = { version = "1", features = ["derive"] }
-russh = "0.61"
-russh-keys = "0.48"
+russh = { version = "0.61", features = ["async-trait", "des"] }
 russh-sftp = "2.3"
-uniffi = { version = "0.29", features = ["cli"] }
+uniffi = { version = "0.31", features = ["cli"] }

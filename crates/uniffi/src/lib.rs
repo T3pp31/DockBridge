@@ -14,8 +14,30 @@ use dockbridge_core::{
 };
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 uniffi::include_scaffolding!("dockbridge_uniffi");
+
+/// Credential received across the FFI boundary; zeroized on drop.
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct SecretCredential(String);
+
+impl SecretCredential {
+    fn into_inner(mut self) -> String {
+        std::mem::take(&mut self.0)
+    }
+}
+
+impl std::fmt::Debug for SecretCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+uniffi::custom_type!(SecretCredential, String, {
+    lower: |v| v.0.clone(),
+    try_lift: |v| Ok(SecretCredential(v)),
+});
 
 static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
@@ -46,11 +68,11 @@ pub struct AppConfigRecord {
 #[derive(uniffi::Enum)]
 pub enum AuthTypeRecord {
     Password {
-        password: String,
+        password: SecretCredential,
     },
     PrivateKey {
         key_path: String,
-        passphrase: Option<String>,
+        passphrase: Option<SecretCredential>,
     },
 }
 
@@ -486,14 +508,14 @@ impl DockBridgeClient {
 fn to_core_profile(profile: ConnectionProfileRecord) -> ConnectionProfile {
     let auth = match profile.auth_type {
         AuthTypeRecord::Password { password } => AuthType::Password {
-            password: SecretPassword::new(password),
+            password: SecretPassword::new(password.into_inner()),
         },
         AuthTypeRecord::PrivateKey {
             key_path,
             passphrase,
         } => AuthType::PrivateKey {
             key_path: PathBuf::from(key_path),
-            passphrase: passphrase.map(SecretPassword::new),
+            passphrase: passphrase.map(|value| SecretPassword::new(value.into_inner())),
         },
     };
 

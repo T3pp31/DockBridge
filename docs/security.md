@@ -5,11 +5,15 @@
 - First-connection host key fingerprint display (SHA256)
 - User accept/reject for unknown host keys
 - Trusted keys stored in DockBridge `known_hosts.json` (0600)
+- Hostname/IP alias normalization: same port and fingerprint are trusted across identifiers (OpenSSH-style comma-separated hosts)
+- OpenSSH `known_hosts` import/export helpers on `KnownHostsManager` (hashed entries skipped)
 - Connection blocked on host key mismatch
 - Passwords and key passphrases stored in Keychain only
 - Private key files are referenced by path, never copied into the app bundle
 - No passwords, keys, or passphrases in logs
 - Rust secrets use `Debug` redaction and `zeroize` where applicable
+- UniFFI credentials use a `SecretCredential` custom type that zeroizes on drop after lift
+- Swift clears password/passphrase and `ConnectionProfileRecord` credentials after connect
 - Delete confirmation for destructive operations
 - Warning when connecting as root
 
@@ -101,7 +105,9 @@ No migration is planned for v0.1. See [roadmap.md](roadmap.md) for tracking. Imp
 
 ## v0.2 planned
 
-- OpenSSH `~/.ssh/known_hosts` compatibility
+- Automatic merge with `~/.ssh/known_hosts` on connect
+- Hashed host entry (`|1|...`) import and matching
+- `@revoked` / `@cert-authority` marker handling
 - Stricter host key change warnings
 
 ## macOS App Sandbox
