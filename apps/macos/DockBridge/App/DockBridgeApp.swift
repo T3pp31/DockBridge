@@ -8,6 +8,10 @@ struct DockBridgeApp: App {
         WindowGroup {
             MainView()
         }
+        .defaultSize(
+            width: WindowLayout.mainMinWidth,
+            height: WindowLayout.mainMinHeight
+        )
         .commands {
             CommandGroup(replacing: .newItem) {}
         }

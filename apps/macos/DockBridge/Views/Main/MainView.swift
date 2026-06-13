@@ -31,7 +31,7 @@ struct MainView: View {
                 showNewConnection: $showNewConnection,
                 editingProfile: $editingProfile
             )
-            .frame(minWidth: 240)
+            .frame(minWidth: WindowLayout.sidebarMinWidth)
         } detail: {
             VStack(spacing: 0) {
                 ConnectionStatusBar(status: bridge.connectionStatus)
@@ -40,17 +40,36 @@ struct MainView: View {
 
                 HSplitView {
                     LocalPaneView(viewModel: viewModel)
-                        .frame(minWidth: 280)
+                        .frame(
+                            minWidth: WindowLayout.paneMinWidth,
+                            maxWidth: .infinity,
+                            minHeight: 0,
+                            maxHeight: .infinity
+                        )
+                        .layoutPriority(1)
                     RemotePaneView(viewModel: viewModel)
-                        .frame(minWidth: 280)
+                        .frame(
+                            minWidth: WindowLayout.paneMinWidth,
+                            maxWidth: .infinity,
+                            minHeight: 0,
+                            maxHeight: .infinity
+                        )
+                        .layoutPriority(1)
                 }
-                .frame(maxHeight: .infinity)
+                .layoutPriority(1)
+                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
 
                 Divider()
 
                 TransferQueueView(viewModel: transferQueue)
-                    .frame(minHeight: 160, idealHeight: 200, maxHeight: 260)
+                    .frame(
+                        minHeight: WindowLayout.transferQueueMinHeight,
+                        idealHeight: WindowLayout.transferQueueIdealHeight
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(0)
             }
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         }
         .navigationTitle("DockBridge")
         .toolbar {
@@ -102,6 +121,9 @@ struct MainView: View {
             Task { await viewModel.onConnectionChanged(isConnected: isConnected) }
         }
         .errorAlert(message: $viewModel.errorMessage)
-        .frame(minWidth: 960, minHeight: 640)
+        .windowMinSize(
+            width: WindowLayout.mainMinWidth,
+            height: WindowLayout.mainMinHeight
+        )
     }
 }

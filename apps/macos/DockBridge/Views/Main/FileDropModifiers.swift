@@ -159,6 +159,8 @@ struct LocalFileTable: View {
                     .draggable(LocalFileDragPayload(url: item.url, isDirectory: item.isDirectory))
             }
         }
+        .containerRelativeFrame([.horizontal, .vertical])
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -188,6 +190,8 @@ struct RemoteFileTable: View {
                     .draggable(RemoteFileDragPayload(path: item.path, isDirectory: item.isDirectory))
             }
         }
+        .containerRelativeFrame([.horizontal, .vertical])
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func remoteSizeLabel(for item: RemoteFileRecord) -> String {

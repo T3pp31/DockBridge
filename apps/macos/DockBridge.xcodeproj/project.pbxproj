@@ -51,6 +51,9 @@
 		C0NN3CT10N5T4TU5B4R1N5RC3 /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */; };
 		C0NN3CT10N5T4TU5M0D3L1N5RC /* ConnectionStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */; };
 		T4BL3C0L7MN8L4Y0U7T1F2B3 /* TableColumnLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */; };
+		W1ND0WL4Y0U7T1F2B3 /* WindowLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1ND0WL4Y0U7T1F2B4 /* WindowLayout.swift */; };
+		W1ND0WM1NS1Z3M0D1F13 /* WindowMinSizeModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1ND0WM1NS1Z3M0D1F14 /* WindowMinSizeModifier.swift */; };
+		3XP4ND1NGFR4M3F1L3B3 /* ExpandingFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3XP4ND1NGFR4M3F1L3B4 /* ExpandingFrame.swift */; };
 		M4NU4LT3STP14N5V3R1F1C4T5 /* ManualTestPlanVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = M4NU4LT3STP14N5V3R1F1C4T6 /* ManualTestPlanVerificationTests.swift */; };
 		H0STK3YPR0MPTV3R1F1C4T5 /* HostKeyPromptVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = H0STK3YPR0MPTV3R1F1C4T6 /* HostKeyPromptVerificationTests.swift */; };
 		H0STK3YC0NF1RMV13WT3ST5 /* HostKeyConfirmViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = H0STK3YC0NF1RMV13WT3ST6 /* HostKeyConfirmViewTests.swift */; };
@@ -111,6 +114,9 @@
 		C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusBar.swift; sourceTree = "<group>"; };
 		C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatus.swift; sourceTree = "<group>"; };
 		T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableColumnLayout.swift; sourceTree = "<group>"; };
+		W1ND0WL4Y0U7T1F2B4 /* WindowLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowLayout.swift; sourceTree = "<group>"; };
+		W1ND0WM1NS1Z3M0D1F14 /* WindowMinSizeModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowMinSizeModifier.swift; sourceTree = "<group>"; };
+		3XP4ND1NGFR4M3F1L3B4 /* ExpandingFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpandingFrame.swift; sourceTree = "<group>"; };
 		M4NU4LT3STP14N5V3R1F1C4T6 /* ManualTestPlanVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualTestPlanVerificationTests.swift; sourceTree = "<group>"; };
 		H0STK3YPR0MPTV3R1F1C4T6 /* HostKeyPromptVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyPromptVerificationTests.swift; sourceTree = "<group>"; };
 		H0STK3YC0NF1RMV13WT3ST6 /* HostKeyConfirmViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyConfirmViewTests.swift; sourceTree = "<group>"; };
@@ -297,7 +303,10 @@
 			isa = PBXGroup;
 			children = (
 				D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */,
+				3XP4ND1NGFR4M3F1L3B4 /* ExpandingFrame.swift */,
 				T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */,
+				W1ND0WL4Y0U7T1F2B4 /* WindowLayout.swift */,
+				W1ND0WM1NS1Z3M0D1F14 /* WindowMinSizeModifier.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -505,7 +514,10 @@
 				F1D2R3A4G5P6A7Y8L9O0A1D2 /* FileDragPayload.swift in Sources */,
 				F1I2L3E4D5R6O7P8M9O0D1I2F3 /* FileDropModifiers.swift in Sources */,
 				D5R0P0P3R4T10N5Y5N0C1N5RC /* DropOperationSync.swift in Sources */,
+				3XP4ND1NGFR4M3F1L3B3 /* ExpandingFrame.swift in Sources */,
 				T4BL3C0L7MN8L4Y0U7T1F2B3 /* TableColumnLayout.swift in Sources */,
+				W1ND0WL4Y0U7T1F2B3 /* WindowLayout.swift in Sources */,
+				W1ND0WM1NS1Z3M0D1F13 /* WindowMinSizeModifier.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -5,37 +5,41 @@ struct RemotePaneView: View {
     @State private var isDropTargeted = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
             pathBar
 
             if viewModel.bridge.isConnected {
-                RemoteFileTable(viewModel: viewModel)
-                    .contextMenu(forSelectionType: String.self) { ids in
-                        if let item = singleSelectedRemoteItem(from: ids) {
-                            Button("Download") {
-                                viewModel.selectedRemoteItemID = item.id
-                                Task { await viewModel.downloadSelected() }
+                ExpandingFrame { size in
+                    RemoteFileTable(viewModel: viewModel)
+                        .frame(width: size.width, height: size.height)
+                        .contextMenu(forSelectionType: String.self) { ids in
+                            if let item = singleSelectedRemoteItem(from: ids) {
+                                Button("Download") {
+                                    viewModel.selectedRemoteItemID = item.id
+                                    Task { await viewModel.downloadSelected() }
+                                }
+                                Button("Rename") {
+                                    viewModel.beginRename(item: item)
+                                }
+                                Button("Delete", role: .destructive) {
+                                    viewModel.requestDeleteRemote(item: item)
+                                }
                             }
-                            Button("Rename") {
-                                viewModel.beginRename(item: item)
-                            }
-                            Button("Delete", role: .destructive) {
-                                viewModel.requestDeleteRemote(item: item)
+                        } primaryAction: { ids in
+                            if let item = singleSelectedRemoteItem(from: ids) ?? viewModel.selectedRemoteItem,
+                               item.isDirectory {
+                                viewModel.navigateRemote(into: item)
                             }
                         }
-                    } primaryAction: { ids in
-                        if let item = singleSelectedRemoteItem(from: ids) ?? viewModel.selectedRemoteItem,
-                           item.isDirectory {
-                            viewModel.navigateRemote(into: item)
+                        .onKeyPress(.return) {
+                            if let item = viewModel.selectedRemoteItem, item.isDirectory {
+                                viewModel.navigateRemote(into: item)
+                                return .handled
+                            }
+                            return .ignored
                         }
-                    }
-                    .onKeyPress(.return) {
-                        if let item = viewModel.selectedRemoteItem, item.isDirectory {
-                            viewModel.navigateRemote(into: item)
-                            return .handled
-                        }
-                        return .ignored
-                    }
+                }
+                .layoutPriority(1)
             } else {
                 ContentUnavailableView(
                     "リモートホストに接続していません",
@@ -45,7 +49,8 @@ struct RemotePaneView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(12)
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+        .padding(WindowLayout.panePadding)
         .overlay {
             if isDropTargeted {
                 RoundedRectangle(cornerRadius: 8)
