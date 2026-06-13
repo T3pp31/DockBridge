@@ -86,6 +86,49 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         XCTAssertTrue(accepted)
     }
 
+    func testPromptUnknownHostFromBackgroundThreadPresentsChallenge() async throws {
+        // Given: a bridge prepared on the main actor
+        let bridge: RustBridgeService = try await MainActor.run {
+            try makeBridge(connectionTimeoutSecs: 5)
+        }
+        let challenge = HostKeyChallenge(
+            host: "127.0.0.1",
+            port: 2222,
+            fingerprintSha256: "SHA256:background-thread-fingerprint",
+            expectedFingerprintSha256: nil
+        )
+
+        // When: promptUnknownHost is invoked from a background thread (mimicking Rust callback)
+        var promptResult: Bool?
+        let backgroundThread = Thread {
+            promptResult = bridge.promptUnknownHost(challenge: challenge)
+        }
+        backgroundThread.start()
+
+        // Then: pendingHostKeyChallenge should appear on the main actor within 2 seconds
+        let deadline = ContinuousClock.now + .seconds(2)
+        while await MainActor.run(body: { bridge.pendingHostKeyChallenge }) == nil {
+            if ContinuousClock.now >= deadline {
+                XCTFail(
+                    "Expected pendingHostKeyChallenge to be set within 2 seconds when promptUnknownHost is called from a background thread"
+                )
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        await MainActor.run {
+            bridge.respondToHostKeyChallenge(accepted: true)
+        }
+
+        let joinDeadline = ContinuousClock.now + .seconds(5)
+        while backgroundThread.isExecuting, ContinuousClock.now < joinDeadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertFalse(backgroundThread.isExecuting, "promptUnknownHost should complete without hanging")
+        XCTAssertEqual(promptResult, true)
+    }
+
     @MainActor
     func testHostKeyPromptTimesOutWhenUnanswered() async throws {
         let bridge = try makeBridge(connectionTimeoutSecs: 1)

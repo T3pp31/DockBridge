@@ -185,9 +185,21 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
     // MARK: - HostKeyHandler
 
     nonisolated func promptUnknownHost(challenge: HostKeyChallenge) -> Bool {
-        DropOperationSync.run { @MainActor in
-            await self.awaitHostKeyDecision(for: challenge)
+        if Thread.isMainThread {
+            return DropOperationSync.run { @MainActor in
+                await self.awaitHostKeyDecision(for: challenge)
+            }
         }
+        let semaphore = DispatchSemaphore(value: 0)
+        var result = false
+        DispatchQueue.main.async {
+            Task { @MainActor in
+                result = await self.awaitHostKeyDecision(for: challenge)
+                semaphore.signal()
+            }
+        }
+        semaphore.wait()
+        return result
     }
 
     @MainActor
