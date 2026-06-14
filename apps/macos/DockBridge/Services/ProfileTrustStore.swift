@@ -15,6 +15,7 @@ enum ProfileTrustStoreError: LocalizedError {
 struct ProfileTrustDetectionResult: Sendable {
     let endpointChanges: [ProfileEndpointChange]
     let pendingInitialTrust: [ConnectionProfile]
+    let pendingNewProfileTrust: [ConnectionProfile]
 }
 
 final class ProfileTrustStore: @unchecked Sendable {
@@ -86,18 +87,18 @@ final class ProfileTrustStore: @unchecked Sendable {
         if trusted.isEmpty, !profiles.isEmpty {
             return ProfileTrustDetectionResult(
                 endpointChanges: [],
-                pendingInitialTrust: profiles
+                pendingInitialTrust: profiles,
+                pendingNewProfileTrust: []
             )
         }
 
         var changes: [ProfileEndpointChange] = []
-        var didUpdateTrusted = false
+        var pendingNewProfiles: [ConnectionProfile] = []
 
         for profile in profiles {
             let current = TrustedProfileEndpoint(profile: profile)
             guard let known = trusted[profile.id] else {
-                trusted[profile.id] = current
-                didUpdateTrusted = true
+                pendingNewProfiles.append(profile)
                 continue
             }
 
@@ -113,13 +114,10 @@ final class ProfileTrustStore: @unchecked Sendable {
             }
         }
 
-        if didUpdateTrusted {
-            try saveTrustedEndpoints(trusted)
-        }
-
         return ProfileTrustDetectionResult(
             endpointChanges: changes,
-            pendingInitialTrust: []
+            pendingInitialTrust: [],
+            pendingNewProfileTrust: pendingNewProfiles
         )
     }
 

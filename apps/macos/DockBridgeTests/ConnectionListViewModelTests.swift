@@ -106,6 +106,77 @@ final class ConnectionListViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.showEndpointChangeWarning)
     }
 
+    func testLoadShowsNewProfileTrustConfirmationWhenNewProfileAdded() throws {
+        let existingProfile = ConnectionProfile(
+            name: "Existing",
+            host: "example.com",
+            username: "user"
+        )
+        let newProfile = ConnectionProfile(
+            name: "New",
+            host: "new.example.com",
+            username: "newuser"
+        )
+
+        try store.saveProfiles([existingProfile])
+        try store.seedInitialTrust(for: [existingProfile])
+        try store.saveProfiles([existingProfile, newProfile])
+
+        viewModel.load()
+
+        XCTAssertTrue(viewModel.showNewProfileTrustConfirmation)
+        XCTAssertFalse(viewModel.showInitialTrustConfirmation)
+        XCTAssertFalse(viewModel.showEndpointChangeWarning)
+    }
+
+    func testConfirmNewProfileTrustSeedsOnlyNewProfile() throws {
+        let existingProfile = ConnectionProfile(
+            name: "Existing",
+            host: "example.com",
+            username: "user"
+        )
+        let newProfile = ConnectionProfile(
+            name: "New",
+            host: "new.example.com",
+            username: "newuser"
+        )
+
+        try store.saveProfiles([existingProfile])
+        try store.seedInitialTrust(for: [existingProfile])
+        try store.saveProfiles([existingProfile, newProfile])
+        viewModel.load()
+        viewModel.confirmNewProfileTrust()
+
+        let trusted = try ProfileTrustStore(baseDirectory: baseDirectory).loadTrustedEndpoints()
+        XCTAssertEqual(trusted[existingProfile.id], TrustedProfileEndpoint(profile: existingProfile))
+        XCTAssertEqual(trusted[newProfile.id], TrustedProfileEndpoint(profile: newProfile))
+        XCTAssertFalse(viewModel.showNewProfileTrustConfirmation)
+    }
+
+    func testDeclineNewProfileTrustLeavesUntrusted() throws {
+        let existingProfile = ConnectionProfile(
+            name: "Existing",
+            host: "example.com",
+            username: "user"
+        )
+        let newProfile = ConnectionProfile(
+            name: "New",
+            host: "new.example.com",
+            username: "newuser"
+        )
+
+        try store.saveProfiles([existingProfile])
+        try store.seedInitialTrust(for: [existingProfile])
+        try store.saveProfiles([existingProfile, newProfile])
+        viewModel.load()
+        viewModel.declineNewProfileTrust()
+
+        let trusted = try ProfileTrustStore(baseDirectory: baseDirectory).loadTrustedEndpoints()
+        XCTAssertEqual(trusted.count, 1)
+        XCTAssertNil(trusted[newProfile.id])
+        XCTAssertFalse(viewModel.showNewProfileTrustConfirmation)
+    }
+
     func testConfirmInitialTrustSeedsTrustStore() throws {
         let profile = ConnectionProfile(
             name: "Test",

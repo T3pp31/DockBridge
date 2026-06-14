@@ -65,4 +65,19 @@ final class RemotePathTests: XCTestCase {
     func testIsValidEntryNameRejectsNullCharacter() {
         XCTAssertFalse(RemotePath.isValidEntryName("foo\0bar"))
     }
+
+    func testPathMatchesEntryAcceptsExpectedJoin() {
+        XCTAssertTrue(RemotePath.pathMatchesEntry(parent: "/var/www", entryPath: "/var/www/index.html", name: "index.html"))
+        XCTAssertTrue(RemotePath.pathMatchesEntry(parent: "/", entryPath: "/file.txt", name: "file.txt"))
+    }
+
+    func testPathMatchesEntryRejectsMismatchedPath() {
+        XCTAssertFalse(RemotePath.pathMatchesEntry(parent: "/var/www", entryPath: "/etc/passwd", name: "index.html"))
+        XCTAssertFalse(RemotePath.pathMatchesEntry(parent: "/var/www", entryPath: "/var/www/../etc/passwd", name: "index.html"))
+    }
+
+    func testPathMatchesEntryRejectsInvalidName() {
+        XCTAssertFalse(RemotePath.pathMatchesEntry(parent: "/var/www", entryPath: "/var/www/evil", name: "../etc"))
+        XCTAssertFalse(RemotePath.pathMatchesEntry(parent: "/var/www", entryPath: "/var/www/evil", name: ""))
+    }
 }

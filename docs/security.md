@@ -55,8 +55,8 @@ Rust core settings in `config/default.toml` (and UniFFI `AppConfigRecord`):
 
 | Setting | Default | Effect |
 |---------|---------|--------|
-| `known_hosts_strict_mode` | `false` | When `true`, trusts host keys only for exact host/port (or stored alias) matches. Disables fingerprint alias fallback across hostnames. |
-| `fail_connect_on_openssh_merge_error` | `false` | When `true`, aborts the connection if merging OpenSSH `known_hosts` fails. When `false`, merge failures are logged and the connection continues. |
+| `known_hosts_strict_mode` | `true` | When `true`, trusts host keys only for exact host/port (or stored alias) matches. Disables fingerprint alias fallback across hostnames. Set to `false` in Settings or config to preserve OpenSSH-style alias behavior. |
+| `fail_connect_on_openssh_merge_error` | `true` | When `true`, aborts the connection if merging OpenSSH `known_hosts` fails. Set to `false` to log merge failures and continue connecting. |
 
 ## Connection profiles (`profiles.json`)
 
@@ -132,11 +132,11 @@ The CLI and non-sandboxed environments use `openssh_known_hosts_path` from `conf
 
 ### Known hosts strict mode
 
-Set `known_hosts_strict_mode = true` in `config/default.toml` (or pass it via `AppConfigRecord`) to trust host keys only when the connecting host/port matches a stored entry or hashed OpenSSH entry. Fingerprint-only alias trust (same key, different hostname) is disabled in strict mode. Default is `false` to preserve OpenSSH-style alias behavior.
+Set `known_hosts_strict_mode = true` in `config/default.toml` (or pass it via `AppConfigRecord`) to trust host keys only when the connecting host/port matches a stored entry or hashed OpenSSH entry. Fingerprint-only alias trust (same key, different hostname) is disabled in strict mode. Default is `true`; set to `false` to preserve OpenSSH-style alias behavior.
 
 ### OpenSSH merge failure handling
 
-By default, a failed OpenSSH `known_hosts` merge is logged and the connection continues (`fail_connect_on_openssh_merge_error = false`). Set `fail_connect_on_openssh_merge_error = true` to abort the connection when merge fails, so operators are not left with a partially updated trust store.
+By default, a failed OpenSSH `known_hosts` merge aborts the connection (`fail_connect_on_openssh_merge_error = true`). Set `fail_connect_on_openssh_merge_error = false` to log merge failures and continue connecting.
 
 ### Hashed host entries and SHA-1
 

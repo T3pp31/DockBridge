@@ -27,6 +27,8 @@ enum AppSettingsKeys {
     static let mergeOpensshKnownHostsOnConnect = "mergeOpensshKnownHostsOnConnect"
     static let opensshKnownHostsPath = "opensshKnownHostsPath"
     static let opensshKnownHostsBookmark = "opensshKnownHostsBookmark"
+    static let knownHostsStrictMode = "knownHostsStrictMode"
+    static let failConnectOnOpensshMergeError = "failConnectOnOpensshMergeError"
 }
 
 final class AppSettingsService: @unchecked Sendable {
@@ -55,6 +57,8 @@ final class AppSettingsService: @unchecked Sendable {
             AppSettingsKeys.showHiddenFiles: AppConfig.default.showHiddenFiles,
             AppSettingsKeys.mergeOpensshKnownHostsOnConnect: AppConfig.default.mergeOpensshKnownHostsOnConnect,
             AppSettingsKeys.opensshKnownHostsPath: AppConfig.default.opensshKnownHostsPath,
+            AppSettingsKeys.knownHostsStrictMode: AppConfig.default.knownHostsStrictMode,
+            AppSettingsKeys.failConnectOnOpensshMergeError: AppConfig.default.failConnectOnOpensshMergeError,
         ])
     }
 
@@ -83,7 +87,11 @@ final class AppSettingsService: @unchecked Sendable {
             ) as? Bool ?? AppConfig.default.mergeOpensshKnownHostsOnConnect,
             opensshKnownHostsPath: defaults.string(forKey: AppSettingsKeys.opensshKnownHostsPath)
                 ?? AppConfig.default.opensshKnownHostsPath,
-            opensshKnownHostsBookmark: defaults.data(forKey: AppSettingsKeys.opensshKnownHostsBookmark)
+            opensshKnownHostsBookmark: defaults.data(forKey: AppSettingsKeys.opensshKnownHostsBookmark),
+            knownHostsStrictMode: defaults.bool(forKey: AppSettingsKeys.knownHostsStrictMode),
+            failConnectOnOpensshMergeError: defaults.bool(
+                forKey: AppSettingsKeys.failConnectOnOpensshMergeError
+            )
         )
     }
 
@@ -99,6 +107,8 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(config.mergeOpensshKnownHostsOnConnect, forKey: AppSettingsKeys.mergeOpensshKnownHostsOnConnect)
         defaults.set(config.opensshKnownHostsPath, forKey: AppSettingsKeys.opensshKnownHostsPath)
         defaults.set(config.opensshKnownHostsBookmark, forKey: AppSettingsKeys.opensshKnownHostsBookmark)
+        defaults.set(config.knownHostsStrictMode, forKey: AppSettingsKeys.knownHostsStrictMode)
+        defaults.set(config.failConnectOnOpensshMergeError, forKey: AppSettingsKeys.failConnectOnOpensshMergeError)
     }
 
     func resolvedOpensshKnownHostsPath(for config: AppConfig) -> String {

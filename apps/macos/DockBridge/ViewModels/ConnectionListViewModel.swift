@@ -8,6 +8,7 @@ final class ConnectionListViewModel: ObservableObject {
     @Published var showRootWarning = false
     @Published var showEndpointChangeWarning = false
     @Published var showInitialTrustConfirmation = false
+    @Published var showNewProfileTrustConfirmation = false
     @Published var pendingConnectProfile: ConnectionProfile?
     @Published var pendingEndpointChange: ProfileEndpointChange?
 
@@ -17,6 +18,7 @@ final class ConnectionListViewModel: ObservableObject {
     private let bookmarkService: SecurityScopedBookmarkService
     private var pendingEndpointChanges: [ProfileEndpointChange] = []
     private var pendingInitialTrustProfiles: [ConnectionProfile] = []
+    private var pendingNewProfileTrustProfiles: [ConnectionProfile] = []
 
     var isConnected: Bool { bridge.isConnected }
     var connectionStatus: ConnectionStatus { bridge.connectionStatus }
@@ -47,6 +49,9 @@ final class ConnectionListViewModel: ObservableObject {
             } else if !result.pendingInitialTrust.isEmpty {
                 pendingInitialTrustProfiles = result.pendingInitialTrust
                 showInitialTrustConfirmation = true
+            } else if !result.pendingNewProfileTrust.isEmpty {
+                pendingNewProfileTrustProfiles = result.pendingNewProfileTrust
+                showNewProfileTrustConfirmation = true
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -178,6 +183,21 @@ final class ConnectionListViewModel: ObservableObject {
     func declineInitialTrust() {
         pendingInitialTrustProfiles = []
         showInitialTrustConfirmation = false
+    }
+
+    func confirmNewProfileTrust() {
+        do {
+            try store.trustProfiles(pendingNewProfileTrustProfiles)
+            pendingNewProfileTrustProfiles = []
+            showNewProfileTrustConfirmation = false
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func declineNewProfileTrust() {
+        pendingNewProfileTrustProfiles = []
+        showNewProfileTrustConfirmation = false
     }
 
     private func presentNextEndpointChangeWarning() {

@@ -40,6 +40,26 @@ pub fn validate_remote_entry_name(name: &str) -> Result<(), SftpError> {
     Ok(())
 }
 
+/// Validates a remote directory entry against the listing directory and server path.
+///
+/// Rejects malicious entry names and mismatches between the server-reported path and the
+/// client-rebuilt path. Returns the client-built absolute remote path.
+pub fn validated_remote_entry(
+    listing_dir: &str,
+    name: &str,
+    server_path: &str,
+) -> Result<String, SftpError> {
+    validate_remote_entry_name(name)?;
+    let rebuilt = join_remote_path(listing_dir, Path::new(name))?;
+    let normalized_server = normalize_remote_path(server_path)?;
+    if normalized_server != rebuilt {
+        return Err(SftpError::InvalidRemotePath {
+            path: server_path.to_string(),
+        });
+    }
+    Ok(rebuilt)
+}
+
 fn normalize_local_path(path: &Path) -> Result<PathBuf, SftpError> {
     let mut normalized = PathBuf::new();
     for component in path.components() {
@@ -57,22 +77,81 @@ fn normalize_local_path(path: &Path) -> Result<PathBuf, SftpError> {
     Ok(normalized)
 }
 
-/// Ensures `path` resolves under `root` after normalizing `.` and rejecting `..`.
+fn invalid_local_path(path: &Path) -> SftpError {
+    SftpError::InvalidRemotePath {
+        path: path.display().to_string(),
+    }
+}
+
+fn canonicalize_local_path(path: &Path) -> Result<PathBuf, SftpError> {
+    std::fs::canonicalize(path).map_err(|_| invalid_local_path(path))
+}
+
+fn resolve_local_path_for_root_check(path: &Path) -> Result<PathBuf, SftpError> {
+    if path.exists() {
+        return canonicalize_local_path(path);
+    }
+
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| invalid_local_path(path))?
+        .to_os_string();
+
+    let mut parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut pending_components: Vec<std::ffi::OsString> = Vec::new();
+
+    while !parent.as_os_str().is_empty() && !parent.exists() {
+        if let Some(name) = parent.file_name() {
+            pending_components.push(name.to_os_string());
+        }
+        parent = parent.parent().unwrap_or_else(|| Path::new("."));
+    }
+
+    let canonical_parent = if parent.as_os_str().is_empty() {
+        canonicalize_local_path(Path::new("."))?
+    } else {
+        canonicalize_local_path(parent)?
+    };
+
+    let mut resolved = canonical_parent;
+    pending_components.reverse();
+    for component in pending_components {
+        resolved.push(component);
+    }
+    resolved.push(file_name);
+    Ok(resolved)
+}
+
+fn ensure_canonical_path_within_root(
+    canonical_root: &Path,
+    canonical_path: &Path,
+    display_path: &Path,
+) -> Result<(), SftpError> {
+    if canonical_path == canonical_root {
+        return Ok(());
+    }
+
+    canonical_path
+        .strip_prefix(canonical_root)
+        .map_err(|_| invalid_local_path(display_path))?;
+    Ok(())
+}
+
+/// Ensures `path` resolves under `root` after normalizing `.`, rejecting `..`, and resolving
+/// symlinks via canonicalization.
 pub fn ensure_local_path_within_root(root: &Path, path: &Path) -> Result<(), SftpError> {
     let normalized_root = normalize_local_path(root)?;
     let normalized_path = normalize_local_path(path)?;
 
-    if normalized_path == normalized_root {
-        return Ok(());
+    if normalized_path != normalized_root {
+        normalized_path
+            .strip_prefix(&normalized_root)
+            .map_err(|_| invalid_local_path(path))?;
     }
 
-    normalized_path
-        .strip_prefix(&normalized_root)
-        .map_err(|_| SftpError::InvalidRemotePath {
-            path: path.display().to_string(),
-        })?;
-
-    Ok(())
+    let canonical_root = canonicalize_local_path(root)?;
+    let resolved_path = resolve_local_path_for_root_check(path)?;
+    ensure_canonical_path_within_root(&canonical_root, &resolved_path, path)
 }
 
 /// Joins a remote base path with a relative path using POSIX separators.
@@ -264,7 +343,7 @@ pub async fn walk_remote_directory<'a>(
     while let Some((current_remote, relative_prefix)) = pending.pop() {
         let entries = client.list_directory(&current_remote).await?;
         for entry in entries {
-            validate_remote_entry_name(&entry.name)?;
+            let child_remote = validated_remote_entry(&current_remote, &entry.name, &entry.path)?;
 
             let relative_path = if relative_prefix.as_os_str().is_empty() {
                 PathBuf::from(&entry.name)
@@ -272,13 +351,11 @@ pub async fn walk_remote_directory<'a>(
                 relative_prefix.join(&entry.name)
             };
 
-            let child_remote = join_remote_path(&current_remote, Path::new(&entry.name))?;
-
             if entry.is_directory {
                 pending.push((child_remote, relative_path));
             } else {
                 files.push(RemoteFileEntry {
-                    remote_path: entry.path,
+                    remote_path: child_remote,
                     relative_path,
                 });
             }
@@ -341,9 +418,11 @@ mod tests {
         // Given: a download root and a path that escapes it
         // When: ensure_local_path_within_root is called
         // Then: InvalidRemotePath is returned
-        let root = Path::new("/tmp/download");
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("download");
+        fs::create_dir(&root).unwrap();
         let escaped = root.join("../secret.txt");
-        let err = ensure_local_path_within_root(root, &escaped).unwrap_err();
+        let err = ensure_local_path_within_root(&root, &escaped).unwrap_err();
         assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
     }
 
@@ -352,9 +431,89 @@ mod tests {
         // Given: a nested path under the root
         // When: ensure_local_path_within_root is called
         // Then: validation succeeds
-        let root = Path::new("/tmp/download");
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("download");
+        fs::create_dir_all(root.join("nested")).unwrap();
         let nested = root.join("nested/file.txt");
-        assert!(ensure_local_path_within_root(root, &nested).is_ok());
+        assert!(ensure_local_path_within_root(&root, &nested).is_ok());
+    }
+
+    #[test]
+    fn ensure_local_path_within_root_accepts_nonexistent_nested_paths() {
+        // Given: a download destination that does not exist yet
+        // When: ensure_local_path_within_root is called
+        // Then: validation succeeds when the logical path stays under the root
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("download");
+        fs::create_dir(&root).unwrap();
+        let nested = root.join("nested/new/file.txt");
+        assert!(ensure_local_path_within_root(&root, &nested).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_local_path_within_root_rejects_symlink_escape() {
+        // Given: a symlink under the root that points outside it
+        // When: ensure_local_path_within_root is called
+        // Then: InvalidRemotePath is returned
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("download");
+        fs::create_dir(&root).unwrap();
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("secret.txt"), b"secret").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), root.join("escape.txt"))
+            .unwrap();
+
+        let escaped = root.join("escape.txt");
+        let err = ensure_local_path_within_root(&root, &escaped).unwrap_err();
+        assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_local_path_within_root_rejects_symlink_directory_escape() {
+        // Given: a directory symlink under the root that points outside it
+        // When: ensure_local_path_within_root is called for a nested file path
+        // Then: InvalidRemotePath is returned
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("download");
+        fs::create_dir(&root).unwrap();
+        let outside = tempdir().unwrap();
+        fs::write(outside.path().join("secret.txt"), b"secret").unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("link_dir")).unwrap();
+
+        let escaped = root.join("link_dir/secret.txt");
+        let err = ensure_local_path_within_root(&root, &escaped).unwrap_err();
+        assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
+    }
+
+    #[test]
+    fn validated_remote_entry_accepts_matching_paths() {
+        // Given: a valid entry name and matching server path
+        // When: validated_remote_entry is called
+        // Then: the client-built path is returned
+        assert_eq!(
+            validated_remote_entry("/remote/dir", "file.txt", "/remote/dir/file.txt").unwrap(),
+            "/remote/dir/file.txt"
+        );
+    }
+
+    #[test]
+    fn validated_remote_entry_rejects_mismatched_server_path() {
+        // Given: a valid entry name but a mismatched server path
+        // When: validated_remote_entry is called
+        // Then: InvalidRemotePath is returned
+        let err = validated_remote_entry("/remote/dir", "file.txt", "/etc/passwd").unwrap_err();
+        assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
+    }
+
+    #[test]
+    fn validated_remote_entry_rejects_malicious_names() {
+        // Given: a malicious entry name
+        // When: validated_remote_entry is called
+        // Then: InvalidRemotePath is returned before path comparison
+        let err = validated_remote_entry("/remote/dir", "..", "/remote/dir/..").unwrap_err();
+        assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
     }
 
     #[test]

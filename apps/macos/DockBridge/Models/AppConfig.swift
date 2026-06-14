@@ -12,6 +12,8 @@ struct AppConfig: Codable, Equatable, Sendable {
     var mergeOpensshKnownHostsOnConnect: Bool
     var opensshKnownHostsPath: String
     var opensshKnownHostsBookmark: Data?
+    var knownHostsStrictMode: Bool
+    var failConnectOnOpensshMergeError: Bool
 
     static let `default` = AppConfig(
         connectionTimeoutSecs: 30,
@@ -24,7 +26,9 @@ struct AppConfig: Codable, Equatable, Sendable {
         showHiddenFiles: false,
         mergeOpensshKnownHostsOnConnect: true,
         opensshKnownHostsPath: "~/.ssh/known_hosts",
-        opensshKnownHostsBookmark: nil
+        opensshKnownHostsBookmark: nil,
+        knownHostsStrictMode: true,
+        failConnectOnOpensshMergeError: true
     )
 
     func toRecord(knownHostsPath: String, opensshKnownHostsPath: String) -> AppConfigRecord {
@@ -36,8 +40,8 @@ struct AppConfig: Codable, Equatable, Sendable {
             knownHostsPath: knownHostsPath,
             opensshKnownHostsPath: opensshKnownHostsPath,
             mergeOpensshKnownHostsOnConnect: mergeOpensshKnownHostsOnConnect,
-            knownHostsStrictMode: false,
-            failConnectOnOpensshMergeError: false
+            knownHostsStrictMode: knownHostsStrictMode,
+            failConnectOnOpensshMergeError: failConnectOnOpensshMergeError
         )
     }
 }

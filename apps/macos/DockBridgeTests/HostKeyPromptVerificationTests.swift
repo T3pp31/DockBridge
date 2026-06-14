@@ -179,6 +179,31 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         XCTAssertFalse(record.mergeOpensshKnownHostsOnConnect)
     }
 
+    func testToRecordPropagatesStrictModeFlags() {
+        var config = AppConfig.default
+        config.knownHostsStrictMode = true
+        config.failConnectOnOpensshMergeError = true
+
+        let record = config.toRecord(knownHostsPath: "/tmp/known_hosts.json", opensshKnownHostsPath: "/tmp/openssh")
+        XCTAssertTrue(record.knownHostsStrictMode)
+        XCTAssertTrue(record.failConnectOnOpensshMergeError)
+
+        config.knownHostsStrictMode = false
+        config.failConnectOnOpensshMergeError = false
+        let relaxed = config.toRecord(knownHostsPath: "/tmp/known_hosts.json", opensshKnownHostsPath: "/tmp/openssh")
+        XCTAssertFalse(relaxed.knownHostsStrictMode)
+        XCTAssertFalse(relaxed.failConnectOnOpensshMergeError)
+    }
+
+    func testBuildAppConfigRecordUsesRegisteredStrictDefaults() {
+        let defaults = UserDefaults(suiteName: "HostKeyPromptVerificationTests.\(UUID().uuidString)")!
+        let settings = AppSettingsService(defaults: defaults)
+
+        let record = settings.buildAppConfigRecord(knownHostsPath: "/tmp/known_hosts.json")
+        XCTAssertTrue(record.knownHostsStrictMode)
+        XCTAssertTrue(record.failConnectOnOpensshMergeError)
+    }
+
     @MainActor
     private func waitForPendingHostKeyChallenge(
         on bridge: RustBridgeService,
