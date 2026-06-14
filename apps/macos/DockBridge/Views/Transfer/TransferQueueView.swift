@@ -4,7 +4,7 @@ struct TransferQueueView: View {
     @ObservedObject var viewModel: TransferQueueViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
             HStack {
                 Text("Transfer Queue")
                     .font(.headline)
@@ -20,36 +20,44 @@ struct TransferQueueView: View {
                     systemImage: "arrow.up.arrow.down.circle",
                     description: Text("Upload or download files to see progress here.")
                 )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, minHeight: WindowLayout.transferQueueMinHeight)
             } else {
-                Table(viewModel.tasks) {
-                    TableColumn("Direction") { task in
-                        Text(task.direction == .upload ? "Upload" : "Download")
-                    }
-                    TableColumn("Local") { task in
-                        Text((task.localPath as NSString).lastPathComponent)
-                            .help(task.localPath)
-                    }
-                    TableColumn("Remote") { task in
-                        Text((task.remotePath as NSString).lastPathComponent)
-                            .help(task.remotePath)
-                    }
-                    TableColumn("Status") { task in
-                        Text(statusLabel(for: task.status))
-                    }
-                    TableColumn("") { task in
-                        if canCancel(task: task) {
-                            Button("Cancel") {
-                                Task { await viewModel.cancel(task: task) }
-                            }
-                        }
-                    }
-                    .width(80)
+                ExpandingFrame { size in
+                    transferTable
+                        .frame(width: size.width, height: size.height)
                 }
             }
         }
-        .padding(12)
+        .frame(maxWidth: .infinity)
+        .padding(WindowLayout.panePadding)
         .errorAlert(message: $viewModel.errorMessage)
+    }
+
+    private var transferTable: some View {
+        Table(viewModel.tasks) {
+            TableColumn("Direction") { task in
+                Text(task.direction == .upload ? "Upload" : "Download")
+            }
+            TableColumn("Local") { task in
+                Text((task.localPath as NSString).lastPathComponent)
+                    .help(task.localPath)
+            }
+            TableColumn("Remote") { task in
+                Text((task.remotePath as NSString).lastPathComponent)
+                    .help(task.remotePath)
+            }
+            TableColumn("Status") { task in
+                Text(statusLabel(for: task.status))
+            }
+            TableColumn("") { task in
+                if canCancel(task: task) {
+                    Button("Cancel") {
+                        Task { await viewModel.cancel(task: task) }
+                    }
+                }
+            }
+            .width(80)
+        }
     }
 
     private func canCancel(task: TransferTaskRecord) -> Bool {
