@@ -34,14 +34,22 @@ enum FileDropValidation {
     }
 
     static func canMoveRemoteItem(from source: String, to directory: String) -> Bool {
-        let normalizedSource = RemotePath.normalize(source)
-        let normalizedDirectory = RemotePath.directoryPath(directory)
-
-        if normalizedSource == RemotePath.normalize(normalizedDirectory) {
+        guard
+            let normalizedSource = try? RemotePath.normalize(source),
+            let normalizedDirectory = try? RemotePath.directoryPath(directory)
+        else {
             return false
         }
 
-        let sourceParent = RemotePath.directoryPath(RemotePath.parent(of: normalizedSource))
+        if normalizedSource == (try? RemotePath.normalize(normalizedDirectory)) {
+            return false
+        }
+
+        guard
+            let sourceParent = try? RemotePath.directoryPath(RemotePath.parent(of: normalizedSource))
+        else {
+            return false
+        }
         if sourceParent == normalizedDirectory {
             return false
         }
@@ -59,7 +67,7 @@ enum FileDropValidation {
 
     static func destinationDirectory(forRemoteDropOn item: RemoteFileRecord) -> String? {
         guard item.isDirectory else { return nil }
-        return RemotePath.directoryPath(item.path)
+        return try? RemotePath.directoryPath(item.path)
     }
 
     static func destinationDirectory(forLocalDropOn item: LocalFileItem) -> URL? {

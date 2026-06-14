@@ -14,20 +14,31 @@ final class RemotePathTests: XCTestCase {
         XCTAssertEqual(RemotePath.join("/var/www/", "index.html"), "/var/www/index.html")
     }
 
-    func testParentOfRootFile() {
-        XCTAssertEqual(RemotePath.parent(of: "/file.txt"), "/")
+    func testParentOfRootFile() throws {
+        XCTAssertEqual(try RemotePath.parent(of: "/file.txt"), "/")
     }
 
-    func testParentOfNestedFile() {
-        XCTAssertEqual(RemotePath.parent(of: "/var/www/index.html"), "/var/www")
+    func testParentOfNestedFile() throws {
+        XCTAssertEqual(try RemotePath.parent(of: "/var/www/index.html"), "/var/www")
     }
 
-    func testNormalizeCollapsesDoubleSlash() {
-        XCTAssertEqual(RemotePath.normalize("//foo//bar"), "/foo/bar")
+    func testNormalizeCollapsesDoubleSlash() throws {
+        XCTAssertEqual(try RemotePath.normalize("//foo//bar"), "/foo/bar")
     }
 
-    func testDirectoryPathAddsTrailingSlash() {
-        XCTAssertEqual(RemotePath.directoryPath("/var/www"), "/var/www/")
+    func testDirectoryPathAddsTrailingSlash() throws {
+        XCTAssertEqual(try RemotePath.directoryPath("/var/www"), "/var/www/")
+    }
+
+    func testNormalizeRejectsParentSegment() {
+        XCTAssertThrowsError(try RemotePath.normalize("/foo/../etc")) { error in
+            XCTAssertTrue(error is RemotePathError)
+        }
+        XCTAssertThrowsError(try RemotePath.normalize("/../etc/passwd"))
+    }
+
+    func testNormalizeAllowsNonTraversalDots() throws {
+        XCTAssertEqual(try RemotePath.normalize("/foo..bar/baz"), "/foo..bar/baz")
     }
 
     func testIsValidEntryNameAcceptsSimpleNames() {

@@ -52,7 +52,7 @@ final class ConnectionStoreTests: XCTestCase {
         )
 
         try store.saveProfiles([profile])
-        _ = try store.loadProfilesWithEndpointCheck()
+        try store.seedInitialTrust(for: [profile])
 
         var tampered = profile
         tampered.host = "evil.example.com"
@@ -76,7 +76,7 @@ final class ConnectionStoreTests: XCTestCase {
         )
 
         try store.saveProfiles([profile])
-        _ = try store.loadProfilesWithEndpointCheck()
+        try store.seedInitialTrust(for: [profile])
 
         var tampered = profile
         tampered.host = "evil.example.com"

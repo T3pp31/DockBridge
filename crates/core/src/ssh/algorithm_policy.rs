@@ -31,6 +31,8 @@ const ALLOWED_HOST_KEY: &[Algorithm] = &[
     Algorithm::Ecdsa {
         curve: EcdsaCurve::NistP521,
     },
+    // RSA with SHA-512/256 is retained for server compatibility. A future Ed25519/ECDSA-only
+    // policy option could drop these entries for environments that do not host legacy RSA keys.
     Algorithm::Rsa {
         hash: Some(HashAlg::Sha512),
     },

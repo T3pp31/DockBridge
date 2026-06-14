@@ -30,6 +30,12 @@ pub struct AppConfig {
     /// When true, merges [`openssh_known_hosts_path`] into the DockBridge store before connecting.
     #[serde(default = "default_merge_openssh_known_hosts_on_connect")]
     pub merge_openssh_known_hosts_on_connect: bool,
+    /// When true, trusts host keys only for exact host/port matches (no fingerprint alias fallback).
+    #[serde(default = "default_known_hosts_strict_mode")]
+    pub known_hosts_strict_mode: bool,
+    /// When true, aborts connection if merging OpenSSH `known_hosts` fails.
+    #[serde(default = "default_fail_connect_on_openssh_merge_error")]
+    pub fail_connect_on_openssh_merge_error: bool,
 }
 
 impl Default for AppConfig {
@@ -42,6 +48,8 @@ impl Default for AppConfig {
             known_hosts_path: default_known_hosts_path(),
             openssh_known_hosts_path: default_openssh_known_hosts_path(),
             merge_openssh_known_hosts_on_connect: true,
+            known_hosts_strict_mode: false,
+            fail_connect_on_openssh_merge_error: false,
         }
     }
 }
@@ -137,6 +145,14 @@ fn default_openssh_known_hosts_path() -> PathBuf {
 
 fn default_merge_openssh_known_hosts_on_connect() -> bool {
     true
+}
+
+fn default_known_hosts_strict_mode() -> bool {
+    false
+}
+
+fn default_fail_connect_on_openssh_merge_error() -> bool {
+    false
 }
 
 /// Ensures the parent directory for the known hosts file exists.

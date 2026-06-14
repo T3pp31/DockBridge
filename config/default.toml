@@ -9,3 +9,7 @@ transfer_chunk_size_bytes = 262144
 known_hosts_path = "~/.dockbridge/known_hosts.json"
 openssh_known_hosts_path = "~/.ssh/known_hosts"
 merge_openssh_known_hosts_on_connect = true
+# When true, only exact host/port matches trust stored keys (no fingerprint alias fallback).
+known_hosts_strict_mode = false
+# When true, abort connection if merging OpenSSH known_hosts fails.
+fail_connect_on_openssh_merge_error = false

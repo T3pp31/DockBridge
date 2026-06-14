@@ -1,25 +1,38 @@
+import Darwin
 import Foundation
 
 /// Holds sensitive text entered in the UI and supports explicit clearing.
 ///
-/// Swift `String` does not guarantee memory zeroing, but clearing on dismiss reduces
-/// how long credentials remain in `@State` after the form closes.
+/// Swift `String` does not guarantee memory zeroing. Clearing uses a `Data` buffer
+/// with explicit `memset` to reduce how long credentials remain in memory after dismiss.
 struct SensitiveString: Equatable {
     var text = ""
 
     mutating func clear() {
-        text = ""
+        Self.zeroize(&text)
     }
 
     static func clear(_ value: inout String) {
-        value = ""
+        zeroize(&value)
     }
 
     static func clear(_ value: inout String?) {
         if var current = value {
-            current = ""
+            zeroize(&current)
         }
         value = nil
+    }
+
+    private static func zeroize(_ value: inout String) {
+        guard var data = value.data(using: .utf8) else {
+            value = ""
+            return
+        }
+        data.withUnsafeMutableBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            memset(baseAddress, 0, buffer.count)
+        }
+        value = ""
     }
 }
 

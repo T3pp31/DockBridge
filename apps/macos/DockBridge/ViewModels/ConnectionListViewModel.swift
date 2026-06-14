@@ -7,6 +7,7 @@ final class ConnectionListViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var showRootWarning = false
     @Published var showEndpointChangeWarning = false
+    @Published var showInitialTrustConfirmation = false
     @Published var pendingConnectProfile: ConnectionProfile?
     @Published var pendingEndpointChange: ProfileEndpointChange?
 
@@ -15,6 +16,7 @@ final class ConnectionListViewModel: ObservableObject {
     private let bridge: RustBridgeService
     private let bookmarkService: SecurityScopedBookmarkService
     private var pendingEndpointChanges: [ProfileEndpointChange] = []
+    private var pendingInitialTrustProfiles: [ConnectionProfile] = []
 
     var isConnected: Bool { bridge.isConnected }
     var connectionStatus: ConnectionStatus { bridge.connectionStatus }
@@ -42,6 +44,9 @@ final class ConnectionListViewModel: ObservableObject {
             if !result.endpointChanges.isEmpty {
                 pendingEndpointChanges = result.endpointChanges
                 presentNextEndpointChangeWarning()
+            } else if !result.pendingInitialTrust.isEmpty {
+                pendingInitialTrustProfiles = result.pendingInitialTrust
+                showInitialTrustConfirmation = true
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -49,6 +54,13 @@ final class ConnectionListViewModel: ObservableObject {
     }
 
     func save(_ profile: ConnectionProfile, password: String?, passphrase: String?) {
+        if profile.requiresPrivateKeyBookmark, !profile.hasPrivateKeyBookmark {
+            errorMessage = """
+            秘密鍵は「Browse…」から選択してください。セキュリティスコープ付きブックマークが必要です。
+            """
+            return
+        }
+
         do {
             profiles = try store.upsert(profile)
             selectedProfileID = profile.id
@@ -153,6 +165,21 @@ final class ConnectionListViewModel: ObservableObject {
         }
     }
 
+    func confirmInitialTrust() {
+        do {
+            try store.seedInitialTrust(for: pendingInitialTrustProfiles)
+            pendingInitialTrustProfiles = []
+            showInitialTrustConfirmation = false
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func declineInitialTrust() {
+        pendingInitialTrustProfiles = []
+        showInitialTrustConfirmation = false
+    }
+
     private func presentNextEndpointChangeWarning() {
         guard let next = pendingEndpointChanges.first else { return }
         pendingEndpointChange = next
@@ -200,27 +227,22 @@ final class ConnectionListViewModel: ObservableObject {
     }
 
     private func resolvePrivateKeyProfile(_ profile: ConnectionProfile) -> ConnectionProfile? {
-        if let bookmark = profile.privateKeyBookmark {
-            do {
-                let keyURL = try bookmarkService.resolveBookmark(bookmark)
-                var resolved = profile
-                resolved.privateKeyPath = keyURL.path
-                return resolved
-            } catch {
-                errorMessage = error.localizedDescription
-                return nil
-            }
+        guard let bookmark = profile.privateKeyBookmark else {
+            errorMessage = """
+            秘密鍵へのアクセス権がありません。接続設定を開き、「Browse…」から秘密鍵を再選択してください。
+            """
+            return nil
         }
 
-        if let path = profile.privateKeyPath,
-           FileManager.default.isReadableFile(atPath: path) {
-            return profile
+        do {
+            let keyURL = try bookmarkService.resolveBookmark(bookmark)
+            var resolved = profile
+            resolved.privateKeyPath = keyURL.path
+            return resolved
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
         }
-
-        errorMessage = """
-        秘密鍵へのアクセス権がありません。接続設定を開き、秘密鍵を再選択してください。
-        """
-        return nil
     }
 
     func disconnect() async {

@@ -199,14 +199,16 @@ final class MainViewModel: ObservableObject {
     }
 
     func navigateRemote(into item: RemoteFileRecord) {
-        guard item.isDirectory else { return }
-        remotePath = RemotePath.directoryPath(item.path)
+        guard item.isDirectory, let path = try? RemotePath.directoryPath(item.path) else { return }
+        remotePath = path
         selectedRemoteItemID = nil
     }
 
     func navigateRemoteUp() {
         guard remotePath != "/" else { return }
-        remotePath = RemotePath.directoryPath(RemotePath.parent(of: remotePath))
+        guard let parent = try? RemotePath.parent(of: remotePath),
+              let path = try? RemotePath.directoryPath(parent) else { return }
+        remotePath = path
         selectedRemoteItemID = nil
     }
 
@@ -330,7 +332,10 @@ final class MainViewModel: ObservableObject {
             errorMessage = RemoteEntryNameError.invalidCharacters.localizedDescription
             return
         }
-        let parent = RemotePath.parent(of: target.path)
+        guard let parent = try? RemotePath.parent(of: target.path) else {
+            errorMessage = RemotePathError.invalidPath(target.path).localizedDescription
+            return
+        }
         let newPath = RemotePath.join(parent, name)
 
         do {

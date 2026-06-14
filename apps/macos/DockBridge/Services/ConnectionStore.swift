@@ -12,6 +12,11 @@ enum ConnectionStoreError: LocalizedError {
     }
 }
 
+/// Persists connection profiles as JSON in Application Support.
+///
+/// Profile metadata is stored in plaintext with owner-only permissions (`0600`).
+/// Passwords and passphrases are stored in Keychain only. Operators must enable
+/// FileVault (or equivalent full-disk encryption) — see `docs/security.md`.
 final class ConnectionStore: @unchecked Sendable {
     static let shared = ConnectionStore()
 
@@ -46,8 +51,12 @@ final class ConnectionStore: @unchecked Sendable {
 
     func loadProfilesWithEndpointCheck() throws -> ProfileLoadResult {
         let profiles = try readProfilesFromDisk()
-        let endpointChanges = try trustStore.detectEndpointChanges(in: profiles)
-        return ProfileLoadResult(profiles: profiles, endpointChanges: endpointChanges)
+        let detection = try trustStore.detectEndpointChanges(in: profiles)
+        return ProfileLoadResult(
+            profiles: profiles,
+            endpointChanges: detection.endpointChanges,
+            pendingInitialTrust: detection.pendingInitialTrust
+        )
     }
 
     func saveProfiles(_ profiles: [ConnectionProfile], updateTrust: Bool = true) throws {
@@ -63,7 +72,10 @@ final class ConnectionStore: @unchecked Sendable {
             try data.write(to: url, options: .atomic)
             try setSecurePermissions(for: url)
             if updateTrust {
-                try trustStore.replaceTrustedEndpoints(for: profiles)
+                let existingTrust = try trustStore.loadTrustedEndpoints()
+                if !existingTrust.isEmpty {
+                    try trustStore.replaceTrustedEndpoints(for: profiles)
+                }
             }
         } catch {
             throw ConnectionStoreError.writeFailed(error.localizedDescription)
@@ -91,6 +103,10 @@ final class ConnectionStore: @unchecked Sendable {
 
     func acceptEndpointChange(_ change: ProfileEndpointChange) throws {
         try trustStore.acceptChange(change)
+    }
+
+    func seedInitialTrust(for profiles: [ConnectionProfile]) throws {
+        try trustStore.seedInitialTrust(from: profiles)
     }
 
     func restoreTrustedEndpoint(for change: ProfileEndpointChange) throws -> [ConnectionProfile] {

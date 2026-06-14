@@ -815,10 +815,12 @@ public struct AppConfigRecord: Equatable, Hashable {
     public var knownHostsPath: String
     public var opensshKnownHostsPath: String
     public var mergeOpensshKnownHostsOnConnect: Bool
+    public var knownHostsStrictMode: Bool
+    public var failConnectOnOpensshMergeError: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool) {
+    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool, knownHostsStrictMode: Bool, failConnectOnOpensshMergeError: Bool) {
         self.connectionTimeoutSecs = connectionTimeoutSecs
         self.sessionHealthCheckIntervalSecs = sessionHealthCheckIntervalSecs
         self.transferRetryCount = transferRetryCount
@@ -826,6 +828,8 @@ public struct AppConfigRecord: Equatable, Hashable {
         self.knownHostsPath = knownHostsPath
         self.opensshKnownHostsPath = opensshKnownHostsPath
         self.mergeOpensshKnownHostsOnConnect = mergeOpensshKnownHostsOnConnect
+        self.knownHostsStrictMode = knownHostsStrictMode
+        self.failConnectOnOpensshMergeError = failConnectOnOpensshMergeError
     }
 
     
@@ -850,7 +854,9 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
                 transferChunkSizeBytes: FfiConverterUInt64.read(from: &buf), 
                 knownHostsPath: FfiConverterString.read(from: &buf), 
                 opensshKnownHostsPath: FfiConverterString.read(from: &buf), 
-                mergeOpensshKnownHostsOnConnect: FfiConverterBool.read(from: &buf)
+                mergeOpensshKnownHostsOnConnect: FfiConverterBool.read(from: &buf), 
+                knownHostsStrictMode: FfiConverterBool.read(from: &buf), 
+                failConnectOnOpensshMergeError: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -862,6 +868,8 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
         FfiConverterString.write(value.knownHostsPath, into: &buf)
         FfiConverterString.write(value.opensshKnownHostsPath, into: &buf)
         FfiConverterBool.write(value.mergeOpensshKnownHostsOnConnect, into: &buf)
+        FfiConverterBool.write(value.knownHostsStrictMode, into: &buf)
+        FfiConverterBool.write(value.failConnectOnOpensshMergeError, into: &buf)
     }
 }
 

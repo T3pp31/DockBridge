@@ -49,7 +49,13 @@ struct ConnectionFormView: View {
                             get: { profile.privateKeyPath ?? "" },
                             set: { profile.privateKeyPath = $0.isEmpty ? nil : $0 }
                         ))
+                        .disabled(true)
                         Button("Browse…") { pickPrivateKey() }
+                    }
+                    if profile.privateKeyBookmark == nil {
+                        Text("Use Browse… to grant access to the private key file.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     SecureField("Passphrase (optional)", text: $passphrase.text)
                 }
@@ -72,7 +78,11 @@ struct ConnectionFormView: View {
     }
 
     private var canSave: Bool {
-        !profile.host.isEmpty && !profile.username.isEmpty
+        guard !profile.host.isEmpty, !profile.username.isEmpty else { return false }
+        if profile.authType == .privateKey {
+            return profile.hasPrivateKeyBookmark
+        }
+        return true
     }
 
     private func save() {

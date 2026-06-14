@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use crate::config::AppConfig;
 use crate::error::{SftpError, TransferError};
 use crate::sftp::{
-    is_local_directory, join_remote_path, local_entry_name, normalize_remote_path,
-    walk_local_directory, walk_remote_directory, SftpClient,
+    ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
+    normalize_remote_path, walk_local_directory, walk_remote_directory, SftpClient,
 };
 use crate::ssh::SshSession;
 
@@ -363,6 +363,8 @@ impl TransferManager {
                 let mut tasks = Vec::with_capacity(files.len());
                 for entry in files {
                     let local_path = local_root.join(&entry.relative_path);
+                    ensure_local_path_within_root(&local_root, &local_path)
+                        .map_err(transfer_error_from_sftp)?;
                     if let Some(parent) = local_path.parent() {
                         tokio::fs::create_dir_all(parent)
                             .await

@@ -9,8 +9,8 @@ use crate::error::SftpError;
 use crate::ssh::session::SshSession;
 
 use super::tree::{
-    is_local_directory, join_remote_path, local_entry_name, normalize_remote_path,
-    walk_local_directory, walk_remote_directory,
+    ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
+    normalize_remote_path, walk_local_directory, walk_remote_directory,
 };
 
 /// Metadata for a remote file or directory entry.
@@ -60,9 +60,10 @@ impl<'a> SftpClient<'a> {
 
     /// Lists entries in a remote directory.
     pub async fn list_directory(&self, path: &str) -> Result<Vec<RemoteFile>, SftpError> {
+        let path = normalize_remote_path(path)?;
         let mut read_dir =
             self.sftp()
-                .read_dir(path)
+                .read_dir(&path)
                 .await
                 .map_err(|err| SftpError::ListFailed {
                     path: path.to_string(),
@@ -272,34 +273,38 @@ impl<'a> SftpClient<'a> {
 
     /// Deletes a remote file.
     pub async fn delete(&self, remote_path: &str) -> Result<(), SftpError> {
+        let remote_path = normalize_remote_path(remote_path)?;
         self.sftp()
-            .remove_file(remote_path)
+            .remove_file(&remote_path)
             .await
             .map_err(|err| SftpError::DeleteFailed {
-                path: remote_path.to_string(),
+                path: remote_path,
                 message: err.to_string(),
             })
     }
 
     /// Renames a remote file or directory.
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), SftpError> {
+        let from = normalize_remote_path(from)?;
+        let to = normalize_remote_path(to)?;
         self.sftp()
-            .rename(from, to)
+            .rename(&from, &to)
             .await
             .map_err(|err| SftpError::RenameFailed {
-                from: from.to_string(),
-                to: to.to_string(),
+                from,
+                to,
                 message: err.to_string(),
             })
     }
 
     /// Creates a remote directory.
     pub async fn create_directory(&self, remote_path: &str) -> Result<(), SftpError> {
+        let remote_path = normalize_remote_path(remote_path)?;
         self.sftp()
-            .create_dir(remote_path)
+            .create_dir(&remote_path)
             .await
             .map_err(|err| SftpError::MkdirFailed {
-                path: remote_path.to_string(),
+                path: remote_path,
                 message: err.to_string(),
             })
     }
@@ -396,6 +401,7 @@ impl<'a> SftpClient<'a> {
                 let files = walk_remote_directory(self, &normalized).await?;
                 for entry in files {
                     let local_path = local_root.join(&entry.relative_path);
+                    ensure_local_path_within_root(&local_root, &local_path)?;
                     if let Some(parent) = local_path.parent() {
                         tokio::fs::create_dir_all(parent).await.map_err(|err| {
                             SftpError::DownloadFailed {
@@ -510,8 +516,8 @@ fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_mkdir_already_exists_message, parent_remote_path, partial_local_path,
-        partial_remote_path,
+        is_mkdir_already_exists_message, normalize_remote_path, parent_remote_path,
+        partial_local_path, partial_remote_path,
     };
 
     #[test]
@@ -562,5 +568,19 @@ mod tests {
             .unwrap_or("");
         assert!(file_name.starts_with(".dockbridge-"));
         assert!(file_name.ends_with(".partial"));
+    }
+
+    #[test]
+    fn client_path_normalization_rejects_parent_segments() {
+        // Given: remote paths with parent-directory segments
+        // When: normalize_remote_path is applied at the SFTP API boundary
+        // Then: InvalidRemotePath is returned before any SFTP call
+        for path in ["/foo/../etc", "../secret"] {
+            let err = normalize_remote_path(path).unwrap_err();
+            assert!(
+                matches!(err, crate::error::SftpError::InvalidRemotePath { .. }),
+                "expected InvalidRemotePath for {path:?}"
+            );
+        }
     }
 }
