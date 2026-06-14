@@ -12,6 +12,11 @@ enum ProfileTrustStoreError: LocalizedError {
     }
 }
 
+struct ProfileTrustDetectionResult: Sendable {
+    let endpointChanges: [ProfileEndpointChange]
+    let pendingInitialTrust: [ConnectionProfile]
+}
+
 final class ProfileTrustStore: @unchecked Sendable {
     private let baseDirectory: URL
     private let fileName = "trusted_endpoints.json"
@@ -75,19 +80,18 @@ final class ProfileTrustStore: @unchecked Sendable {
         }
     }
 
-    func detectEndpointChanges(in profiles: [ConnectionProfile]) throws -> [ProfileEndpointChange] {
+    func detectEndpointChanges(in profiles: [ConnectionProfile]) throws -> ProfileTrustDetectionResult {
         var trusted = try loadTrustedEndpoints()
-        var didUpdateTrusted = false
 
         if trusted.isEmpty, !profiles.isEmpty {
-            for profile in profiles {
-                trusted[profile.id] = TrustedProfileEndpoint(profile: profile)
-            }
-            try saveTrustedEndpoints(trusted)
-            return []
+            return ProfileTrustDetectionResult(
+                endpointChanges: [],
+                pendingInitialTrust: profiles
+            )
         }
 
         var changes: [ProfileEndpointChange] = []
+        var didUpdateTrusted = false
 
         for profile in profiles {
             let current = TrustedProfileEndpoint(profile: profile)
@@ -113,7 +117,17 @@ final class ProfileTrustStore: @unchecked Sendable {
             try saveTrustedEndpoints(trusted)
         }
 
-        return changes
+        return ProfileTrustDetectionResult(
+            endpointChanges: changes,
+            pendingInitialTrust: []
+        )
+    }
+
+    func seedInitialTrust(from profiles: [ConnectionProfile]) throws {
+        let trusted = Dictionary(
+            uniqueKeysWithValues: profiles.map { ($0.id, TrustedProfileEndpoint(profile: $0)) }
+        )
+        try saveTrustedEndpoints(trusted)
     }
 
     func updateTrust(for profile: ConnectionProfile) throws {

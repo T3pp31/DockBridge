@@ -45,6 +45,14 @@ struct ConnectionProfile: Identifiable, Codable, Equatable, Sendable {
         username == "root"
     }
 
+    var requiresPrivateKeyBookmark: Bool {
+        authType == .privateKey
+    }
+
+    var hasPrivateKeyBookmark: Bool {
+        privateKeyBookmark != nil
+    }
+
     func toRecord(password: String?, passphrase: String?) -> ConnectionProfileRecord {
         let auth: AuthTypeRecord
         switch authType {

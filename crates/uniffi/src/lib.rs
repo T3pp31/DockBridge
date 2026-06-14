@@ -64,6 +64,8 @@ pub struct AppConfigRecord {
     pub known_hosts_path: String,
     pub openssh_known_hosts_path: String,
     pub merge_openssh_known_hosts_on_connect: bool,
+    pub known_hosts_strict_mode: bool,
+    pub fail_connect_on_openssh_merge_error: bool,
 }
 
 /// Authentication method for a connection profile.
@@ -225,6 +227,8 @@ impl DockBridgeClient {
             known_hosts_path,
             openssh_known_hosts_path,
             merge_openssh_known_hosts_on_connect: app_config.merge_openssh_known_hosts_on_connect,
+            known_hosts_strict_mode: app_config.known_hosts_strict_mode,
+            fail_connect_on_openssh_merge_error: app_config.fail_connect_on_openssh_merge_error,
         };
         let known_hosts_manager =
             KnownHostsManager::load(config.known_hosts_path()).map_err(map_error)?;

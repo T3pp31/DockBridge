@@ -46,12 +46,26 @@ final class ConnectionListViewModelTests: XCTestCase {
         let account = keychain.keychainAccount(for: profileID, kind: "profile")
         XCTAssertEqual(try keychain.loadPassword(account: account), "secret-password")
 
-        profile.authType = .privateKey
-        profile.privateKeyPath = "/Users/test/.ssh/id_rsa"
-        viewModel.save(profile, password: nil, passphrase: "key-passphrase")
+        let privateKeyProfile = try makePrivateKeyProfile(id: profileID)
+        viewModel.save(privateKeyProfile, password: nil, passphrase: "key-passphrase")
 
         XCTAssertNil(try keychain.loadPassword(account: account))
         XCTAssertEqual(try keychain.loadPassphrase(account: account), "key-passphrase")
+    }
+
+    func testSaveRejectsPrivateKeyWithoutBookmark() {
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyPath: "/Users/test/.ssh/id_rsa"
+        )
+
+        viewModel.save(profile, password: nil, passphrase: nil)
+
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertTrue(viewModel.profiles.isEmpty)
     }
 
     func testLoadShowsEndpointChangeWarningForTamperedProfile() throws {
@@ -64,6 +78,7 @@ final class ConnectionListViewModelTests: XCTestCase {
         )
 
         try store.saveProfiles([profile])
+        try store.seedInitialTrust(for: [profile])
         viewModel.load()
 
         var tampered = profile
@@ -77,6 +92,47 @@ final class ConnectionListViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.pendingEndpointChange?.trusted.host, "example.com")
     }
 
+    func testLoadShowsInitialTrustConfirmationWhenTrustStoreEmpty() throws {
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+
+        try store.saveProfiles([profile])
+        viewModel.load()
+
+        XCTAssertTrue(viewModel.showInitialTrustConfirmation)
+        XCTAssertFalse(viewModel.showEndpointChangeWarning)
+    }
+
+    func testConfirmInitialTrustSeedsTrustStore() throws {
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+
+        try store.saveProfiles([profile])
+        viewModel.load()
+        viewModel.confirmInitialTrust()
+
+        XCTAssertFalse(viewModel.showInitialTrustConfirmation)
+        XCTAssertTrue(try store.loadProfilesWithEndpointCheck().endpointChanges.isEmpty)
+    }
+
+    func testSaveDoesNotSeedTrustBeforeInitialConfirmation() throws {
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+
+        viewModel.save(profile, password: nil, passphrase: nil)
+
+        XCTAssertTrue(try ProfileTrustStore(baseDirectory: baseDirectory).loadTrustedEndpoints().isEmpty)
+    }
+
     func testAcceptEndpointChangeUpdatesTrustAndClearsWarning() throws {
         let profileID = UUID()
         let profile = ConnectionProfile(
@@ -87,6 +143,7 @@ final class ConnectionListViewModelTests: XCTestCase {
         )
 
         try store.saveProfiles([profile])
+        try store.seedInitialTrust(for: [profile])
         _ = try store.loadProfilesWithEndpointCheck()
 
         var tampered = profile
@@ -103,14 +160,7 @@ final class ConnectionListViewModelTests: XCTestCase {
 
     func testSaveDeletesPassphraseWhenSwitchingToPassword() throws {
         let profileID = UUID()
-        var profile = ConnectionProfile(
-            id: profileID,
-            name: "Test",
-            host: "example.com",
-            username: "user",
-            authType: .privateKey,
-            privateKeyPath: "/Users/test/.ssh/id_rsa"
-        )
+        var profile = try makePrivateKeyProfile(id: profileID)
 
         viewModel.save(profile, password: nil, passphrase: "key-passphrase")
 
@@ -119,6 +169,7 @@ final class ConnectionListViewModelTests: XCTestCase {
 
         profile.authType = .password
         profile.privateKeyPath = nil
+        profile.privateKeyBookmark = nil
         viewModel.save(profile, password: "secret-password", passphrase: nil)
 
         XCTAssertNil(try keychain.loadPassphrase(account: account))
@@ -146,23 +197,37 @@ final class ConnectionListViewModelTests: XCTestCase {
     }
 
     func testSaveDeletesPassphraseWhenSaveSecretsDisabled() throws {
-        let profileID = UUID()
-        let profile = ConnectionProfile(
-            id: profileID,
-            name: "Test",
-            host: "example.com",
-            username: "user",
-            authType: .privateKey,
-            privateKeyPath: "/Users/test/.ssh/id_rsa"
-        )
+        let profile = try makePrivateKeyProfile()
 
         viewModel.save(profile, password: nil, passphrase: "key-passphrase")
 
-        let account = keychain.keychainAccount(for: profileID, kind: "profile")
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
         XCTAssertEqual(try keychain.loadPassphrase(account: account), "key-passphrase")
 
         viewModel.save(profile, password: nil, passphrase: nil)
 
         XCTAssertNil(try keychain.loadPassphrase(account: account))
+    }
+
+    private func makePrivateKeyProfile(id: UUID = UUID()) throws -> ConnectionProfile {
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        let keyURL = baseDirectory.appendingPathComponent("id_rsa")
+        try Data("fake-key".utf8).write(to: keyURL)
+        let bookmark: Data
+        do {
+            bookmark = try SecurityScopedBookmarkService.shared.createBookmark(for: keyURL)
+        } catch {
+            throw XCTSkip("Security-scoped bookmarks require App Sandbox context: \(error)")
+        }
+
+        return ConnectionProfile(
+            id: id,
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyPath: keyURL.path,
+            privateKeyBookmark: bookmark
+        )
     }
 }

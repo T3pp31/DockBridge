@@ -16,7 +16,10 @@ pub use error::{
     AppError, AuthError, ConfigError, ConnectionError, SecurityError, SftpError, TransferError,
 };
 pub use security::{fingerprint_sha256, HostAlias, HostKeyCheckResult, KnownHostsManager};
-pub use sftp::{RemoteFile, SftpClient};
+pub use sftp::{
+    ensure_local_path_within_root, normalize_remote_path, validate_remote_entry_name, RemoteFile,
+    SftpClient,
+};
 pub use ssh::{
     is_connection_lost_message, AuthType, ConnectionProfile, HostKeyPrompt, SecretPassword,
     SshSession,

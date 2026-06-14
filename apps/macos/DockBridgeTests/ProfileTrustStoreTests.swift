@@ -17,16 +17,29 @@ final class ProfileTrustStoreTests: XCTestCase {
         super.tearDown()
     }
 
-    func testDetectEndpointChangesSeedsTrustOnFirstLoad() throws {
+    func testDetectEndpointChangesRequiresInitialTrustConfirmation() throws {
         let profile = ConnectionProfile(
             name: "Test",
             host: "example.com",
             username: "user"
         )
 
-        let changes = try trustStore.detectEndpointChanges(in: [profile])
+        let detection = try trustStore.detectEndpointChanges(in: [profile])
 
-        XCTAssertTrue(changes.isEmpty)
+        XCTAssertTrue(detection.endpointChanges.isEmpty)
+        XCTAssertEqual(detection.pendingInitialTrust, [profile])
+        XCTAssertTrue(try trustStore.loadTrustedEndpoints().isEmpty)
+    }
+
+    func testSeedInitialTrustPersistsEndpoints() throws {
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+
+        try trustStore.seedInitialTrust(from: [profile])
+
         let trusted = try trustStore.loadTrustedEndpoints()
         XCTAssertEqual(trusted[profile.id], TrustedProfileEndpoint(profile: profile))
     }
@@ -39,16 +52,17 @@ final class ProfileTrustStoreTests: XCTestCase {
             host: "example.com",
             username: "user"
         )
-        _ = try trustStore.detectEndpointChanges(in: [profile])
+        try trustStore.seedInitialTrust(from: [profile])
 
         var tampered = profile
         tampered.host = "evil.example.com"
-        let changes = try trustStore.detectEndpointChanges(in: [tampered])
+        let detection = try trustStore.detectEndpointChanges(in: [tampered])
 
-        XCTAssertEqual(changes.count, 1)
-        XCTAssertEqual(changes[0].profileID, profileID)
-        XCTAssertEqual(changes[0].trusted.host, "example.com")
-        XCTAssertEqual(changes[0].current.host, "evil.example.com")
+        XCTAssertEqual(detection.pendingInitialTrust, [])
+        XCTAssertEqual(detection.endpointChanges.count, 1)
+        XCTAssertEqual(detection.endpointChanges[0].profileID, profileID)
+        XCTAssertEqual(detection.endpointChanges[0].trusted.host, "example.com")
+        XCTAssertEqual(detection.endpointChanges[0].current.host, "evil.example.com")
     }
 
     func testSaveTrustedEndpointsSetsPermissionsTo0600() throws {

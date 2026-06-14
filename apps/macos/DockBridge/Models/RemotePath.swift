@@ -11,6 +11,17 @@ enum RemoteEntryNameError: LocalizedError {
     }
 }
 
+enum RemotePathError: LocalizedError {
+    case invalidPath(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidPath(let path):
+            return "The remote path '\(path)' contains an invalid '..' segment."
+        }
+    }
+}
+
 enum RemotePath {
     static func isValidEntryName(_ name: String) -> Bool {
         guard !name.isEmpty else { return false }
@@ -34,8 +45,8 @@ enum RemotePath {
         return base + "/" + trimmedName
     }
 
-    static func parent(of path: String) -> String {
-        let normalized = normalize(path)
+    static func parent(of path: String) throws -> String {
+        let normalized = try normalize(path)
         guard normalized != "/" else { return "/" }
 
         let withoutTrailingSlash = normalized.hasSuffix("/")
@@ -43,10 +54,12 @@ enum RemotePath {
             : normalized
 
         let parent = (withoutTrailingSlash as NSString).deletingLastPathComponent
-        return parent.isEmpty ? "/" : normalize(parent)
+        return parent.isEmpty ? "/" : try normalize(parent)
     }
 
-    static func normalize(_ path: String) -> String {
+    static func normalize(_ path: String) throws -> String {
+        try rejectParentSegment(in: path)
+
         var value = path.replacingOccurrences(of: "//", with: "/")
         if value.isEmpty {
             value = "/"
@@ -57,8 +70,14 @@ enum RemotePath {
         return value
     }
 
-    static func directoryPath(_ path: String) -> String {
-        let normalized = normalize(path)
+    static func directoryPath(_ path: String) throws -> String {
+        let normalized = try normalize(path)
         return normalized.hasSuffix("/") ? normalized : normalized + "/"
+    }
+
+    private static func rejectParentSegment(in path: String) throws {
+        if path.split(separator: "/").contains(where: { $0 == ".." }) {
+            throw RemotePathError.invalidPath(path)
+        }
     }
 }

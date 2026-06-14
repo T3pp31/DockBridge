@@ -146,6 +146,7 @@ struct SshClientHandler {
     port: u16,
     known_hosts: Arc<Mutex<KnownHostsManager>>,
     prompt: Arc<dyn HostKeyPrompt>,
+    known_hosts_strict_mode: bool,
 }
 
 impl client::Handler for SshClientHandler {
@@ -158,7 +159,12 @@ impl client::Handler for SshClientHandler {
         let fingerprint = fingerprint_sha256(server_public_key);
         let check = {
             let manager = self.known_hosts.lock().await;
-            manager.check_host_key(&self.host, self.port, server_public_key)
+            manager.check_host_key(
+                &self.host,
+                self.port,
+                server_public_key,
+                self.known_hosts_strict_mode,
+            )
         };
 
         match check {
@@ -244,6 +250,7 @@ impl SshSession {
             port,
             known_hosts,
             prompt,
+            known_hosts_strict_mode: config.known_hosts_strict_mode,
         };
 
         let connect_future =

@@ -35,7 +35,9 @@ struct AppConfig: Codable, Equatable, Sendable {
             transferChunkSizeBytes: transferChunkSizeBytes,
             knownHostsPath: knownHostsPath,
             opensshKnownHostsPath: opensshKnownHostsPath,
-            mergeOpensshKnownHostsOnConnect: mergeOpensshKnownHostsOnConnect
+            mergeOpensshKnownHostsOnConnect: mergeOpensshKnownHostsOnConnect,
+            knownHostsStrictMode: false,
+            failConnectOnOpensshMergeError: false
         )
     }
 }

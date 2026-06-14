@@ -12,13 +12,14 @@
 - `@revoked` entries reject matching keys; `@cert-authority` entries are imported but not used for host trust (host certificate authentication is not supported)
 - Host key mismatch prompts with previous and new SHA256 fingerprints (explicit accept required)
 - Passwords and key passphrases stored in Keychain only
-- Private key files are referenced by path, never copied into the app bundle
+- Private key files require a security-scoped bookmark (selected via Browse…); plaintext path-only references are not used for connections
 - No passwords, keys, or passphrases in logs
 - Rust secrets use `Debug` redaction and `zeroize` where applicable
 - UniFFI credentials use a `SecretCredential` custom type that zeroizes on drop after lift
 - Swift clears password/passphrase and `ConnectionProfileRecord` credentials after connect
 - Delete confirmation for destructive operations
 - Warning when connecting as root
+- **FileVault (or equivalent full-disk encryption) required** on the boot volume — see [Connection profiles](#connection-profiles-profilesjson)
 
 ## CLI password authentication
 
@@ -26,8 +27,18 @@ Password-based CLI connections support two mechanisms:
 
 | Flag | Use case | Risk |
 |------|----------|------|
-| `--password-stdin` | Scripts, CI, production | Recommended; password is not visible in argv or `ps` |
+| `--password-stdin` | Scripts, CI, production | **Recommended**; password is not visible in argv or `ps` |
 | `--password` | Local development and testing only | Visible in argv, shell history, and process listings ([CWE-214](https://cwe.mitre.org/data/definitions/214.html)) |
+
+### Distribution policy
+
+For production deployments and release artifacts, build the CLI **without** inline `--password` support:
+
+```bash
+cargo build -p dockbridge-cli --release --features disable-cli-password
+```
+
+This removes the `--password` flag at compile time so operators cannot accidentally pass secrets on the command line. Use `--password-stdin` exclusively in scripts, CI, and automation.
 
 Example (recommended):
 
@@ -38,11 +49,14 @@ printf '%s\n' "$PASSWORD" | dockbridge list \
 
 When `CI=true` or in release builds, the CLI prints a warning if `--password` is used. Set `DOCKBRIDGE_SUPPRESS_PASSWORD_WARNING=1` only when you accept the risk (for example, a one-off local test in CI).
 
-For hardened deployments, build the CLI without the flag:
+## Host key trust policy
 
-```bash
-cargo build -p dockbridge-cli --release --features disable-cli-password
-```
+Rust core settings in `config/default.toml` (and UniFFI `AppConfigRecord`):
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `known_hosts_strict_mode` | `false` | When `true`, trusts host keys only for exact host/port (or stored alias) matches. Disables fingerprint alias fallback across hostnames. |
+| `fail_connect_on_openssh_merge_error` | `false` | When `true`, aborts the connection if merging OpenSSH `known_hosts` fails. When `false`, merge failures are logged and the connection continues. |
 
 ## Connection profiles (`profiles.json`)
 
@@ -88,11 +102,11 @@ Severity in DockBridge’s threat model: **Low**, assuming the mitigations below
 - Physical access to an unlocked Mac
 - Disk images or backups copied while the volume is decrypted
 
-### FileVault prerequisite
+### FileVault requirement
 
-DockBridge assumes the boot volume is protected with **FileVault** (or equivalent full-disk encryption). FileVault encrypts data at rest so that `profiles.json`, Keychain items, and private key files are not readable from a stolen drive while the Mac is powered off.
+**FileVault (or equivalent full-disk encryption) is required** on any Mac that stores production connection profiles. DockBridge relies on OS-level encryption at rest to protect `profiles.json`, Keychain items, and referenced private key files when the machine is powered off or the volume is locked.
 
-Without full-disk encryption, `0600` and App Sandbox reduce casual exposure but do not prevent offline disk extraction. Operators in shared, travel, or compliance-sensitive environments should enable FileVault before storing production connection profiles.
+Without full-disk encryption, `0600` and App Sandbox reduce casual exposure but do not prevent offline disk extraction. Enable FileVault before saving production profiles in shared, travel, or compliance-sensitive environments.
 
 ### Encrypted store migration (future consideration)
 
@@ -116,6 +130,20 @@ The macOS app runs in App Sandbox and cannot read `~/.ssh/known_hosts` without e
 
 The CLI and non-sandboxed environments use `openssh_known_hosts_path` from `config/default.toml` (default: `~/.ssh/known_hosts`).
 
+### Known hosts strict mode
+
+Set `known_hosts_strict_mode = true` in `config/default.toml` (or pass it via `AppConfigRecord`) to trust host keys only when the connecting host/port matches a stored entry or hashed OpenSSH entry. Fingerprint-only alias trust (same key, different hostname) is disabled in strict mode. Default is `false` to preserve OpenSSH-style alias behavior.
+
+### OpenSSH merge failure handling
+
+By default, a failed OpenSSH `known_hosts` merge is logged and the connection continues (`fail_connect_on_openssh_merge_error = false`). Set `fail_connect_on_openssh_merge_error = true` to abort the connection when merge fails, so operators are not left with a partially updated trust store.
+
+### Hashed host entries and SHA-1
+
+OpenSSH hashed host lines (`|1|salt|hash`) use **SHA-1** to derive the stored hostname hash. DockBridge implements the same algorithm when importing and matching hashed entries in `KnownHostsManager` (see `openssh_hostname_hash` in `crates/core/src/security/known_hosts.rs`).
+
+This SHA-1 usage is **OpenSSH specification–compliant**, not a general-purpose integrity choice. DockBridge does not use SHA-1 for host-key fingerprints shown to users (those use SHA-256) or for SSH transport cryptography. Hashed-entry matching must remain SHA-1–compatible to interoperate with standard `known_hosts` files.
+
 ## macOS App Sandbox
 
 DockBridge runs with App Sandbox enabled for defense in depth and a reduced attack surface. An SFTP client does not need full filesystem access; user-selected paths and security-scoped bookmarks are sufficient for browsing, transfers, and private-key references. The app accesses only folders and keys explicitly chosen by the user.
@@ -130,10 +158,23 @@ DockBridge runs with App Sandbox enabled for defense in depth and a reduced atta
 
 Entitlements not granted include `network.server`, `temporary-exception.files.absolute-path.*`, and broad folder access such as `downloads.read-write`.
 
-### Code signing
+### Code signing and distribution
 
 - Hardened Runtime enabled for Release builds
-- Notarization is not yet in CI (planned for v1.0); required before Developer ID distribution outside the Mac App Store
+- CI builds the macOS app unsigned (`CODE_SIGNING_ALLOWED=NO`) for compile and test verification only
+
+#### Notarization (planned for v1.0)
+
+Apple [Notarization](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution) is **not** performed in CI today. It is a **v1.0 release requirement** before distributing DockBridge outside the Mac App Store with a Developer ID certificate.
+
+Planned v1.0 distribution checklist:
+
+1. Sign the Release `.app` with a Developer ID Application certificate
+2. Submit the build to Apple's Notary Service (`notarytool submit`)
+3. Staple the notarization ticket to the app bundle (`stapler staple`)
+4. Verify Gatekeeper acceptance on a clean macOS install (`spctl --assess --type execute`)
+
+Track progress in [roadmap.md](roadmap.md#10). Until v1.0, treat CI and local Debug/Release artifacts as development builds only—not for end-user distribution.
 
 ## Dependency vulnerability management
 

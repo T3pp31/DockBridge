@@ -142,10 +142,16 @@ impl KnownHostsManager {
     /// Lookup order:
     /// 1. `@revoked` entries (plain or hashed) matching host and fingerprint
     /// 2. Exact canonical host/port or stored alias (excluding cert-authority markers)
-    /// 3. Same port and matching fingerprint (hostname/IP alias normalization)
+    /// 3. Same port and matching fingerprint (hostname/IP alias normalization; skipped in strict mode)
     /// 4. Hashed entries matching host and fingerprint
     /// 5. Unknown
-    pub fn check_host_key(&self, host: &str, port: u16, key: &PublicKey) -> HostKeyCheckResult {
+    pub fn check_host_key(
+        &self,
+        host: &str,
+        port: u16,
+        key: &PublicKey,
+        strict_mode: bool,
+    ) -> HostKeyCheckResult {
         let actual = fingerprint_sha256(key);
 
         if self.is_revoked(host, port, &actual) {
@@ -156,9 +162,10 @@ impl KnownHostsManager {
             return fingerprint_check(entry, &actual);
         }
 
-        if self
-            .find_trusted_entry_by_fingerprint(port, &actual)
-            .is_some()
+        if !strict_mode
+            && self
+                .find_trusted_entry_by_fingerprint(port, &actual)
+                .is_some()
         {
             return HostKeyCheckResult::Trust;
         }
@@ -243,7 +250,8 @@ impl KnownHostsManager {
     ///
     /// When merging is disabled, returns `0` without reading the file.
     /// When the file does not exist, returns `0` without error.
-    /// Read failures are logged and return `0` so connection is not blocked.
+    /// Read failures are logged and return `0` so connection is not blocked unless
+    /// [`AppConfig::fail_connect_on_openssh_merge_error`] is enabled.
     pub fn merge_openssh_on_connect(&mut self, config: &AppConfig) -> Result<usize, SecurityError> {
         if !config.merge_openssh_known_hosts_on_connect {
             return Ok(0);
@@ -262,7 +270,11 @@ impl KnownHostsManager {
                     error = %err,
                     "failed to merge OpenSSH known_hosts on connect"
                 );
-                Ok(0)
+                if config.fail_connect_on_openssh_merge_error {
+                    Err(err)
+                } else {
+                    Ok(0)
+                }
             }
         }
     }
@@ -667,6 +679,8 @@ fn openssh_marker_to_known_host_marker(marker: &OpenSshMarker) -> KnownHostMarke
 }
 
 fn openssh_hostname_hash(salt: &[u8], host: &str, port: u16) -> [u8; 20] {
+    // OpenSSH hashed-hostname entries use SHA-1 per the known_hosts format (see ssh-key crate).
+    // SHA-256 is used for fingerprint display; this hash is spec-mandated for |1| entries.
     let mut hasher = Sha1::new();
     hasher.update(salt);
     if port == 22 {
@@ -783,7 +797,7 @@ mod tests {
 
         let mut manager = KnownHostsManager::load(&path).unwrap();
         assert_eq!(
-            manager.check_host_key("localhost", 22, &key),
+            manager.check_host_key("localhost", 22, &key, false),
             HostKeyCheckResult::Unknown
         );
 
@@ -792,7 +806,7 @@ mod tests {
 
         let reloaded = KnownHostsManager::load(&path).unwrap();
         assert_eq!(
-            reloaded.check_host_key("localhost", 22, &key),
+            reloaded.check_host_key("localhost", 22, &key, false),
             HostKeyCheckResult::Trust
         );
     }
@@ -807,7 +821,7 @@ mod tests {
         let mut manager = KnownHostsManager::load(&path).unwrap();
         manager.accept_host_key("example.com", 22, &first).unwrap();
 
-        match manager.check_host_key("example.com", 22, &second) {
+        match manager.check_host_key("example.com", 22, &second, false) {
             HostKeyCheckResult::Mismatch { .. } => {}
             other => panic!("expected mismatch, got {other:?}"),
         }
@@ -823,7 +837,7 @@ mod tests {
         manager.accept_host_key("example.com", 22, &key).unwrap();
 
         assert_eq!(
-            manager.check_host_key("203.0.113.1", 22, &key),
+            manager.check_host_key("203.0.113.1", 22, &key, false),
             HostKeyCheckResult::Trust
         );
     }
@@ -852,7 +866,7 @@ mod tests {
 
         let manager = KnownHostsManager::load(&path).unwrap();
         assert_eq!(
-            manager.check_host_key("localhost", 22, &test_public_key()),
+            manager.check_host_key("localhost", 22, &test_public_key(), false),
             HostKeyCheckResult::Unknown
         );
         assert!(!path.exists());
@@ -866,7 +880,7 @@ mod tests {
 
         let manager = KnownHostsManager::load(&path).unwrap();
         assert_eq!(
-            manager.check_host_key("localhost", 22, &test_public_key()),
+            manager.check_host_key("localhost", 22, &test_public_key(), false),
             HostKeyCheckResult::Unknown
         );
     }
@@ -900,11 +914,11 @@ mod tests {
         assert_eq!(merged, 1);
 
         assert_eq!(
-            manager.check_host_key("example.com", 22, &key),
+            manager.check_host_key("example.com", 22, &key, false),
             HostKeyCheckResult::Trust
         );
         assert_eq!(
-            manager.check_host_key("203.0.113.1", 22, &key),
+            manager.check_host_key("203.0.113.1", 22, &key, false),
             HostKeyCheckResult::Trust
         );
     }
@@ -969,7 +983,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            manager.check_host_key(host, 22, &key),
+            manager.check_host_key(host, 22, &key, false),
             HostKeyCheckResult::Trust
         );
     }
@@ -998,7 +1012,7 @@ mod tests {
         manager.import_openssh(&openssh_path).unwrap();
 
         assert_eq!(
-            manager.check_host_key("other.example.com", 22, &key),
+            manager.check_host_key("other.example.com", 22, &key, false),
             HostKeyCheckResult::Unknown
         );
     }
@@ -1023,7 +1037,7 @@ mod tests {
         manager.import_openssh(&openssh_path).unwrap();
 
         assert_eq!(
-            manager.check_host_key("example.com", 22, &key),
+            manager.check_host_key("example.com", 22, &key, false),
             HostKeyCheckResult::Reject
         );
     }
@@ -1048,7 +1062,7 @@ mod tests {
         manager.import_openssh(&openssh_path).unwrap();
 
         assert_eq!(
-            manager.check_host_key("server.example.com", 22, &key),
+            manager.check_host_key("server.example.com", 22, &key, false),
             HostKeyCheckResult::Unknown
         );
     }
@@ -1094,7 +1108,7 @@ mod tests {
         let merged = manager.merge_openssh_on_connect(&config).unwrap();
         assert_eq!(merged, 0);
         assert_eq!(
-            manager.check_host_key("example.com", 22, &key),
+            manager.check_host_key("example.com", 22, &key, false),
             HostKeyCheckResult::Unknown
         );
     }
@@ -1124,7 +1138,7 @@ mod tests {
         manager.import_openssh(&openssh_path).unwrap();
 
         assert_eq!(
-            manager.check_host_key(host, 22, &key),
+            manager.check_host_key(host, 22, &key, false),
             HostKeyCheckResult::Reject
         );
     }
@@ -1152,7 +1166,7 @@ mod tests {
         let merged = manager.merge_openssh_on_connect(&config).unwrap();
         assert_eq!(merged, 1);
         assert_eq!(
-            manager.check_host_key("example.com", 22, &key),
+            manager.check_host_key("example.com", 22, &key, false),
             HostKeyCheckResult::Trust
         );
     }
@@ -1172,13 +1186,57 @@ mod tests {
         manager.accept_host_key("example.com", 22, &second).unwrap();
 
         assert_eq!(
-            manager.check_host_key("example.com", 22, &second),
+            manager.check_host_key("example.com", 22, &second, false),
             HostKeyCheckResult::Trust
         );
-        match manager.check_host_key("example.com", 22, &first) {
+        match manager.check_host_key("example.com", 22, &first, false) {
             HostKeyCheckResult::Mismatch { .. } => {}
             other => panic!("expected mismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn strict_mode_rejects_fingerprint_alias_without_exact_host() {
+        // Given: a trusted host and strict mode enabled
+        // When: the same key is presented under a different hostname
+        // Then: Unknown is returned instead of fingerprint alias trust
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &key, true),
+            HostKeyCheckResult::Unknown
+        );
+    }
+
+    #[test]
+    fn merge_openssh_on_connect_failure_aborts_when_configured() {
+        // Given: merge enabled, invalid OpenSSH file, and abort-on-failure config
+        // When: merge_openssh_on_connect is called
+        // Then: the merge error is returned
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        fs::write(&openssh_path, "this is not a valid known_hosts line\n").unwrap();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        let config = AppConfig {
+            openssh_known_hosts_path: openssh_path,
+            merge_openssh_known_hosts_on_connect: true,
+            fail_connect_on_openssh_merge_error: true,
+            ..AppConfig::default()
+        };
+
+        let err = manager.merge_openssh_on_connect(&config).unwrap_err();
+        assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
     }
 
     #[cfg(unix)]

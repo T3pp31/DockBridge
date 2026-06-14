@@ -85,6 +85,21 @@ struct ConnectionListView: View {
         } message: {
             Text("Connecting as root is discouraged. Continue only if you understand the risks.")
         }
+        .alert("Trust connection endpoints?", isPresented: $viewModel.showInitialTrustConfirmation) {
+            Button("Not Now", role: .cancel) {
+                viewModel.declineInitialTrust()
+            }
+            Button("Trust Endpoints") {
+                viewModel.confirmInitialTrust()
+            }
+        } message: {
+            Text(
+                """
+                DockBridge will remember the host, port, and username for your saved connections \
+                to detect unauthorized changes. Confirm only if these profiles belong to you.
+                """
+            )
+        }
         .errorAlert(message: $viewModel.errorMessage)
     }
 

@@ -47,6 +47,8 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace
 
+  # macOS job: compile/test only. Developer ID signing and Apple Notarization are
+  # planned for v1.0 before public distribution—see docs/security.md#notarization-planned-for-v10.
   macos:
     name: macOS
     runs-on: macos-latest
