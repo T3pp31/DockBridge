@@ -62,6 +62,15 @@ struct SettingsView: View {
                     }
                 }
 
+                Toggle(
+                    "Strict host key matching (no fingerprint alias)",
+                    isOn: $config.knownHostsStrictMode
+                )
+                Toggle(
+                    "Abort connection if OpenSSH known_hosts merge fails",
+                    isOn: $config.failConnectOnOpensshMergeError
+                )
+
                 Text(
                     """
                     The sandboxed app cannot read ~/.ssh/known_hosts directly. \

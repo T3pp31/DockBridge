@@ -100,6 +100,21 @@ struct ConnectionListView: View {
                 """
             )
         }
+        .alert("Trust new connection endpoints?", isPresented: $viewModel.showNewProfileTrustConfirmation) {
+            Button("Not Now", role: .cancel) {
+                viewModel.declineNewProfileTrust()
+            }
+            Button("Trust Endpoints") {
+                viewModel.confirmNewProfileTrust()
+            }
+        } message: {
+            Text(
+                """
+                DockBridge found new saved connections without trusted endpoints. \
+                Trust only profiles you added yourself.
+                """
+            )
+        }
         .errorAlert(message: $viewModel.errorMessage)
     }
 

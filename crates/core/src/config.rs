@@ -48,8 +48,8 @@ impl Default for AppConfig {
             known_hosts_path: default_known_hosts_path(),
             openssh_known_hosts_path: default_openssh_known_hosts_path(),
             merge_openssh_known_hosts_on_connect: true,
-            known_hosts_strict_mode: false,
-            fail_connect_on_openssh_merge_error: false,
+            known_hosts_strict_mode: true,
+            fail_connect_on_openssh_merge_error: true,
         }
     }
 }
@@ -148,11 +148,11 @@ fn default_merge_openssh_known_hosts_on_connect() -> bool {
 }
 
 fn default_known_hosts_strict_mode() -> bool {
-    false
+    true
 }
 
 fn default_fail_connect_on_openssh_merge_error() -> bool {
-    false
+    true
 }
 
 /// Ensures the parent directory for the known hosts file exists.
@@ -169,6 +169,16 @@ pub fn ensure_known_hosts_parent(path: &Path) -> Result<(), SecurityError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_config_uses_strict_security_defaults() {
+        // Given: the default AppConfig
+        // When: security-related defaults are inspected
+        // Then: strict host matching and merge failure abort are enabled
+        let config = AppConfig::default();
+        assert!(config.known_hosts_strict_mode);
+        assert!(config.fail_connect_on_openssh_merge_error);
+    }
 
     #[test]
     fn expand_tilde_replaces_home_prefix() {

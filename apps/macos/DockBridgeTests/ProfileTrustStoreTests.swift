@@ -28,6 +28,7 @@ final class ProfileTrustStoreTests: XCTestCase {
 
         XCTAssertTrue(detection.endpointChanges.isEmpty)
         XCTAssertEqual(detection.pendingInitialTrust, [profile])
+        XCTAssertEqual(detection.pendingNewProfileTrust, [])
         XCTAssertTrue(try trustStore.loadTrustedEndpoints().isEmpty)
     }
 
@@ -42,6 +43,32 @@ final class ProfileTrustStoreTests: XCTestCase {
 
         let trusted = try trustStore.loadTrustedEndpoints()
         XCTAssertEqual(trusted[profile.id], TrustedProfileEndpoint(profile: profile))
+    }
+
+    func testDetectEndpointChangesDoesNotAutoTrustNewProfileWhenExistingTrust() throws {
+        let existingProfile = ConnectionProfile(
+            name: "Existing",
+            host: "example.com",
+            username: "user"
+        )
+        try trustStore.seedInitialTrust(from: [existingProfile])
+
+        let newProfile = ConnectionProfile(
+            name: "New",
+            host: "new.example.com",
+            username: "newuser"
+        )
+
+        let detection = try trustStore.detectEndpointChanges(in: [existingProfile, newProfile])
+
+        XCTAssertEqual(detection.pendingInitialTrust, [])
+        XCTAssertEqual(detection.endpointChanges, [])
+        XCTAssertEqual(detection.pendingNewProfileTrust, [newProfile])
+
+        let trusted = try trustStore.loadTrustedEndpoints()
+        XCTAssertEqual(trusted.count, 1)
+        XCTAssertEqual(trusted[existingProfile.id], TrustedProfileEndpoint(profile: existingProfile))
+        XCTAssertNil(trusted[newProfile.id])
     }
 
     func testDetectEndpointChangesReportsHostChange() throws {
@@ -59,6 +86,7 @@ final class ProfileTrustStoreTests: XCTestCase {
         let detection = try trustStore.detectEndpointChanges(in: [tampered])
 
         XCTAssertEqual(detection.pendingInitialTrust, [])
+        XCTAssertEqual(detection.pendingNewProfileTrust, [])
         XCTAssertEqual(detection.endpointChanges.count, 1)
         XCTAssertEqual(detection.endpointChanges[0].profileID, profileID)
         XCTAssertEqual(detection.endpointChanges[0].trusted.host, "example.com")

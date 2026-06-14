@@ -10,7 +10,7 @@ use crate::ssh::session::SshSession;
 
 use super::tree::{
     ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
-    normalize_remote_path, walk_local_directory, walk_remote_directory,
+    normalize_remote_path, validated_remote_entry, walk_local_directory, walk_remote_directory,
 };
 
 /// Metadata for a remote file or directory entry.
@@ -73,10 +73,11 @@ impl<'a> SftpClient<'a> {
         let mut files = Vec::new();
         for entry in read_dir.by_ref() {
             let name = entry.file_name();
+            let validated_path = validated_remote_entry(&path, &name, &entry.path())?;
             let metadata = entry.metadata();
             files.push(RemoteFile {
                 name: name.clone(),
-                path: entry.path(),
+                path: validated_path,
                 is_directory: metadata.is_dir(),
                 size: metadata.size.unwrap_or(0),
             });
@@ -100,10 +101,11 @@ impl<'a> SftpClient<'a> {
         chunk_size: usize,
         is_cancelled: impl Fn() -> bool + Send,
     ) -> Result<(), SftpError> {
+        let remote_path = normalize_remote_path(remote_path)?;
         let local = local_path.display().to_string();
-        let remote = remote_path.to_string();
+        let remote = remote_path.clone();
         let chunk_size = clamp_transfer_chunk_size(chunk_size);
-        let partial_remote_path = partial_remote_path(remote_path)?;
+        let partial_remote_path = partial_remote_path(&remote_path)?;
 
         let mut local_file =
             tokio::fs::File::open(local_path)
@@ -163,7 +165,7 @@ impl<'a> SftpClient<'a> {
                 message: err.to_string(),
             })?;
 
-        if let Err(err) = self.rename(&partial_remote_path, remote_path).await {
+        if let Err(err) = self.rename(&partial_remote_path, &remote_path).await {
             let _ = self.delete(&partial_remote_path).await;
             return Err(err);
         }
@@ -185,7 +187,8 @@ impl<'a> SftpClient<'a> {
         chunk_size: usize,
         is_cancelled: impl Fn() -> bool + Send,
     ) -> Result<(), SftpError> {
-        let remote = remote_path.to_string();
+        let remote_path = normalize_remote_path(remote_path)?;
+        let remote = remote_path.clone();
         let local = local_path.display().to_string();
         let chunk_size = clamp_transfer_chunk_size(chunk_size);
         let partial_local_path = partial_local_path(local_path);
@@ -202,7 +205,7 @@ impl<'a> SftpClient<'a> {
 
         let mut remote_file =
             self.sftp()
-                .open(remote_path)
+                .open(&remote_path)
                 .await
                 .map_err(|err| SftpError::DownloadFailed {
                     remote: remote.clone(),
@@ -582,5 +585,32 @@ mod tests {
                 "expected InvalidRemotePath for {path:?}"
             );
         }
+    }
+
+    #[test]
+    fn upload_download_boundary_normalizes_relative_paths() {
+        // Given: relative remote paths passed to transfer helpers
+        // When: normalize_remote_path is applied at the upload/download boundary
+        // Then: paths are normalized to absolute POSIX paths
+        assert_eq!(
+            normalize_remote_path("remote/dir/file.txt").unwrap(),
+            "/remote/dir/file.txt"
+        );
+        assert_eq!(
+            normalize_remote_path("/already/absolute").unwrap(),
+            "/already/absolute"
+        );
+    }
+
+    #[test]
+    fn partial_remote_path_rejects_traversal_before_upload() {
+        // Given: a remote upload path containing parent-directory segments
+        // When: partial_remote_path is called after normalization
+        // Then: InvalidRemotePath is returned before any SFTP upload begins
+        let err = partial_remote_path("/remote/../secret.txt").unwrap_err();
+        assert!(matches!(
+            err,
+            crate::error::SftpError::InvalidRemotePath { .. }
+        ));
     }
 }

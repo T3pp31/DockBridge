@@ -55,7 +55,8 @@ final class ConnectionStore: @unchecked Sendable {
         return ProfileLoadResult(
             profiles: profiles,
             endpointChanges: detection.endpointChanges,
-            pendingInitialTrust: detection.pendingInitialTrust
+            pendingInitialTrust: detection.pendingInitialTrust,
+            pendingNewProfileTrust: detection.pendingNewProfileTrust
         )
     }
 
@@ -74,7 +75,9 @@ final class ConnectionStore: @unchecked Sendable {
             if updateTrust {
                 let existingTrust = try trustStore.loadTrustedEndpoints()
                 if !existingTrust.isEmpty {
-                    try trustStore.replaceTrustedEndpoints(for: profiles)
+                    for profile in profiles where existingTrust[profile.id] != nil {
+                        try trustStore.updateTrust(for: profile)
+                    }
                 }
             }
         } catch {
@@ -107,6 +110,12 @@ final class ConnectionStore: @unchecked Sendable {
 
     func seedInitialTrust(for profiles: [ConnectionProfile]) throws {
         try trustStore.seedInitialTrust(from: profiles)
+    }
+
+    func trustProfiles(_ profiles: [ConnectionProfile]) throws {
+        for profile in profiles {
+            try trustStore.updateTrust(for: profile)
+        }
     }
 
     func restoreTrustedEndpoint(for change: ProfileEndpointChange) throws -> [ConnectionProfile] {

@@ -42,4 +42,5 @@ struct ProfileLoadResult: Sendable {
     let profiles: [ConnectionProfile]
     let endpointChanges: [ProfileEndpointChange]
     let pendingInitialTrust: [ConnectionProfile]
+    let pendingNewProfileTrust: [ConnectionProfile]
 }

@@ -187,8 +187,11 @@ final class MainViewModel: ObservableObject {
 
         do {
             let items = try await bridge.listDirectory(path: path)
+            let filtered = items.filter { item in
+                RemotePath.pathMatchesEntry(parent: path, entryPath: item.path, name: item.name)
+            }
             guard generation == remoteLoadGeneration, path == remotePath else { return }
-            remoteItems = items
+            remoteItems = filtered
         } catch {
             guard generation == remoteLoadGeneration else { return }
             errorMessage = error.dockBridgeUserMessage

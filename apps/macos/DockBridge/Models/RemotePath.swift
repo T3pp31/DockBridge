@@ -75,6 +75,16 @@ enum RemotePath {
         return normalized.hasSuffix("/") ? normalized : normalized + "/"
     }
 
+    static func pathMatchesEntry(parent: String, entryPath: String, name: String) -> Bool {
+        guard isValidEntryName(name) else { return false }
+        guard let normalizedParent = try? normalize(parent),
+              let normalizedEntry = try? normalize(entryPath),
+              let expected = try? normalize(join(parent, name)) else {
+            return false
+        }
+        return normalizedEntry == expected
+    }
+
     private static func rejectParentSegment(in path: String) throws {
         if path.split(separator: "/").contains(where: { $0 == ".." }) {
             throw RemotePathError.invalidPath(path)

@@ -53,7 +53,9 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
             showHiddenFiles: false,
             mergeOpensshKnownHostsOnConnect: true,
             opensshKnownHostsPath: "~/.ssh/known_hosts",
-            opensshKnownHostsBookmark: nil
+            opensshKnownHostsBookmark: nil,
+            knownHostsStrictMode: true,
+            failConnectOnOpensshMergeError: true
         )
 
         let resolved = DefaultLocalPathResolver.resolve(config: config, bookmarkService: service)
