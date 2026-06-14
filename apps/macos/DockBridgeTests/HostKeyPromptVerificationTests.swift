@@ -117,6 +117,8 @@ final class HostKeyPromptVerificationTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(10))
         }
 
+        try await Task.sleep(for: .milliseconds(20))
+
         await MainActor.run {
             bridge.respondToHostKeyChallenge(accepted: true)
         }

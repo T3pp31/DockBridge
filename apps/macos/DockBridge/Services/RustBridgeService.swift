@@ -208,13 +208,13 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
             respondToHostKeyChallenge(accepted: false)
         }
 
-        pendingHostKeyChallenge = challenge
         let timeoutSecs = settings.loadConfig().connectionTimeoutSecs
 
         let decision = await withTaskGroup(of: Bool.self) { group in
             group.addTask { @MainActor in
                 await withCheckedContinuation { continuation in
                     self.hostKeyContinuation = continuation
+                    self.pendingHostKeyChallenge = challenge
                 }
             }
 
