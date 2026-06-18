@@ -7,6 +7,12 @@ export PATH="${HOME}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# Release packaging builds a universal static library before xcodebuild.
+if [[ "${DOCKBRIDGE_SKIP_HOST_BUILD:-}" == "1" && -z "${1:-}" ]]; then
+  echo "Skipping host Rust build (DOCKBRIDGE_SKIP_HOST_BUILD=1)."
+  exit 0
+fi
+
 # Use native target by default (target/release). Pass a rust triple to cross-compile.
 RUST_TARGET="${1:-}"
 PROFILE="${2:-release}"

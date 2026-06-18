@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="DockBridge is a macOS-native SFTP client inspired by WinSCP."
+    />
+    <title>DockBridge — macOS SFTP Client</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container">
+        <a class="brand" href="./">
+          <img src="assets/thumbnail.png" alt="" width="32" height="32" />
+          <span>DockBridge</span>
+        </a>
+        <nav class="nav-links" aria-label="Site">
+          <a href="#features">Features</a>
+          <a href="#install">Install</a>
+          <a href="https://github.com/T3pp31/DockBridge/releases" target="_blank" rel="noopener noreferrer">Releases</a>
+          <a href="https://github.com/T3pp31/DockBridge" target="_blank" rel="noopener noreferrer">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="container">
+          <img
+            class="hero-icon"
+            src="assets/thumbnail.png"
+            alt="DockBridge app icon"
+            width="128"
+            height="128"
+          />
+          <h1>DockBridge</h1>
+          <p>
+            A native macOS SFTP client with a two-pane file browser, saved
+            connections, transfer queue, and Keychain-backed credentials.
+          </p>
+          <div class="download-group">
+            <a
+              id="download-button"
+              class="btn-primary is-loading"
+              href="https://github.com/T3pp31/DockBridge/releases/latest"
+              aria-busy="true"
+            >
+              Download for macOS
+            </a>
+            <p id="download-meta" class="download-meta">Loading latest release…</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="features" class="section">
+        <div class="container">
+          <h2>Features</h2>
+          <div class="card-grid">
+            <article class="card">
+              <h3>Two-pane browser</h3>
+              <p>Navigate local and remote directories side by side, WinSCP-style.</p>
+            </article>
+            <article class="card">
+              <h3>SFTP transfers</h3>
+              <p>Upload, download, delete, rename, and create directories over SFTP.</p>
+            </article>
+            <article class="card">
+              <h3>Saved connections</h3>
+              <p>Store connection profiles with passwords and passphrases in Keychain.</p>
+            </article>
+            <article class="card">
+              <h3>Host key verification</h3>
+              <p>Review SHA-256 fingerprints before trusting a server on first connect.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="requirements" class="section">
+        <div class="container">
+          <h2>Requirements</h2>
+          <div class="card">
+            <ul>
+              <li>macOS 15 Sequoia or later</li>
+              <li>Apple Silicon or Intel Mac</li>
+              <li>Network access to your SFTP server</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="install" class="section">
+        <div class="container">
+          <h2>Install</h2>
+          <div class="card">
+            <ol class="steps">
+              <li>Download the latest <code>DockBridge-*-macOS.zip</code> from the button above.</li>
+              <li>Double-click the ZIP file to extract <code>DockBridge.app</code>.</li>
+              <li>Drag <code>DockBridge.app</code> into your Applications folder.</li>
+              <li>Open DockBridge from Applications.</li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <section id="gatekeeper" class="section">
+        <div class="container">
+          <h2>Opening unsigned builds</h2>
+          <div class="card notice">
+            <p>
+              Early releases are not yet signed with a Developer ID certificate.
+              macOS may show a warning that the developer cannot be verified.
+            </p>
+            <ul>
+              <li>Right-click <code>DockBridge.app</code> and choose <strong>Open</strong>, then confirm.</li>
+              <li>
+                Or remove the quarantine attribute:
+                <code>xattr -cr /Applications/DockBridge.app</code>
+              </li>
+            </ul>
+            <p>
+              Developer ID signing and Apple Notarization are planned for v1.0.
+              See the <a href="https://github.com/T3pp31/DockBridge/blob/main/docs/security.md">security docs</a>.
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container">
+        <p>
+          <a href="https://github.com/T3pp31/DockBridge">Source on GitHub</a>
+          ·
+          <a href="https://github.com/T3pp31/DockBridge/releases">Release notes</a>
+        </p>
+        <p>Licensed under the MIT License.</p>
+      </div>
+    </footer>
+
+    <script>
+      (function () {
+        const GITHUB_REPO = "T3pp31/DockBridge";
+        const FALLBACK_VERSION = "0.1.0";
+        const FALLBACK_ASSET = `DockBridge-${FALLBACK_VERSION}-macOS.zip`;
+
+        const button = document.getElementById("download-button");
+        const meta = document.getElementById("download-meta");
+
+        function setDownload(url, label) {
+          button.href = url;
+          button.classList.remove("is-loading");
+          button.removeAttribute("aria-busy");
+          button.textContent = "Download for macOS";
+          meta.textContent = label;
+        }
+
+        function setFallback(message) {
+          setDownload(
+            `https://github.com/${GITHUB_REPO}/releases/latest/download/${FALLBACK_ASSET}`,
+            message
+          );
+        }
+
+        fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+          headers: { Accept: "application/vnd.github+json" },
+        })
+          .then(function (response) {
+            if (!response.ok) {
+              throw new Error("Release API unavailable");
+            }
+            return response.json();
+          })
+          .then(function (release) {
+            const zipAsset = (release.assets || []).find(function (asset) {
+              return asset.name.endsWith(".zip");
+            });
+
+            if (zipAsset) {
+              setDownload(
+                zipAsset.browser_download_url,
+                `Version ${release.tag_name.replace(/^v/, "")} · macOS 15+`
+              );
+              return;
+            }
+
+            setFallback(
+              `Version ${release.tag_name.replace(/^v/, "")} · download from Releases page`
+            );
+          })
+          .catch(function () {
+            setFallback(
+              `Expected ${FALLBACK_ASSET} · see Releases if the download fails`
+            );
+          });
+      })();
+    </script>
+  </body>
+</html>

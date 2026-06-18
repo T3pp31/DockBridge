@@ -1,0 +1,6 @@
+[release]
+version = "0.1.0"
+app_name = "DockBridge"
+min_macos = "15.0"
+github_repo = "T3pp31/DockBridge"
+asset_name_template = "{app_name}-{version}-macOS.zip"
