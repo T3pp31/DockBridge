@@ -29,6 +29,7 @@ enum AppSettingsKeys {
     static let opensshKnownHostsBookmark = "opensshKnownHostsBookmark"
     static let knownHostsStrictMode = "knownHostsStrictMode"
     static let failConnectOnOpensshMergeError = "failConnectOnOpensshMergeError"
+    static let skippedUpdateVersion = "skippedUpdateVersion"
 }
 
 final class AppSettingsService: @unchecked Sendable {
@@ -117,6 +118,14 @@ final class AppSettingsService: @unchecked Sendable {
             return url.standardizedFileURL.path
         }
         return NSString(string: config.opensshKnownHostsPath).expandingTildeInPath
+    }
+
+    func loadSkippedUpdateVersion() -> String? {
+        defaults.string(forKey: AppSettingsKeys.skippedUpdateVersion)
+    }
+
+    func saveSkippedUpdateVersion(_ version: String) {
+        defaults.set(version, forKey: AppSettingsKeys.skippedUpdateVersion)
     }
 
     func buildAppConfigRecord(knownHostsPath: String) -> AppConfigRecord {
