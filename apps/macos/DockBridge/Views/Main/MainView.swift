@@ -34,7 +34,11 @@ struct MainView: View {
             .frame(minWidth: WindowLayout.sidebarMinWidth)
         } detail: {
             VStack(spacing: 0) {
-                ConnectionStatusBar(status: bridge.connectionStatus)
+                ConnectionStatusBar(
+                    status: bridge.connectionStatus,
+                    localPath: viewModel.localPath.path,
+                    remotePath: bridge.isConnected ? viewModel.remotePath : nil
+                )
 
                 Divider()
 

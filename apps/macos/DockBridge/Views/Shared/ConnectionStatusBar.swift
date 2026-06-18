@@ -2,23 +2,33 @@ import SwiftUI
 
 struct ConnectionStatusBar: View {
     let status: ConnectionStatus
+    let localPath: String
+    let remotePath: String?
 
     var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(indicatorColor)
-                .frame(width: 8, height: 8)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(indicatorColor)
+                    .frame(width: 8, height: 8)
 
-            if status.isConnecting {
-                ProgressView()
-                    .controlSize(.small)
+                if status.isConnecting {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Text(status.statusTitle)
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+
+                Spacer()
             }
 
-            Text(status.statusTitle)
-                .font(.subheadline)
-                .foregroundStyle(.primary)
+            PathSummaryRow(label: "Local", path: localPath, showRevealInFinder: true)
 
-            Spacer()
+            if status.isConnected, let remotePath {
+                PathSummaryRow(label: "Remote", path: remotePath)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
