@@ -101,6 +101,8 @@ trap 'rm -rf "$STAGING_DIR"' EXIT
 echo "Preparing DMG staging directory..."
 ditto "$APP_PATH" "${STAGING_DIR}/${APP_NAME}.app"
 ln -s /Applications "${STAGING_DIR}/Applications"
+cp "${ROOT}/scripts/dmg-install-dockbridge.command" "${STAGING_DIR}/DockBridgeをインストール.command"
+chmod +x "${STAGING_DIR}/DockBridgeをインストール.command"
 
 echo "Creating DMG: ${DMG_PATH}"
 hdiutil create \

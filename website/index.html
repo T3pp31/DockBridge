@@ -96,11 +96,20 @@
         <div class="container">
           <h2>Install</h2>
           <div class="card">
+            <p><strong>かんたんインストール（推奨）</strong></p>
             <ol class="steps">
               <li>Download the latest <code>DockBridge-*-macOS.dmg</code> from the button above.</li>
               <li>Double-click the DMG file to mount it.</li>
+              <li>
+                Double-click <code>DockBridgeをインストール.command</code> inside the DMG.
+                If macOS blocks it, right-click the file and choose <strong>Open</strong>, then confirm.
+              </li>
+              <li>Wait for the setup script to finish. DockBridge opens automatically when done.</li>
+            </ol>
+            <p><strong>手動インストール</strong></p>
+            <ol class="steps">
               <li>Drag <code>DockBridge.app</code> into the <code>Applications</code> folder shortcut.</li>
-              <li>Eject the DMG and open DockBridge from Applications.</li>
+              <li>Follow the <a href="#gatekeeper">Gatekeeper steps</a> if macOS blocks the app.</li>
             </ol>
           </div>
         </div>
@@ -114,12 +123,13 @@
               Early releases are not yet signed with a Developer ID certificate.
               macOS may show a warning that the developer cannot be verified.
             </p>
+            <p>
+              The easiest fix is to run <code>DockBridgeをインストール.command</code> from the DMG.
+              It installs DockBridge, removes the security block, and launches the app for you.
+            </p>
+            <p><strong>If you installed manually:</strong></p>
             <ul>
               <li>Right-click <code>DockBridge.app</code> and choose <strong>Open</strong>, then confirm.</li>
-              <li>
-                Or remove the quarantine attribute:
-                <code>xattr -cr /Applications/DockBridge.app</code>
-              </li>
             </ul>
             <p>
               Developer ID signing and Apple Notarization are planned for v1.0.
@@ -144,7 +154,7 @@
     <script>
       (function () {
         const GITHUB_REPO = "T3pp31/DockBridge";
-        const FALLBACK_VERSION = "0.1.1";
+        const FALLBACK_VERSION = "0.1.2";
         const FALLBACK_ASSET = `DockBridge-${FALLBACK_VERSION}-macOS.dmg`;
 
         const button = document.getElementById("download-button");
