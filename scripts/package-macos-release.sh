@@ -32,8 +32,8 @@ fi
 
 ASSET_NAME="${ASSET_TEMPLATE//\{app_name\}/${APP_NAME}}"
 ASSET_NAME="${ASSET_NAME//\{version\}/${VERSION}}"
-ZIP_PATH="${DIST_DIR}/${ASSET_NAME}"
-SHA256_PATH="${ZIP_PATH}.sha256"
+DMG_PATH="${DIST_DIR}/${ASSET_NAME}"
+SHA256_PATH="${DMG_PATH}.sha256"
 
 echo "Packaging ${APP_NAME} ${VERSION} (build ${BUILD_NUMBER})..."
 
@@ -93,16 +93,28 @@ if [[ "${SIGN_AND_NOTARIZE:-}" == "true" ]]; then
 fi
 
 mkdir -p "$DIST_DIR"
-rm -f "$ZIP_PATH" "$SHA256_PATH"
+rm -f "$DMG_PATH" "$SHA256_PATH"
 
-echo "Creating ZIP: ${ZIP_PATH}"
-ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
+STAGING_DIR="$(mktemp -d)"
+trap 'rm -rf "$STAGING_DIR"' EXIT
+
+echo "Preparing DMG staging directory..."
+ditto "$APP_PATH" "${STAGING_DIR}/${APP_NAME}.app"
+ln -s /Applications "${STAGING_DIR}/Applications"
+
+echo "Creating DMG: ${DMG_PATH}"
+hdiutil create \
+  -volname "DockBridge ${VERSION}" \
+  -srcfolder "$STAGING_DIR" \
+  -ov \
+  -format UDZO \
+  "$DMG_PATH"
 
 (
   cd "$DIST_DIR"
-  shasum -a 256 "$(basename "$ZIP_PATH")" > "$(basename "$SHA256_PATH")"
+  shasum -a 256 "$(basename "$DMG_PATH")" > "$(basename "$SHA256_PATH")"
 )
 
 echo "Package ready:"
-echo "  ZIP:    ${ZIP_PATH}"
+echo "  DMG:    ${DMG_PATH}"
 echo "  SHA256: ${SHA256_PATH}"

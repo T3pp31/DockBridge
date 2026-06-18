@@ -97,10 +97,10 @@
           <h2>Install</h2>
           <div class="card">
             <ol class="steps">
-              <li>Download the latest <code>DockBridge-*-macOS.zip</code> from the button above.</li>
-              <li>Double-click the ZIP file to extract <code>DockBridge.app</code>.</li>
-              <li>Drag <code>DockBridge.app</code> into your Applications folder.</li>
-              <li>Open DockBridge from Applications.</li>
+              <li>Download the latest <code>DockBridge-*-macOS.dmg</code> from the button above.</li>
+              <li>Double-click the DMG file to mount it.</li>
+              <li>Drag <code>DockBridge.app</code> into the <code>Applications</code> folder shortcut.</li>
+              <li>Eject the DMG and open DockBridge from Applications.</li>
             </ol>
           </div>
         </div>
@@ -144,8 +144,8 @@
     <script>
       (function () {
         const GITHUB_REPO = "T3pp31/DockBridge";
-        const FALLBACK_VERSION = "0.1.0";
-        const FALLBACK_ASSET = `DockBridge-${FALLBACK_VERSION}-macOS.zip`;
+        const FALLBACK_VERSION = "0.1.1";
+        const FALLBACK_ASSET = `DockBridge-${FALLBACK_VERSION}-macOS.dmg`;
 
         const button = document.getElementById("download-button");
         const meta = document.getElementById("download-meta");
@@ -175,13 +175,13 @@
             return response.json();
           })
           .then(function (release) {
-            const zipAsset = (release.assets || []).find(function (asset) {
-              return asset.name.endsWith(".zip");
+            const dmgAsset = (release.assets || []).find(function (asset) {
+              return asset.name.endsWith(".dmg");
             });
 
-            if (zipAsset) {
+            if (dmgAsset) {
               setDownload(
-                zipAsset.browser_download_url,
+                dmgAsset.browser_download_url,
                 `Version ${release.tag_name.replace(/^v/, "")} · macOS 15+`
               );
               return;
