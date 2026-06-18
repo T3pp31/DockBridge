@@ -5,6 +5,7 @@ struct MainView: View {
     @StateObject private var connectionList: ConnectionListViewModel
     @StateObject private var transferQueue: TransferQueueViewModel
     @StateObject private var viewModel: MainViewModel
+    @StateObject private var updateCheck = UpdateCheckViewModel()
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showNewConnection = false
@@ -113,6 +114,26 @@ struct MainView: View {
                     onAccept: { bridge.respondToHostKeyChallenge(accepted: true) },
                     onReject: { bridge.respondToHostKeyChallenge(accepted: false) }
                 )
+            }
+        }
+        .sheet(isPresented: $updateCheck.showUpdateSheet) {
+            if let update = updateCheck.pendingUpdate {
+                UpdateAvailableView(
+                    update: update,
+                    currentVersion: VersionComparator.currentAppVersion,
+                    onDownload: updateCheck.downloadUpdate,
+                    onLater: updateCheck.skipUpdate
+                )
+            }
+        }
+        .task {
+            await updateCheck.checkOnLaunch(
+                isHostKeyBlocking: bridge.pendingHostKeyChallenge != nil
+            )
+        }
+        .onChange(of: bridge.pendingHostKeyChallenge) { _, challenge in
+            if challenge == nil {
+                updateCheck.onHostKeyDismissed()
             }
         }
         .onAppear {

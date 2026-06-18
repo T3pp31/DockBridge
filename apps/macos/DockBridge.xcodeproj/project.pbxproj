@@ -64,6 +64,14 @@
 		F1L3D3R0P4C3C3P7T4N5C3T5ST /* FileDropAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */; };
 		S3C8K0P3B00KM4RKS3RV1C3SW1 /* SecurityScopedBookmarkService.swift in Sources */ = {isa = PBXBuildFile; fileRef = S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */; };
 		S3C8K0P3B00KM4RKS3RV1C3T1 /* SecurityScopedBookmarkServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = S3C8K0P3B00KM4RKS3RV1C3T2 /* SecurityScopedBookmarkServiceTests.swift */; };
+		APPD4T3C0NF1G5W1FT3BF1 /* AppUpdateConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPD4T3C0NF1G5W1FT3RC1 /* AppUpdateConfig.swift */; };
+		APPD4T31NF05W1FT3BF1 /* AppUpdateInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPD4T31NF05W1FT3RC1 /* AppUpdateInfo.swift */; };
+		V3R5C0MP4R4T0R5W1FT3BF1 /* VersionComparator.swift in Sources */ = {isa = PBXBuildFile; fileRef = V3R5C0MP4R4T0R5W1FT3RC1 /* VersionComparator.swift */; };
+		APPUPD4T3S3RV1C3SW1FT3BF1 /* AppUpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPUPD4T3S3RV1C3SW1FT3RC1 /* AppUpdateService.swift */; };
+		UPD4T3CH3CKV13WT3BF1 /* UpdateCheckViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPD4T3CH3CKV13WT3RC1 /* UpdateCheckViewModel.swift */; };
+		UPD4T34V4BL3V13WT3BF1 /* UpdateAvailableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPD4T34V4BL3V13WT3RC1 /* UpdateAvailableView.swift */; };
+		V3R5C0MP4R4T0T3ST5BF1 /* VersionComparatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = V3R5C0MP4R4T0T3ST5RC1 /* VersionComparatorTests.swift */; };
+		APPUPD4T3S3RV1C3T2 /* AppUpdateServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPUPD4T3S3RV1C3T1 /* AppUpdateServiceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -129,6 +137,14 @@
 		F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropAcceptanceTests.swift; sourceTree = "<group>"; };
 		S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityScopedBookmarkService.swift; sourceTree = "<group>"; };
 		S3C8K0P3B00KM4RKS3RV1C3T2 /* SecurityScopedBookmarkServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityScopedBookmarkServiceTests.swift; sourceTree = "<group>"; };
+		APPD4T3C0NF1G5W1FT3RC1 /* AppUpdateConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateConfig.swift; sourceTree = "<group>"; };
+		APPD4T31NF05W1FT3RC1 /* AppUpdateInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateInfo.swift; sourceTree = "<group>"; };
+		V3R5C0MP4R4T0R5W1FT3RC1 /* VersionComparator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VersionComparator.swift; sourceTree = "<group>"; };
+		APPUPD4T3S3RV1C3SW1FT3RC1 /* AppUpdateService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateService.swift; sourceTree = "<group>"; };
+		UPD4T3CH3CKV13WT3RC1 /* UpdateCheckViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateCheckViewModel.swift; sourceTree = "<group>"; };
+		UPD4T34V4BL3V13WT3RC1 /* UpdateAvailableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateAvailableView.swift; sourceTree = "<group>"; };
+		V3R5C0MP4R4T0T3ST5RC1 /* VersionComparatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VersionComparatorTests.swift; sourceTree = "<group>"; };
+		APPUPD4T3S3RV1C3T1 /* AppUpdateServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -196,6 +212,22 @@
 			path = Security;
 			sourceTree = "<group>";
 		};
+		UPD4T3V13WT3GRP1 /* Update */ = {
+			isa = PBXGroup;
+			children = (
+				UPD4T34V4BL3V13WT3RC1 /* UpdateAvailableView.swift */,
+			);
+			path = Update;
+			sourceTree = "<group>";
+		};
+		APPD4T3C0NF1G5W1FT3GRP1 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				APPD4T3C0NF1G5W1FT3RC1 /* AppUpdateConfig.swift */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
 		CDB38CFA6CE21FAC5EDA57F2 /* Settings */ = {
 			isa = PBXGroup;
 			children = (
@@ -242,6 +274,7 @@
 			isa = PBXGroup;
 			children = (
 				09932BA46F7FE81DAD83C80A /* AppConfig.swift */,
+				APPD4T31NF05W1FT3RC1 /* AppUpdateInfo.swift */,
 				C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */,
 				F3EA1C873F6BA2EA52B40161 /* AuthType.swift */,
 				ACD7B5DCE2F20029520D971B /* ConnectionProfile.swift */,
@@ -271,12 +304,14 @@
 			isa = PBXGroup;
 			children = (
 				DBE43F47539AA08723B7C33A /* AppSettingsService.swift */,
+				APPUPD4T3S3RV1C3SW1FT3RC1 /* AppUpdateService.swift */,
 				AA9B9731537045170D199A2B /* ConnectionStore.swift */,
 				6D9B83DAFF9C7E5919036C99 /* ProfileTrustStore.swift */,
 				FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */,
 				6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */,
 				5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */,
 				S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */,
+				V3R5C0MP4R4T0R5W1FT3RC1 /* VersionComparator.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -287,6 +322,7 @@
 				D00EBFBF60D5CB33F46A53DF /* ConnectionListViewModel.swift */,
 				29C973CCD1AFF29E5BC535CC /* MainViewModel.swift */,
 				CD683D1BCC635FB229692D63 /* TransferQueueViewModel.swift */,
+				UPD4T3CH3CKV13WT3RC1 /* UpdateCheckViewModel.swift */,
 			);
 			path = ViewModels;
 			sourceTree = "<group>";
@@ -298,6 +334,7 @@
 				C7BC360528F9E33D34270AA4 /* Main */,
 				F893CF1118C6E52535C24466 /* Security */,
 				CDB38CFA6CE21FAC5EDA57F2 /* Settings */,
+				UPD4T3V13WT3GRP1 /* Update */,
 				141E446FF2C7A61E13702B31 /* Shared */,
 				C887E6561EC056DAA19FA858 /* Transfer */,
 			);
@@ -321,6 +358,7 @@
 			isa = PBXGroup;
 			children = (
 				64B7118BB78101A16549F2E0 /* App */,
+				APPD4T3C0NF1G5W1FT3GRP1 /* Config */,
 				F42A07F6A8CAB9C91AA22A75 /* Generated */,
 				3D36BF4FEDAE3131C117398E /* Models */,
 				E91B28D0DE8A916C703786B0 /* Resources */,
@@ -335,6 +373,7 @@
 		5C6D7E8F9012345678901234 /* DockBridgeTests */ = {
 			isa = PBXGroup;
 			children = (
+				APPUPD4T3S3RV1C3T1 /* AppUpdateServiceTests.swift */,
 				D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */,
 				F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */,
 				F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */,
@@ -350,6 +389,7 @@
 				H0STK3YC0NF1RMV13WT3ST6 /* HostKeyConfirmViewTests.swift */,
 				S3C8K0P3B00KM4RKS3RV1C3T2 /* SecurityScopedBookmarkServiceTests.swift */,
 				S3NS1T1V3STR1NGT3ST5RC2 /* SensitiveStringTests.swift */,
+				V3R5C0MP4R4T0T3ST5RC1 /* VersionComparatorTests.swift */,
 			);
 			path = DockBridgeTests;
 			sourceTree = "<group>";
@@ -526,6 +566,12 @@
 				T4BL3C0L7MN8L4Y0U7T1F2B3 /* TableColumnLayout.swift in Sources */,
 				W1ND0WL4Y0U7T1F2B3 /* WindowLayout.swift in Sources */,
 				W1ND0WM1NS1Z3M0D1F13 /* WindowMinSizeModifier.swift in Sources */,
+				APPD4T3C0NF1G5W1FT3BF1 /* AppUpdateConfig.swift in Sources */,
+				APPD4T31NF05W1FT3BF1 /* AppUpdateInfo.swift in Sources */,
+				V3R5C0MP4R4T0R5W1FT3BF1 /* VersionComparator.swift in Sources */,
+				APPUPD4T3S3RV1C3SW1FT3BF1 /* AppUpdateService.swift in Sources */,
+				UPD4T3CH3CKV13WT3BF1 /* UpdateCheckViewModel.swift in Sources */,
+				UPD4T34V4BL3V13WT3BF1 /* UpdateAvailableView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -533,6 +579,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				APPUPD4T3S3RV1C3T2 /* AppUpdateServiceTests.swift in Sources */,
 				D5R0P0P3R4T10N5Y5N0C1T5ST /* DropOperationSyncTests.swift in Sources */,
 				F1L3D3R0P4C3C3P7T4N5C3T5ST /* FileDropAcceptanceTests.swift in Sources */,
 				F1D2R3O4P5V6A7L8I9D0T1E2S3T4 /* FileDropValidationTests.swift in Sources */,
@@ -548,6 +595,7 @@
 				H0STK3YC0NF1RMV13WT3ST5 /* HostKeyConfirmViewTests.swift in Sources */,
 				S3C8K0P3B00KM4RKS3RV1C3T1 /* SecurityScopedBookmarkServiceTests.swift in Sources */,
 				S3NS1T1V3STR1NGT3ST5RC1 /* SensitiveStringTests.swift in Sources */,
+				V3R5C0MP4R4T0T3ST5BF1 /* VersionComparatorTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
