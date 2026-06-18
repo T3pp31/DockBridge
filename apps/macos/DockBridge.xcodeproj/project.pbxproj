@@ -49,6 +49,8 @@
 		F1I2L3E4D5R6O7P8M9O0D1I2F3 /* FileDropModifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */; };
 		F1D2R3O4P5V6A7L8I9D0T1E2S3T4 /* FileDropValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */; };
 		C0NN3CT10N5T4TU5B4R1N5RC3 /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */; };
+		CL1PB04RDH3LP3R1N5RC1 /* ClipboardHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = CL1PB04RDH3LP3R1N5RC2 /* ClipboardHelper.swift */; };
+		P4TH5UMM4RYR0W1N5RC1 /* PathSummaryRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */; };
 		C0NN3CT10N5T4TU5M0D3L1N5RC /* ConnectionStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */; };
 		T4BL3C0L7MN8L4Y0U7T1F2B3 /* TableColumnLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */; };
 		W1ND0WL4Y0U7T1F2B3 /* WindowLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1ND0WL4Y0U7T1F2B4 /* WindowLayout.swift */; };
@@ -112,6 +114,8 @@
 		F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropModifiers.swift; sourceTree = "<group>"; };
 		F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropValidationTests.swift; sourceTree = "<group>"; };
 		C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusBar.swift; sourceTree = "<group>"; };
+		CL1PB04RDH3LP3R1N5RC2 /* ClipboardHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHelper.swift; sourceTree = "<group>"; };
+		P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathSummaryRow.swift; sourceTree = "<group>"; };
 		C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatus.swift; sourceTree = "<group>"; };
 		T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableColumnLayout.swift; sourceTree = "<group>"; };
 		W1ND0WL4Y0U7T1F2B4 /* WindowLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowLayout.swift; sourceTree = "<group>"; };
@@ -205,6 +209,7 @@
 			children = (
 				C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */,
 				D2B8765D556D65748132CE54 /* ErrorAlert.swift */,
+				P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -302,6 +307,7 @@
 		T4BL3C0L7MN8L4Y0U7T1F2G5 /* UI */ = {
 			isa = PBXGroup;
 			children = (
+				CL1PB04RDH3LP3R1N5RC2 /* ClipboardHelper.swift */,
 				D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */,
 				3XP4ND1NGFR4M3F1L3B4 /* ExpandingFrame.swift */,
 				T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */,
@@ -504,6 +510,8 @@
 				4F485BCC460E809CBC369F6D /* HostKeyConfirmView.swift in Sources */,
 				629A59E59C65594C7998652C /* SettingsView.swift in Sources */,
 				C0NN3CT10N5T4TU5B4R1N5RC3 /* ConnectionStatusBar.swift in Sources */,
+				CL1PB04RDH3LP3R1N5RC1 /* ClipboardHelper.swift in Sources */,
+				P4TH5UMM4RYR0W1N5RC1 /* PathSummaryRow.swift in Sources */,
 				C0NN3CT10N5T4TU5M0D3L1N5RC /* ConnectionStatus.swift in Sources */,
 				C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */,
 				B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */,
