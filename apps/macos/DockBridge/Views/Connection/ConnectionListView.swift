@@ -77,13 +77,29 @@ struct ConnectionListView: View {
         }
         .alert("Connect as root?", isPresented: $viewModel.showRootWarning) {
             Button("Cancel", role: .cancel) {
-                viewModel.pendingConnectProfile = nil
+                viewModel.cancelPendingConnect()
             }
             Button("Connect Anyway", role: .destructive) {
                 viewModel.confirmRootConnect()
             }
         } message: {
             Text("Connecting as root is discouraged. Continue only if you understand the risks.")
+        }
+        .alert("RSA private key warning", isPresented: $viewModel.showRsaKeyWarning) {
+            Button("Cancel", role: .cancel) {
+                viewModel.cancelPendingConnect()
+            }
+            Button("Connect Anyway", role: .destructive) {
+                viewModel.confirmRsaConnect()
+            }
+        } message: {
+            Text(
+                """
+                This connection uses an RSA private key. RSA key authentication may be \
+                vulnerable to timing attacks (Marvin Attack). Prefer Ed25519 or ECDSA keys \
+                when possible.
+                """
+            )
         }
         .alert("Trust connection endpoints?", isPresented: $viewModel.showInitialTrustConfirmation) {
             Button("Not Now", role: .cancel) {

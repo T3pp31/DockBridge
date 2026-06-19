@@ -6,6 +6,7 @@ final class ConnectionListViewModel: ObservableObject {
     @Published var selectedProfileID: UUID?
     @Published var errorMessage: String?
     @Published var showRootWarning = false
+    @Published var showRsaKeyWarning = false
     @Published var showEndpointChangeWarning = false
     @Published var showInitialTrustConfirmation = false
     @Published var showNewProfileTrustConfirmation = false
@@ -19,6 +20,8 @@ final class ConnectionListViewModel: ObservableObject {
     private var pendingEndpointChanges: [ProfileEndpointChange] = []
     private var pendingInitialTrustProfiles: [ConnectionProfile] = []
     private var pendingNewProfileTrustProfiles: [ConnectionProfile] = []
+    private var rootWarningAcknowledged = false
+    private var rsaWarningAcknowledged = false
 
     var isConnected: Bool { bridge.isConnected }
     var connectionStatus: ConnectionStatus { bridge.connectionStatus }
@@ -119,12 +122,47 @@ final class ConnectionListViewModel: ObservableObject {
             return
         }
 
-        if profile.isRootUser {
-            pendingConnectProfile = profile
+        pendingConnectProfile = profile
+        rootWarningAcknowledged = false
+        rsaWarningAcknowledged = false
+        continueConnectAfterWarnings()
+    }
+
+    private func continueConnectAfterWarnings() {
+        guard let profile = pendingConnectProfile else { return }
+
+        if profile.isRootUser, !rootWarningAcknowledged {
             showRootWarning = true
-        } else {
-            Task { await connect(profile: profile) }
+            return
         }
+
+        if profile.authType == .privateKey, !rsaWarningAcknowledged {
+            switch profileUsesRsaPrivateKey(profile) {
+            case .some(true):
+                showRsaKeyWarning = true
+                return
+            case .some(false):
+                break
+            case .none:
+                return
+            }
+        }
+
+        guard let profileToConnect = pendingConnectProfile else { return }
+        clearPendingConnectState()
+        Task { await connect(profile: profileToConnect) }
+    }
+
+    func cancelPendingConnect() {
+        clearPendingConnectState()
+    }
+
+    private func clearPendingConnectState() {
+        pendingConnectProfile = nil
+        showRootWarning = false
+        showRsaKeyWarning = false
+        rootWarningAcknowledged = false
+        rsaWarningAcknowledged = false
     }
 
     func acceptEndpointChange() {
@@ -207,10 +245,15 @@ final class ConnectionListViewModel: ObservableObject {
     }
 
     func confirmRootConnect() {
-        guard let profile = pendingConnectProfile else { return }
-        pendingConnectProfile = nil
         showRootWarning = false
-        Task { await connect(profile: profile) }
+        rootWarningAcknowledged = true
+        continueConnectAfterWarnings()
+    }
+
+    func confirmRsaConnect() {
+        showRsaKeyWarning = false
+        rsaWarningAcknowledged = true
+        continueConnectAfterWarnings()
     }
 
     func connect(profile: ConnectionProfile) async {
@@ -243,6 +286,31 @@ final class ConnectionListViewModel: ObservableObject {
             selectedProfileID = updated.id
         } catch {
             errorMessage = error.dockBridgeUserMessage
+        }
+    }
+
+    private func profileUsesRsaPrivateKey(_ profile: ConnectionProfile) -> Bool? {
+        guard let resolvedProfile = resolvePrivateKeyProfile(profile) else {
+            return nil
+        }
+
+        guard let keyPath = resolvedProfile.privateKeyPath else {
+            errorMessage = "Private key path is missing."
+            return nil
+        }
+
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        var passphrase: String? = try? keychain.loadPassphrase(account: account)
+        defer {
+            SensitiveString.clear(&passphrase)
+        }
+
+        do {
+            let algorithm = try inspectPrivateKeyAlgorithm(keyPath: keyPath, passphrase: passphrase)
+            return algorithm == .rsa
+        } catch {
+            errorMessage = error.dockBridgeUserMessage
+            return nil
         }
     }
 

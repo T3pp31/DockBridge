@@ -280,10 +280,62 @@ final class ConnectionListViewModelTests: XCTestCase {
         XCTAssertNil(try keychain.loadPassphrase(account: account))
     }
 
+    func testRequestConnectShowsRsaKeyWarningForRsaPrivateKey() throws {
+        let profile = try makeGeneratedPrivateKeyProfile(keyFilename: "id_rsa", keyType: "rsa")
+
+        viewModel.requestConnect(profile: profile)
+
+        XCTAssertTrue(viewModel.showRsaKeyWarning)
+        XCTAssertNotNil(viewModel.pendingConnectProfile)
+    }
+
+    func testRequestConnectDoesNotShowRsaKeyWarningForEd25519PrivateKey() throws {
+        let profile = try makeGeneratedPrivateKeyProfile(keyFilename: "id_ed25519", keyType: "ed25519")
+
+        viewModel.requestConnect(profile: profile)
+
+        XCTAssertFalse(viewModel.showRsaKeyWarning)
+    }
+
     private func makePrivateKeyProfile(id: UUID = UUID()) throws -> ConnectionProfile {
         try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         let keyURL = baseDirectory.appendingPathComponent("id_rsa")
         try Data("fake-key".utf8).write(to: keyURL)
+        let bookmark: Data
+        do {
+            bookmark = try SecurityScopedBookmarkService.shared.createBookmark(for: keyURL)
+        } catch {
+            throw XCTSkip("Security-scoped bookmarks require App Sandbox context: \(error)")
+        }
+
+        return ConnectionProfile(
+            id: id,
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyPath: keyURL.path,
+            privateKeyBookmark: bookmark
+        )
+    }
+
+    private func makeGeneratedPrivateKeyProfile(
+        id: UUID = UUID(),
+        keyFilename: String,
+        keyType: String
+    ) throws -> ConnectionProfile {
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        let keyURL = baseDirectory.appendingPathComponent(keyFilename)
+
+        let keygen = Process()
+        keygen.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
+        keygen.arguments = ["-t", keyType, "-f", keyURL.path, "-N", "", "-q"]
+        try keygen.run()
+        keygen.waitUntilExit()
+        guard keygen.terminationStatus == 0 else {
+            throw XCTSkip("ssh-keygen failed for key type \(keyType)")
+        }
+
         let bookmark: Data
         do {
             bookmark = try SecurityScopedBookmarkService.shared.createBookmark(for: keyURL)

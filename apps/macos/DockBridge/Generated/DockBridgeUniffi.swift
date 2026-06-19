@@ -1309,6 +1309,93 @@ public func FfiConverterTypeDockBridgeError_lower(_ value: DockBridgeError) -> R
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 /**
+ * Private key algorithm classification exposed to Swift.
+ */
+
+public enum PrivateKeyAlgorithmRecord: Equatable, Hashable {
+    
+    case ed25519
+    case ecdsa
+    case rsa
+    case other(label: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension PrivateKeyAlgorithmRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePrivateKeyAlgorithmRecord: FfiConverterRustBuffer {
+    typealias SwiftType = PrivateKeyAlgorithmRecord
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PrivateKeyAlgorithmRecord {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .ed25519
+        
+        case 2: return .ecdsa
+        
+        case 3: return .rsa
+        
+        case 4: return .other(label: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: PrivateKeyAlgorithmRecord, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .ed25519:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .ecdsa:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .rsa:
+            writeInt(&buf, Int32(3))
+        
+        
+        case let .other(label):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(label, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePrivateKeyAlgorithmRecord_lift(_ buf: RustBuffer) throws -> PrivateKeyAlgorithmRecord {
+    return try FfiConverterTypePrivateKeyAlgorithmRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePrivateKeyAlgorithmRecord_lower(_ value: PrivateKeyAlgorithmRecord) -> RustBuffer {
+    return FfiConverterTypePrivateKeyAlgorithmRecord.lower(value)
+}
+
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+/**
  * Direction of a file transfer task.
  */
 
@@ -1881,6 +1968,14 @@ public func FfiConverterTypeSecretCredential_lower(_ value: SecretCredential) ->
     return FfiConverterTypeSecretCredential.lower(value)
 }
 
+public func inspectPrivateKeyAlgorithm(keyPath: String, passphrase: SecretCredential?)throws  -> PrivateKeyAlgorithmRecord  {
+    return try  FfiConverterTypePrivateKeyAlgorithmRecord_lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+    uniffi_dockbridge_uniffi_fn_func_inspect_private_key_algorithm(
+        FfiConverterString.lower(keyPath),
+        FfiConverterOptionTypeSecretCredential.lower(passphrase),$0
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -1896,6 +1991,9 @@ private let initializationResult: InitializationResult = {
     let scaffolding_contract_version = ffi_dockbridge_uniffi_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_func_inspect_private_key_algorithm() != 17776) {
+        return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_cancel_transfer() != 17692) {
         return InitializationResult.apiChecksumMismatch
