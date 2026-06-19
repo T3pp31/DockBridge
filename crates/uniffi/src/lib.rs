@@ -134,6 +134,8 @@ pub struct TransferTaskRecord {
     pub local_path: String,
     pub remote_path: String,
     pub status: TransferStatusRecord,
+    pub bytes_transferred: u64,
+    pub total_bytes: u64,
 }
 
 /// Host key verification challenge presented to Swift.
@@ -590,6 +592,8 @@ fn to_transfer_task_record(task: TransferTask) -> TransferTaskRecord {
             TransferStatus::Failed { message } => TransferStatusRecord::Failed { message },
             TransferStatus::Cancelled => TransferStatusRecord::Cancelled,
         },
+        bytes_transferred: task.bytes_transferred,
+        total_bytes: task.total_bytes,
     }
 }
 

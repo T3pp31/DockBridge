@@ -174,6 +174,116 @@ final class FileDropAcceptanceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: sourceFile.path))
     }
 
+    // MARK: - Async kickoff (non-blocking D&D accept)
+
+    func testRemoteDownloadKickoffAcceptsImmediatelyWithoutBlocking() throws {
+        // Given: a view model and non-empty remote drag items
+        let viewModel = try makeKickoffViewModel()
+        let items = [RemoteFileDragPayload(path: "/remote/folder", isDirectory: true)]
+
+        // When: kickoff is invoked
+        let start = ContinuousClock.now
+        let accepted = FileDropTransferKickoff.acceptRemoteDownloads(items: items, viewModel: viewModel)
+        let elapsed = start.duration(to: ContinuousClock.now)
+
+        // Then: accepts immediately without waiting for transfer completion
+        XCTAssertTrue(accepted)
+        XCTAssertLessThan(elapsed, .milliseconds(100))
+    }
+
+    func testRemoteDownloadKickoffRejectsEmptyItems() throws {
+        // Given: a view model and no drag items
+        let viewModel = try makeKickoffViewModel()
+
+        // When: kickoff is invoked with empty items
+        let accepted = FileDropTransferKickoff.acceptRemoteDownloads(items: [], viewModel: viewModel)
+
+        // Then: drop is rejected
+        XCTAssertFalse(accepted)
+    }
+
+    func testUploadKickoffAcceptsImmediatelyWithoutBlocking() throws {
+        // Given: a valid local file URL
+        let viewModel = try makeKickoffViewModel()
+        let localFile = viewModel.localPath.appendingPathComponent("kickoff-upload.txt")
+        try "kickoff upload".write(to: localFile, atomically: true, encoding: .utf8)
+
+        // When: kickoff is invoked
+        let start = ContinuousClock.now
+        let accepted = FileDropTransferKickoff.acceptUploads(urls: [localFile], viewModel: viewModel)
+        let elapsed = start.duration(to: ContinuousClock.now)
+
+        // Then: accepts immediately without waiting for upload completion
+        XCTAssertTrue(accepted)
+        XCTAssertLessThan(elapsed, .milliseconds(100))
+    }
+
+    func testUploadKickoffRejectsInvalidURLs() throws {
+        // Given: a view model and a non-existent upload URL
+        let viewModel = try makeKickoffViewModel()
+        let missingURL = viewModel.localPath.appendingPathComponent("missing-upload.txt")
+
+        // When: kickoff is invoked
+        let accepted = FileDropTransferKickoff.acceptUploads(urls: [missingURL], viewModel: viewModel)
+
+        // Then: drop is rejected
+        XCTAssertFalse(accepted)
+    }
+
+    func testRemoteMoveKickoffAcceptsImmediatelyWithoutBlocking() throws {
+        // Given: valid remote move items
+        let viewModel = try makeKickoffViewModel()
+        viewModel.remotePath = "/destination"
+        let items = [RemoteFileDragPayload(path: "/source/file.txt", isDirectory: false)]
+
+        // When: kickoff is invoked
+        let start = ContinuousClock.now
+        let accepted = FileDropTransferKickoff.acceptRemoteMoves(
+            items: items,
+            toDirectory: viewModel.remotePath,
+            viewModel: viewModel
+        )
+        let elapsed = start.duration(to: ContinuousClock.now)
+
+        // Then: accepts immediately without waiting for move completion
+        XCTAssertTrue(accepted)
+        XCTAssertLessThan(elapsed, .milliseconds(100))
+    }
+
+    func testRemoteMoveKickoffRejectsInvalidMoves() throws {
+        // Given: a move into the same directory as the source
+        let viewModel = try makeKickoffViewModel()
+        viewModel.remotePath = "/same"
+        let items = [RemoteFileDragPayload(path: "/same/file.txt", isDirectory: false)]
+
+        // When: kickoff is invoked
+        let accepted = FileDropTransferKickoff.acceptRemoteMoves(
+            items: items,
+            toDirectory: viewModel.remotePath,
+            viewModel: viewModel
+        )
+
+        // Then: drop is rejected
+        XCTAssertFalse(accepted)
+    }
+
+    private func makeKickoffViewModel() throws -> MainViewModel {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("file-drop-kickoff-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let bridge = RustBridgeService(hostKeyStore: HostKeyStore(baseDirectory: directory))
+        let transferQueue = TransferQueueViewModel(bridge: bridge)
+        let connectionList = ConnectionListViewModel(bridge: bridge)
+        let viewModel = MainViewModel(
+            bridge: bridge,
+            connectionList: connectionList,
+            transferQueue: transferQueue
+        )
+        viewModel.localPath = directory
+        return viewModel
+    }
+
     // MARK: - E2E setup
 
     private func prepareViewModel() async throws {
