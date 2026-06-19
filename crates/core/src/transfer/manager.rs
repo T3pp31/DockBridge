@@ -509,10 +509,7 @@ impl TransferManager {
         local_path: &Path,
     ) -> Result<(), TransferError> {
         let client = SftpClient::new(session);
-        let total_bytes = client
-            .remote_file_size(remote_path)
-            .await
-            .unwrap_or(0);
+        let total_bytes = client.remote_file_size(remote_path).await.unwrap_or(0);
         self.set_task_total_bytes(task_id, total_bytes);
 
         let attempts = self.retry_count.max(1);

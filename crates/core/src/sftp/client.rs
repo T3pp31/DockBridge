@@ -90,15 +90,15 @@ impl<'a> SftpClient<'a> {
     /// Returns the size of a remote file in bytes.
     pub async fn remote_file_size(&self, remote_path: &str) -> Result<u64, SftpError> {
         let remote_path = normalize_remote_path(remote_path)?;
-        let metadata = self
-            .sftp()
-            .metadata(&remote_path)
-            .await
-            .map_err(|err| SftpError::DownloadFailed {
-                remote: remote_path.clone(),
-                local: String::new(),
-                message: err.to_string(),
-            })?;
+        let metadata =
+            self.sftp()
+                .metadata(&remote_path)
+                .await
+                .map_err(|err| SftpError::DownloadFailed {
+                    remote: remote_path.clone(),
+                    local: String::new(),
+                    message: err.to_string(),
+                })?;
         Ok(metadata.size.unwrap_or(0))
     }
 
