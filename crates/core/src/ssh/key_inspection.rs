@@ -26,12 +26,12 @@ pub fn inspect_private_key_algorithm(
     key_path: &Path,
     passphrase: Option<&str>,
 ) -> Result<PrivateKeyAlgorithm, AuthError> {
-    let key_contents = Zeroizing::new(
-        std::fs::read_to_string(key_path).map_err(|err| AuthError::PrivateKeyLoadFailed {
+    let key_contents = Zeroizing::new(std::fs::read_to_string(key_path).map_err(|err| {
+        AuthError::PrivateKeyLoadFailed {
             path: key_path.display().to_string(),
             message: err.to_string(),
-        })?,
-    );
+        }
+    })?);
     let private_key = decode_secret_key(key_contents.as_str(), passphrase).map_err(|err| {
         AuthError::PrivateKeyLoadFailed {
             path: key_path.display().to_string(),
