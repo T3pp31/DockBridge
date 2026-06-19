@@ -6,7 +6,9 @@ struct RemotePaneView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
-            pathBar
+            RemotePanePathBar(viewModel: viewModel)
+
+            Divider()
 
             if viewModel.bridge.isConnected {
                 ExpandingFrame { size in
@@ -39,7 +41,7 @@ struct RemotePaneView: View {
                             return .ignored
                         }
                 }
-                .layoutPriority(1)
+                .layoutPriority(0)
             } else {
                 ContentUnavailableView(
                     "リモートホストに接続していません",
@@ -103,39 +105,5 @@ struct RemotePaneView: View {
     private func singleSelectedRemoteItem(from ids: Set<String>) -> RemoteFileRecord? {
         guard ids.count == 1, let id = ids.first else { return nil }
         return viewModel.remoteItems.first { $0.id == id }
-    }
-
-    private var pathBar: some View {
-        HStack {
-            Text("Remote")
-                .font(.headline)
-            TextField("Path", text: $viewModel.remotePath)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit {
-                    Task { await viewModel.reloadRemote() }
-                }
-            Button(action: viewModel.navigateRemoteUp) {
-                Image(systemName: "arrow.up.circle")
-            }
-            .help("Parent directory")
-            Button {
-                Task { await viewModel.reloadRemote() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .help("Refresh")
-            Button {
-                Task { await viewModel.downloadSelected() }
-            } label: {
-                Label("Download", systemImage: "square.and.arrow.down")
-            }
-            .disabled(viewModel.selectedRemoteItem == nil || !viewModel.bridge.isConnected)
-            Button {
-                viewModel.showMkdirPrompt = true
-            } label: {
-                Label("New Folder", systemImage: "folder.badge.plus")
-            }
-            .disabled(!viewModel.bridge.isConnected)
-        }
     }
 }

@@ -13,6 +13,7 @@ struct ExpandingFrame<Content: View>: View {
             }
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+        .clipped()
         .onGeometryChange(for: CGSize.self, of: \.size) { newSize in
             guard newSize != size else { return }
             size = newSize
