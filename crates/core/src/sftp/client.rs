@@ -1,7 +1,10 @@
 use std::path::{Path, PathBuf};
 
+use rand::TryRng;
+use russh_sftp::client::error::Error as SftpClientError;
 use russh_sftp::client::fs::File as RemoteFileHandle;
 use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::OpenFlags;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::config::{clamp_transfer_chunk_size, DEFAULT_TRANSFER_CHUNK_SIZE_BYTES};
@@ -127,7 +130,7 @@ impl<'a> SftpClient<'a> {
         let local = local_path.display().to_string();
         let remote = remote_path.clone();
         let chunk_size = clamp_transfer_chunk_size(chunk_size);
-        let partial_remote_path = partial_remote_path(&remote_path)?;
+        let parent = parent_remote_path(&remote_path)?.unwrap_or_else(|| "/".to_string());
 
         let mut local_file =
             tokio::fs::File::open(local_path)
@@ -138,64 +141,63 @@ impl<'a> SftpClient<'a> {
                     message: err.to_string(),
                 })?;
 
-        let mut remote_file = self
-            .sftp()
-            .create(&partial_remote_path)
-            .await
-            .map_err(|err| SftpError::UploadFailed {
-                local: local.clone(),
-                remote: remote.clone(),
-                message: err.to_string(),
-            })?;
+        let mut partial = PartialRemoteTransfer::begin(self, &parent, &local, &remote).await?;
 
         let mut buffer = vec![0_u8; chunk_size];
         let mut transferred = 0_u64;
         loop {
             if is_cancelled() {
-                cleanup_cancelled_upload(self, &mut remote_file, &partial_remote_path).await?;
+                partial.abort(true).await?;
                 return Err(SftpError::Cancelled);
             }
 
-            let bytes_read =
-                local_file
-                    .read(&mut buffer)
-                    .await
-                    .map_err(|err| SftpError::UploadFailed {
+            let bytes_read = match local_file.read(&mut buffer).await {
+                Ok(bytes_read) => bytes_read,
+                Err(err) => {
+                    let _ = partial.abort(false).await;
+                    return Err(SftpError::UploadFailed {
                         local: local.clone(),
                         remote: remote.clone(),
                         message: err.to_string(),
-                    })?;
+                    });
+                }
+            };
             if bytes_read == 0 {
                 break;
             }
 
-            remote_file
+            if let Err(err) = partial
+                .remote_file_mut()
                 .write_all(&buffer[..bytes_read])
                 .await
-                .map_err(|err| SftpError::UploadFailed {
+            {
+                let _ = partial.abort(false).await;
+                return Err(SftpError::UploadFailed {
                     local: local.clone(),
                     remote: remote.clone(),
                     message: err.to_string(),
-                })?;
+                });
+            }
             transferred += bytes_read as u64;
             on_progress(transferred);
         }
 
-        remote_file
-            .shutdown()
-            .await
-            .map_err(|err| SftpError::UploadFailed {
-                local: local.clone(),
-                remote: remote.clone(),
-                message: err.to_string(),
-            })?;
+        if is_cancelled() {
+            partial.abort(true).await?;
+            return Err(SftpError::Cancelled);
+        }
 
-        if let Err(err) = self.rename(&partial_remote_path, &remote_path).await {
-            let _ = self.delete(&partial_remote_path).await;
+        if let Err(err) = partial.shutdown().await {
+            let _ = partial.abort(false).await;
             return Err(err);
         }
 
-        Ok(())
+        if is_cancelled() {
+            partial.abort(true).await?;
+            return Err(SftpError::Cancelled);
+        }
+
+        partial.finalize_rename(&remote_path).await
     }
 
     /// Downloads a remote file to a local path.
@@ -223,7 +225,6 @@ impl<'a> SftpClient<'a> {
         let remote = remote_path.clone();
         let local = local_path.display().to_string();
         let chunk_size = clamp_transfer_chunk_size(chunk_size);
-        let partial_local_path = partial_local_path(local_path);
 
         if let Some(parent) = local_path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -245,68 +246,64 @@ impl<'a> SftpClient<'a> {
                     message: err.to_string(),
                 })?;
 
-        let mut local_file = tokio::fs::File::create(&partial_local_path)
-            .await
-            .map_err(|err| SftpError::DownloadFailed {
-                remote: remote.clone(),
-                local: local.clone(),
-                message: err.to_string(),
-            })?;
+        let local_parent = local_path.parent().unwrap_or_else(|| Path::new("."));
+        let mut partial = PartialLocalTransfer::begin(local_parent, &remote, &local).await?;
 
         let mut buffer = vec![0_u8; chunk_size];
         let mut transferred = 0_u64;
         loop {
             if is_cancelled() {
-                cleanup_cancelled_download(&mut remote_file, &partial_local_path).await?;
+                partial.abort(true, &mut remote_file).await?;
                 return Err(SftpError::Cancelled);
             }
 
-            let bytes_read =
-                remote_file
-                    .read(&mut buffer)
-                    .await
-                    .map_err(|err| SftpError::DownloadFailed {
+            let bytes_read = match remote_file.read(&mut buffer).await {
+                Ok(bytes_read) => bytes_read,
+                Err(err) => {
+                    let _ = partial.abort(false, &mut remote_file).await;
+                    return Err(SftpError::DownloadFailed {
                         remote: remote.clone(),
                         local: local.clone(),
                         message: err.to_string(),
-                    })?;
+                    });
+                }
+            };
             if bytes_read == 0 {
                 break;
             }
 
-            local_file
+            if let Err(err) = partial
+                .local_file_mut()
                 .write_all(&buffer[..bytes_read])
                 .await
-                .map_err(|err| SftpError::DownloadFailed {
+            {
+                let _ = partial.abort(false, &mut remote_file).await;
+                return Err(SftpError::DownloadFailed {
                     remote: remote.clone(),
                     local: local.clone(),
                     message: err.to_string(),
-                })?;
+                });
+            }
             transferred += bytes_read as u64;
             on_progress(transferred);
         }
 
-        local_file
-            .flush()
-            .await
-            .map_err(|err| SftpError::DownloadFailed {
-                remote: remote.clone(),
-                local: local.clone(),
-                message: err.to_string(),
-            })?;
-
-        drop(local_file);
-
-        if let Err(err) = tokio::fs::rename(&partial_local_path, local_path).await {
-            let _ = tokio::fs::remove_file(&partial_local_path).await;
-            return Err(SftpError::DownloadFailed {
-                remote,
-                local,
-                message: err.to_string(),
-            });
+        if is_cancelled() {
+            partial.abort(true, &mut remote_file).await?;
+            return Err(SftpError::Cancelled);
         }
 
-        Ok(())
+        if let Err(err) = partial.flush().await {
+            let _ = partial.abort(false, &mut remote_file).await;
+            return Err(err);
+        }
+
+        if is_cancelled() {
+            partial.abort(true, &mut remote_file).await?;
+            return Err(SftpError::Cancelled);
+        }
+
+        partial.finalize_rename(local_path, &mut remote_file).await
     }
 
     /// Deletes a remote file.
@@ -470,63 +467,316 @@ fn default_chunk_size() -> usize {
     DEFAULT_TRANSFER_CHUNK_SIZE_BYTES
 }
 
-fn partial_remote_path(remote_path: &str) -> Result<String, SftpError> {
+const PARTIAL_SUFFIX_BYTES: usize = 16;
+const MAX_PARTIAL_CREATE_ATTEMPTS: usize = 5;
+
+fn random_partial_suffix() -> String {
+    let mut bytes = [0_u8; PARTIAL_SUFFIX_BYTES];
+    rand::rng()
+        .try_fill_bytes(&mut bytes)
+        .expect("failed to generate random partial suffix");
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+fn partial_file_name(suffix: &str) -> String {
+    format!(".dockbridge-{suffix}.partial")
+}
+
+#[cfg(test)]
+fn partial_remote_path_for_suffix(remote_path: &str, suffix: &str) -> Result<String, SftpError> {
     let parent = parent_remote_path(remote_path)?.unwrap_or_else(|| "/".to_string());
-    let nanos = partial_path_nanos();
-    join_remote_path(&parent, Path::new(&format!(".dockbridge-{nanos}.partial")))
+    join_remote_path(&parent, Path::new(&partial_file_name(suffix)))
 }
 
-fn partial_local_path(local_path: &Path) -> PathBuf {
-    let parent = local_path.parent().unwrap_or_else(|| Path::new("."));
-    let nanos = partial_path_nanos();
-    parent.join(format!(".dockbridge-{nanos}.partial"))
+fn partial_local_path_for_suffix(parent: &Path, suffix: &str) -> PathBuf {
+    parent.join(partial_file_name(suffix))
 }
 
-fn partial_path_nanos() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0)
+struct PartialRemoteTransfer<'a> {
+    client: &'a SftpClient<'a>,
+    partial_path: String,
+    remote_file: Option<RemoteFileHandle>,
+    committed: bool,
+    local: String,
+    remote: String,
 }
 
-async fn cleanup_cancelled_upload(
+impl<'a> PartialRemoteTransfer<'a> {
+    async fn begin(
+        client: &'a SftpClient<'a>,
+        parent: &str,
+        local: &str,
+        remote: &str,
+    ) -> Result<Self, SftpError> {
+        let (partial_path, remote_file) =
+            create_exclusive_remote_partial(client, parent, local, remote).await?;
+        Ok(Self {
+            client,
+            partial_path,
+            remote_file: Some(remote_file),
+            committed: false,
+            local: local.to_string(),
+            remote: remote.to_string(),
+        })
+    }
+
+    fn remote_file_mut(&mut self) -> &mut RemoteFileHandle {
+        self.remote_file
+            .as_mut()
+            .expect("partial remote file handle must exist before commit")
+    }
+
+    async fn shutdown(&mut self) -> Result<(), SftpError> {
+        if let Some(mut remote_file) = self.remote_file.take() {
+            remote_file
+                .shutdown()
+                .await
+                .map_err(|err| SftpError::UploadFailed {
+                    local: self.local.clone(),
+                    remote: self.remote.clone(),
+                    message: err.to_string(),
+                })?;
+        }
+        Ok(())
+    }
+
+    async fn finalize_rename(mut self, final_path: &str) -> Result<(), SftpError> {
+        match self.client.rename(&self.partial_path, final_path).await {
+            Ok(()) => {
+                self.committed = true;
+                Ok(())
+            }
+            Err(err) => {
+                self.abort(true).await?;
+                Err(err)
+            }
+        }
+    }
+
+    async fn abort(mut self, strict: bool) -> Result<(), SftpError> {
+        if self.committed {
+            return Ok(());
+        }
+
+        if let Some(mut remote_file) = self.remote_file.take() {
+            if let Err(err) = remote_file.shutdown().await {
+                tracing::warn!(
+                    partial_remote_path = %self.partial_path,
+                    error = %err,
+                    "failed to close partial remote file during cleanup"
+                );
+            }
+        }
+
+        match self.client.delete(&self.partial_path).await {
+            Ok(()) => Ok(()),
+            Err(err) if !strict => {
+                tracing::warn!(
+                    partial_remote_path = %self.partial_path,
+                    error = %err,
+                    "failed to delete partial remote file after transfer error"
+                );
+                Ok(())
+            }
+            Err(err) => Err(SftpError::CleanupFailed {
+                path: self.partial_path,
+                message: err.to_string(),
+            }),
+        }
+    }
+}
+
+struct PartialLocalTransfer {
+    partial_path: PathBuf,
+    local_file: Option<tokio::fs::File>,
+    committed: bool,
+    remote: String,
+    local: String,
+}
+
+impl PartialLocalTransfer {
+    async fn begin(parent: &Path, remote: &str, local: &str) -> Result<Self, SftpError> {
+        let (partial_path, local_file) = create_exclusive_local_partial(parent).await?;
+        Ok(Self {
+            partial_path,
+            local_file: Some(local_file),
+            committed: false,
+            remote: remote.to_string(),
+            local: local.to_string(),
+        })
+    }
+
+    fn local_file_mut(&mut self) -> &mut tokio::fs::File {
+        self.local_file
+            .as_mut()
+            .expect("partial local file handle must exist before commit")
+    }
+
+    async fn flush(&mut self) -> Result<(), SftpError> {
+        self.local_file_mut()
+            .flush()
+            .await
+            .map_err(|err| SftpError::DownloadFailed {
+                remote: self.remote.clone(),
+                local: self.local.clone(),
+                message: err.to_string(),
+            })
+    }
+
+    async fn finalize_rename(
+        mut self,
+        final_path: &Path,
+        remote_file: &mut RemoteFileHandle,
+    ) -> Result<(), SftpError> {
+        self.local_file.take();
+
+        match tokio::fs::rename(&self.partial_path, final_path).await {
+            Ok(()) => {
+                self.committed = true;
+                Ok(())
+            }
+            Err(err) => {
+                let remote = self.remote.clone();
+                let local = self.local.clone();
+                self.abort(true, remote_file).await?;
+                Err(SftpError::DownloadFailed {
+                    remote,
+                    local,
+                    message: err.to_string(),
+                })
+            }
+        }
+    }
+
+    async fn abort(
+        mut self,
+        strict: bool,
+        remote_file: &mut RemoteFileHandle,
+    ) -> Result<(), SftpError> {
+        if self.committed {
+            return Ok(());
+        }
+
+        self.local_file.take();
+
+        if let Err(err) = remote_file.shutdown().await {
+            tracing::warn!(
+                local = %self.partial_path.display(),
+                error = %err,
+                "failed to close remote file during download cleanup"
+            );
+        }
+
+        match tokio::fs::remove_file(&self.partial_path).await {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) if !strict => {
+                tracing::warn!(
+                    local = %self.partial_path.display(),
+                    error = %err,
+                    "failed to delete partial local file after transfer error"
+                );
+                Ok(())
+            }
+            Err(err) => Err(SftpError::CleanupFailed {
+                path: self.partial_path.display().to_string(),
+                message: err.to_string(),
+            }),
+        }
+    }
+}
+
+async fn create_exclusive_remote_partial(
     client: &SftpClient<'_>,
-    remote_file: &mut RemoteFileHandle,
-    partial_remote_path: &str,
-) -> Result<(), SftpError> {
-    if let Err(err) = remote_file.shutdown().await {
-        tracing::warn!(
-            partial_remote_path,
-            error = %err,
-            "failed to close partial remote file after cancel"
-        );
+    parent: &str,
+    local: &str,
+    remote: &str,
+) -> Result<(String, RemoteFileHandle), SftpError> {
+    for _ in 0..MAX_PARTIAL_CREATE_ATTEMPTS {
+        let suffix = random_partial_suffix();
+        let partial_path = join_remote_path(parent, Path::new(&partial_file_name(&suffix)))?;
+        match client
+            .sftp()
+            .open_with_flags(
+                &partial_path,
+                OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
+            )
+            .await
+        {
+            Ok(remote_file) => return Ok((partial_path, remote_file)),
+            Err(err) if is_remote_file_exists_error(&err) => continue,
+            Err(err) => {
+                return Err(SftpError::UploadFailed {
+                    local: local.to_string(),
+                    remote: remote.to_string(),
+                    message: err.to_string(),
+                });
+            }
+        }
     }
-    client
-        .delete(partial_remote_path)
-        .await
-        .map_err(|err| SftpError::CleanupFailed {
-            path: partial_remote_path.to_string(),
-            message: err.to_string(),
-        })
+
+    Err(SftpError::UploadFailed {
+        local: local.to_string(),
+        remote: remote.to_string(),
+        message: format!(
+            "failed to create exclusive partial file after {MAX_PARTIAL_CREATE_ATTEMPTS} attempts"
+        ),
+    })
 }
 
-async fn cleanup_cancelled_download(
-    remote_file: &mut RemoteFileHandle,
-    partial_local_path: &Path,
-) -> Result<(), SftpError> {
-    if let Err(err) = remote_file.shutdown().await {
-        tracing::warn!(
-            local = %partial_local_path.display(),
-            error = %err,
-            "failed to close remote file after cancel"
-        );
+async fn create_exclusive_local_partial(
+    parent: &Path,
+) -> Result<(PathBuf, tokio::fs::File), SftpError> {
+    for _ in 0..MAX_PARTIAL_CREATE_ATTEMPTS {
+        let suffix = random_partial_suffix();
+        let partial_path = partial_local_path_for_suffix(parent, &suffix);
+        match open_exclusive_local_file(&partial_path).await {
+            Ok(file) => return Ok((partial_path, file)),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(SftpError::DownloadFailed {
+                    remote: String::new(),
+                    local: parent.display().to_string(),
+                    message: err.to_string(),
+                });
+            }
+        }
     }
-    tokio::fs::remove_file(partial_local_path)
-        .await
-        .map_err(|err| SftpError::CleanupFailed {
-            path: partial_local_path.display().to_string(),
-            message: err.to_string(),
-        })
+
+    Err(SftpError::DownloadFailed {
+        remote: String::new(),
+        local: parent.display().to_string(),
+        message: format!(
+            "failed to create exclusive partial file after {MAX_PARTIAL_CREATE_ATTEMPTS} attempts"
+        ),
+    })
+}
+
+async fn open_exclusive_local_file(path: &Path) -> std::io::Result<tokio::fs::File> {
+    let mut options = tokio::fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    options.open(path).await
+}
+
+fn is_remote_file_exists_error(err: &SftpClientError) -> bool {
+    match err {
+        SftpClientError::Status(status) => {
+            let message = status.error_message.to_lowercase();
+            message.contains("file exists") || message.contains("already exists")
+        }
+        SftpClientError::IO(message) => {
+            let message = message.to_lowercase();
+            message.contains("file exists") || message.contains("already exists")
+        }
+        _ => false,
+    }
 }
 
 fn is_mkdir_already_exists_message(message: &str) -> bool {
@@ -553,9 +803,12 @@ fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::ErrorKind;
+
     use super::{
-        is_mkdir_already_exists_message, normalize_remote_path, parent_remote_path,
-        partial_local_path, partial_remote_path,
+        create_exclusive_local_partial, is_mkdir_already_exists_message, normalize_remote_path,
+        open_exclusive_local_file, parent_remote_path, partial_file_name,
+        partial_local_path_for_suffix, partial_remote_path_for_suffix, random_partial_suffix,
     };
 
     #[test]
@@ -583,36 +836,61 @@ mod tests {
     }
 
     #[test]
+    fn random_partial_suffix_is_32_hex_chars() {
+        let suffix = random_partial_suffix();
+        assert_eq!(suffix.len(), 32);
+        assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()));
+    }
+
+    #[test]
     fn partial_remote_path_uses_parent_directory_and_suffix() {
-        // Given: a remote file path
-        // When: partial_remote_path is called
-        // Then: the path is under the parent with a .dockbridge-*.partial suffix
-        let partial = partial_remote_path("/a/b.txt").unwrap();
-        assert!(partial.starts_with("/a/"));
-        assert!(partial.contains(".dockbridge-"));
-        assert!(partial.ends_with(".partial"));
+        let partial = partial_remote_path_for_suffix("/a/b.txt", "abc123").unwrap();
+        assert_eq!(partial, "/a/.dockbridge-abc123.partial");
     }
 
     #[test]
     fn partial_local_path_uses_parent_directory_and_suffix() {
-        // Given: a local file path
-        // When: partial_local_path is called
-        // Then: the path is under the parent with a .dockbridge-*.partial suffix
-        let partial = partial_local_path(std::path::Path::new("/tmp/a/b.txt"));
-        assert_eq!(partial.parent().and_then(|p| p.to_str()), Some("/tmp/a"));
-        let file_name = partial
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("");
-        assert!(file_name.starts_with(".dockbridge-"));
-        assert!(file_name.ends_with(".partial"));
+        let partial = partial_local_path_for_suffix(std::path::Path::new("/tmp/a"), "abc123");
+        assert_eq!(
+            partial,
+            std::path::Path::new("/tmp/a/.dockbridge-abc123.partial")
+        );
+    }
+
+    #[test]
+    fn partial_file_name_uses_expected_prefix_and_suffix() {
+        assert_eq!(
+            partial_file_name("deadbeef"),
+            ".dockbridge-deadbeef.partial"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_exclusive_local_partial_rejects_existing_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let parent = temp_dir.path();
+
+        let (partial_path, _file) = create_exclusive_local_partial(parent).await.unwrap();
+
+        let duplicate_err = open_exclusive_local_file(&partial_path).await.unwrap_err();
+        assert_eq!(duplicate_err.kind(), ErrorKind::AlreadyExists);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_exclusive_local_file_rejects_symlink_path() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let target = temp_dir.path().join("target.txt");
+        std::fs::write(&target, b"secret").unwrap();
+        let link = temp_dir.path().join(".dockbridge-link.partial");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = open_exclusive_local_file(&link).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::AlreadyExists);
     }
 
     #[test]
     fn client_path_normalization_rejects_parent_segments() {
-        // Given: remote paths with parent-directory segments
-        // When: normalize_remote_path is applied at the SFTP API boundary
-        // Then: InvalidRemotePath is returned before any SFTP call
         for path in ["/foo/../etc", "../secret"] {
             let err = normalize_remote_path(path).unwrap_err();
             assert!(
@@ -624,9 +902,6 @@ mod tests {
 
     #[test]
     fn upload_download_boundary_normalizes_relative_paths() {
-        // Given: relative remote paths passed to transfer helpers
-        // When: normalize_remote_path is applied at the upload/download boundary
-        // Then: paths are normalized to absolute POSIX paths
         assert_eq!(
             normalize_remote_path("remote/dir/file.txt").unwrap(),
             "/remote/dir/file.txt"
@@ -639,10 +914,7 @@ mod tests {
 
     #[test]
     fn partial_remote_path_rejects_traversal_before_upload() {
-        // Given: a remote upload path containing parent-directory segments
-        // When: partial_remote_path is called after normalization
-        // Then: InvalidRemotePath is returned before any SFTP upload begins
-        let err = partial_remote_path("/remote/../secret.txt").unwrap_err();
+        let err = partial_remote_path_for_suffix("/remote/../secret.txt", "abc123").unwrap_err();
         assert!(matches!(
             err,
             crate::error::SftpError::InvalidRemotePath { .. }

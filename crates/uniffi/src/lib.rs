@@ -7,10 +7,12 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use dockbridge_core::{
-    ensure_known_hosts_parent, expand_tilde, is_connection_lost_message,
-    validate_transfer_chunk_size, AppConfig, AuthType, ConnectionProfile, HostKeyPrompt,
-    KnownHostsManager, RemoteFile, SecretPassword, SftpClient, SshSession, TransferDirection,
-    TransferManager, TransferStatus, TransferTask,
+    ensure_known_hosts_parent, expand_tilde,
+    inspect_private_key_algorithm as core_inspect_private_key_algorithm,
+    is_connection_lost_message, validate_transfer_chunk_size, AppConfig, AuthType,
+    ConnectionProfile, HostKeyPrompt, KnownHostsManager, PrivateKeyAlgorithm, RemoteFile,
+    SecretPassword, SftpClient, SshSession, TransferDirection, TransferManager, TransferStatus,
+    TransferTask,
 };
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
@@ -113,6 +115,15 @@ pub enum TransferStatusRecord {
     Completed,
     Failed { message: String },
     Cancelled,
+}
+
+/// Private key algorithm classification exposed to Swift.
+#[derive(uniffi::Enum)]
+pub enum PrivateKeyAlgorithmRecord {
+    Ed25519,
+    Ecdsa,
+    Rsa,
+    Other { label: String },
 }
 
 /// A queued or completed file transfer operation.
@@ -596,4 +607,24 @@ fn map_error_string(message: impl Into<String>) -> DockBridgeError {
     DockBridgeError::Generic {
         message: message.into(),
     }
+}
+
+#[uniffi::export]
+fn inspect_private_key_algorithm(
+    key_path: String,
+    passphrase: Option<SecretCredential>,
+) -> Result<PrivateKeyAlgorithmRecord, DockBridgeError> {
+    let passphrase = passphrase.map(SecretCredential::into_inner);
+    let algorithm = core_inspect_private_key_algorithm(
+        PathBuf::from(&key_path).as_path(),
+        passphrase.as_deref(),
+    )
+    .map_err(map_error)?;
+
+    Ok(match algorithm {
+        PrivateKeyAlgorithm::Ed25519 => PrivateKeyAlgorithmRecord::Ed25519,
+        PrivateKeyAlgorithm::Ecdsa => PrivateKeyAlgorithmRecord::Ecdsa,
+        PrivateKeyAlgorithm::Rsa => PrivateKeyAlgorithmRecord::Rsa,
+        PrivateKeyAlgorithm::Other(label) => PrivateKeyAlgorithmRecord::Other { label },
+    })
 }

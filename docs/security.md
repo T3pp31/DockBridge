@@ -206,9 +206,29 @@ Track progress in [roadmap.md](roadmap.md#10). Until v1.0, treat CI and local De
 
 | Advisory | Crate | Severity | Status |
 |----------|-------|----------|--------|
-| RUSTSEC-2026-0153 | russh-cryptovec | High (7.5) | Upgrade to `russh >=0.60.3` when Rust toolchain supports 1.85+ |
+| RUSTSEC-2023-0071 | rsa | Medium (5.9) | No fixed upgrade available; see [RSA Marvin Attack](#rsa-marvin-attack-rustsec-2023-0071) |
+
+### Recently resolved advisories
+
+| Advisory | Crate | Severity | Resolution |
+|----------|-------|----------|------------|
+| RUSTSEC-2026-0153 | russh-cryptovec | High (7.5) | Fixed in `russh 0.61.2` / `russh-cryptovec 0.61.0` (patched `>=0.60.3`) |
 | RUSTSEC-2026-0154 | russh | High (7.5) | Same as above |
-| RUSTSEC-2023-0071 | rsa | Medium (5.9) | No fixed upgrade available; transitive via `russh` / `ssh-key` |
+
+### RSA Marvin Attack (RUSTSEC-2023-0071)
+
+The `rsa` crate (currently `0.10.0-rc.18` in `Cargo.lock`) has no patched release. It is pulled in transitively by `russh` and `ssh-key`.
+
+**Exposure in DockBridge**
+
+- **Client authentication with an RSA private key** — DockBridge uses the `rsa` crate for RSA signing during SSH public-key authentication. An attacker who can observe network timing during authentication may recover key material (Marvin Attack).
+- **Server host keys using RSA** — DockBridge also uses the same crate when verifying RSA server host keys (`ssh-rsa` with SHA-256/512 in `algorithm_policy.rs`). This is a different code path from client signing but shares the same dependency.
+
+**Mitigations**
+
+- **Prefer Ed25519 or ECDSA private keys** for client authentication. The macOS app shows a connection warning when an RSA private key is selected.
+- **Host key policy** — DockBridge rejects legacy `ssh-rsa` without a hash (`Algorithm::Rsa { hash: None }`). Only RSA with SHA-256 or SHA-512 is accepted for server host keys.
+- **Tracked exception** — `RUSTSEC-2023-0071` remains in `.cargo/audit.toml` until upstream ships a constant-time fix or DockBridge can drop RSA support entirely.
 
 Run `cargo audit` locally to match CI (`.cargo/audit.toml` applies tracked exceptions):
 
