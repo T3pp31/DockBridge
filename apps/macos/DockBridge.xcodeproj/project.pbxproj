@@ -61,6 +61,8 @@
 		H0STK3YPR0MPTV3R1F1C4T5 /* HostKeyPromptVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = H0STK3YPR0MPTV3R1F1C4T6 /* HostKeyPromptVerificationTests.swift */; };
 		H0STK3YC0NF1RMV13WT3ST5 /* HostKeyConfirmViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = H0STK3YC0NF1RMV13WT3ST6 /* HostKeyConfirmViewTests.swift */; };
 		D5R0P0P3R4T10N5Y5N0C1N5RC /* DropOperationSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */; };
+		T7R4N5F3R0P4R0G3F0RM4T3RC /* TransferProgressFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = T7R4N5F3R0P4R0G3F0RM4T3RD /* TransferProgressFormatter.swift */; };
+		T7R4N5F3R0P4R0G3F0RM4T3TS /* TransferProgressFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T7R4N5F3R0P4R0G3F0RM4T3TS5 /* TransferProgressFormatterTests.swift */; };
 		D5R0P0P3R4T10N5Y5N0C1T5ST /* DropOperationSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */; };
 		F1L3D3R0P4C3C3P7T4N5C3T5ST /* FileDropAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */; };
 		S3C8K0P3B00KM4RKS3RV1C3SW1 /* SecurityScopedBookmarkService.swift in Sources */ = {isa = PBXBuildFile; fileRef = S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */; };
@@ -136,6 +138,8 @@
 		H0STK3YPR0MPTV3R1F1C4T6 /* HostKeyPromptVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyPromptVerificationTests.swift; sourceTree = "<group>"; };
 		H0STK3YC0NF1RMV13WT3ST6 /* HostKeyConfirmViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyConfirmViewTests.swift; sourceTree = "<group>"; };
 		D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropOperationSync.swift; sourceTree = "<group>"; };
+		T7R4N5F3R0P4R0G3F0RM4T3RD /* TransferProgressFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferProgressFormatter.swift; sourceTree = "<group>"; };
+		T7R4N5F3R0P4R0G3F0RM4T3TS5 /* TransferProgressFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferProgressFormatterTests.swift; sourceTree = "<group>"; };
 		D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropOperationSyncTests.swift; sourceTree = "<group>"; };
 		F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropAcceptanceTests.swift; sourceTree = "<group>"; };
 		S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityScopedBookmarkService.swift; sourceTree = "<group>"; };
@@ -351,6 +355,7 @@
 			children = (
 				CL1PB04RDH3LP3R1N5RC2 /* ClipboardHelper.swift */,
 				D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */,
+				T7R4N5F3R0P4R0G3F0RM4T3RD /* TransferProgressFormatter.swift */,
 				3XP4ND1NGFR4M3F1L3B4 /* ExpandingFrame.swift */,
 				T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */,
 				W1ND0WL4Y0U7T1F2B4 /* WindowLayout.swift */,
@@ -381,6 +386,7 @@
 				APPUPD4T3S3RV1C3T1 /* AppUpdateServiceTests.swift */,
 				D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */,
 				F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */,
+				T7R4N5F3R0P4R0G3F0RM4T3TS5 /* TransferProgressFormatterTests.swift */,
 				F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */,
 				D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */,
 				F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */,
@@ -569,6 +575,7 @@
 				F1D2R3A4G5P6A7Y8L9O0A1D2 /* FileDragPayload.swift in Sources */,
 				F1I2L3E4D5R6O7P8M9O0D1I2F3 /* FileDropModifiers.swift in Sources */,
 				D5R0P0P3R4T10N5Y5N0C1N5RC /* DropOperationSync.swift in Sources */,
+				T7R4N5F3R0P4R0G3F0RM4T3RC /* TransferProgressFormatter.swift in Sources */,
 				3XP4ND1NGFR4M3F1L3B3 /* ExpandingFrame.swift in Sources */,
 				T4BL3C0L7MN8L4Y0U7T1F2B3 /* TableColumnLayout.swift in Sources */,
 				W1ND0WL4Y0U7T1F2B3 /* WindowLayout.swift in Sources */,
@@ -589,6 +596,7 @@
 				APPUPD4T3S3RV1C3T2 /* AppUpdateServiceTests.swift in Sources */,
 				D5R0P0P3R4T10N5Y5N0C1T5ST /* DropOperationSyncTests.swift in Sources */,
 				F1L3D3R0P4C3C3P7T4N5C3T5ST /* FileDropAcceptanceTests.swift in Sources */,
+				T7R4N5F3R0P4R0G3F0RM4T3TS /* TransferProgressFormatterTests.swift in Sources */,
 				F1D2R3O4P5V6A7L8I9D0T1E2S3T4 /* FileDropValidationTests.swift in Sources */,
 				C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */,
 				E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */,

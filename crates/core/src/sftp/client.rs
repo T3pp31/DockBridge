@@ -87,10 +87,31 @@ impl<'a> SftpClient<'a> {
         Ok(files)
     }
 
+    /// Returns the size of a remote file in bytes.
+    pub async fn remote_file_size(&self, remote_path: &str) -> Result<u64, SftpError> {
+        let remote_path = normalize_remote_path(remote_path)?;
+        let metadata = self
+            .sftp()
+            .metadata(&remote_path)
+            .await
+            .map_err(|err| SftpError::DownloadFailed {
+                remote: remote_path.clone(),
+                local: String::new(),
+                message: err.to_string(),
+            })?;
+        Ok(metadata.size.unwrap_or(0))
+    }
+
     /// Uploads a local file to a remote path.
     pub async fn upload(&self, local_path: &Path, remote_path: &str) -> Result<(), SftpError> {
-        self.upload_cancellable(local_path, remote_path, default_chunk_size(), || false)
-            .await
+        self.upload_cancellable(
+            local_path,
+            remote_path,
+            default_chunk_size(),
+            || false,
+            |_| {},
+        )
+        .await
     }
 
     /// Uploads a local file in chunks, checking `is_cancelled` before each chunk.
@@ -100,6 +121,7 @@ impl<'a> SftpClient<'a> {
         remote_path: &str,
         chunk_size: usize,
         is_cancelled: impl Fn() -> bool + Send,
+        mut on_progress: impl FnMut(u64) + Send,
     ) -> Result<(), SftpError> {
         let remote_path = normalize_remote_path(remote_path)?;
         let local = local_path.display().to_string();
@@ -127,6 +149,7 @@ impl<'a> SftpClient<'a> {
             })?;
 
         let mut buffer = vec![0_u8; chunk_size];
+        let mut transferred = 0_u64;
         loop {
             if is_cancelled() {
                 cleanup_cancelled_upload(self, &mut remote_file, &partial_remote_path).await?;
@@ -154,6 +177,8 @@ impl<'a> SftpClient<'a> {
                     remote: remote.clone(),
                     message: err.to_string(),
                 })?;
+            transferred += bytes_read as u64;
+            on_progress(transferred);
         }
 
         remote_file
@@ -175,8 +200,14 @@ impl<'a> SftpClient<'a> {
 
     /// Downloads a remote file to a local path.
     pub async fn download(&self, remote_path: &str, local_path: &Path) -> Result<(), SftpError> {
-        self.download_cancellable(remote_path, local_path, default_chunk_size(), || false)
-            .await
+        self.download_cancellable(
+            remote_path,
+            local_path,
+            default_chunk_size(),
+            || false,
+            |_| {},
+        )
+        .await
     }
 
     /// Downloads a remote file in chunks, checking `is_cancelled` before each chunk.
@@ -186,6 +217,7 @@ impl<'a> SftpClient<'a> {
         local_path: &Path,
         chunk_size: usize,
         is_cancelled: impl Fn() -> bool + Send,
+        mut on_progress: impl FnMut(u64) + Send,
     ) -> Result<(), SftpError> {
         let remote_path = normalize_remote_path(remote_path)?;
         let remote = remote_path.clone();
@@ -222,6 +254,7 @@ impl<'a> SftpClient<'a> {
             })?;
 
         let mut buffer = vec![0_u8; chunk_size];
+        let mut transferred = 0_u64;
         loop {
             if is_cancelled() {
                 cleanup_cancelled_download(&mut remote_file, &partial_local_path).await?;
@@ -249,6 +282,8 @@ impl<'a> SftpClient<'a> {
                     local: local.clone(),
                     message: err.to_string(),
                 })?;
+            transferred += bytes_read as u64;
+            on_progress(transferred);
         }
 
         local_file

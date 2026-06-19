@@ -36,6 +36,8 @@ pub struct TransferTask {
     pub local_path: PathBuf,
     pub remote_path: String,
     pub status: TransferStatus,
+    pub bytes_transferred: u64,
+    pub total_bytes: u64,
 }
 
 /// Sequential transfer queue manager.
@@ -99,6 +101,40 @@ impl TransferManager {
         if let Ok(mut tasks) = self.tasks.lock() {
             if let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) {
                 task.status = status;
+            }
+        }
+    }
+
+    fn set_task_total_bytes(&self, task_id: u64, total_bytes: u64) {
+        if let Ok(mut tasks) = self.tasks.lock() {
+            if let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) {
+                task.total_bytes = total_bytes;
+            }
+        }
+    }
+
+    fn reset_task_progress(&self, task_id: u64) {
+        if let Ok(mut tasks) = self.tasks.lock() {
+            if let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) {
+                task.bytes_transferred = 0;
+            }
+        }
+    }
+
+    fn update_task_progress(&self, task_id: u64, bytes_transferred: u64) {
+        if let Ok(mut tasks) = self.tasks.lock() {
+            if let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) {
+                task.bytes_transferred = bytes_transferred;
+            }
+        }
+    }
+
+    fn mark_task_progress_complete(&self, task_id: u64) {
+        if let Ok(mut tasks) = self.tasks.lock() {
+            if let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) {
+                if task.total_bytes > 0 {
+                    task.bytes_transferred = task.total_bytes;
+                }
             }
         }
     }
@@ -175,6 +211,7 @@ impl TransferManager {
 
         match result {
             Ok(()) => {
+                self.mark_task_progress_complete(task_id);
                 self.update_task_status(task_id, TransferStatus::Completed);
                 Ok(())
             }
@@ -210,6 +247,8 @@ impl TransferManager {
             local_path: local_path.clone(),
             remote_path: remote_path.clone(),
             status: TransferStatus::Pending,
+            bytes_transferred: 0,
+            total_bytes: 0,
         };
 
         self.insert_task(task.clone());
@@ -245,6 +284,8 @@ impl TransferManager {
             local_path: local_path.clone(),
             remote_path: remote_path.clone(),
             status: TransferStatus::Pending,
+            bytes_transferred: 0,
+            total_bytes: 0,
         };
 
         self.insert_task(task.clone());
@@ -400,6 +441,12 @@ impl TransferManager {
         remote_path: &str,
     ) -> Result<(), TransferError> {
         let client = SftpClient::new(session);
+        let total_bytes = tokio::fs::metadata(local_path)
+            .await
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        self.set_task_total_bytes(task_id, total_bytes);
+
         let attempts = self.retry_count.max(1);
         let mut last_error = String::from("unknown transfer error");
         let mut attempt = 0;
@@ -410,10 +457,15 @@ impl TransferManager {
             }
 
             attempt = current;
+            self.reset_task_progress(task_id);
             match client
-                .upload_cancellable(local_path, remote_path, self.chunk_size, || {
-                    self.is_cancelled(task_id)
-                })
+                .upload_cancellable(
+                    local_path,
+                    remote_path,
+                    self.chunk_size,
+                    || self.is_cancelled(task_id),
+                    |transferred| self.update_task_progress(task_id, transferred),
+                )
                 .await
             {
                 Ok(()) => return Ok(()),
@@ -457,6 +509,12 @@ impl TransferManager {
         local_path: &Path,
     ) -> Result<(), TransferError> {
         let client = SftpClient::new(session);
+        let total_bytes = client
+            .remote_file_size(remote_path)
+            .await
+            .unwrap_or(0);
+        self.set_task_total_bytes(task_id, total_bytes);
+
         let attempts = self.retry_count.max(1);
         let mut last_error = String::from("unknown transfer error");
         let mut attempt = 0;
@@ -467,10 +525,15 @@ impl TransferManager {
             }
 
             attempt = current;
+            self.reset_task_progress(task_id);
             match client
-                .download_cancellable(remote_path, local_path, self.chunk_size, || {
-                    self.is_cancelled(task_id)
-                })
+                .download_cancellable(
+                    remote_path,
+                    local_path,
+                    self.chunk_size,
+                    || self.is_cancelled(task_id),
+                    |transferred| self.update_task_progress(task_id, transferred),
+                )
                 .await
             {
                 Ok(()) => return Ok(()),
@@ -572,6 +635,8 @@ mod tests {
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
             status: TransferStatus::Pending,
+            bytes_transferred: 0,
+            total_bytes: 0,
         };
 
         manager.insert_task(task);
@@ -590,6 +655,8 @@ mod tests {
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
             status: TransferStatus::Pending,
+            bytes_transferred: 0,
+            total_bytes: 0,
         };
 
         manager.insert_task(task);
@@ -608,6 +675,8 @@ mod tests {
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
             status: TransferStatus::Pending,
+            bytes_transferred: 0,
+            total_bytes: 0,
         };
 
         manager.insert_task(task);
@@ -633,6 +702,8 @@ mod tests {
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
             status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 0,
         };
 
         manager.insert_task(task);
@@ -675,6 +746,8 @@ mod tests {
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
             status: TransferStatus::Pending,
+            bytes_transferred: 0,
+            total_bytes: 0,
         };
         manager.insert_task(task.clone());
         manager.register_cancellation_flag(task.id);
@@ -708,6 +781,8 @@ mod tests {
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
             status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 0,
         };
 
         manager.insert_task(task);
@@ -732,6 +807,8 @@ mod tests {
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
             status: TransferStatus::Pending,
+            bytes_transferred: 0,
+            total_bytes: 0,
         };
 
         manager.insert_task(task);
@@ -749,5 +826,98 @@ mod tests {
                 message: "permission denied".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn set_task_total_bytes_updates_recorded_task() {
+        // Given: a queued transfer task
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 100,
+            direction: TransferDirection::Download,
+            local_path: PathBuf::from("/tmp/file.bin"),
+            remote_path: "/remote/file.bin".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 0,
+        };
+        manager.insert_task(task);
+
+        // When: total bytes are set
+        manager.set_task_total_bytes(100, 1_024);
+
+        // Then: the queue reflects the total
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].total_bytes, 1_024);
+    }
+
+    #[test]
+    fn update_task_progress_updates_transferred_bytes() {
+        // Given: a queued transfer task with a known total
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 101,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.bin"),
+            remote_path: "/remote/file.bin".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 2_048,
+        };
+        manager.insert_task(task);
+
+        // When: progress is updated
+        manager.update_task_progress(101, 512);
+
+        // Then: transferred bytes are recorded
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].bytes_transferred, 512);
+    }
+
+    #[test]
+    fn reset_task_progress_clears_transferred_bytes_on_retry() {
+        // Given: a task with partial progress
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 102,
+            direction: TransferDirection::Download,
+            local_path: PathBuf::from("/tmp/file.bin"),
+            remote_path: "/remote/file.bin".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 900,
+            total_bytes: 1_000,
+        };
+        manager.insert_task(task);
+
+        // When: progress is reset before a retry
+        manager.reset_task_progress(102);
+
+        // Then: transferred bytes return to zero
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].bytes_transferred, 0);
+        assert_eq!(queue[0].total_bytes, 1_000);
+    }
+
+    #[test]
+    fn mark_task_progress_complete_sets_transferred_to_total() {
+        // Given: a task with total bytes set
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 103,
+            direction: TransferDirection::Download,
+            local_path: PathBuf::from("/tmp/file.bin"),
+            remote_path: "/remote/file.bin".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 500,
+            total_bytes: 1_000,
+        };
+        manager.insert_task(task);
+
+        // When: completion progress is applied
+        manager.mark_task_progress_complete(103);
+
+        // Then: transferred bytes match total
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].bytes_transferred, 1_000);
     }
 }

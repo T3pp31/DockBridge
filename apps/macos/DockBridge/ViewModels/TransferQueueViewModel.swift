@@ -5,6 +5,10 @@ final class TransferQueueViewModel: ObservableObject {
     @Published private(set) var tasks: [TransferTaskRecord] = []
     @Published var errorMessage: String?
 
+    var activeTransferSummary: String? {
+        TransferProgressFormatter.activeTransferSummary(for: tasks)
+    }
+
     private let bridge: RustBridgeService
     private var refreshTask: Task<Void, Never>?
 

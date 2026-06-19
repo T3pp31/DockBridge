@@ -47,7 +47,7 @@ struct TransferQueueView: View {
                     .help(task.remotePath)
             }
             TableColumn("Status") { task in
-                Text(statusLabel(for: task.status))
+                statusView(for: task)
             }
             TableColumn("") { task in
                 if canCancel(task: task) {
@@ -57,6 +57,27 @@ struct TransferQueueView: View {
                 }
             }
             .width(80)
+        }
+    }
+
+    @ViewBuilder
+    private func statusView(for task: TransferTaskRecord) -> some View {
+        if case .inProgress = task.status,
+           let progressLabel = TransferProgressFormatter.progressLabel(
+               transferred: task.bytesTransferred,
+               total: task.totalBytes
+           ) {
+            VStack(alignment: .leading, spacing: 4) {
+                ProgressView(
+                    value: Double(task.bytesTransferred),
+                    total: Double(task.totalBytes)
+                )
+                Text(progressLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            Text(statusLabel(for: task.status))
         }
     }
 

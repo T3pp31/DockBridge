@@ -35,7 +35,10 @@ struct MainView: View {
             .frame(minWidth: WindowLayout.sidebarMinWidth)
         } detail: {
             VStack(spacing: 0) {
-                ConnectionStatusBar(status: bridge.connectionStatus)
+                ConnectionStatusBar(
+                    status: bridge.connectionStatus,
+                    transferSummary: transferQueue.activeTransferSummary
+                )
 
                 Divider()
 
