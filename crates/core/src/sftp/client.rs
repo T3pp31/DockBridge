@@ -215,8 +215,7 @@ impl<'a> SftpClient<'a> {
                 })?;
 
         let local_parent = local_path.parent().unwrap_or_else(|| Path::new("."));
-        let mut partial =
-            PartialLocalTransfer::begin(local_parent, &remote, &local).await?;
+        let mut partial = PartialLocalTransfer::begin(local_parent, &remote, &local).await?;
 
         let mut buffer = vec![0_u8; chunk_size];
         loop {
@@ -269,9 +268,7 @@ impl<'a> SftpClient<'a> {
             return Err(SftpError::Cancelled);
         }
 
-        partial
-            .finalize_rename(local_path, &mut remote_file)
-            .await
+        partial.finalize_rename(local_path, &mut remote_file).await
     }
 
     /// Deletes a remote file.
@@ -827,7 +824,10 @@ mod tests {
 
     #[test]
     fn partial_file_name_uses_expected_prefix_and_suffix() {
-        assert_eq!(partial_file_name("deadbeef"), ".dockbridge-deadbeef.partial");
+        assert_eq!(
+            partial_file_name("deadbeef"),
+            ".dockbridge-deadbeef.partial"
+        );
     }
 
     #[tokio::test]
@@ -837,9 +837,7 @@ mod tests {
 
         let (partial_path, _file) = create_exclusive_local_partial(parent).await.unwrap();
 
-        let duplicate_err = open_exclusive_local_file(&partial_path)
-            .await
-            .unwrap_err();
+        let duplicate_err = open_exclusive_local_file(&partial_path).await.unwrap_err();
         assert_eq!(duplicate_err.kind(), ErrorKind::AlreadyExists);
     }
 
