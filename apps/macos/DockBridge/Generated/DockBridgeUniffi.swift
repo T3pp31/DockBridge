@@ -1093,15 +1093,19 @@ public struct TransferTaskRecord: Equatable, Hashable {
     public var localPath: String
     public var remotePath: String
     public var status: TransferStatusRecord
+    public var bytesTransferred: UInt64
+    public var totalBytes: UInt64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: UInt64, direction: TransferDirectionRecord, localPath: String, remotePath: String, status: TransferStatusRecord) {
+    public init(id: UInt64, direction: TransferDirectionRecord, localPath: String, remotePath: String, status: TransferStatusRecord, bytesTransferred: UInt64, totalBytes: UInt64) {
         self.id = id
         self.direction = direction
         self.localPath = localPath
         self.remotePath = remotePath
         self.status = status
+        self.bytesTransferred = bytesTransferred
+        self.totalBytes = totalBytes
     }
 
     
@@ -1124,7 +1128,9 @@ public struct FfiConverterTypeTransferTaskRecord: FfiConverterRustBuffer {
                 direction: FfiConverterTypeTransferDirectionRecord.read(from: &buf), 
                 localPath: FfiConverterString.read(from: &buf), 
                 remotePath: FfiConverterString.read(from: &buf), 
-                status: FfiConverterTypeTransferStatusRecord.read(from: &buf)
+                status: FfiConverterTypeTransferStatusRecord.read(from: &buf), 
+                bytesTransferred: FfiConverterUInt64.read(from: &buf), 
+                totalBytes: FfiConverterUInt64.read(from: &buf)
         )
     }
 
@@ -1134,6 +1140,8 @@ public struct FfiConverterTypeTransferTaskRecord: FfiConverterRustBuffer {
         FfiConverterString.write(value.localPath, into: &buf)
         FfiConverterString.write(value.remotePath, into: &buf)
         FfiConverterTypeTransferStatusRecord.write(value.status, into: &buf)
+        FfiConverterUInt64.write(value.bytesTransferred, into: &buf)
+        FfiConverterUInt64.write(value.totalBytes, into: &buf)
     }
 }
 

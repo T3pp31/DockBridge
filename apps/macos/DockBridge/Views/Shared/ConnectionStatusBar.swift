@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ConnectionStatusBar: View {
     let status: ConnectionStatus
+    var transferSummary: String?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -17,6 +18,13 @@ struct ConnectionStatusBar: View {
             Text(status.statusTitle)
                 .font(.subheadline)
                 .foregroundStyle(.primary)
+
+            if let transferSummary {
+                Text(transferSummary)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
 
             Spacer()
         }
