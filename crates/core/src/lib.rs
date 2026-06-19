@@ -21,7 +21,7 @@ pub use sftp::{
     validated_remote_entry, RemoteFile, SftpClient,
 };
 pub use ssh::{
-    is_connection_lost_message, AuthType, ConnectionProfile, HostKeyPrompt, SecretPassword,
-    SshSession,
+    inspect_private_key_algorithm, is_connection_lost_message, AuthType, ConnectionProfile,
+    HostKeyPrompt, PrivateKeyAlgorithm, SecretPassword, SshSession,
 };
 pub use transfer::{TransferDirection, TransferManager, TransferStatus, TransferTask};
