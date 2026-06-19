@@ -6,12 +6,9 @@ struct LocalPaneView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
-            pathBar(
-                title: "Local",
-                path: viewModel.localPath.path,
-                onUp: viewModel.navigateLocalUp,
-                onRefresh: viewModel.reloadLocal
-            )
+            LocalPanePathBar(viewModel: viewModel)
+
+            Divider()
 
             ExpandingFrame { size in
                 LocalFileTable(viewModel: viewModel)
@@ -44,7 +41,7 @@ struct LocalPaneView: View {
                     }
                     .modifier(LocalPaneDropModifier(viewModel: viewModel, isTargeted: $isDropTargeted))
             }
-            .layoutPriority(1)
+            .layoutPriority(0)
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .padding(WindowLayout.panePadding)
@@ -56,30 +53,5 @@ struct LocalPaneView: View {
     private func singleSelectedLocalItem(from ids: Set<String>) -> LocalFileItem? {
         guard ids.count == 1, let id = ids.first else { return nil }
         return viewModel.localItems.first { $0.id == id }
-    }
-
-    @ViewBuilder
-    private func pathBar(title: String, path: String, onUp: @escaping () -> Void, onRefresh: @escaping () -> Void) -> some View {
-        HStack {
-            Text(title)
-                .font(.headline)
-            TextField("Path", text: .constant(path))
-                .textFieldStyle(.roundedBorder)
-                .disabled(true)
-            Button(action: onUp) {
-                Image(systemName: "arrow.up.circle")
-            }
-            .help("Parent directory")
-            Button(action: onRefresh) {
-                Image(systemName: "arrow.clockwise")
-            }
-            .help("Refresh")
-            Button {
-                Task { await viewModel.uploadSelected() }
-            } label: {
-                Label("Upload", systemImage: "square.and.arrow.up")
-            }
-            .disabled(viewModel.selectedLocalItem == nil || !viewModel.bridge.isConnected)
-        }
     }
 }
