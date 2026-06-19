@@ -151,7 +151,11 @@ impl TransferManager {
 
         if was_cancelled {
             return match result {
-                Ok(()) | Err(TransferError::Cancelled) => {
+                Ok(()) => {
+                    self.update_task_status(task_id, TransferStatus::Completed);
+                    Ok(())
+                }
+                Err(TransferError::Cancelled) => {
                     self.update_task_status(task_id, TransferStatus::Cancelled);
                     Err(TransferError::Cancelled)
                 }
@@ -700,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn finalize_task_result_honours_cancel_after_successful_transfer() {
+    fn finalize_task_result_marks_completed_when_transfer_succeeds_despite_cancel_flag() {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 11,
@@ -714,9 +718,32 @@ mod tests {
         manager.register_cancellation_flag(11);
         manager.request_cancellation(11);
 
-        let err = manager
+        manager
             .finalize_task_result(11, Ok(()))
-            .expect_err("cancelled task should not finalize as completed");
+            .expect("successful transfer should finalize as completed");
+
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].status, TransferStatus::Completed);
+    }
+
+    #[test]
+    fn finalize_task_result_marks_cancelled_when_transfer_returns_cancelled() {
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 12,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::InProgress,
+        };
+
+        manager.insert_task(task);
+        manager.register_cancellation_flag(12);
+        manager.request_cancellation(12);
+
+        let err = manager
+            .finalize_task_result(12, Err(TransferError::Cancelled))
+            .expect_err("cancelled transfer should not finalize as completed");
 
         assert!(matches!(err, TransferError::Cancelled));
         let queue = manager.get_transfer_queue();
