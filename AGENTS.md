@@ -52,6 +52,8 @@ Non-obvious gotchas discovered during setup:
   `merge_openssh_known_hosts_on_connect = false` to avoid touching `~/.ssh/known_hosts`.
 - Remote paths resolve **absolute from `/`**, not the login home. Use full paths like
   `/home/ubuntu/upload/hello.txt` (a bare `upload/hello.txt` becomes `/upload/...` and fails).
-- Uploads are atomic: the CLI writes a `.partial` file and renames it onto the target. SFTP rename
-  does not overwrite, so re-uploading to an existing remote path fails with `Failure: Failure` —
-  delete the remote file (or use a new name) before re-uploading.
+- Uploads are atomic: the CLI writes a random `.dockbridge-<hex>.partial` file with exclusive
+  create (`create_new` + `O_NOFOLLOW` on Unix) and renames it onto the target on success.
+  The default overwrite policy is `Replace`, which deletes an existing remote destination before
+  rename when needed. Use `TransferOverwritePolicy::FailIfExists` to reject transfers whose
+  destination already exists.
