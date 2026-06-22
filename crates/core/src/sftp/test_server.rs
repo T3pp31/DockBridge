@@ -179,7 +179,7 @@ impl russh_sftp::server::Handler for SftpHandler {
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
         Ok(Name {
             id,
-            files: vec![File::dummy(&self.canonical(&path))],
+            files: vec![File::dummy(self.canonical(&path))],
         })
     }
 
@@ -387,15 +387,14 @@ impl TestSftpServer {
         });
 
         let known_hosts_dir = tempfile::tempdir().unwrap();
-        let server = Self {
+        Self {
             addr,
             root,
             failures,
             _root_dir: root_dir,
             _known_hosts_dir: known_hosts_dir,
             _server_task: server_task,
-        };
-        server
+        }
     }
 
     pub async fn connect_session(&self) -> SshSession {

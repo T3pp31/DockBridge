@@ -969,8 +969,7 @@ mod tests {
             buf: &mut tokio::io::ReadBuf<'_>,
         ) -> Poll<io::Result<()>> {
             if self.reads >= self.fail_after_successful_reads {
-                return Poll::Ready(Err(io::Error::new(
-                    ErrorKind::Other,
+                return Poll::Ready(Err(io::Error::other(
                     "simulated local read failure",
                 )));
             }
