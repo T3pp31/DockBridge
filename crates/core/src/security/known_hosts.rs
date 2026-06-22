@@ -733,28 +733,101 @@ pub fn fingerprint_sha256(key: &PublicKey) -> String {
     key.fingerprint(HashAlg::Sha256).to_string()
 }
 
+const KNOWN_HOSTS_PARTIAL_SUFFIX_BYTES: usize = 16;
+const MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS: usize = 5;
+
+fn random_known_hosts_partial_suffix() -> String {
+    use rand::TryRng;
+
+    let mut bytes = [0_u8; KNOWN_HOSTS_PARTIAL_SUFFIX_BYTES];
+    rand::rng()
+        .try_fill_bytes(&mut bytes)
+        .expect("failed to generate random partial suffix");
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+fn known_hosts_partial_file_name(suffix: &str) -> String {
+    format!(".dockbridge-{suffix}.partial")
+}
+
 #[cfg(unix)]
-fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
+fn open_exclusive_local_file_sync(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
 
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|err| SecurityError::KnownHostsWriteFailed {
-            path: path.display().to_string(),
-            message: err.to_string(),
-        })?;
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true).mode(0o600);
+    options.custom_flags(libc::O_NOFOLLOW);
+    options.open(path)
+}
 
-    file.write_all(data)
-        .map_err(|err| SecurityError::KnownHostsWriteFailed {
-            path: path.display().to_string(),
-            message: err.to_string(),
-        })?;
-
+#[cfg(unix)]
+fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
     use std::os::unix::fs::PermissionsExt;
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| SecurityError::KnownHostsWriteFailed {
+            path: path.display().to_string(),
+            message: "known hosts path has no parent directory".to_string(),
+        })?;
+
+    let mut temp_path = None;
+    let mut file = None;
+
+    for _ in 0..MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS {
+        let candidate = parent.join(known_hosts_partial_file_name(
+            &random_known_hosts_partial_suffix(),
+        ));
+        match open_exclusive_local_file_sync(&candidate) {
+            Ok(opened) => {
+                temp_path = Some(candidate);
+                file = Some(opened);
+                break;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(SecurityError::KnownHostsWriteFailed {
+                    path: path.display().to_string(),
+                    message: err.to_string(),
+                });
+            }
+        }
+    }
+
+    let temp_path = temp_path.ok_or_else(|| SecurityError::KnownHostsWriteFailed {
+        path: path.display().to_string(),
+        message: format!(
+            "failed to create exclusive partial file after {MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS} attempts"
+        ),
+    })?;
+    let mut file = file.expect("partial file handle must exist when temp path was created");
+
+    if let Err(err) = file.write_all(data) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(SecurityError::KnownHostsWriteFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        });
+    }
+
+    if let Err(err) = file.sync_all() {
+        let _ = fs::remove_file(&temp_path);
+        return Err(SecurityError::KnownHostsWriteFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        });
+    }
+
+    if let Err(err) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(SecurityError::KnownHostsWriteFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        });
+    }
 
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|err| {
         SecurityError::KnownHostsWriteFailed {
@@ -1253,5 +1326,68 @@ mod tests {
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_file_mode_0600_does_not_modify_symlink_target() {
+        // Given: the destination path is a symlink to a secret file
+        // When: write_file_mode_0600 persists new contents
+        // Then: the symlink target is not truncated or overwritten
+        let dir = tempdir().unwrap();
+        let secret = dir.path().join("secret.txt");
+        fs::write(&secret, b"untouched").unwrap();
+        let path = dir.path().join("known_hosts.json");
+        std::os::unix::fs::symlink(&secret, &path).unwrap();
+
+        write_file_mode_0600(&path, br#"{"entries":[],"hashed_entries":[]}"#).unwrap();
+
+        assert_eq!(fs::read(&secret).unwrap(), b"untouched");
+        assert!(!path.is_symlink());
+    }
+
+    #[test]
+    fn persist_leaves_no_partial_files_after_success() {
+        // Given: an empty known hosts store
+        // When: accept_host_key persists the store
+        // Then: no .dockbridge-*.partial files remain in the parent directory
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.accept_host_key("localhost", 22, &key).unwrap();
+
+        let partials = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .filter(|name| {
+                name.to_string_lossy().starts_with(".dockbridge-")
+                    && name.to_string_lossy().ends_with(".partial")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            partials.is_empty(),
+            "partial files left behind: {partials:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_exclusive_local_file_sync_rejects_symlink_path() {
+        use std::io::ErrorKind;
+
+        // Given: a symlink path for a partial file
+        // When: open_exclusive_local_file_sync tries to create it
+        // Then: AlreadyExists is returned without following the symlink
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("target.txt");
+        fs::write(&target, b"secret").unwrap();
+        let link = dir.path().join(".dockbridge-link.partial");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = open_exclusive_local_file_sync(&link).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::AlreadyExists);
     }
 }
