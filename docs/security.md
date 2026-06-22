@@ -176,6 +176,26 @@ This SHA-1 usage is **OpenSSH specification–compliant**, not a general-purpose
 
 DockBridge runs with App Sandbox enabled for defense in depth and a reduced attack surface. An SFTP client does not need full filesystem access; user-selected paths and security-scoped bookmarks are sufficient for browsing, transfers, and private-key references. The app accesses only folders and keys explicitly chosen by the user.
 
+## SFTP transfer safety
+
+Uploads and downloads write to temporary partial files before renaming to the final destination:
+
+| Stage | Local partial | Remote partial |
+|-------|---------------|----------------|
+| Create | `create_new(true)` + `O_NOFOLLOW` (Unix) | `CREATE \| EXCLUDE \| WRITE` |
+| Name | `.dockbridge-<32-hex>.partial` (cryptographic random) | same pattern in destination directory |
+| Cancel / failure | partial file removed; destination untouched | partial file removed; destination untouched |
+| Success | rename partial → final | delete existing destination when policy is `Replace`, then rename |
+
+`TransferOverwritePolicy` controls final-destination behavior:
+
+| Policy | Behavior |
+|--------|----------|
+| `Replace` (default) | Replace an existing destination after the transfer completes successfully. Remote uploads delete the existing file before rename when the server does not overwrite via rename alone. |
+| `FailIfExists` | Fail without modifying the destination when it already exists. |
+
+Local finalize rejects symlink destinations without following them. Partial files are never opened through symlinks on Unix.
+
 ### Entitlements
 
 - `com.apple.security.app-sandbox` — confines the app to its container and granted capabilities

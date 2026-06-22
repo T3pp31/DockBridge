@@ -23,7 +23,7 @@ Remote Server
 | SwiftUI | 2-pane UI, connection management, settings, host key dialogs |
 | Swift Services | Keychain, AppConfig assembly, connection profiles, file watching |
 | UniFFI | Type-safe bridge between Swift and Rust |
-| Rust Core | SSH/SFTP, transfer queue, known hosts, error classification |
+| Rust Core | SSH/SFTP, transfer queue, known hosts, error classification, transfer overwrite policy |
 
 ## Configuration flow
 
