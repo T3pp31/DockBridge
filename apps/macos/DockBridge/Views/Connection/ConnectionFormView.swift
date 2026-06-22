@@ -106,7 +106,10 @@ struct ConnectionFormView: View {
         panel.allowedContentTypes = [UTType.data, UTType.plainText]
         if panel.runModal() == .OK, let url = panel.url {
             profile.privateKeyPath = url.path
-            profile.privateKeyBookmark = try? SecurityScopedBookmarkService.shared.createBookmark(for: url)
+            profile.privateKeyBookmark = try? SecurityScopedBookmarkService.shared.createBookmark(
+                for: url,
+                readOnly: true
+            )
         }
     }
 }

@@ -28,10 +28,15 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
 
     private init() {}
 
-    func createBookmark(for url: URL) throws -> Data {
+    func createBookmark(for url: URL, readOnly: Bool = false) throws -> Data {
+        var options: URL.BookmarkCreationOptions = .withSecurityScope
+        if readOnly {
+            options.insert(.securityScopeAllowOnlyReadAccess)
+        }
+
         do {
             return try url.bookmarkData(
-                options: .withSecurityScope,
+                options: options,
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
@@ -40,8 +45,7 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
         }
     }
 
-    @discardableResult
-    func resolveBookmark(_ data: Data) throws -> URL {
+    func resolveBookmarkURL(_ data: Data) throws -> URL {
         var isStale = false
         let url: URL
         do {
@@ -59,19 +63,17 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
             throw SecurityScopedBookmarkError.staleBookmark
         }
 
-        lock.lock()
-        let alreadyActive = activeURLs.contains(url)
-        lock.unlock()
+        return url
+    }
 
-        if !alreadyActive {
-            guard url.startAccessingSecurityScopedResource() else {
-                throw SecurityScopedBookmarkError.accessDenied
-            }
-            lock.lock()
-            activeURLs.insert(url)
-            lock.unlock()
+    /// Resolves a bookmark and begins long-term security-scoped access.
+    /// Use for resources that remain open for a session, such as the default local directory.
+    @discardableResult
+    func resolveBookmark(_ data: Data) throws -> URL {
+        let url = try resolveBookmarkURL(data)
+        guard beginAccessing(url) else {
+            throw SecurityScopedBookmarkError.accessDenied
         }
-
         return url
     }
 
@@ -116,14 +118,44 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
         }
     }
 
-    func withAccess<T>(to url: URL, perform work: () throws -> T) rethrows -> T {
-        let accessed = url.startAccessingSecurityScopedResource()
+    func isAccessActive(for url: URL) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return activeURLs.contains(url)
+    }
+
+    func withAccess<T>(to url: URL, perform work: () throws -> T) throws -> T {
+        let accessed = beginAccessing(url)
         defer {
             if accessed {
-                url.stopAccessingSecurityScopedResource()
+                stopAccessing(url)
             }
         }
+        guard accessed else {
+            throw SecurityScopedBookmarkError.accessDenied
+        }
         return try work()
+    }
+
+    func withAccess<T>(to bookmarkData: Data, perform work: (URL) throws -> T) throws -> T {
+        let url = try resolveBookmarkURL(bookmarkData)
+        return try withAccess(to: url) {
+            try work(url)
+        }
+    }
+
+    func withAccess<T>(to bookmarkData: Data, perform work: (URL) async throws -> T) async throws -> T {
+        let url = try resolveBookmarkURL(bookmarkData)
+        let accessed = beginAccessing(url)
+        defer {
+            if accessed {
+                stopAccessing(url)
+            }
+        }
+        guard accessed else {
+            throw SecurityScopedBookmarkError.accessDenied
+        }
+        return try await work(url)
     }
 }
 

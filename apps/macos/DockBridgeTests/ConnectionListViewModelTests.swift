@@ -297,6 +297,39 @@ final class ConnectionListViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.showRsaKeyWarning)
     }
 
+    func testConnectReleasesPrivateKeyBookmarkAccessAfterCompletion() async throws {
+        let bookmarkService = SecurityScopedBookmarkService.shared
+        bookmarkService.stopAllAccess()
+
+        let profile = try makePrivateKeyProfile()
+        guard let bookmark = profile.privateKeyBookmark else {
+            throw XCTSkip("Security-scoped bookmarks require App Sandbox context")
+        }
+
+        let keyURL = try bookmarkService.resolveBookmarkURL(bookmark)
+
+        await viewModel.connect(profile: profile)
+
+        XCTAssertFalse(bookmarkService.isAccessActive(for: keyURL))
+    }
+
+    func testConnectReleasesPrivateKeyBookmarkAccessAfterFailure() async throws {
+        let bookmarkService = SecurityScopedBookmarkService.shared
+        bookmarkService.stopAllAccess()
+
+        let profile = try makePrivateKeyProfile()
+        guard let bookmark = profile.privateKeyBookmark else {
+            throw XCTSkip("Security-scoped bookmarks require App Sandbox context")
+        }
+
+        let keyURL = try bookmarkService.resolveBookmarkURL(bookmark)
+
+        await viewModel.connect(profile: profile)
+
+        XCTAssertFalse(bookmarkService.isAccessActive(for: keyURL))
+        XCTAssertNotNil(viewModel.errorMessage)
+    }
+
     private func makePrivateKeyProfile(id: UUID = UUID()) throws -> ConnectionProfile {
         try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         let keyURL = baseDirectory.appendingPathComponent("id_rsa")
