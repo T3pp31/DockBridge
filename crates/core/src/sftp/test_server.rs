@@ -31,6 +31,7 @@ pub struct FailureConfig {
 pub struct TestSftpServer {
     pub addr: SocketAddr,
     pub root: PathBuf,
+    #[allow(dead_code)]
     pub failures: Arc<FailureConfig>,
     _root_dir: tempfile::TempDir,
     _known_hosts_dir: tempfile::TempDir,
@@ -431,6 +432,10 @@ impl TestSftpServer {
             fs::create_dir_all(parent).await.unwrap();
         }
         fs::write(local, contents).await.unwrap();
+    }
+
+    pub fn remote_file_exists(&self, remote_path: &str) -> bool {
+        self.resolve(remote_path).is_file()
     }
 
     fn resolve(&self, path: &str) -> PathBuf {
