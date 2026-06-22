@@ -951,8 +951,7 @@ mod tests {
         create_exclusive_local_partial, is_mkdir_already_exists_message, normalize_remote_path,
         open_exclusive_local_file, parent_remote_path, partial_file_name,
         partial_local_path_for_suffix, partial_remote_path_for_suffix,
-        prepare_local_finalize_destination, random_partial_suffix,
-        SftpClient,
+        prepare_local_finalize_destination, random_partial_suffix, SftpClient,
     };
     use crate::error::SftpError;
     use crate::sftp::test_server::{list_partial_paths, TestSftpServer};
