@@ -720,7 +720,7 @@
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
 				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
 				INFOPLIST_FILE = "DockBridge/Resources/Info.plist";
-				MARKETING_VERSION = "0.1.0";
+				MARKETING_VERSION = "0.1.6";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-force_load",
@@ -761,7 +761,7 @@
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
 				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
 				INFOPLIST_FILE = "DockBridge/Resources/Info.plist";
-				MARKETING_VERSION = "0.1.0";
+				MARKETING_VERSION = "0.1.6";
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-force_load",
@@ -787,7 +787,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = "0.1.6";
 				PRODUCT_BUNDLE_IDENTIFIER = com.dockbridge.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
@@ -807,7 +807,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = "0.1.6";
 				PRODUCT_BUNDLE_IDENTIFIER = com.dockbridge.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_INCLUDE_PATHS = "$(PROJECT_DIR)/DockBridge/Generated/Headers";

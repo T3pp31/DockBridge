@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "dockbridge-cli"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -686,7 +686,7 @@ dependencies = [
 
 [[package]]
 name = "dockbridge-core"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -711,7 +711,7 @@ dependencies = [
 
 [[package]]
 name = "dockbridge-uniffi"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "dockbridge-core",
  "tokio",
