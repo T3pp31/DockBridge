@@ -1066,9 +1066,8 @@ mod tests {
         append_cleanup_context, create_exclusive_local_partial, download_to_writer,
         is_mkdir_already_exists_message, normalize_remote_path, open_exclusive_local_file,
         parent_remote_path, partial_file_name, partial_local_path_for_suffix,
-        partial_remote_path_for_suffix, prepare_local_finalize_destination,
-        random_partial_suffix, upload_from_reader,
-        PartialLocalTransfer, PartialRemoteTransfer, SftpClient,
+        partial_remote_path_for_suffix, prepare_local_finalize_destination, random_partial_suffix,
+        upload_from_reader, PartialLocalTransfer, PartialRemoteTransfer, SftpClient,
     };
     use crate::error::SftpError;
     use crate::sftp::test_server::{list_partial_paths, TestSftpServer};
@@ -1331,7 +1330,6 @@ mod tests {
         assert!(list_partial_paths(local_dir.path()).is_empty(), "{err:?}");
         assert!(!local_path.exists());
     }
-
 
     #[test]
     fn parent_remote_path_returns_parent_directory() {
