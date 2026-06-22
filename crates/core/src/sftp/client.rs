@@ -143,7 +143,7 @@ impl<'a> SftpClient<'a> {
 
         let mut partial = PartialRemoteTransfer::begin(self, &parent, &local, &remote).await?;
 
-        let result = upload_from_reader(
+        upload_from_reader(
             &mut local_file,
             &mut partial,
             chunk_size,
@@ -152,11 +152,7 @@ impl<'a> SftpClient<'a> {
             &local,
             &remote,
         )
-        .await;
-
-        if let Err(err) = result {
-            return Err(err);
-        }
+        .await?;
 
         if is_cancelled() {
             partial.abort(true).await?;
@@ -215,7 +211,7 @@ impl<'a> SftpClient<'a> {
         let local_parent = local_path.parent().unwrap_or_else(|| Path::new("."));
         let mut partial = PartialLocalTransfer::begin(local_parent, &remote, &local).await?;
 
-        let result = download_to_writer(
+        download_to_writer(
             &mut remote_file,
             &mut partial,
             chunk_size,
@@ -224,11 +220,7 @@ impl<'a> SftpClient<'a> {
             &remote,
             &local,
         )
-        .await;
-
-        if let Err(err) = result {
-            return Err(err);
-        }
+        .await?;
 
         if is_cancelled() {
             partial.abort(true, &mut remote_file).await?;
