@@ -969,9 +969,7 @@ mod tests {
             buf: &mut tokio::io::ReadBuf<'_>,
         ) -> Poll<io::Result<()>> {
             if self.reads >= self.fail_after_successful_reads {
-                return Poll::Ready(Err(io::Error::other(
-                    "simulated local read failure",
-                )));
+                return Poll::Ready(Err(io::Error::other("simulated local read failure")));
             }
             self.reads += 1;
             let data = b"partial-chunk";
