@@ -39,6 +39,70 @@ final class FileDropValidationTests: XCTestCase {
         )
     }
 
+    func testCanUploadExternalItemRequiresFileURL() throws {
+        let directory = FileManager.default.temporaryDirectory
+        let fileURL = directory.appendingPathComponent("file-drop-external-upload-validation.txt")
+        FileManager.default.createFile(atPath: fileURL.path, contents: Data("upload".utf8))
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+
+        XCTAssertTrue(FileDropValidation.canUploadExternalItem(at: fileURL))
+        XCTAssertFalse(
+            FileDropValidation.canUploadExternalItem(
+                at: URL(string: "https://example.com/not-a-local-file.txt")!
+            )
+        )
+    }
+
+    func testRejectsSpoofedLocalPayloadNotInDisplayedItems() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("file-drop-spoof-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let displayedFile = directory.appendingPathComponent("visible.txt")
+        FileManager.default.createFile(atPath: displayedFile.path, contents: Data("visible".utf8))
+
+        let spoofedFile = directory.appendingPathComponent("secret.txt")
+        FileManager.default.createFile(atPath: spoofedFile.path, contents: Data("secret".utf8))
+
+        let displayedItem = LocalFileItem(url: displayedFile)
+        let spoofedPayload = LocalFileDragPayload(url: spoofedFile, isDirectory: false)
+
+        XCTAssertTrue(
+            FileDropValidation.isDisplayedLocalItem(
+                LocalFileDragPayload(url: displayedFile, isDirectory: false),
+                in: [displayedItem]
+            )
+        )
+        XCTAssertFalse(
+            FileDropValidation.isDisplayedLocalItem(spoofedPayload, in: [displayedItem])
+        )
+    }
+
+    func testRejectsSpoofedRemotePayloadNotInDisplayedItems() {
+        let displayedItem = RemoteFileRecord(
+            name: "visible.txt",
+            path: "/remote/visible.txt",
+            isDirectory: false,
+            size: 10
+        )
+        let spoofedPayload = RemoteFileDragPayload(path: "/remote/secret.txt", isDirectory: false)
+
+        XCTAssertTrue(
+            FileDropValidation.isDisplayedRemoteItem(
+                RemoteFileDragPayload(path: "/remote/visible.txt", isDirectory: false),
+                in: [displayedItem]
+            )
+        )
+        XCTAssertFalse(
+            FileDropValidation.isDisplayedRemoteItem(spoofedPayload, in: [displayedItem])
+        )
+    }
+
     func testRejectsMovingRemoteItemIntoSameDirectory() {
         XCTAssertFalse(
             FileDropValidation.canMoveRemoteItem(
