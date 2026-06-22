@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
 use crate::error::SftpError;
@@ -29,10 +30,16 @@ fn reject_parent_dir_segment(path: &str) -> Result<(), SftpError> {
 
 /// Validates a single SFTP directory entry name from the server.
 ///
-/// Rejects empty names, `/`, path separators, null bytes, and `..` to block path
+/// Rejects empty names, `.`, `/`, path separators, null bytes, and `..` to block path
 /// traversal via malicious directory listings.
 pub fn validate_remote_entry_name(name: &str) -> Result<(), SftpError> {
-    if name.is_empty() || name == ".." || name == "/" || name.contains('/') || name.contains('\0') {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name == "/"
+        || name.contains('/')
+        || name.contains('\0')
+    {
         return Err(SftpError::InvalidRemotePath {
             path: name.to_string(),
         });
@@ -338,7 +345,9 @@ pub async fn walk_remote_directory<'a>(
     let normalized_root = normalize_remote_path(root)?;
     let _entries = client.list_directory(&normalized_root).await?;
     let mut files = Vec::new();
-    let mut pending = vec![(normalized_root, PathBuf::new())];
+    let mut pending = vec![(normalized_root.clone(), PathBuf::new())];
+    let mut visited = HashSet::new();
+    visited.insert(normalized_root);
 
     while let Some((current_remote, relative_prefix)) = pending.pop() {
         let entries = client.list_directory(&current_remote).await?;
@@ -352,7 +361,9 @@ pub async fn walk_remote_directory<'a>(
             };
 
             if entry.is_directory {
-                pending.push((child_remote, relative_path));
+                if visited.insert(child_remote.clone()) {
+                    pending.push((child_remote, relative_path));
+                }
             } else {
                 files.push(RemoteFileEntry {
                     remote_path: child_remote,
@@ -395,7 +406,7 @@ mod tests {
         // Given: malicious or malformed SFTP entry names
         // When: validate_remote_entry_name is called
         // Then: InvalidRemotePath is returned
-        for name in ["", "..", "/", "foo/bar", "a\u{0}b"] {
+        for name in ["", ".", "..", "/", "foo/bar", "a\u{0}b"] {
             let err = validate_remote_entry_name(name).unwrap_err();
             assert!(
                 matches!(err, SftpError::InvalidRemotePath { .. }),
@@ -514,6 +525,34 @@ mod tests {
         // Then: InvalidRemotePath is returned before path comparison
         let err = validated_remote_entry("/remote/dir", "..", "/remote/dir/..").unwrap_err();
         assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
+    }
+
+    #[test]
+    fn validated_remote_entry_rejects_dot_entry() {
+        // Given: a directory entry named "."
+        // When: validated_remote_entry is called
+        // Then: InvalidRemotePath is returned before path comparison
+        let err = validated_remote_entry("/remote/dir", ".", "/remote/dir").unwrap_err();
+        assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
+    }
+
+    #[test]
+    fn remote_directory_visit_tracking_skips_already_seen_paths() {
+        // Given: visited paths including a directory that would cycle back
+        // When: the same insert logic as walk_remote_directory is applied
+        // Then: already-seen paths are not enqueued again
+        let mut visited = HashSet::from(["/remote/dir".to_string()]);
+        let cycle_path = "/remote/dir".to_string();
+        assert!(
+            !visited.insert(cycle_path),
+            "already-seen directory paths must not be re-enqueued"
+        );
+
+        let child_path = "/remote/dir/sub".to_string();
+        assert!(
+            visited.insert(child_path),
+            "new directory paths must be enqueued once"
+        );
     }
 
     #[test]

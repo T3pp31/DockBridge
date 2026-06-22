@@ -13,7 +13,7 @@ fn malicious_entry_names_are_rejected_before_local_join() {
     // Given: server-supplied directory entry names used in traversal
     // When: each name is validated
     // Then: traversal payloads never reach local path construction
-    for name in ["..", "/etc/passwd", "", "nested\u{0}file"] {
+    for name in [".", "..", "/etc/passwd", "", "nested\u{0}file"] {
         let err = validate_remote_entry_name(name).unwrap_err();
         assert!(
             matches!(err, SftpError::InvalidRemotePath { .. }),
