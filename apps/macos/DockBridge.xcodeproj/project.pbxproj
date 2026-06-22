@@ -17,6 +17,7 @@
 		6B586B55FA53102F7DF8BEFE /* AppSettingsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBE43F47539AA08723B7C33A /* AppSettingsService.swift */; };
 		E343B62539FDD93851A20646 /* ConnectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA9B9731537045170D199A2B /* ConnectionStore.swift */; };
 		CA00FEA0559FBBCE3E5F20F0 /* ProfileTrustStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D9B83DAFF9C7E5919036C99 /* ProfileTrustStore.swift */; };
+		PR0F1L3TRU5T5S1GN1NGK3Y1 /* ProfileTrustSigningKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PR0F1L3TRU5T5S1GN1NGK3Y2 /* ProfileTrustSigningKeyStore.swift */; };
 		EBE6C0D78C1B9D2DFB9E66B6 /* HostKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */; };
 		6B644EEA7799402A90D59AAA /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */; };
 		14A839F4D61A1075B5ACF82D /* RustBridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */; };
@@ -91,6 +92,7 @@
 		DBE43F47539AA08723B7C33A /* AppSettingsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsService.swift; sourceTree = "<group>"; };
 		AA9B9731537045170D199A2B /* ConnectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStore.swift; sourceTree = "<group>"; };
 		6D9B83DAFF9C7E5919036C99 /* ProfileTrustStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTrustStore.swift; sourceTree = "<group>"; };
+		PR0F1L3TRU5T5S1GN1NGK3Y2 /* ProfileTrustSigningKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTrustSigningKeyStore.swift; sourceTree = "<group>"; };
 		FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyStore.swift; sourceTree = "<group>"; };
 		6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridgeService.swift; sourceTree = "<group>"; };
@@ -316,6 +318,7 @@
 				APPUPD4T3S3RV1C3SW1FT3RC1 /* AppUpdateService.swift */,
 				AA9B9731537045170D199A2B /* ConnectionStore.swift */,
 				6D9B83DAFF9C7E5919036C99 /* ProfileTrustStore.swift */,
+				PR0F1L3TRU5T5S1GN1NGK3Y2 /* ProfileTrustSigningKeyStore.swift */,
 				FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */,
 				6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */,
 				5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */,
@@ -547,6 +550,7 @@
 				6B586B55FA53102F7DF8BEFE /* AppSettingsService.swift in Sources */,
 				E343B62539FDD93851A20646 /* ConnectionStore.swift in Sources */,
 				CA00FEA0559FBBCE3E5F20F0 /* ProfileTrustStore.swift in Sources */,
+				PR0F1L3TRU5T5S1GN1NGK3Y1 /* ProfileTrustSigningKeyStore.swift in Sources */,
 				EBE6C0D78C1B9D2DFB9E66B6 /* HostKeyStore.swift in Sources */,
 				6B644EEA7799402A90D59AAA /* KeychainService.swift in Sources */,
 				14A839F4D61A1075B5ACF82D /* RustBridgeService.swift in Sources */,

@@ -3,16 +3,24 @@ import XCTest
 
 final class ProfileTrustStoreTests: XCTestCase {
     private var baseDirectory: URL!
+    private var signingKeyStore: ProfileTrustSigningKeyStore!
     private var trustStore: ProfileTrustStore!
 
     override func setUp() {
         super.setUp()
         baseDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        trustStore = ProfileTrustStore(baseDirectory: baseDirectory)
+        signingKeyStore = ProfileTrustSigningKeyStore(
+            serviceName: "com.dockbridge.tests.\(UUID().uuidString)"
+        )
+        trustStore = ProfileTrustStore(
+            baseDirectory: baseDirectory,
+            signingKeyStore: signingKeyStore
+        )
     }
 
     override func tearDown() {
+        try? signingKeyStore.deleteKey()
         try? FileManager.default.removeItem(at: baseDirectory)
         super.tearDown()
     }
@@ -106,5 +114,92 @@ final class ProfileTrustStoreTests: XCTestCase {
         let attributes = try FileManager.default.attributesOfItem(atPath: trustPath)
         let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
         XCTAssertEqual(permissions, Int(0o600))
+    }
+
+    func testLoadTrustedEndpointsRejectsTamperedHMAC() throws {
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+        try trustStore.seedInitialTrust(from: [profile])
+
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        var envelope = try JSONDecoder().decode(
+            SignedTrustedEndpointsEnvelopeForTests.self,
+            from: Data(contentsOf: trustURL)
+        )
+        envelope.endpoints[profile.id.uuidString]?.host = "evil.example.com"
+        try JSONEncoder().encode(envelope).write(to: trustURL)
+
+        XCTAssertThrowsError(try trustStore.loadTrustedEndpoints()) { error in
+            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+        }
+    }
+
+    func testDetectEndpointChangesTreatsTamperedTrustStoreAsUntrusted() throws {
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+        try trustStore.seedInitialTrust(from: [profile])
+
+        let tamperedRecords = [
+            profile.id.uuidString: TrustedProfileEndpoint(
+                host: "evil.example.com",
+                port: profile.port,
+                username: profile.username
+            ),
+        ]
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        try JSONEncoder().encode(tamperedRecords).write(to: trustURL)
+
+        let detection = try trustStore.detectEndpointChanges(in: [profile])
+
+        XCTAssertTrue(detection.endpointChanges.isEmpty)
+        XCTAssertEqual(detection.pendingInitialTrust, [profile])
+        XCTAssertTrue(detection.pendingNewProfileTrust.isEmpty)
+    }
+
+    func testLegacyUnsignedTrustStoreMigratesWhenNoSigningKeyExists() throws {
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+        let records = [profile.id.uuidString: TrustedProfileEndpoint(profile: profile)]
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        try JSONEncoder().encode(records).write(to: trustURL)
+
+        let trusted = try trustStore.loadTrustedEndpoints()
+
+        XCTAssertEqual(trusted[profile.id], TrustedProfileEndpoint(profile: profile))
+        XCTAssertTrue(signingKeyStore.hasExistingKey)
+
+        let migratedData = try Data(contentsOf: trustURL)
+        XCTAssertNoThrow(try JSONDecoder().decode(SignedTrustedEndpointsEnvelopeForTests.self, from: migratedData))
+    }
+}
+
+private struct SignedTrustedEndpointsEnvelopeForTests: Codable {
+    let version: Int
+    var endpoints: [String: TrustedProfileEndpoint]
+    let mac: String
+}
+
+extension ProfileTrustStoreError: Equatable {
+    public static func == (lhs: ProfileTrustStoreError, rhs: ProfileTrustStoreError) -> Bool {
+        switch (lhs, rhs) {
+        case (.verificationFailed, .verificationFailed):
+            return true
+        case (.readFailed(let left), .readFailed(let right)):
+            return left == right
+        case (.writeFailed(let left), .writeFailed(let right)):
+            return left == right
+        default:
+            return false
+        }
     }
 }
