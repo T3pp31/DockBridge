@@ -16,6 +16,8 @@
 		DEAAB69B962239B2FF2B68B5 /* UniFFIExtensions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E7FDBA4ECAABE2550A535FE /* UniFFIExtensions.swift */; };
 		6B586B55FA53102F7DF8BEFE /* AppSettingsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBE43F47539AA08723B7C33A /* AppSettingsService.swift */; };
 		E343B62539FDD93851A20646 /* ConnectionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA9B9731537045170D199A2B /* ConnectionStore.swift */; };
+		PR0F1L3ENCRYP7S3RV1C3SW1 /* ProfileEncryptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = PR0F1L3ENCRYP7S3RV1C3SW2 /* ProfileEncryptionService.swift */; };
+		ST0R3DPR0F1L3M0D3L1N5RC1 /* StoredConnectionProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = ST0R3DPR0F1L3M0D3L1N5RC2 /* StoredConnectionProfile.swift */; };
 		CA00FEA0559FBBCE3E5F20F0 /* ProfileTrustStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D9B83DAFF9C7E5919036C99 /* ProfileTrustStore.swift */; };
 		PR0F1L3TRU5T5S1GN1NGK3Y1 /* ProfileTrustSigningKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PR0F1L3TRU5T5S1GN1NGK3Y2 /* ProfileTrustSigningKeyStore.swift */; };
 		EBE6C0D78C1B9D2DFB9E66B6 /* HostKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */; };
@@ -39,6 +41,7 @@
 		C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */; };
 		E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */; };
 		C0NN3CT10N5T0R3T3ST5RC3 /* ConnectionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T0R3T3ST5RC4 /* ConnectionStoreTests.swift */; };
+		PR0F1L3ENCRYP7S3RV1C3T1 /* ProfileEncryptionServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PR0F1L3ENCRYP7S3RV1C3T2 /* ProfileEncryptionServiceTests.swift */; };
 		PR0F1L3TRU5T5T0R3T3ST5RC3 /* ProfileTrustStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PR0F1L3TRU5T5T0R3T3ST5RC4 /* ProfileTrustStoreTests.swift */; };
 		C0NN3CT10NL15TV13W0D3LT3STRC3 /* ConnectionListViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10NL15TV13W0D3LT3STRC4 /* ConnectionListViewModelTests.swift */; };
 		0718293A4B5C6D7E8F901234 /* KeychainServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */; };
@@ -86,11 +89,13 @@
 		09932BA46F7FE81DAD83C80A /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		F3EA1C873F6BA2EA52B40161 /* AuthType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthType.swift; sourceTree = "<group>"; };
 		ACD7B5DCE2F20029520D971B /* ConnectionProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionProfile.swift; sourceTree = "<group>"; };
+		ST0R3DPR0F1L3M0D3L1N5RC2 /* StoredConnectionProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoredConnectionProfile.swift; sourceTree = "<group>"; };
 		AAE721AC174FDF5E8E1C9E9C /* ProfileEndpointChange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEndpointChange.swift; sourceTree = "<group>"; };
 		85A0E836BF343460B3DC13A2 /* LocalFileItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalFileItem.swift; sourceTree = "<group>"; };
 		1E7FDBA4ECAABE2550A535FE /* UniFFIExtensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UniFFIExtensions.swift; sourceTree = "<group>"; };
 		DBE43F47539AA08723B7C33A /* AppSettingsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsService.swift; sourceTree = "<group>"; };
 		AA9B9731537045170D199A2B /* ConnectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStore.swift; sourceTree = "<group>"; };
+		PR0F1L3ENCRYP7S3RV1C3SW2 /* ProfileEncryptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEncryptionService.swift; sourceTree = "<group>"; };
 		6D9B83DAFF9C7E5919036C99 /* ProfileTrustStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTrustStore.swift; sourceTree = "<group>"; };
 		PR0F1L3TRU5T5S1GN1NGK3Y2 /* ProfileTrustSigningKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTrustSigningKeyStore.swift; sourceTree = "<group>"; };
 		FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyStore.swift; sourceTree = "<group>"; };
@@ -116,6 +121,7 @@
 		D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePathTests.swift; sourceTree = "<group>"; };
 		F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyStoreTests.swift; sourceTree = "<group>"; };
 		C0NN3CT10N5T0R3T3ST5RC4 /* ConnectionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStoreTests.swift; sourceTree = "<group>"; };
+		PR0F1L3ENCRYP7S3RV1C3T2 /* ProfileEncryptionServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEncryptionServiceTests.swift; sourceTree = "<group>"; };
 		PR0F1L3TRU5T5T0R3T3ST5RC4 /* ProfileTrustStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTrustStoreTests.swift; sourceTree = "<group>"; };
 		C0NN3CT10NL15TV13W0D3LT3STRC4 /* ConnectionListViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionListViewModelTests.swift; sourceTree = "<group>"; };
 		18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceTests.swift; sourceTree = "<group>"; };
@@ -289,6 +295,7 @@
 				C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */,
 				F3EA1C873F6BA2EA52B40161 /* AuthType.swift */,
 				ACD7B5DCE2F20029520D971B /* ConnectionProfile.swift */,
+				ST0R3DPR0F1L3M0D3L1N5RC2 /* StoredConnectionProfile.swift */,
 				AAE721AC174FDF5E8E1C9E9C /* ProfileEndpointChange.swift */,
 				F1D2R3O4P5E6R7R8O9R0A1B2C4 /* FileDropError.swift */,
 				F1D2R3O4P5V6A7L8I9D0A1T2I4 /* FileDropValidation.swift */,
@@ -317,6 +324,7 @@
 				DBE43F47539AA08723B7C33A /* AppSettingsService.swift */,
 				APPUPD4T3S3RV1C3SW1FT3RC1 /* AppUpdateService.swift */,
 				AA9B9731537045170D199A2B /* ConnectionStore.swift */,
+				PR0F1L3ENCRYP7S3RV1C3SW2 /* ProfileEncryptionService.swift */,
 				6D9B83DAFF9C7E5919036C99 /* ProfileTrustStore.swift */,
 				PR0F1L3TRU5T5S1GN1NGK3Y2 /* ProfileTrustSigningKeyStore.swift */,
 				FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */,
@@ -394,6 +402,7 @@
 				D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */,
 				F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */,
 				C0NN3CT10N5T0R3T3ST5RC4 /* ConnectionStoreTests.swift */,
+				PR0F1L3ENCRYP7S3RV1C3T2 /* ProfileEncryptionServiceTests.swift */,
 				PR0F1L3TRU5T5T0R3T3ST5RC4 /* ProfileTrustStoreTests.swift */,
 				C0NN3CT10NL15TV13W0D3LT3STRC4 /* ConnectionListViewModelTests.swift */,
 				18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */,
@@ -544,11 +553,13 @@
 				8BDFD143D7160A697BC046C3 /* AppConfig.swift in Sources */,
 				47B65A6DC688402703026ABF /* AuthType.swift in Sources */,
 				6D87A264B141B29EB44D1F64 /* ConnectionProfile.swift in Sources */,
+				ST0R3DPR0F1L3M0D3L1N5RC1 /* StoredConnectionProfile.swift in Sources */,
 				8AF9F53D6EDF8C2CCD6C9AE3 /* ProfileEndpointChange.swift in Sources */,
 				A84F06720E0FA6B9EFAC86A9 /* LocalFileItem.swift in Sources */,
 				DEAAB69B962239B2FF2B68B5 /* UniFFIExtensions.swift in Sources */,
 				6B586B55FA53102F7DF8BEFE /* AppSettingsService.swift in Sources */,
 				E343B62539FDD93851A20646 /* ConnectionStore.swift in Sources */,
+				PR0F1L3ENCRYP7S3RV1C3SW1 /* ProfileEncryptionService.swift in Sources */,
 				CA00FEA0559FBBCE3E5F20F0 /* ProfileTrustStore.swift in Sources */,
 				PR0F1L3TRU5T5S1GN1NGK3Y1 /* ProfileTrustSigningKeyStore.swift in Sources */,
 				EBE6C0D78C1B9D2DFB9E66B6 /* HostKeyStore.swift in Sources */,
@@ -605,6 +616,7 @@
 				C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */,
 				E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */,
 				C0NN3CT10N5T0R3T3ST5RC3 /* ConnectionStoreTests.swift in Sources */,
+				PR0F1L3ENCRYP7S3RV1C3T1 /* ProfileEncryptionServiceTests.swift in Sources */,
 				PR0F1L3TRU5T5T0R3T3ST5RC3 /* ProfileTrustStoreTests.swift in Sources */,
 				C0NN3CT10NL15TV13W0D3LT3STRC3 /* ConnectionListViewModelTests.swift in Sources */,
 				0718293A4B5C6D7E8F901234 /* KeychainServiceTests.swift in Sources */,
