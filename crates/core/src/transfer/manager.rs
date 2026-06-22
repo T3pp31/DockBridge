@@ -799,6 +799,38 @@ mod tests {
     }
 
     #[test]
+    fn cancel_after_rename_success_marks_transfer_completed_not_cancelled() {
+        // Given: cancel was requested but rename already succeeded (Ok result)
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 13,
+            direction: TransferDirection::Download,
+            local_path: PathBuf::from("/tmp/downloaded.txt"),
+            remote_path: "/remote/downloaded.txt".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 1024,
+            total_bytes: 1024,
+        };
+
+        manager.insert_task(task);
+        manager.register_cancellation_flag(13);
+        manager.request_cancellation(13);
+
+        // When: finalize receives Ok after rename completed
+        manager
+            .finalize_task_result(13, Ok(()))
+            .expect("post-rename success should finalize as completed");
+
+        // Then: status is Completed, not Cancelled
+        let queue = manager.get_transfer_queue();
+        assert_eq!(
+            queue[0].status,
+            TransferStatus::Completed,
+            "rename-after-cancel must prefer Completed over Cancelled"
+        );
+    }
+
+    #[test]
     fn finalize_task_result_marks_cancelled_when_transfer_returns_cancelled() {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
