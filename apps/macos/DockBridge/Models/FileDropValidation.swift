@@ -1,12 +1,38 @@
 import Foundation
 
 enum FileDropValidation {
+    static func isDisplayedLocalItem(_ payload: LocalFileDragPayload, in items: [LocalFileItem]) -> Bool {
+        let payloadPath = normalizedLocalPath(payload.url)
+        return items.contains { item in
+            normalizedLocalPath(item.url) == payloadPath && item.isDirectory == payload.isDirectory
+        }
+    }
+
+    static func isDisplayedRemoteItem(_ payload: RemoteFileDragPayload, in items: [RemoteFileRecord]) -> Bool {
+        guard let normalizedPayloadPath = try? RemotePath.normalize(payload.path) else {
+            return false
+        }
+        return items.contains { item in
+            guard let normalizedItemPath = try? RemotePath.normalize(item.path) else {
+                return false
+            }
+            return normalizedItemPath == normalizedPayloadPath && item.isDirectory == payload.isDirectory
+        }
+    }
+
     static func canUploadLocalItem(at url: URL) -> Bool {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
             return false
         }
         return FileManager.default.isReadableFile(atPath: url.path)
+    }
+
+    static func canUploadExternalItem(at url: URL) -> Bool {
+        guard url.isFileURL else {
+            return false
+        }
+        return canUploadLocalItem(at: url)
     }
 
     static func canMoveLocalItem(from source: URL, to directory: URL) -> Bool {
