@@ -3,16 +3,26 @@ import XCTest
 
 final class ConnectionStoreTests: XCTestCase {
     private var baseDirectory: URL!
+    private var signingKeyStore: ProfileTrustSigningKeyStore!
+    private var trustStore: ProfileTrustStore!
     private var store: ConnectionStore!
 
     override func setUp() {
         super.setUp()
         baseDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        store = ConnectionStore(baseDirectory: baseDirectory)
+        signingKeyStore = ProfileTrustSigningKeyStore(
+            serviceName: "com.dockbridge.tests.\(UUID().uuidString)"
+        )
+        trustStore = ProfileTrustStore(
+            baseDirectory: baseDirectory,
+            signingKeyStore: signingKeyStore
+        )
+        store = ConnectionStore(baseDirectory: baseDirectory, trustStore: trustStore)
     }
 
     override func tearDown() {
+        try? signingKeyStore.deleteKey()
         try? FileManager.default.removeItem(at: baseDirectory)
         super.tearDown()
     }
@@ -87,6 +97,36 @@ final class ConnectionStoreTests: XCTestCase {
 
         XCTAssertEqual(restored.first?.host, "example.com")
         XCTAssertTrue(try store.loadProfilesWithEndpointCheck().endpointChanges.isEmpty)
+    }
+
+    func testSimultaneousTamperingCannotBypassEndpointWarning() throws {
+        let profileID = UUID()
+        let profile = ConnectionProfile(
+            id: profileID,
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+
+        try store.saveProfiles([profile])
+        try store.seedInitialTrust(for: [profile])
+
+        var tampered = profile
+        tampered.host = "evil.example.com"
+        try store.saveProfiles([tampered], updateTrust: false)
+
+        let matchingTrust = [
+            profileID.uuidString: TrustedProfileEndpoint(profile: tampered),
+        ]
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        try JSONEncoder().encode(matchingTrust).write(to: trustURL)
+
+        let result = try store.loadProfilesWithEndpointCheck()
+
+        XCTAssertEqual(result.profiles.first?.host, "evil.example.com")
+        XCTAssertTrue(result.endpointChanges.isEmpty)
+        XCTAssertEqual(result.pendingInitialTrust, [tampered])
+        XCTAssertTrue(result.pendingNewProfileTrust.isEmpty)
     }
 
     private var storeProfilesPath: String {

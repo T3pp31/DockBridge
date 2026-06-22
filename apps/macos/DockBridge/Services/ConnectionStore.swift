@@ -73,11 +73,15 @@ final class ConnectionStore: @unchecked Sendable {
             try data.write(to: url, options: .atomic)
             try setSecurePermissions(for: url)
             if updateTrust {
-                let existingTrust = try trustStore.loadTrustedEndpoints()
-                if !existingTrust.isEmpty {
-                    for profile in profiles where existingTrust[profile.id] != nil {
-                        try trustStore.updateTrust(for: profile)
+                do {
+                    let existingTrust = try trustStore.loadTrustedEndpoints()
+                    if !existingTrust.isEmpty {
+                        for profile in profiles where existingTrust[profile.id] != nil {
+                            try trustStore.updateTrust(for: profile)
+                        }
                     }
+                } catch ProfileTrustStoreError.verificationFailed {
+                    // Skip auto trust refresh until the user re-confirms trust on next load.
                 }
             }
         } catch {
