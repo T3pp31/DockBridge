@@ -926,15 +926,35 @@ fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
+impl<'a> SftpClient<'a> {
+    async fn open_remote_for_test(&self, path: &str) -> Result<RemoteFileHandle, SftpError> {
+        let path = normalize_remote_path(path)?;
+        self.sftp()
+            .open(&path)
+            .await
+            .map_err(|err| SftpError::DownloadFailed {
+                remote: path.clone(),
+                local: String::new(),
+                message: err.to_string(),
+            })
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::io::ErrorKind;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     use super::{
         create_exclusive_local_partial, is_mkdir_already_exists_message, normalize_remote_path,
         open_exclusive_local_file, parent_remote_path, partial_file_name,
         partial_local_path_for_suffix, partial_remote_path_for_suffix,
-        prepare_local_finalize_destination, random_partial_suffix,
+        prepare_local_finalize_destination, random_partial_suffix, SftpClient,
     };
+    use crate::error::SftpError;
+    use crate::sftp::test_server::{list_partial_paths, TestSftpServer};
     use crate::transfer::TransferOverwritePolicy;
 
     #[test]
@@ -1110,5 +1130,101 @@ mod tests {
             err,
             crate::error::SftpError::InvalidRemotePath { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn upload_cancel_before_rename_leaves_no_remote_final_file() {
+        // Given: a local file and a test SFTP server
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let payload = b"upload cancel before rename payload";
+        let local_path = local_dir.path().join("file.txt");
+        tokio::fs::write(&local_path, payload).await.unwrap();
+        let total_bytes = payload.len() as u64;
+
+        // When: all bytes are transferred and cancel is requested before rename
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_flag = Arc::clone(&cancel);
+        let err = client
+            .upload_cancellable(
+                &local_path,
+                "/upload/file.txt",
+                16,
+                TransferOverwritePolicy::default(),
+                move || cancel_flag.load(Ordering::Relaxed),
+                {
+                    let cancel_flag = Arc::clone(&cancel);
+                    move |transferred| {
+                        if transferred >= total_bytes {
+                            cancel_flag.store(true, Ordering::Relaxed);
+                        }
+                    }
+                },
+            )
+            .await
+            .unwrap_err();
+
+        // Then: transfer is cancelled and no final or partial remote file remains
+        assert!(matches!(err, SftpError::Cancelled));
+        assert!(
+            !server.remote_file_exists("/upload/file.txt"),
+            "final remote file must not exist after cancel-before-rename"
+        );
+        assert!(
+            server.remote_partial_paths().is_empty(),
+            "partial remote files must be cleaned up: {:?}",
+            server.remote_partial_paths()
+        );
+    }
+
+    #[tokio::test]
+    async fn download_cancel_before_rename_leaves_no_local_final_file() {
+        // Given: a remote file on the test SFTP server
+        let server = TestSftpServer::start().await;
+        let payload = b"download cancel before rename payload";
+        server
+            .write_remote_file("/download/file.txt", payload)
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.txt");
+        let total_bytes = payload.len() as u64;
+
+        // When: all bytes are transferred and cancel is requested before rename
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_flag = Arc::clone(&cancel);
+        let err = client
+            .download_cancellable(
+                "/download/file.txt",
+                &local_path,
+                16,
+                TransferOverwritePolicy::default(),
+                move || cancel_flag.load(Ordering::Relaxed),
+                {
+                    let cancel_flag = Arc::clone(&cancel);
+                    move |transferred| {
+                        if transferred >= total_bytes {
+                            cancel_flag.store(true, Ordering::Relaxed);
+                        }
+                    }
+                },
+            )
+            .await
+            .unwrap_err();
+
+        // Then: transfer is cancelled and no final or partial local file remains
+        assert!(matches!(err, SftpError::Cancelled));
+        assert!(
+            !local_path.exists(),
+            "final local file must not exist after cancel-before-rename"
+        );
+        assert!(
+            list_partial_paths(local_dir.path()).is_empty(),
+            "partial local files must be cleaned up: {:?}",
+            list_partial_paths(local_dir.path())
+        );
     }
 }
