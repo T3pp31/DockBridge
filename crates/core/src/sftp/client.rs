@@ -1153,6 +1153,7 @@ mod tests {
                 &local_path,
                 "/upload/file.txt",
                 16,
+                TransferOverwritePolicy::default(),
                 move || cancel_flag.load(Ordering::Relaxed),
                 {
                     let cancel_flag = Arc::clone(&cancel);
@@ -1201,6 +1202,7 @@ mod tests {
                 "/download/file.txt",
                 &local_path,
                 16,
+                TransferOverwritePolicy::default(),
                 move || cancel_flag.load(Ordering::Relaxed),
                 {
                     let cancel_flag = Arc::clone(&cancel);
