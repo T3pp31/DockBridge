@@ -836,16 +836,14 @@ async fn prepare_local_finalize_destination(
     local: &str,
 ) -> Result<(), SftpError> {
     match tokio::fs::symlink_metadata(final_path).await {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err(SftpError::DownloadFailed {
-                remote: remote.to_string(),
-                local: local.to_string(),
-                message: format!(
-                    "destination '{}' is a symlink and cannot be replaced safely",
-                    final_path.display()
-                ),
-            })
-        }
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(SftpError::DownloadFailed {
+            remote: remote.to_string(),
+            local: local.to_string(),
+            message: format!(
+                "destination '{}' is a symlink and cannot be replaced safely",
+                final_path.display()
+            ),
+        }),
         Ok(_) => match overwrite_policy {
             TransferOverwritePolicy::FailIfExists => Err(SftpError::DownloadFailed {
                 remote: remote.to_string(),
@@ -934,8 +932,8 @@ mod tests {
     use super::{
         create_exclusive_local_partial, is_mkdir_already_exists_message, normalize_remote_path,
         open_exclusive_local_file, parent_remote_path, partial_file_name,
-        partial_local_path_for_suffix, partial_remote_path_for_suffix, prepare_local_finalize_destination,
-        random_partial_suffix,
+        partial_local_path_for_suffix, partial_remote_path_for_suffix,
+        prepare_local_finalize_destination, random_partial_suffix,
     };
     use crate::transfer::TransferOverwritePolicy;
 

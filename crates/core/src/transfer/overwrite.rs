@@ -1,16 +1,11 @@
 /// Policy applied when a transfer completes and the final destination path already exists.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransferOverwritePolicy {
     /// Replace the existing destination after the transfer completes successfully.
+    #[default]
     Replace,
     /// Fail without modifying the destination when it already exists.
     FailIfExists,
-}
-
-impl Default for TransferOverwritePolicy {
-    fn default() -> Self {
-        Self::Replace
-    }
 }
 
 impl TransferOverwritePolicy {
