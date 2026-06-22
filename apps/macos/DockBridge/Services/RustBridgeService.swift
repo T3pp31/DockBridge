@@ -16,13 +16,16 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
     private var sessionId: UInt64?
     private let settings: AppSettingsService
     private let hostKeyStore: HostKeyStore
+    private let bookmarkService: SecurityScopedBookmarkService
 
     init(
         settings: AppSettingsService = .shared,
-        hostKeyStore: HostKeyStore = .shared
+        hostKeyStore: HostKeyStore = .shared,
+        bookmarkService: SecurityScopedBookmarkService = .shared
     ) {
         self.settings = settings
         self.hostKeyStore = hostKeyStore
+        self.bookmarkService = bookmarkService
         super.init()
     }
 
@@ -37,6 +40,29 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
     }
 
     func connect(
+        profile: ConnectionProfile,
+        password: String?,
+        passphrase: String?
+    ) async throws {
+        let config = settings.loadConfig()
+        if let bookmark = config.opensshKnownHostsBookmark {
+            try await bookmarkService.withAccess(to: bookmark) { _ in
+                try await performConnect(
+                    profile: profile,
+                    password: password,
+                    passphrase: passphrase
+                )
+            }
+        } else {
+            try await performConnect(
+                profile: profile,
+                password: password,
+                passphrase: passphrase
+            )
+        }
+    }
+
+    private func performConnect(
         profile: ConnectionProfile,
         password: String?,
         passphrase: String?

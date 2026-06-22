@@ -41,6 +41,90 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
         XCTAssertThrowsError(try service.resolveBookmark(Data([0, 1, 2])))
     }
 
+    func testResolveBookmarkURLDoesNotStartAccess() throws {
+        let fileURL = tempDir.appendingPathComponent("resolve-only.txt")
+        try Data("resolve-only".utf8).write(to: fileURL)
+
+        let bookmark: Data
+        do {
+            bookmark = try service.createBookmark(for: fileURL)
+        } catch {
+            throw XCTSkip("Security-scoped bookmarks require App Sandbox context: \(error)")
+        }
+
+        let resolvedURL = try service.resolveBookmarkURL(bookmark)
+        XCTAssertEqual(resolvedURL.standardizedFileURL.path, fileURL.standardizedFileURL.path)
+        XCTAssertFalse(service.isAccessActive(for: resolvedURL))
+    }
+
+    func testWithAccessToBookmarkReleasesAccessAfterWork() throws {
+        let fileURL = tempDir.appendingPathComponent("scoped-access.txt")
+        try Data("scoped-access".utf8).write(to: fileURL)
+
+        let bookmark: Data
+        do {
+            bookmark = try service.createBookmark(for: fileURL)
+        } catch {
+            throw XCTSkip("Security-scoped bookmarks require App Sandbox context: \(error)")
+        }
+
+        try service.withAccess(to: bookmark) { url in
+            XCTAssertTrue(service.isAccessActive(for: url))
+            XCTAssertTrue(FileManager.default.isReadableFile(atPath: url.path))
+        }
+
+        XCTAssertFalse(service.isAccessActive(for: fileURL))
+    }
+
+    func testWithAccessToBookmarkReleasesAccessAfterThrowingWork() throws {
+        let fileURL = tempDir.appendingPathComponent("scoped-throw.txt")
+        try Data("scoped-throw".utf8).write(to: fileURL)
+
+        let bookmark: Data
+        do {
+            bookmark = try service.createBookmark(for: fileURL)
+        } catch {
+            throw XCTSkip("Security-scoped bookmarks require App Sandbox context: \(error)")
+        }
+
+        struct TestError: Error {}
+
+        XCTAssertThrowsError(
+            try service.withAccess(to: bookmark) { _ in
+                throw TestError()
+            }
+        )
+
+        XCTAssertFalse(service.isAccessActive(for: fileURL))
+    }
+
+    func testBuildAppConfigRecordDoesNotRetainOpensshKnownHostsAccess() throws {
+        let fileURL = tempDir.appendingPathComponent("known_hosts")
+        try Data("example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI".utf8).write(to: fileURL)
+
+        let bookmark: Data
+        do {
+            bookmark = try service.createBookmark(for: fileURL)
+        } catch {
+            throw XCTSkip("Security-scoped bookmarks require App Sandbox context: \(error)")
+        }
+
+        let defaults = UserDefaults(suiteName: "SecurityScopedBookmarkServiceTests.\(UUID().uuidString)")!
+        let settings = AppSettingsService(defaults: defaults, bookmarkService: service)
+
+        var config = AppConfig.default
+        config.opensshKnownHostsBookmark = bookmark
+        config.opensshKnownHostsPath = fileURL.path
+        settings.saveConfig(config)
+
+        let record = settings.buildAppConfigRecord(knownHostsPath: tempDir.appendingPathComponent("store.json").path)
+        XCTAssertEqual(
+            URL(fileURLWithPath: record.opensshKnownHostsPath).standardizedFileURL.path,
+            fileURL.standardizedFileURL.path
+        )
+        XCTAssertFalse(service.isAccessActive(for: fileURL))
+    }
+
     func testDefaultLocalPathResolverFallsBackToContainerHome() {
         let config = AppConfig(
             connectionTimeoutSecs: 30,

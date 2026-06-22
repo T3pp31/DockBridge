@@ -258,44 +258,53 @@ final class ConnectionListViewModel: ObservableObject {
 
     func connect(profile: ConnectionProfile) async {
         do {
-            var connectProfile = profile
             if profile.authType == .privateKey {
-                guard let resolvedProfile = resolvePrivateKeyProfile(profile) else {
+                guard let bookmark = profile.privateKeyBookmark else {
+                    errorMessage = """
+                    秘密鍵へのアクセス権がありません。接続設定を開き、「Browse…」から秘密鍵を再選択してください。
+                    """
                     return
                 }
-                connectProfile = resolvedProfile
+
+                try await bookmarkService.withAccess(to: bookmark) { keyURL in
+                    var connectProfile = profile
+                    connectProfile.privateKeyPath = keyURL.path
+                    try await performConnect(profile: profile, connectProfile: connectProfile)
+                }
+            } else {
+                try await performConnect(profile: profile, connectProfile: profile)
             }
-
-            let account = keychain.keychainAccount(for: profile.id, kind: "profile")
-            var password = connectProfile.authType == .password
-                ? try keychain.loadPassword(account: account)
-                : nil
-            var passphrase = connectProfile.authType == .privateKey
-                ? try keychain.loadPassphrase(account: account)
-                : nil
-            defer {
-                SensitiveString.clear(&password)
-                SensitiveString.clear(&passphrase)
-            }
-
-            try await bridge.connect(profile: connectProfile, password: password, passphrase: passphrase)
-
-            var updated = profile
-            updated.lastConnectedAt = Date()
-            profiles = try store.upsert(updated)
-            selectedProfileID = updated.id
         } catch {
             errorMessage = error.dockBridgeUserMessage
         }
     }
 
-    private func profileUsesRsaPrivateKey(_ profile: ConnectionProfile) -> Bool? {
-        guard let resolvedProfile = resolvePrivateKeyProfile(profile) else {
-            return nil
+    private func performConnect(profile: ConnectionProfile, connectProfile: ConnectionProfile) async throws {
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        var password = connectProfile.authType == .password
+            ? try keychain.loadPassword(account: account)
+            : nil
+        var passphrase = connectProfile.authType == .privateKey
+            ? try keychain.loadPassphrase(account: account)
+            : nil
+        defer {
+            SensitiveString.clear(&password)
+            SensitiveString.clear(&passphrase)
         }
 
-        guard let keyPath = resolvedProfile.privateKeyPath else {
-            errorMessage = "Private key path is missing."
+        try await bridge.connect(profile: connectProfile, password: password, passphrase: passphrase)
+
+        var updated = profile
+        updated.lastConnectedAt = Date()
+        profiles = try store.upsert(updated)
+        selectedProfileID = updated.id
+    }
+
+    private func profileUsesRsaPrivateKey(_ profile: ConnectionProfile) -> Bool? {
+        guard let bookmark = profile.privateKeyBookmark else {
+            errorMessage = """
+            秘密鍵へのアクセス権がありません。接続設定を開き、「Browse…」から秘密鍵を再選択してください。
+            """
             return nil
         }
 
@@ -306,29 +315,12 @@ final class ConnectionListViewModel: ObservableObject {
         }
 
         do {
-            let algorithm = try inspectPrivateKeyAlgorithm(keyPath: keyPath, passphrase: passphrase)
-            return algorithm == .rsa
+            return try bookmarkService.withAccess(to: bookmark) { keyURL in
+                let algorithm = try inspectPrivateKeyAlgorithm(keyPath: keyURL.path, passphrase: passphrase)
+                return algorithm == .rsa
+            }
         } catch {
             errorMessage = error.dockBridgeUserMessage
-            return nil
-        }
-    }
-
-    private func resolvePrivateKeyProfile(_ profile: ConnectionProfile) -> ConnectionProfile? {
-        guard let bookmark = profile.privateKeyBookmark else {
-            errorMessage = """
-            秘密鍵へのアクセス権がありません。接続設定を開き、「Browse…」から秘密鍵を再選択してください。
-            """
-            return nil
-        }
-
-        do {
-            let keyURL = try bookmarkService.resolveBookmark(bookmark)
-            var resolved = profile
-            resolved.privateKeyPath = keyURL.path
-            return resolved
-        } catch {
-            errorMessage = error.localizedDescription
             return nil
         }
     }
