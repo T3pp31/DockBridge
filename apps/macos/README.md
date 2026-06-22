@@ -64,5 +64,5 @@ If cancel succeeds but partial-file cleanup fails, the Transfer Queue shows **Fa
 - Swift builds `AppConfigRecord` and passes it to Rust via UniFFI.
 - `HostKeyHandler` shows accept/reject UI for unknown host keys (SHA256 fingerprint).
 - Passwords and key passphrases are stored in Keychain (`com.dockbridge`).
-- Connection profiles live in `~/Library/Application Support/DockBridge/profiles.json`.
+- Connection profiles live in `~/Library/Application Support/DockBridge/profiles.json` (AES-GCM encrypted envelope; master key in Keychain).
 - Known hosts: `~/Library/Application Support/DockBridge/known_hosts.json` (mode 0600).

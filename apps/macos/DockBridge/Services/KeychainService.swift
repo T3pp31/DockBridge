@@ -68,6 +68,18 @@ final class KeychainService: @unchecked Sendable {
         try deleteSecret(account: account, kind: "passphrase")
     }
 
+    func saveKeyData(_ data: Data, account: String) throws {
+        try save(data: data, account: account, kind: "encryption-key")
+    }
+
+    func loadKeyData(account: String) throws -> Data? {
+        try loadData(account: account, kind: "encryption-key")
+    }
+
+    func deleteKeyData(account: String) throws {
+        try deleteData(account: account, kind: "encryption-key")
+    }
+
     func keychainAccount(for profileID: UUID, kind: String) -> String {
         "\(profileID.uuidString).\(kind)"
     }
@@ -76,7 +88,10 @@ final class KeychainService: @unchecked Sendable {
         guard let data = secret.data(using: .utf8) else {
             throw KeychainServiceError.encodingFailed
         }
+        try save(data: data, account: account, kind: kind)
+    }
 
+    private func save(data: Data, account: String, kind: String) throws {
         let query = makeQuery(account: account, kind: kind)
         let attributes: [String: Any] = [
             kSecValueData as String: data,
@@ -108,6 +123,13 @@ final class KeychainService: @unchecked Sendable {
     }
 
     private func loadSecret(account: String, kind: String) throws -> String? {
+        guard let data = try loadData(account: account, kind: kind) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func loadData(account: String, kind: String) throws -> Data? {
         var query = makeQuery(account: account, kind: kind)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -117,16 +139,13 @@ final class KeychainService: @unchecked Sendable {
 
         switch status {
         case errSecSuccess:
-            guard let data = item as? Data, let secret = String(data: data, encoding: .utf8) else {
-                return nil
-            }
-            return secret
+            return item as? Data
 
         case errSecItemNotFound:
             return nil
 
         case errSecAuthFailed, errSecMissingEntitlement:
-            try deleteSecret(account: account, kind: kind)
+            try deleteData(account: account, kind: kind)
             return nil
 
         default:
@@ -135,6 +154,10 @@ final class KeychainService: @unchecked Sendable {
     }
 
     private func deleteSecret(account: String, kind: String) throws {
+        try deleteData(account: account, kind: kind)
+    }
+
+    private func deleteData(account: String, kind: String) throws {
         let query = makeQuery(account: account, kind: kind)
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
