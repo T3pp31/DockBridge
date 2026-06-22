@@ -1,16 +1,29 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+protocol FileDropSecurityScopeService {
+    @discardableResult
+    func beginAccessing(_ url: URL) -> Bool
+    func stopAccessing(_ url: URL)
+}
+
+extension SecurityScopedBookmarkService: FileDropSecurityScopeService {}
+
 enum FileDropTransferKickoff {
     @MainActor
     static func acceptRemoteDownloads(
         items: [RemoteFileDragPayload],
-        viewModel: MainViewModel
+        viewModel: MainViewModel,
+        displayedRemoteItems: [RemoteFileRecord]? = nil
     ) -> Bool {
-        guard !items.isEmpty else { return false }
+        let displayedItems = displayedRemoteItems ?? viewModel.remoteItems
+        let validItems = items.filter {
+            FileDropValidation.isDisplayedRemoteItem($0, in: displayedItems)
+        }
+        guard !validItems.isEmpty else { return false }
 
         Task { @MainActor in
-            for item in items {
+            for item in validItems {
                 _ = await viewModel.download(
                     remotePath: item.path,
                     toLocalDirectory: viewModel.localPath
@@ -21,26 +34,56 @@ enum FileDropTransferKickoff {
     }
 
     @MainActor
-    static func acceptUploads(
-        urls: [URL],
+    static func acceptLocalPayloadUploads(
+        items: [LocalFileDragPayload],
         viewModel: MainViewModel,
-        bookmarkService: SecurityScopedBookmarkService = .shared
+        displayedLocalItems: [LocalFileItem]? = nil
     ) -> Bool {
-        let validURLs = urls.filter { FileDropValidation.canUploadLocalItem(at: $0) }
-        guard !validURLs.isEmpty else { return false }
+        let displayedItems = displayedLocalItems ?? viewModel.localItems
+        let validItems = items.filter {
+            FileDropValidation.isDisplayedLocalItem($0, in: displayedItems)
+                && FileDropValidation.canUploadLocalItem(at: $0.url)
+        }
+        guard !validItems.isEmpty else { return false }
 
         Task { @MainActor in
-            var scopedURLs: [URL] = []
+            for item in validItems {
+                _ = await viewModel.upload(
+                    localURL: item.url,
+                    toRemoteDirectory: viewModel.remotePath
+                )
+            }
+        }
+        return true
+    }
+
+    @MainActor
+    static func acceptExternalUploads(
+        urls: [URL],
+        viewModel: MainViewModel,
+        bookmarkService: some FileDropSecurityScopeService = SecurityScopedBookmarkService.shared
+    ) -> Bool {
+        let validURLs = urls.filter { FileDropValidation.canUploadExternalItem(at: $0) }
+        guard !validURLs.isEmpty else { return false }
+
+        var scopedURLs: [URL] = []
+        var urlsToUpload: [URL] = []
+        for url in validURLs {
+            if bookmarkService.beginAccessing(url) {
+                scopedURLs.append(url)
+                urlsToUpload.append(url)
+            }
+        }
+        guard !urlsToUpload.isEmpty else { return false }
+
+        Task { @MainActor in
             defer {
                 for url in scopedURLs {
                     bookmarkService.stopAccessing(url)
                 }
             }
 
-            for url in validURLs {
-                if bookmarkService.beginAccessing(url) {
-                    scopedURLs.append(url)
-                }
+            for url in urlsToUpload {
                 _ = await viewModel.upload(
                     localURL: url,
                     toRemoteDirectory: viewModel.remotePath
@@ -54,10 +97,13 @@ enum FileDropTransferKickoff {
     static func acceptRemoteMoves(
         items: [RemoteFileDragPayload],
         toDirectory remotePath: String,
-        viewModel: MainViewModel
+        viewModel: MainViewModel,
+        displayedRemoteItems: [RemoteFileRecord]? = nil
     ) -> Bool {
+        let displayedItems = displayedRemoteItems ?? viewModel.remoteItems
         let validItems = items.filter {
-            FileDropValidation.canMoveRemoteItem(from: $0.path, to: remotePath)
+            FileDropValidation.isDisplayedRemoteItem($0, in: displayedItems)
+                && FileDropValidation.canMoveRemoteItem(from: $0.path, to: remotePath)
         }
         guard !validItems.isEmpty else { return false }
 
@@ -97,6 +143,9 @@ struct LocalPaneDropModifier: ViewModifier {
     private func acceptLocalMoves(_ items: [LocalFileDragPayload]) -> Bool {
         var accepted = false
         for item in items {
+            guard FileDropValidation.isDisplayedLocalItem(item, in: viewModel.localItems) else {
+                continue
+            }
             guard FileDropValidation.canMoveLocalItem(from: item.url, to: viewModel.localPath) else {
                 continue
             }
@@ -134,15 +183,11 @@ struct RemotePaneDropModifier: ViewModifier {
     }
 
     private func acceptLocalUploads(_ items: [LocalFileDragPayload]) -> Bool {
-        acceptUploads(urls: items.map(\.url))
+        FileDropTransferKickoff.acceptLocalPayloadUploads(items: items, viewModel: viewModel)
     }
 
     private func acceptExternalUploads(_ urls: [URL]) -> Bool {
-        acceptUploads(urls: urls)
-    }
-
-    private func acceptUploads(urls: [URL]) -> Bool {
-        FileDropTransferKickoff.acceptUploads(urls: urls, viewModel: viewModel)
+        FileDropTransferKickoff.acceptExternalUploads(urls: urls, viewModel: viewModel)
     }
 
     private func acceptRemoteMoves(_ items: [RemoteFileDragPayload]) -> Bool {

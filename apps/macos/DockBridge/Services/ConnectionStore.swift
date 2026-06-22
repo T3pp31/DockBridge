@@ -3,35 +3,52 @@ import Foundation
 enum ConnectionStoreError: LocalizedError {
     case readFailed(String)
     case writeFailed(String)
+    case corruptEncryptedStore
 
     var errorDescription: String? {
         switch self {
         case .readFailed(let message): "Failed to read connection profiles: \(message)"
         case .writeFailed(let message): "Failed to save connection profiles: \(message)"
+        case .corruptEncryptedStore:
+            """
+            Connection profiles could not be decrypted. The encrypted store or its Keychain \
+            master key may be corrupt. Remove ~/Library/Application Support/DockBridge/profiles.json \
+            and recreate profiles, or restore both profiles.json and Keychain items from backup.
+            """
         }
     }
 }
 
-/// Persists connection profiles as JSON in Application Support.
+/// Persists connection profiles as AES-GCM encrypted JSON in Application Support.
 ///
-/// Profile metadata is stored in plaintext with owner-only permissions (`0600`).
-/// Passwords and passphrases are stored in Keychain only. Operators must enable
-/// FileVault (or equivalent full-disk encryption) — see `docs/security.md`.
+/// Profile metadata is encrypted with a master key stored in Keychain. Passwords and passphrases
+/// remain in Keychain only. See `docs/security.md`.
 final class ConnectionStore: @unchecked Sendable {
     static let shared = ConnectionStore()
 
     private let profilesBaseDirectory: URL
     private let trustStore: ProfileTrustStore
+    private let encryptionService: ProfileEncryptionService
     private let fileName = "profiles.json"
 
-    init(settings: AppSettingsService = .shared, trustStore: ProfileTrustStore? = nil) {
+    init(
+        settings: AppSettingsService = .shared,
+        trustStore: ProfileTrustStore? = nil,
+        encryptionService: ProfileEncryptionService? = nil
+    ) {
         self.profilesBaseDirectory = settings.appSupportDirectory
         self.trustStore = trustStore ?? ProfileTrustStore(baseDirectory: settings.appSupportDirectory)
+        self.encryptionService = encryptionService ?? ProfileEncryptionService()
     }
 
-    init(baseDirectory: URL, trustStore: ProfileTrustStore? = nil) {
+    init(
+        baseDirectory: URL,
+        trustStore: ProfileTrustStore? = nil,
+        encryptionService: ProfileEncryptionService? = nil
+    ) {
         self.profilesBaseDirectory = baseDirectory
         self.trustStore = trustStore ?? ProfileTrustStore(baseDirectory: baseDirectory)
+        self.encryptionService = encryptionService ?? ProfileEncryptionService()
     }
 
     private var profilesURL: URL {
@@ -61,28 +78,8 @@ final class ConnectionStore: @unchecked Sendable {
     }
 
     func saveProfiles(_ profiles: [ConnectionProfile], updateTrust: Bool = true) throws {
-        let url = profilesURL
-        let parent = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
-
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            encoder.dateEncodingStrategy = .iso8601
-            let data = try encoder.encode(profiles)
-            try data.write(to: url, options: .atomic)
-            try setSecurePermissions(for: url)
-            if updateTrust {
-                let existingTrust = try trustStore.loadTrustedEndpoints()
-                if !existingTrust.isEmpty {
-                    for profile in profiles where existingTrust[profile.id] != nil {
-                        try trustStore.updateTrust(for: profile)
-                    }
-                }
-            }
-        } catch {
-            throw ConnectionStoreError.writeFailed(error.localizedDescription)
-        }
+        let stored = profiles.map(StoredConnectionProfile.init(from:))
+        try writeEncryptedProfiles(stored, updateTrust: updateTrust, sourceProfiles: profiles)
     }
 
     func upsert(_ profile: ConnectionProfile) throws -> [ConnectionProfile] {
@@ -153,13 +150,79 @@ final class ConnectionStore: @unchecked Sendable {
 
         try setSecurePermissions(for: url)
 
+        let data: Data
         do {
-            let data = try Data(contentsOf: url)
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            return try decoder.decode([ConnectionProfile].self, from: data)
+            data = try Data(contentsOf: url)
         } catch {
             throw ConnectionStoreError.readFailed(error.localizedDescription)
+        }
+
+        if let envelope = try? JSONDecoder().decode(EncryptedProfilesEnvelope.self, from: data),
+           envelope.format == EncryptedProfilesEnvelope.formatIdentifier {
+            do {
+                let stored = try encryptionService.decrypt(envelope)
+                return stored.map { $0.toConnectionProfile() }
+            } catch let error as ProfileEncryptionError {
+                switch error {
+                case .invalidEnvelope, .decryptionFailed:
+                    throw ConnectionStoreError.corruptEncryptedStore
+                case .encryptionFailed(let message):
+                    throw ConnectionStoreError.readFailed(message)
+                }
+            } catch {
+                throw ConnectionStoreError.readFailed(error.localizedDescription)
+            }
+        }
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        if let legacyProfiles = try? decoder.decode([ConnectionProfile].self, from: data) {
+            let stored = legacyProfiles.map(StoredConnectionProfile.init(from:))
+            do {
+                try writeEncryptedProfiles(stored, updateTrust: false, sourceProfiles: legacyProfiles)
+            } catch {
+                throw ConnectionStoreError.writeFailed(error.localizedDescription)
+            }
+            return legacyProfiles.map { profile in
+                StoredConnectionProfile(from: profile).toConnectionProfile()
+            }
+        }
+
+        throw ConnectionStoreError.readFailed("Unsupported profiles.json format.")
+    }
+
+    private func writeEncryptedProfiles(
+        _ stored: [StoredConnectionProfile],
+        updateTrust: Bool,
+        sourceProfiles: [ConnectionProfile]
+    ) throws {
+        let url = profilesURL
+        let parent = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+
+        do {
+            let envelope = try encryptionService.encrypt(stored)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(envelope)
+            try data.write(to: url, options: .atomic)
+            try setSecurePermissions(for: url)
+            if updateTrust {
+                do {
+                    let existingTrust = try trustStore.loadTrustedEndpoints()
+                    if !existingTrust.isEmpty {
+                        for profile in sourceProfiles where existingTrust[profile.id] != nil {
+                            try trustStore.updateTrust(for: profile)
+                        }
+                    }
+                } catch ProfileTrustStoreError.verificationFailed {
+                    // Skip auto trust refresh until the user re-confirms trust on next load.
+                }
+            }
+        } catch let error as ProfileEncryptionError {
+            throw ConnectionStoreError.writeFailed(error.localizedDescription)
+        } catch {
+            throw ConnectionStoreError.writeFailed(error.localizedDescription)
         }
     }
 }

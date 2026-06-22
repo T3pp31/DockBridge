@@ -12,8 +12,9 @@ final class ConnectionListViewModelTests: XCTestCase {
         super.setUp()
         baseDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        store = ConnectionStore(baseDirectory: baseDirectory)
-        keychain = KeychainService(serviceName: "com.dockbridge.tests")
+        keychain = KeychainService(serviceName: "com.dockbridge.tests.\(UUID().uuidString)")
+        let encryptionService = ProfileEncryptionService(keychain: keychain)
+        store = ConnectionStore(baseDirectory: baseDirectory, encryptionService: encryptionService)
         viewModel = ConnectionListViewModel(
             store: store,
             keychain: keychain,
@@ -27,6 +28,7 @@ final class ConnectionListViewModelTests: XCTestCase {
             try? keychain.deletePassword(account: account)
             try? keychain.deletePassphrase(account: account)
         }
+        try? keychain.deleteKeyData(account: ProfileEncryptionService.masterKeyAccount)
         try? FileManager.default.removeItem(at: baseDirectory)
         super.tearDown()
     }
@@ -295,6 +297,39 @@ final class ConnectionListViewModelTests: XCTestCase {
         viewModel.requestConnect(profile: profile)
 
         XCTAssertFalse(viewModel.showRsaKeyWarning)
+    }
+
+    func testConnectReleasesPrivateKeyBookmarkAccessAfterCompletion() async throws {
+        let bookmarkService = SecurityScopedBookmarkService.shared
+        bookmarkService.stopAllAccess()
+
+        let profile = try makePrivateKeyProfile()
+        guard let bookmark = profile.privateKeyBookmark else {
+            throw XCTSkip("Security-scoped bookmarks require App Sandbox context")
+        }
+
+        let keyURL = try bookmarkService.resolveBookmarkURL(bookmark)
+
+        await viewModel.connect(profile: profile)
+
+        XCTAssertFalse(bookmarkService.isAccessActive(for: keyURL))
+    }
+
+    func testConnectReleasesPrivateKeyBookmarkAccessAfterFailure() async throws {
+        let bookmarkService = SecurityScopedBookmarkService.shared
+        bookmarkService.stopAllAccess()
+
+        let profile = try makePrivateKeyProfile()
+        guard let bookmark = profile.privateKeyBookmark else {
+            throw XCTSkip("Security-scoped bookmarks require App Sandbox context")
+        }
+
+        let keyURL = try bookmarkService.resolveBookmarkURL(bookmark)
+
+        await viewModel.connect(profile: profile)
+
+        XCTAssertFalse(bookmarkService.isAccessActive(for: keyURL))
+        XCTAssertNotNil(viewModel.errorMessage)
     }
 
     private func makePrivateKeyProfile(id: UUID = UUID()) throws -> ConnectionProfile {

@@ -180,10 +180,17 @@ final class FileDropAcceptanceTests: XCTestCase {
         // Given: a view model and non-empty remote drag items
         let viewModel = try makeKickoffViewModel()
         let items = [RemoteFileDragPayload(path: "/remote/folder", isDirectory: true)]
+        let displayedItems = [
+            RemoteFileRecord(name: "folder", path: "/remote/folder", isDirectory: true, size: 0),
+        ]
 
         // When: kickoff is invoked
         let start = ContinuousClock.now
-        let accepted = FileDropTransferKickoff.acceptRemoteDownloads(items: items, viewModel: viewModel)
+        let accepted = FileDropTransferKickoff.acceptRemoteDownloads(
+            items: items,
+            viewModel: viewModel,
+            displayedRemoteItems: displayedItems
+        )
         let elapsed = start.duration(to: ContinuousClock.now)
 
         // Then: accepts immediately without waiting for transfer completion
@@ -203,14 +210,20 @@ final class FileDropAcceptanceTests: XCTestCase {
     }
 
     func testUploadKickoffAcceptsImmediatelyWithoutBlocking() throws {
-        // Given: a valid local file URL
+        // Given: a displayed local drag item
         let viewModel = try makeKickoffViewModel()
         let localFile = viewModel.localPath.appendingPathComponent("kickoff-upload.txt")
         try "kickoff upload".write(to: localFile, atomically: true, encoding: .utf8)
+        let displayedItems = [LocalFileItem(url: localFile)]
+        let payload = LocalFileDragPayload(url: localFile, isDirectory: false)
 
         // When: kickoff is invoked
         let start = ContinuousClock.now
-        let accepted = FileDropTransferKickoff.acceptUploads(urls: [localFile], viewModel: viewModel)
+        let accepted = FileDropTransferKickoff.acceptLocalPayloadUploads(
+            items: [payload],
+            viewModel: viewModel,
+            displayedLocalItems: displayedItems
+        )
         let elapsed = start.duration(to: ContinuousClock.now)
 
         // Then: accepts immediately without waiting for upload completion
@@ -224,9 +237,48 @@ final class FileDropAcceptanceTests: XCTestCase {
         let missingURL = viewModel.localPath.appendingPathComponent("missing-upload.txt")
 
         // When: kickoff is invoked
-        let accepted = FileDropTransferKickoff.acceptUploads(urls: [missingURL], viewModel: viewModel)
+        let accepted = FileDropTransferKickoff.acceptExternalUploads(
+            urls: [missingURL],
+            viewModel: viewModel
+        )
 
         // Then: drop is rejected
+        XCTAssertFalse(accepted)
+    }
+
+    func testLocalPayloadUploadKickoffRejectsSpoofedItem() throws {
+        let viewModel = try makeKickoffViewModel()
+        let displayedFile = viewModel.localPath.appendingPathComponent("visible.txt")
+        try "visible".write(to: displayedFile, atomically: true, encoding: .utf8)
+
+        let spoofedFile = viewModel.localPath.appendingPathComponent("secret.txt")
+        try "secret".write(to: spoofedFile, atomically: true, encoding: .utf8)
+
+        let accepted = FileDropTransferKickoff.acceptLocalPayloadUploads(
+            items: [LocalFileDragPayload(url: spoofedFile, isDirectory: false)],
+            viewModel: viewModel,
+            displayedLocalItems: [LocalFileItem(url: displayedFile)]
+        )
+
+        XCTAssertFalse(accepted)
+    }
+
+    func testExternalUploadKickoffRejectsWhenSecurityScopeFails() throws {
+        let viewModel = try makeKickoffViewModel()
+        let localFile = viewModel.localPath.appendingPathComponent("scope-fail.txt")
+        try "scope fail".write(to: localFile, atomically: true, encoding: .utf8)
+
+        struct DenyingSecurityScopeService: FileDropSecurityScopeService {
+            func beginAccessing(_ url: URL) -> Bool { false }
+            func stopAccessing(_ url: URL) {}
+        }
+
+        let accepted = FileDropTransferKickoff.acceptExternalUploads(
+            urls: [localFile],
+            viewModel: viewModel,
+            bookmarkService: DenyingSecurityScopeService()
+        )
+
         XCTAssertFalse(accepted)
     }
 
@@ -235,13 +287,17 @@ final class FileDropAcceptanceTests: XCTestCase {
         let viewModel = try makeKickoffViewModel()
         viewModel.remotePath = "/destination"
         let items = [RemoteFileDragPayload(path: "/source/file.txt", isDirectory: false)]
+        let displayedItems = [
+            RemoteFileRecord(name: "file.txt", path: "/source/file.txt", isDirectory: false, size: 10),
+        ]
 
         // When: kickoff is invoked
         let start = ContinuousClock.now
         let accepted = FileDropTransferKickoff.acceptRemoteMoves(
             items: items,
             toDirectory: viewModel.remotePath,
-            viewModel: viewModel
+            viewModel: viewModel,
+            displayedRemoteItems: displayedItems
         )
         let elapsed = start.duration(to: ContinuousClock.now)
 

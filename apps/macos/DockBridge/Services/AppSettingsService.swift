@@ -114,7 +114,7 @@ final class AppSettingsService: @unchecked Sendable {
 
     func resolvedOpensshKnownHostsPath(for config: AppConfig) -> String {
         if let bookmark = config.opensshKnownHostsBookmark,
-           let url = try? bookmarkService.resolveBookmark(bookmark) {
+           let url = try? bookmarkService.resolveBookmarkURL(bookmark) {
             return url.standardizedFileURL.path
         }
         return NSString(string: config.opensshKnownHostsPath).expandingTildeInPath

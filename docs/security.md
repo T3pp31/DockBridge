@@ -19,7 +19,7 @@
 - Swift clears password/passphrase and `ConnectionProfileRecord` credentials after connect
 - Delete confirmation for destructive operations
 - Warning when connecting as root
-- **FileVault (or equivalent full-disk encryption) required** on the boot volume — see [Connection profiles](#connection-profiles-profilesjson)
+- **FileVault (or equivalent full-disk encryption) recommended** on the boot volume — see [Connection profiles](#connection-profiles-profilesjson)
 
 ## CLI password authentication
 
@@ -60,65 +60,93 @@ Rust core settings in `config/default.toml` (and UniFFI `AppConfigRecord`):
 
 ## Connection profiles (`profiles.json`)
 
-### Storage location and contents
+### Storage location and format
 
-Connection profiles are stored as JSON at:
+Connection profiles are stored at:
 
 `~/Library/Application Support/DockBridge/profiles.json`
 
 The file is written with owner-only permissions (`0600`) on every save and load. Passwords and private-key passphrases are **not** stored in this file; they live in the macOS Keychain only.
 
-Fields persisted in plaintext JSON include:
+Profile metadata is stored as an **AES-GCM encrypted envelope**. A 256-bit master key is generated on first save and kept in Keychain (`encryption-key.profiles.master-key` under service `com.dockbridge`). The on-disk JSON contains only:
+
+| Field | Contents |
+|-------|----------|
+| `format` | Envelope version (`dockbridge-profiles-v1`) |
+| `payload` | Base64-encoded AES-GCM ciphertext (nonce + ciphertext + tag) |
+
+Plaintext hostnames, usernames, bookmarks, and other metadata never appear in `profiles.json`.
+
+Fields encrypted inside the payload include:
 
 | Field | Sensitivity |
 |-------|-------------|
 | `name`, `host`, `port`, `username` | Infrastructure mapping |
 | `authType` | Reveals authentication method per host |
-| `privateKeyPath` | Path to a private key on disk |
 | `privateKeyBookmark` | Security-scoped bookmark for sandboxed key access |
 | `lastConnectedAt` | Usage metadata |
 
-### Plaintext storage risk
+`privateKeyPath` is **not persisted**. It is resolved from `privateKeyBookmark` at runtime for UI display and connections.
 
-Because profile metadata is not encrypted at the application layer, anyone who can read `profiles.json` can learn which hosts you connect to, under which accounts, and where private keys are referenced. That does not expose passwords or passphrases directly, but it can leak enough context for targeted follow-on attacks (for example, stealing a referenced key file or phishing a specific account).
+### Residual risk
+
+Application-layer encryption reduces exposure from same-user disk reads, backups of `profiles.json`, and casual forensic inspection. Residual risks include:
+
+- Same-user malware with Keychain access can decrypt profiles while the Mac is unlocked
+- Loss or corruption of the Keychain master key makes the encrypted file unreadable
+- Physical access to an unlocked Mac
 
 Relevant classifications:
 
 - [OWASP A02: Cryptographic Failures](https://owasp.org/Top10/A02_2021-Cryptographic_Failures/)
 - [CWE-311: Missing Encryption of Sensitive Data](https://cwe.mitre.org/data/definitions/311.html)
 
-Severity in DockBridge’s threat model: **Low**, assuming the mitigations below are in place.
+Severity in DockBridge’s threat model: **Low to Medium**, depending on deployment; encryption materially reduces metadata leakage compared to plaintext JSON.
 
-### Current mitigations
+### Mitigations
 
+- **AES-GCM envelope encryption** — profile metadata is not stored in plaintext JSON.
+- **Keychain master key** — encryption key never written to `profiles.json`.
 - **File permissions (`0600`)** — only the owning user can read or write `profiles.json`.
 - **App Sandbox** — the app cannot read arbitrary paths; private keys require explicit user selection.
 - **Keychain for secrets** — passwords and passphrases never appear in `profiles.json` or logs.
 - **No secret material in logs** — connection logs must not echo credentials or key contents.
 
-`0600` protects against other OS users and unprivileged processes. It does **not** protect against:
+`0600` and encryption protect against other OS users and unprivileged processes. They do **not** fully protect against:
 
-- Malware running as the same user
+- Malware running as the same user with Keychain access
 - Physical access to an unlocked Mac
-- Disk images or backups copied while the volume is decrypted
+- Disk images or backups copied while the volume is decrypted (Keychain items may still be protected separately)
 
-### FileVault requirement
+### FileVault recommendation
 
-**FileVault (or equivalent full-disk encryption) is required** on any Mac that stores production connection profiles. DockBridge relies on OS-level encryption at rest to protect `profiles.json`, Keychain items, and referenced private key files when the machine is powered off or the volume is locked.
+**FileVault (or equivalent full-disk encryption) is strongly recommended** on any Mac that stores production connection profiles. DockBridge uses application-layer encryption for profile metadata, but Keychain items and referenced private key files still benefit from OS-level encryption at rest when the machine is powered off or the volume is locked.
 
-Without full-disk encryption, `0600` and App Sandbox reduce casual exposure but do not prevent offline disk extraction. Enable FileVault before saving production profiles in shared, travel, or compliance-sensitive environments.
+Without full-disk encryption, `0600`, App Sandbox, and profile encryption reduce casual exposure but do not prevent offline disk extraction of non-Keychain artifacts. Enable FileVault before saving production profiles in shared, travel, or compliance-sensitive environments.
 
-### Encrypted store migration (future consideration)
+### Migration from legacy plaintext JSON
 
-For environments that require stronger confidentiality than plaintext JSON plus OS-level controls, these approaches are under consideration for a future release:
+DockBridge automatically upgrades legacy plaintext `profiles.json` files (pre-v0.2 format: a JSON array of profiles) on first load:
 
-| Approach | Pros | Cons |
-|----------|------|------|
-| **Keychain-backed profiles** — store each profile (or profile blob) as a Keychain generic-password item | OS-managed encryption; reuses existing `KeychainService` patterns | Harder to inspect or bulk-edit; migration from JSON; per-item Keychain UX limits |
-| **Encrypted JSON file** — AES-GCM envelope encryption with a master key held in Keychain | Keeps a single portable file; familiar backup/restore shape | Key rotation and migration complexity; must handle corrupt ciphertext gracefully |
-| **Status quo** — plaintext JSON with `0600` + Sandbox + FileVault | Simple, debuggable, sufficient for typical developer workstations | Metadata readable by same-user malware or forensic disk access on an unlocked machine |
+1. Read and decode the legacy array.
+2. Strip `privateKeyPath` from the persisted payload.
+3. Re-encrypt and atomically rewrite `profiles.json`.
+4. Leave Keychain credentials unchanged.
 
-No migration is planned for v0.1. See [roadmap.md](roadmap.md) for tracking. Implementation would include a one-time upgrade path from existing `profiles.json` files and documentation for operators who export or back up profiles.
+Operators who back up profiles must back up **both** `profiles.json` and the DockBridge Keychain items (master key and per-profile credentials).
+
+### Corrupt store recovery
+
+If decryption fails (missing master key, truncated file, or tampered ciphertext), DockBridge surfaces a corrupt-store error. Recovery options:
+
+1. Restore `profiles.json` **and** matching Keychain items from backup.
+2. Delete `~/Library/Application Support/DockBridge/profiles.json`, remove stale DockBridge Keychain entries, and recreate connections in the app.
+
+Do not edit the encrypted envelope manually.
+
+### Legacy note (pre-v0.2 plaintext format)
+
+Earlier versions stored profile metadata as plaintext JSON with `0600` permissions and relied primarily on FileVault for confidentiality at rest. That format is migrated automatically; see above.
 
 ### OpenSSH known_hosts merge (macOS Sandbox)
 
@@ -148,6 +176,26 @@ This SHA-1 usage is **OpenSSH specification–compliant**, not a general-purpose
 
 DockBridge runs with App Sandbox enabled for defense in depth and a reduced attack surface. An SFTP client does not need full filesystem access; user-selected paths and security-scoped bookmarks are sufficient for browsing, transfers, and private-key references. The app accesses only folders and keys explicitly chosen by the user.
 
+## SFTP transfer safety
+
+Uploads and downloads write to temporary partial files before renaming to the final destination:
+
+| Stage | Local partial | Remote partial |
+|-------|---------------|----------------|
+| Create | `create_new(true)` + `O_NOFOLLOW` (Unix) | `CREATE \| EXCLUDE \| WRITE` |
+| Name | `.dockbridge-<32-hex>.partial` (cryptographic random) | same pattern in destination directory |
+| Cancel / failure | partial file removed; destination untouched | partial file removed; destination untouched |
+| Success | rename partial → final | delete existing destination when policy is `Replace`, then rename |
+
+`TransferOverwritePolicy` controls final-destination behavior:
+
+| Policy | Behavior |
+|--------|----------|
+| `Replace` (default) | Replace an existing destination after the transfer completes successfully. Remote uploads delete the existing file before rename when the server does not overwrite via rename alone. |
+| `FailIfExists` | Fail without modifying the destination when it already exists. |
+
+Local finalize rejects symlink destinations without following them. Partial files are never opened through symlinks on Unix.
+
 ### Entitlements
 
 - `com.apple.security.app-sandbox` — confines the app to its container and granted capabilities
@@ -162,19 +210,36 @@ Entitlements not granted include `network.server`, `temporary-exception.files.ab
 
 - Hardened Runtime enabled for Release builds
 - CI builds the macOS app unsigned (`CODE_SIGNING_ALLOWED=NO`) for compile and test verification only
+- Public releases are signed with a Developer ID Application certificate, notarized with Apple Notary Service, and verified before upload
 
-#### Notarization (planned for v1.0)
+#### Release signing pipeline
 
-Apple [Notarization](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution) is **not** performed in CI today. It is a **v1.0 release requirement** before distributing DockBridge outside the Mac App Store with a Developer ID certificate.
+GitHub Release workflow (`.github/workflows/release.yml`) requires these repository secrets:
 
-Planned v1.0 distribution checklist:
+| Secret | Purpose |
+|--------|---------|
+| `APPLE_CERTIFICATE_BASE64` | Developer ID Application `.p12` (Base64-encoded) |
+| `APPLE_CERTIFICATE_PASSWORD` | Password for the `.p12` file |
+| `APPLE_ID` | Apple ID used for notarization |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password for `notarytool` |
+| `APPLE_TEAM_ID` | Apple Developer Team ID |
 
-1. Sign the Release `.app` with a Developer ID Application certificate
-2. Submit the build to Apple's Notary Service (`notarytool submit`)
-3. Staple the notarization ticket to the app bundle (`stapler staple`)
-4. Verify Gatekeeper acceptance on a clean macOS install (`spctl --assess --type execute`)
+Release packaging runs `scripts/sign-and-notarize-macos.sh`, which:
 
-Track progress in [roadmap.md](roadmap.md#10). Until v1.0, treat CI and local Debug/Release artifacts as development builds only—not for end-user distribution.
+1. Signs the Release `.app` with a Developer ID Application certificate (`codesign --options runtime`)
+2. Submits the build to Apple's Notary Service (`notarytool submit --wait`)
+3. Staples the notarization ticket to the app bundle (`stapler staple`)
+4. Verifies Gatekeeper acceptance (`spctl --assess --type execute`)
+
+If signing or notarization fails, the release workflow stops before publishing assets.
+
+Local unsigned builds for development:
+
+```bash
+SIGN_AND_NOTARIZE=false ./scripts/package-macos-release.sh
+```
+
+Do not distribute unsigned DMGs. The dev-only helper `scripts/dev-install-unsigned.command` removes quarantine attributes and must not be shipped in release DMGs.
 
 ## Dependency vulnerability management
 
