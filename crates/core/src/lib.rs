@@ -24,4 +24,6 @@ pub use ssh::{
     inspect_private_key_algorithm, is_connection_lost_message, AuthType, ConnectionProfile,
     HostKeyPrompt, PrivateKeyAlgorithm, SecretPassword, SshSession,
 };
-pub use transfer::{TransferDirection, TransferManager, TransferStatus, TransferTask};
+pub use transfer::{
+    TransferDirection, TransferManager, TransferOverwritePolicy, TransferStatus, TransferTask,
+};

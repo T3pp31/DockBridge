@@ -96,45 +96,12 @@
         <div class="container">
           <h2>Install</h2>
           <div class="card">
-            <p><strong>かんたんインストール（推奨）</strong></p>
             <ol class="steps">
               <li>Download the latest <code>DockBridge-*-macOS.dmg</code> from the button above.</li>
               <li>Double-click the DMG file to mount it.</li>
-              <li>
-                Double-click <code>DockBridgeをインストール.command</code> inside the DMG.
-                If macOS blocks it, right-click the file and choose <strong>Open</strong>, then confirm.
-              </li>
-              <li>Wait for the setup script to finish. DockBridge opens automatically when done.</li>
-            </ol>
-            <p><strong>手動インストール</strong></p>
-            <ol class="steps">
               <li>Drag <code>DockBridge.app</code> into the <code>Applications</code> folder shortcut.</li>
-              <li>Follow the <a href="#gatekeeper">Gatekeeper steps</a> if macOS blocks the app.</li>
+              <li>Open DockBridge from Applications. macOS verifies the Developer ID signature and notarization automatically.</li>
             </ol>
-          </div>
-        </div>
-      </section>
-
-      <section id="gatekeeper" class="section">
-        <div class="container">
-          <h2>Opening unsigned builds</h2>
-          <div class="card notice">
-            <p>
-              Early releases are not yet signed with a Developer ID certificate.
-              macOS may show a warning that the developer cannot be verified.
-            </p>
-            <p>
-              The easiest fix is to run <code>DockBridgeをインストール.command</code> from the DMG.
-              It installs DockBridge, removes the security block, and launches the app for you.
-            </p>
-            <p><strong>If you installed manually:</strong></p>
-            <ul>
-              <li>Right-click <code>DockBridge.app</code> and choose <strong>Open</strong>, then confirm.</li>
-            </ul>
-            <p>
-              Developer ID signing and Apple Notarization are planned for v1.0.
-              See the <a href="https://github.com/T3pp31/DockBridge/blob/main/docs/security.md">security docs</a>.
-            </p>
           </div>
         </div>
       </section>

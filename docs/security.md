@@ -176,6 +176,26 @@ This SHA-1 usage is **OpenSSH specification–compliant**, not a general-purpose
 
 DockBridge runs with App Sandbox enabled for defense in depth and a reduced attack surface. An SFTP client does not need full filesystem access; user-selected paths and security-scoped bookmarks are sufficient for browsing, transfers, and private-key references. The app accesses only folders and keys explicitly chosen by the user.
 
+## SFTP transfer safety
+
+Uploads and downloads write to temporary partial files before renaming to the final destination:
+
+| Stage | Local partial | Remote partial |
+|-------|---------------|----------------|
+| Create | `create_new(true)` + `O_NOFOLLOW` (Unix) | `CREATE \| EXCLUDE \| WRITE` |
+| Name | `.dockbridge-<32-hex>.partial` (cryptographic random) | same pattern in destination directory |
+| Cancel / failure | partial file removed; destination untouched | partial file removed; destination untouched |
+| Success | rename partial → final | delete existing destination when policy is `Replace`, then rename |
+
+`TransferOverwritePolicy` controls final-destination behavior:
+
+| Policy | Behavior |
+|--------|----------|
+| `Replace` (default) | Replace an existing destination after the transfer completes successfully. Remote uploads delete the existing file before rename when the server does not overwrite via rename alone. |
+| `FailIfExists` | Fail without modifying the destination when it already exists. |
+
+Local finalize rejects symlink destinations without following them. Partial files are never opened through symlinks on Unix.
+
 ### Entitlements
 
 - `com.apple.security.app-sandbox` — confines the app to its container and granted capabilities
@@ -190,19 +210,36 @@ Entitlements not granted include `network.server`, `temporary-exception.files.ab
 
 - Hardened Runtime enabled for Release builds
 - CI builds the macOS app unsigned (`CODE_SIGNING_ALLOWED=NO`) for compile and test verification only
+- Public releases are signed with a Developer ID Application certificate, notarized with Apple Notary Service, and verified before upload
 
-#### Notarization (planned for v1.0)
+#### Release signing pipeline
 
-Apple [Notarization](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution) is **not** performed in CI today. It is a **v1.0 release requirement** before distributing DockBridge outside the Mac App Store with a Developer ID certificate.
+GitHub Release workflow (`.github/workflows/release.yml`) requires these repository secrets:
 
-Planned v1.0 distribution checklist:
+| Secret | Purpose |
+|--------|---------|
+| `APPLE_CERTIFICATE_BASE64` | Developer ID Application `.p12` (Base64-encoded) |
+| `APPLE_CERTIFICATE_PASSWORD` | Password for the `.p12` file |
+| `APPLE_ID` | Apple ID used for notarization |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password for `notarytool` |
+| `APPLE_TEAM_ID` | Apple Developer Team ID |
 
-1. Sign the Release `.app` with a Developer ID Application certificate
-2. Submit the build to Apple's Notary Service (`notarytool submit`)
-3. Staple the notarization ticket to the app bundle (`stapler staple`)
-4. Verify Gatekeeper acceptance on a clean macOS install (`spctl --assess --type execute`)
+Release packaging runs `scripts/sign-and-notarize-macos.sh`, which:
 
-Track progress in [roadmap.md](roadmap.md#10). Until v1.0, treat CI and local Debug/Release artifacts as development builds only—not for end-user distribution.
+1. Signs the Release `.app` with a Developer ID Application certificate (`codesign --options runtime`)
+2. Submits the build to Apple's Notary Service (`notarytool submit --wait`)
+3. Staples the notarization ticket to the app bundle (`stapler staple`)
+4. Verifies Gatekeeper acceptance (`spctl --assess --type execute`)
+
+If signing or notarization fails, the release workflow stops before publishing assets.
+
+Local unsigned builds for development:
+
+```bash
+SIGN_AND_NOTARIZE=false ./scripts/package-macos-release.sh
+```
+
+Do not distribute unsigned DMGs. The dev-only helper `scripts/dev-install-unsigned.command` removes quarantine attributes and must not be shipped in release DMGs.
 
 ## Dependency vulnerability management
 

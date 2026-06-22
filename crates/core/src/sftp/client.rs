@@ -10,6 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::config::{clamp_transfer_chunk_size, DEFAULT_TRANSFER_CHUNK_SIZE_BYTES};
 use crate::error::SftpError;
 use crate::ssh::session::SshSession;
+use crate::transfer::TransferOverwritePolicy;
 
 use super::tree::{
     ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
@@ -111,6 +112,7 @@ impl<'a> SftpClient<'a> {
             local_path,
             remote_path,
             default_chunk_size(),
+            TransferOverwritePolicy::default(),
             || false,
             |_| {},
         )
@@ -123,6 +125,7 @@ impl<'a> SftpClient<'a> {
         local_path: &Path,
         remote_path: &str,
         chunk_size: usize,
+        overwrite_policy: TransferOverwritePolicy,
         is_cancelled: impl Fn() -> bool + Send,
         mut on_progress: impl FnMut(u64) + Send,
     ) -> Result<(), SftpError> {
@@ -141,7 +144,8 @@ impl<'a> SftpClient<'a> {
                     message: err.to_string(),
                 })?;
 
-        let mut partial = PartialRemoteTransfer::begin(self, &parent, &local, &remote).await?;
+        let mut partial =
+            PartialRemoteTransfer::begin(self, &parent, &local, &remote, overwrite_policy).await?;
 
         let mut buffer = vec![0_u8; chunk_size];
         let mut transferred = 0_u64;
@@ -206,6 +210,7 @@ impl<'a> SftpClient<'a> {
             remote_path,
             local_path,
             default_chunk_size(),
+            TransferOverwritePolicy::default(),
             || false,
             |_| {},
         )
@@ -218,6 +223,7 @@ impl<'a> SftpClient<'a> {
         remote_path: &str,
         local_path: &Path,
         chunk_size: usize,
+        overwrite_policy: TransferOverwritePolicy,
         is_cancelled: impl Fn() -> bool + Send,
         mut on_progress: impl FnMut(u64) + Send,
     ) -> Result<(), SftpError> {
@@ -247,7 +253,8 @@ impl<'a> SftpClient<'a> {
                 })?;
 
         let local_parent = local_path.parent().unwrap_or_else(|| Path::new("."));
-        let mut partial = PartialLocalTransfer::begin(local_parent, &remote, &local).await?;
+        let mut partial =
+            PartialLocalTransfer::begin(local_parent, &remote, &local, overwrite_policy).await?;
 
         let mut buffer = vec![0_u8; chunk_size];
         let mut transferred = 0_u64;
@@ -502,6 +509,7 @@ struct PartialRemoteTransfer<'a> {
     committed: bool,
     local: String,
     remote: String,
+    overwrite_policy: TransferOverwritePolicy,
 }
 
 impl<'a> PartialRemoteTransfer<'a> {
@@ -510,6 +518,7 @@ impl<'a> PartialRemoteTransfer<'a> {
         parent: &str,
         local: &str,
         remote: &str,
+        overwrite_policy: TransferOverwritePolicy,
     ) -> Result<Self, SftpError> {
         let (partial_path, remote_file) =
             create_exclusive_remote_partial(client, parent, local, remote).await?;
@@ -520,6 +529,7 @@ impl<'a> PartialRemoteTransfer<'a> {
             committed: false,
             local: local.to_string(),
             remote: remote.to_string(),
+            overwrite_policy,
         })
     }
 
@@ -544,6 +554,19 @@ impl<'a> PartialRemoteTransfer<'a> {
     }
 
     async fn finalize_rename(mut self, final_path: &str) -> Result<(), SftpError> {
+        if let Err(err) = prepare_remote_finalize_destination(
+            self.client,
+            final_path,
+            self.overwrite_policy,
+            &self.local,
+            &self.remote,
+        )
+        .await
+        {
+            self.abort(true).await?;
+            return Err(err);
+        }
+
         match self.client.rename(&self.partial_path, final_path).await {
             Ok(()) => {
                 self.committed = true;
@@ -595,10 +618,16 @@ struct PartialLocalTransfer {
     committed: bool,
     remote: String,
     local: String,
+    overwrite_policy: TransferOverwritePolicy,
 }
 
 impl PartialLocalTransfer {
-    async fn begin(parent: &Path, remote: &str, local: &str) -> Result<Self, SftpError> {
+    async fn begin(
+        parent: &Path,
+        remote: &str,
+        local: &str,
+        overwrite_policy: TransferOverwritePolicy,
+    ) -> Result<Self, SftpError> {
         let (partial_path, local_file) = create_exclusive_local_partial(parent).await?;
         Ok(Self {
             partial_path,
@@ -606,6 +635,7 @@ impl PartialLocalTransfer {
             committed: false,
             remote: remote.to_string(),
             local: local.to_string(),
+            overwrite_policy,
         })
     }
 
@@ -632,6 +662,18 @@ impl PartialLocalTransfer {
         remote_file: &mut RemoteFileHandle,
     ) -> Result<(), SftpError> {
         self.local_file.take();
+
+        if let Err(err) = prepare_local_finalize_destination(
+            final_path,
+            self.overwrite_policy,
+            &self.remote,
+            &self.local,
+        )
+        .await
+        {
+            self.abort(true, remote_file).await?;
+            return Err(err);
+        }
 
         match tokio::fs::rename(&self.partial_path, final_path).await {
             Ok(()) => {
@@ -765,6 +807,74 @@ async fn open_exclusive_local_file(path: &Path) -> std::io::Result<tokio::fs::Fi
     options.open(path).await
 }
 
+async fn prepare_remote_finalize_destination(
+    client: &SftpClient<'_>,
+    final_path: &str,
+    overwrite_policy: TransferOverwritePolicy,
+    local: &str,
+    remote: &str,
+) -> Result<(), SftpError> {
+    let exists = remote_path_exists(client, final_path).await?;
+    if !exists {
+        return Ok(());
+    }
+
+    match overwrite_policy {
+        TransferOverwritePolicy::FailIfExists => Err(SftpError::UploadFailed {
+            local: local.to_string(),
+            remote: remote.to_string(),
+            message: TransferOverwritePolicy::destination_exists_message(final_path),
+        }),
+        TransferOverwritePolicy::Replace => client.delete(final_path).await,
+    }
+}
+
+async fn prepare_local_finalize_destination(
+    final_path: &Path,
+    overwrite_policy: TransferOverwritePolicy,
+    remote: &str,
+    local: &str,
+) -> Result<(), SftpError> {
+    match tokio::fs::symlink_metadata(final_path).await {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(SftpError::DownloadFailed {
+            remote: remote.to_string(),
+            local: local.to_string(),
+            message: format!(
+                "destination '{}' is a symlink and cannot be replaced safely",
+                final_path.display()
+            ),
+        }),
+        Ok(_) => match overwrite_policy {
+            TransferOverwritePolicy::FailIfExists => Err(SftpError::DownloadFailed {
+                remote: remote.to_string(),
+                local: local.to_string(),
+                message: TransferOverwritePolicy::destination_exists_message(
+                    &final_path.display().to_string(),
+                ),
+            }),
+            TransferOverwritePolicy::Replace => Ok(()),
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(SftpError::DownloadFailed {
+            remote: remote.to_string(),
+            local: local.to_string(),
+            message: err.to_string(),
+        }),
+    }
+}
+
+async fn remote_path_exists(client: &SftpClient<'_>, path: &str) -> Result<bool, SftpError> {
+    match client.sftp().metadata(path).await {
+        Ok(_) => Ok(true),
+        Err(err) if is_remote_no_such_file_error(&err) => Ok(false),
+        Err(err) => Err(SftpError::UploadFailed {
+            local: String::new(),
+            remote: path.to_string(),
+            message: err.to_string(),
+        }),
+    }
+}
+
 fn is_remote_file_exists_error(err: &SftpClientError) -> bool {
     match err {
         SftpClientError::Status(status) => {
@@ -774,6 +884,20 @@ fn is_remote_file_exists_error(err: &SftpClientError) -> bool {
         SftpClientError::IO(message) => {
             let message = message.to_lowercase();
             message.contains("file exists") || message.contains("already exists")
+        }
+        _ => false,
+    }
+}
+
+fn is_remote_no_such_file_error(err: &SftpClientError) -> bool {
+    match err {
+        SftpClientError::Status(status) => {
+            let message = status.error_message.to_lowercase();
+            message.contains("no such file") || message.contains("not found")
+        }
+        SftpClientError::IO(message) => {
+            let message = message.to_lowercase();
+            message.contains("no such file") || message.contains("not found")
         }
         _ => false,
     }
@@ -826,11 +950,13 @@ mod tests {
     use super::{
         create_exclusive_local_partial, is_mkdir_already_exists_message, normalize_remote_path,
         open_exclusive_local_file, parent_remote_path, partial_file_name,
-        partial_local_path_for_suffix, partial_remote_path_for_suffix, random_partial_suffix,
+        partial_local_path_for_suffix, partial_remote_path_for_suffix,
+        prepare_local_finalize_destination, random_partial_suffix,
         SftpClient,
     };
     use crate::error::SftpError;
     use crate::sftp::test_server::{list_partial_paths, TestSftpServer};
+    use crate::transfer::TransferOverwritePolicy;
 
     #[test]
     fn parent_remote_path_returns_parent_directory() {
@@ -908,6 +1034,71 @@ mod tests {
 
         let err = open_exclusive_local_file(&link).await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+    }
+
+    #[tokio::test]
+    async fn finalize_local_destination_rejects_existing_file_when_policy_is_fail_if_exists() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let destination = temp_dir.path().join("final.txt");
+        std::fs::write(&destination, b"existing").unwrap();
+
+        let err = prepare_local_finalize_destination(
+            &destination,
+            TransferOverwritePolicy::FailIfExists,
+            "/remote/file.txt",
+            destination.display().to_string().as_str(),
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            crate::error::SftpError::DownloadFailed { message, .. } => {
+                assert!(message.contains("already exists and overwrite is disabled"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn finalize_local_destination_allows_replace_when_file_exists() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let destination = temp_dir.path().join("final.txt");
+        std::fs::write(&destination, b"existing").unwrap();
+
+        prepare_local_finalize_destination(
+            &destination,
+            TransferOverwritePolicy::Replace,
+            "/remote/file.txt",
+            destination.display().to_string().as_str(),
+        )
+        .await
+        .expect("replace policy should allow existing destination");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn finalize_local_destination_rejects_symlink_destination() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let target = temp_dir.path().join("target.txt");
+        std::fs::write(&target, b"secret").unwrap();
+        let link = temp_dir.path().join("final.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = prepare_local_finalize_destination(
+            &link,
+            TransferOverwritePolicy::Replace,
+            "/remote/file.txt",
+            link.display().to_string().as_str(),
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            crate::error::SftpError::DownloadFailed { message, .. } => {
+                assert!(message.contains("symlink"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

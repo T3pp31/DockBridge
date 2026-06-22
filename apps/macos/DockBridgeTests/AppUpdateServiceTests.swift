@@ -22,15 +22,19 @@ private struct MockURLSession: URLSessionDataProviding {
 }
 
 final class AppUpdateServiceTests: XCTestCase {
+    private let validDownloadURL =
+        "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg"
+    private let releasePageURL = "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0"
+
     func testCheckForUpdateReturnsInfoWhenNewerVersionAvailable() async throws {
         let json = """
         {
           "tag_name": "v0.2.0",
-          "html_url": "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0",
+          "html_url": "\(releasePageURL)",
           "assets": [
             {
               "name": "DockBridge-0.2.0-macOS.dmg",
-              "browser_download_url": "https://example.com/DockBridge-0.2.0-macOS.dmg"
+              "browser_download_url": "\(validDownloadURL)"
             }
           ]
         }
@@ -40,14 +44,8 @@ final class AppUpdateServiceTests: XCTestCase {
         let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
 
         XCTAssertEqual(update?.version, "0.2.0")
-        XCTAssertEqual(
-            update?.downloadURL.absoluteString,
-            "https://example.com/DockBridge-0.2.0-macOS.dmg"
-        )
-        XCTAssertEqual(
-            update?.releasePageURL.absoluteString,
-            "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0"
-        )
+        XCTAssertEqual(update?.downloadURL.absoluteString, validDownloadURL)
+        XCTAssertEqual(update?.releasePageURL.absoluteString, releasePageURL)
     }
 
     func testCheckForUpdateReturnsNilWhenCurrentVersionIsLatest() async throws {
@@ -69,11 +67,11 @@ final class AppUpdateServiceTests: XCTestCase {
         let json = """
         {
           "tag_name": "v0.2.0",
-          "html_url": "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0",
+          "html_url": "\(releasePageURL)",
           "assets": [
             {
               "name": "DockBridge-0.2.0-macOS.dmg",
-              "browser_download_url": "https://example.com/DockBridge-0.2.0-macOS.dmg"
+              "browser_download_url": "\(validDownloadURL)"
             }
           ]
         }
@@ -89,7 +87,7 @@ final class AppUpdateServiceTests: XCTestCase {
         let json = """
         {
           "tag_name": "v0.2.0",
-          "html_url": "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0",
+          "html_url": "\(releasePageURL)",
           "assets": []
         }
         """.data(using: .utf8)!
@@ -97,10 +95,129 @@ final class AppUpdateServiceTests: XCTestCase {
         let service = AppUpdateService(session: MockURLSession(statusCode: 200, data: json))
         let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
 
-        XCTAssertEqual(
-            update?.downloadURL.absoluteString,
-            "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0"
-        )
+        XCTAssertEqual(update?.downloadURL.absoluteString, releasePageURL)
+    }
+
+    func testCheckForUpdateRejectsUntrustedDownloadURLAndFallsBackToReleasePage() async throws {
+        let json = """
+        {
+          "tag_name": "v0.2.0",
+          "html_url": "\(releasePageURL)",
+          "assets": [
+            {
+              "name": "DockBridge-0.2.0-macOS.dmg",
+              "browser_download_url": "https://example.com/DockBridge-0.2.0-macOS.dmg"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let service = AppUpdateService(session: MockURLSession(statusCode: 200, data: json))
+        let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+
+        XCTAssertEqual(update?.downloadURL.absoluteString, releasePageURL)
+    }
+
+    func testCheckForUpdateRejectsHTTPScheme() async throws {
+        let json = """
+        {
+          "tag_name": "v0.2.0",
+          "html_url": "\(releasePageURL)",
+          "assets": [
+            {
+              "name": "DockBridge-0.2.0-macOS.dmg",
+              "browser_download_url": "http://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let service = AppUpdateService(session: MockURLSession(statusCode: 200, data: json))
+        let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+
+        XCTAssertEqual(update?.downloadURL.absoluteString, releasePageURL)
+    }
+
+    func testCheckForUpdateRejectsUnexpectedAssetName() async throws {
+        let json = """
+        {
+          "tag_name": "v0.2.0",
+          "html_url": "\(releasePageURL)",
+          "assets": [
+            {
+              "name": "DockBridge-0.2.0-macOS-evil.dmg",
+              "browser_download_url": "\(validDownloadURL)"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let service = AppUpdateService(session: MockURLSession(statusCode: 200, data: json))
+        let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+
+        XCTAssertEqual(update?.downloadURL.absoluteString, releasePageURL)
+    }
+
+    func testCheckForUpdateAcceptsValidGitHubReleaseDownloadURL() async throws {
+        let json = """
+        {
+          "tag_name": "v0.2.0",
+          "html_url": "\(releasePageURL)",
+          "assets": [
+            {
+              "name": "DockBridge-0.2.0-macOS.dmg",
+              "browser_download_url": "\(validDownloadURL)"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let service = AppUpdateService(session: MockURLSession(statusCode: 200, data: json))
+        let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+
+        XCTAssertEqual(update?.downloadURL.absoluteString, validDownloadURL)
+    }
+
+    func testCheckForUpdateAcceptsObjectsGitHubusercontentURL() async throws {
+        let objectsURL =
+            "https://objects.githubusercontent.com/github-production-release-asset-2e65be/123/DockBridge-0.2.0-macOS.dmg"
+        let json = """
+        {
+          "tag_name": "v0.2.0",
+          "html_url": "\(releasePageURL)",
+          "assets": [
+            {
+              "name": "DockBridge-0.2.0-macOS.dmg",
+              "browser_download_url": "\(objectsURL)"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let service = AppUpdateService(session: MockURLSession(statusCode: 200, data: json))
+        let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+
+        XCTAssertEqual(update?.downloadURL.absoluteString, objectsURL)
+    }
+
+    func testCheckForUpdateReturnsNilWhenBothURLsUntrusted() async throws {
+        let json = """
+        {
+          "tag_name": "v0.2.0",
+          "html_url": "https://example.com/releases/tag/v0.2.0",
+          "assets": [
+            {
+              "name": "DockBridge-0.2.0-macOS.dmg",
+              "browser_download_url": "https://example.com/DockBridge-0.2.0-macOS.dmg"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let service = AppUpdateService(session: MockURLSession(statusCode: 200, data: json))
+        let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+
+        XCTAssertNil(update)
     }
 
     func testCheckForUpdateThrowsOnInvalidResponse() async {

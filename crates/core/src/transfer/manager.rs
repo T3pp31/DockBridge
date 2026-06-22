@@ -10,6 +10,7 @@ use crate::sftp::{
     normalize_remote_path, walk_local_directory, walk_remote_directory, SftpClient,
 };
 use crate::ssh::SshSession;
+use crate::transfer::TransferOverwritePolicy;
 
 /// Direction of a file transfer task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -467,6 +468,7 @@ impl TransferManager {
                     local_path,
                     remote_path,
                     self.chunk_size,
+                    TransferOverwritePolicy::default(),
                     || self.is_cancelled(task_id),
                     |transferred| self.update_task_progress(task_id, transferred),
                 )
@@ -532,6 +534,7 @@ impl TransferManager {
                     remote_path,
                     local_path,
                     self.chunk_size,
+                    TransferOverwritePolicy::default(),
                     || self.is_cancelled(task_id),
                     |transferred| self.update_task_progress(task_id, transferred),
                 )
@@ -595,6 +598,7 @@ pub(crate) fn is_non_retryable_transfer_error(message: &str) -> bool {
         || lower.contains("permission denied")
         || lower.contains("failure")
         || lower.contains("no such file")
+        || lower.contains("already exists and overwrite is disabled")
         || lower.contains("failed to create directory")
 }
 
@@ -735,6 +739,9 @@ mod tests {
         ));
         assert!(is_non_retryable_transfer_error(
             "failed to create directory '/home/demo': Permission denied"
+        ));
+        assert!(is_non_retryable_transfer_error(
+            "failed to upload '/a' to '/b': destination '/b' already exists and overwrite is disabled"
         ));
     }
 

@@ -1,5 +1,9 @@
 #!/bin/bash
-# DockBridge セットアップ: Applications にコピーし、起動ブロックを解除して起動します。
+# DEV ONLY — do not ship in release DMGs.
+#
+# Installs an unsigned local build, removes quarantine attributes, and launches
+# the app. This bypasses Gatekeeper download protection and must not be used for
+# public distribution. Release builds are Developer ID signed and notarized.
 
 set -euo pipefail
 

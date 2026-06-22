@@ -55,7 +55,7 @@ This is also included in the full E2E suite:
 
 Cancel is checked between read/write chunks, so large transfers can be interrupted at chunk boundaries (default chunk size: 256 KiB).
 
-When cancelling an upload that would overwrite an existing remote file, the original remote file is preserved. Transfers write to a temporary `.dockbridge-<timestamp>.partial` file in the same directory and atomically rename it on success; cancel removes only the partial file.
+When cancelling an upload that would overwrite an existing remote file, the original remote file is preserved. Transfers write to a temporary `.dockbridge-<random-hex>.partial` file in the same directory and atomically rename it on success; cancel removes only the partial file. The default overwrite policy replaces an existing destination after a successful transfer.
 
 If cancel succeeds but partial-file cleanup fails, the Transfer Queue shows **Failed** with a message that a partial file may remain on the server or locally. Remove any leftover `.dockbridge-*.partial` files manually if needed.
 

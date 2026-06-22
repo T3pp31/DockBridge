@@ -62,6 +62,8 @@ fi
 DERIVED_DATA="${DERIVED_DATA:-${ROOT}/.derivedData/Release}"
 mkdir -p "$DERIVED_DATA"
 
+SIGN_AND_NOTARIZE="${SIGN_AND_NOTARIZE:-false}"
+
 echo "Building macOS app (Release, archs: ${RELEASE_ARCHS})..."
 export DOCKBRIDGE_SKIP_HOST_BUILD=1
 (
@@ -86,10 +88,9 @@ if [[ ! -d "$APP_PATH" ]]; then
   exit 1
 fi
 
-if [[ "${SIGN_AND_NOTARIZE:-}" == "true" ]]; then
-  echo "SIGN_AND_NOTARIZE=true is set. Signing and notarization are planned for v1.0 and not implemented yet." >&2
-  echo "See docs/security.md#notarization-planned-for-v10" >&2
-  exit 1
+if [[ "$SIGN_AND_NOTARIZE" == "true" ]]; then
+  echo "Signing and notarizing release app bundle..."
+  "${ROOT}/scripts/sign-and-notarize-macos.sh" "$APP_PATH"
 fi
 
 mkdir -p "$DIST_DIR"
@@ -101,8 +102,6 @@ trap 'rm -rf "$STAGING_DIR"' EXIT
 echo "Preparing DMG staging directory..."
 ditto "$APP_PATH" "${STAGING_DIR}/${APP_NAME}.app"
 ln -s /Applications "${STAGING_DIR}/Applications"
-cp "${ROOT}/scripts/dmg-install-dockbridge.command" "${STAGING_DIR}/DockBridgeをインストール.command"
-chmod +x "${STAGING_DIR}/DockBridgeをインストール.command"
 
 echo "Creating DMG: ${DMG_PATH}"
 hdiutil create \

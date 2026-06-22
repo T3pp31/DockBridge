@@ -54,12 +54,19 @@ final class AppUpdateService: @unchecked Sendable {
             return nil
         }
 
-        let downloadURL = dmgDownloadURL(from: release) ?? release.htmlURL
+        let downloadURL = dmgDownloadURL(from: release, version: latestVersion)
+            ?? validatedReleasePageURL(release.htmlURL)
+
+        guard let downloadURL else {
+            return nil
+        }
+
+        let releasePageURL = validatedReleasePageURL(release.htmlURL) ?? downloadURL
 
         return AppUpdateInfo(
             version: latestVersion,
             downloadURL: downloadURL,
-            releasePageURL: release.htmlURL
+            releasePageURL: releasePageURL
         )
     }
 
@@ -76,9 +83,44 @@ final class AppUpdateService: @unchecked Sendable {
         return try JSONDecoder().decode(GitHubReleaseResponse.self, from: data)
     }
 
-    private func dmgDownloadURL(from release: GitHubReleaseResponse) -> URL? {
-        release.assets
-            .first { $0.name.hasSuffix(AppUpdateConfig.dmgSuffix) }?
-            .browserDownloadURL
+    private func dmgDownloadURL(from release: GitHubReleaseResponse, version: String) -> URL? {
+        let expectedAssetName = AppUpdateConfig.expectedAssetName(for: version)
+        guard let asset = release.assets.first(where: { $0.name == expectedAssetName }) else {
+            return nil
+        }
+        return validatedDownloadURL(asset.browserDownloadURL, expectedAssetName: expectedAssetName)
+    }
+
+    private func validatedDownloadURL(_ url: URL, expectedAssetName: String) -> URL? {
+        guard url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased(),
+              AppUpdateConfig.allowedDownloadHosts.contains(host) else {
+            return nil
+        }
+
+        switch host {
+        case "github.com":
+            guard url.path.hasPrefix(AppUpdateConfig.githubReleaseDownloadPathPrefix),
+                  url.lastPathComponent == expectedAssetName else {
+                return nil
+            }
+        case "objects.githubusercontent.com":
+            guard url.lastPathComponent == expectedAssetName else {
+                return nil
+            }
+        default:
+            return nil
+        }
+
+        return url
+    }
+
+    private func validatedReleasePageURL(_ url: URL) -> URL? {
+        guard url.scheme?.lowercased() == "https",
+              url.host?.lowercased() == "github.com",
+              url.path.hasPrefix(AppUpdateConfig.githubReleasePagePathPrefix) else {
+            return nil
+        }
+        return url
     }
 }
