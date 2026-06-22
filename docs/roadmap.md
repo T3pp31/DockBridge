@@ -18,6 +18,7 @@
 - Drag and drop
 - chmod, hidden files, symlinks
 - Encrypted connection-profile storage (AES-GCM envelope + Keychain master key) — implemented; see [security.md](security.md#connection-profiles-profilesjson)
+- Developer ID signing and notarization for release DMGs — implemented; see [security.md](security.md#release-signing-pipeline)
 
 ## v0.3
 
@@ -26,7 +27,6 @@
 
 ## 1.0
 
-- Developer ID signing + Notarization
 - Stable SFTP feature set
 
 ## After 1.0
