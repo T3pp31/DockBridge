@@ -99,9 +99,12 @@ struct MainView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(config: settingsConfig) { config in
                 AppSettingsService.shared.saveConfig(config)
-                viewModel.applyDefaultLocalConfig(config)
                 showSettings = false
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .appConfigDidChange)) { notification in
+            guard let config = notification.object as? AppConfig else { return }
+            viewModel.applyDefaultLocalConfig(config)
         }
         .sheet(isPresented: Binding(
             get: { bridge.pendingHostKeyChallenge != nil },
