@@ -25,8 +25,37 @@ Policy B (v0.1): commit `DockBridge/Generated/DockBridgeUniffi.swift` only. Do n
 
 ## Run
 
-1. Build the Rust library (above).
-2. Open the Xcode project and press Cmd+R.
+1. Open the Xcode project and press Cmd+R.
+
+The DockBridge target **preBuild** phase runs `./scripts/build-rust.sh` and `./scripts/generate-uniffi.sh` on every build, so a normal Xcode build refreshes the Rust static library and local generated headers. After editing `crates/core` or `crates/uniffi`, run both scripts manually from the repository root (see [Build Rust + Swift bindings](#build-rust--swift-bindings)) before building or committing—this is faster to debug and ensures binding diffs are visible.
+
+### When the Rust API changes
+
+If you add, remove, or rename UniFFI exports:
+
+1. `./scripts/build-rust.sh`
+2. `./scripts/generate-uniffi.sh`
+3. Review and commit `DockBridge/Generated/DockBridgeUniffi.swift` (Policy B: only this file under `Generated/` is committed).
+4. Build or run in Xcode.
+
+CI runs the same generation step and fails if `DockBridgeUniffi.swift` is out of date.
+
+## Troubleshooting
+
+**Linker error: `Undefined symbol: _uniffi_dockbridge_uniffi_fn_...`**
+
+Bindings and `target/release/libdockbridge_uniffi.a` are mismatched. From the repo root:
+
+```bash
+./scripts/build-rust.sh
+./scripts/generate-uniffi.sh
+```
+
+Clean the Xcode build folder (Product → Clean Build Folder), then rebuild. If the UniFFI API changed, commit the updated `DockBridgeUniffi.swift`.
+
+**UniFFI checksum mismatch**
+
+Regenerate bindings and rebuild the static library with the commands above, confirm Xcode links `target/release/libdockbridge_uniffi.a` (via `-force_load`), clean, and rebuild.
 
 ## Verify transfer cancel (Issue #3)
 
