@@ -9,6 +9,7 @@ struct ConnectionFormView: View {
     @State private var password = SensitiveString()
     @State private var passphrase = SensitiveString()
     @State private var saveSecrets = true
+    @State private var pickerErrorMessage: String?
 
     let onSave: (ConnectionProfile, String?, String?) -> Void
 
@@ -75,6 +76,14 @@ struct ConnectionFormView: View {
                     .disabled(!canSave)
             }
         }
+        .alert("File Selection", isPresented: Binding(
+            get: { pickerErrorMessage != nil },
+            set: { if !$0 { pickerErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(pickerErrorMessage ?? "")
+        }
     }
 
     private var canSave: Bool {
@@ -104,12 +113,18 @@ struct ConnectionFormView: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [UTType.data, UTType.plainText]
-        if panel.runModal() == .OK, let url = panel.url {
-            profile.privateKeyPath = url.path
-            profile.privateKeyBookmark = try? SecurityScopedBookmarkService.shared.createBookmark(
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            profile.privateKeyBookmark = try SecurityScopedBookmarkService.shared.createBookmark(
                 for: url,
                 readOnly: true
             )
+            profile.privateKeyPath = url.path
+        } catch {
+            profile.privateKeyPath = nil
+            profile.privateKeyBookmark = nil
+            pickerErrorMessage = "\(error.localizedDescription) Use Browse… to try again."
         }
     }
 }
