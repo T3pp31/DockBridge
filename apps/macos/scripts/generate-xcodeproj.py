@@ -8,8 +8,18 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = ROOT.parent.parent
+RELEASE_TOML = REPO_ROOT / "config" / "release.toml"
 PROJECT_DIR = ROOT / "DockBridge.xcodeproj"
 SRC_ROOT = ROOT / "DockBridge"
+
+
+def read_release_value(key: str) -> str:
+    for line in RELEASE_TOML.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped.startswith(f"{key} ="):
+            return stripped.split('"')[1]
+    raise KeyError(f"Missing {key!r} in {RELEASE_TOML}")
 
 
 def uid(seed: str) -> str:
@@ -315,7 +325,7 @@ target_settings = {
         "$(PROJECT_DIR)/../../target/x86_64-apple-darwin/debug",
         "$(PROJECT_DIR)/../../target/x86_64-apple-darwin/release",
     ),
-    "MARKETING_VERSION": "0.1.0",
+    "MARKETING_VERSION": read_release_value("version"),
     "OTHER_LDFLAGS": (
         "$(inherited)",
         "-ldockbridge_uniffi",
