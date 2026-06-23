@@ -44,6 +44,8 @@ The `--password` flag is for local development and testing only. Passwords on th
 
 To remove `--password` entirely, build with `--features disable-cli-password` on `dockbridge-cli`.
 
+### macOS app (Rust + UniFFI)
+
 ```bash
 # Rust static lib + Swift bindings
 ./scripts/build-rust.sh
@@ -51,6 +53,40 @@ To remove `--password` entirely, build with `--features disable-cli-password` on
 ```
 
 Open `apps/macos/DockBridge.xcodeproj` in Xcode to build the macOS app.
+
+The DockBridge target runs a **preBuild** phase on every Xcode build (`alwaysOutOfDate = 1`) that executes `./scripts/build-rust.sh` and `./scripts/generate-uniffi.sh` from the repository root. The app links `target/release/libdockbridge_uniffi.a` with `-force_load`.
+
+#### After changing Rust or UniFFI (`crates/core`, `crates/uniffi`)
+
+1. From the repository root, rebuild the static library and regenerate Swift bindings:
+
+   ```bash
+   ./scripts/build-rust.sh
+   ./scripts/generate-uniffi.sh
+   ```
+
+2. If you changed the UniFFI surface (new or renamed functions, types, or errors), commit the updated `apps/macos/DockBridge/Generated/DockBridgeUniffi.swift`. CI verifies that this file matches the generated output.
+
+3. Build or run the app in Xcode (Cmd+B / Cmd+R). The preBuild phase also runs the scripts, but running them manually first avoids stale artifacts and makes binding diffs easier to review before committing.
+
+See `apps/macos/README.md` for app-specific details.
+
+#### Troubleshooting (macOS app)
+
+**Linker error: `Undefined symbol: _uniffi_dockbridge_uniffi_fn_...`**
+
+The Swift bindings and the static library are out of sync. Rebuild from the repository root:
+
+```bash
+./scripts/build-rust.sh
+./scripts/generate-uniffi.sh
+```
+
+Then clean the Xcode build folder (Product → Clean Build Folder) and rebuild. If you changed the UniFFI API, regenerate `DockBridgeUniffi.swift` and commit it.
+
+**UniFFI checksum mismatch at runtime**
+
+Swift bindings were generated from a different library than the one linked into the app. Run both scripts above, ensure `target/release/libdockbridge_uniffi.a` is fresh, clean the Xcode build folder, and rebuild.
 
 ## Project layout
 
