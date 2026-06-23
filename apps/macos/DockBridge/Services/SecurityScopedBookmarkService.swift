@@ -159,6 +159,30 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
     }
 }
 
+enum DefaultLocalPathResolution {
+    case bookmark(URL)
+    case homeWithoutBookmark(URL)
+    case bookmarkFailed(homeURL: URL, error: Error)
+
+    var url: URL {
+        switch self {
+        case .bookmark(let url), .homeWithoutBookmark(let url):
+            return url
+        case .bookmarkFailed(let homeURL, _):
+            return homeURL
+        }
+    }
+
+    var accessURL: URL? {
+        switch self {
+        case .bookmark(let url):
+            return url
+        case .homeWithoutBookmark, .bookmarkFailed:
+            return nil
+        }
+    }
+}
+
 enum DefaultLocalPathResolver {
     static func containerHomeURL() -> URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -167,11 +191,22 @@ enum DefaultLocalPathResolver {
     static func resolve(
         config: AppConfig,
         bookmarkService: SecurityScopedBookmarkService
-    ) -> URL {
-        if let bookmark = config.defaultLocalBookmark,
-           let url = try? bookmarkService.resolveBookmark(bookmark) {
-            return url
+    ) -> DefaultLocalPathResolution {
+        let homeURL = containerHomeURL()
+        guard let bookmark = config.defaultLocalBookmark else {
+            return .homeWithoutBookmark(homeURL)
         }
-        return containerHomeURL()
+        do {
+            let url = try bookmarkService.resolveBookmark(bookmark)
+            return .bookmark(url)
+        } catch {
+            return .bookmarkFailed(homeURL: homeURL, error: error)
+        }
+    }
+
+    static func userMessage(for _: Error) -> String {
+        """
+        デフォルトのローカルフォルダへのアクセス権がありません。設定を開き、「Choose…」からフォルダを再選択してください。
+        """
     }
 }
