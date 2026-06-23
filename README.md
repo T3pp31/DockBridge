@@ -29,6 +29,7 @@ cargo build --release
 
 # CLI (development)
 cargo run -p dockbridge-cli -- list --help
+```
 
 ### CLI password authentication
 
@@ -43,6 +44,7 @@ The `--password` flag is for local development and testing only. Passwords on th
 
 To remove `--password` entirely, build with `--features disable-cli-password` on `dockbridge-cli`.
 
+```bash
 # Rust static lib + Swift bindings
 ./scripts/build-rust.sh
 ./scripts/generate-uniffi.sh
