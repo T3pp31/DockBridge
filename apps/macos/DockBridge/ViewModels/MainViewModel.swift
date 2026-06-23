@@ -49,9 +49,12 @@ final class MainViewModel: ObservableObject {
         self.connectionList = connectionList
         self.transferQueue = transferQueue
         let config = settings.loadConfig()
-        let resolved = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
-        self.defaultLocalAccessURL = config.defaultLocalBookmark == nil ? nil : resolved
-        self.localPath = resolved
+        let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
+        self.defaultLocalAccessURL = resolution.accessURL
+        self.localPath = resolution.url
+        if case .bookmarkFailed(_, let error) = resolution {
+            self.errorMessage = DefaultLocalPathResolver.userMessage(for: error)
+        }
     }
 
     func applyDefaultLocalConfig(_ config: AppConfig) {
@@ -60,11 +63,12 @@ final class MainViewModel: ObservableObject {
             defaultLocalAccessURL = nil
         }
 
-        let resolved = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
-        if config.defaultLocalBookmark != nil {
-            defaultLocalAccessURL = resolved
+        let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
+        defaultLocalAccessURL = resolution.accessURL
+        localPath = resolution.url
+        if case .bookmarkFailed(_, let error) = resolution {
+            errorMessage = DefaultLocalPathResolver.userMessage(for: error)
         }
-        localPath = resolved
         selectedLocalItemID = nil
         reloadLocal()
     }

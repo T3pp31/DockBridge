@@ -142,10 +142,49 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
             failConnectOnOpensshMergeError: true
         )
 
-        let resolved = DefaultLocalPathResolver.resolve(config: config, bookmarkService: service)
+        let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: service)
+        guard case .homeWithoutBookmark(let url) = resolution else {
+            XCTFail("Expected homeWithoutBookmark, got \(resolution)")
+            return
+        }
         XCTAssertEqual(
-            resolved.standardizedFileURL.path,
+            url.standardizedFileURL.path,
             DefaultLocalPathResolver.containerHomeURL().standardizedFileURL.path
+        )
+    }
+
+    func testDefaultLocalPathResolverReportsBookmarkFailure() {
+        let config = AppConfig(
+            connectionTimeoutSecs: 30,
+            sessionHealthCheckIntervalSecs: 10,
+            transferRetryCount: 3,
+            transferChunkSizeBytes: 262_144,
+            defaultLocalPath: "/tmp/unreachable-without-bookmark",
+            defaultLocalBookmark: Data([0, 1, 2]),
+            confirmBeforeDelete: true,
+            showHiddenFiles: false,
+            mergeOpensshKnownHostsOnConnect: true,
+            opensshKnownHostsPath: "~/.ssh/known_hosts",
+            opensshKnownHostsBookmark: nil,
+            knownHostsStrictMode: true,
+            failConnectOnOpensshMergeError: true
+        )
+
+        let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: service)
+        guard case .bookmarkFailed(let homeURL, let error) = resolution else {
+            XCTFail("Expected bookmarkFailed, got \(resolution)")
+            return
+        }
+        XCTAssertEqual(
+            homeURL.standardizedFileURL.path,
+            DefaultLocalPathResolver.containerHomeURL().standardizedFileURL.path
+        )
+        XCTAssertNotNil(error)
+        XCTAssertEqual(
+            DefaultLocalPathResolver.userMessage(for: error),
+            """
+            デフォルトのローカルフォルダへのアクセス権がありません。設定を開き、「Choose…」からフォルダを再選択してください。
+            """
         )
     }
 }
