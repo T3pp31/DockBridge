@@ -51,4 +51,19 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         XCTAssertTrue(message.contains("リモート"))
         XCTAssertTrue(message.contains("保存先"))
     }
+
+    func testHostKeyRejectedErrorMessageIsUserFriendly() {
+        let message = DockBridgeError.friendlyMessage(
+            for: "host key rejected by user for example.com:22"
+        )
+        XCTAssertEqual(message, "ホスト鍵の承認が拒否されたため、接続を中止しました。")
+    }
+
+    func testAuthenticationRejectedErrorIsNotMappedToHostKeyMessage() {
+        let message = DockBridgeError.friendlyMessage(
+            for: "connection rejected: authentication failed for user 'demo'"
+        )
+        XCTAssertTrue(message.contains("ユーザー名") || message.contains("パスワード"))
+        XCTAssertFalse(message.contains("ホスト鍵"))
+    }
 }
