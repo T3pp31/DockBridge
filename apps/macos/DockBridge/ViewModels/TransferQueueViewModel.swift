@@ -46,7 +46,6 @@ final class TransferQueueViewModel: ObservableObject {
             tasks = fetched
             errorMessage = nil
         } catch {
-            tasks = []
             errorMessage = error.dockBridgeUserMessage
         }
     }
