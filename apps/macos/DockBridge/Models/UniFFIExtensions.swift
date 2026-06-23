@@ -36,7 +36,7 @@ extension DockBridgeError {
             return "サーバーの識別情報が前回と異なります。接続を中止し、サーバー管理者に確認してください。"
         }
 
-        if lowercased.contains("host key rejected") || lowercased.contains("rejected") {
+        if lowercased.contains("host key rejected") {
             return "ホスト鍵の承認が拒否されたため、接続を中止しました。"
         }
 
