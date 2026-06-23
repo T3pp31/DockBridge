@@ -205,6 +205,31 @@ final class HostKeyPromptVerificationTests: XCTestCase {
     }
 
     @MainActor
+    func testPrepareClientReflectsUpdatedSettingsOnReconnect() throws {
+        let defaults = UserDefaults(suiteName: "HostKeyPromptVerificationTests.\(UUID().uuidString)")!
+        defaults.set(30, forKey: AppSettingsKeys.connectionTimeoutSecs)
+        let settings = AppSettingsService(defaults: defaults)
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("config-reload-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        tempDirectory = directory
+
+        let knownHostsPath = directory.appendingPathComponent("store.json").path
+        let bridge = RustBridgeService(
+            settings: settings,
+            hostKeyStore: HostKeyStore(baseDirectory: directory)
+        )
+        try bridge.prepareClient()
+
+        defaults.set(90, forKey: AppSettingsKeys.connectionTimeoutSecs)
+        try bridge.prepareClient()
+
+        let record = settings.buildAppConfigRecord(knownHostsPath: knownHostsPath)
+        XCTAssertEqual(record.connectionTimeoutSecs, 90)
+    }
+
+    @MainActor
     private func waitForPendingHostKeyChallenge(
         on bridge: RustBridgeService,
         timeout: Duration = .seconds(1)

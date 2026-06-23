@@ -67,9 +67,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
         password: String?,
         passphrase: String?
     ) async throws {
-        if client == nil {
-            try prepareClient()
-        }
+        try prepareClient()
         guard let client else {
             throw DockBridgeError.Generic(message: "Rust client is not initialized.")
         }
@@ -270,6 +268,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
     private func clearConnectionState() {
         resetSessionFields()
         connectedProfileID = nil
+        client = nil
     }
 
     private func resetSessionFields() {
