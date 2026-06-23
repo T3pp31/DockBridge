@@ -32,6 +32,10 @@ enum AppSettingsKeys {
     static let skippedUpdateVersion = "skippedUpdateVersion"
 }
 
+extension Notification.Name {
+    static let appConfigDidChange = Notification.Name("DockBridgeAppConfigDidChange")
+}
+
 final class AppSettingsService: @unchecked Sendable {
     static let shared = AppSettingsService()
 
@@ -110,6 +114,7 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(config.opensshKnownHostsBookmark, forKey: AppSettingsKeys.opensshKnownHostsBookmark)
         defaults.set(config.knownHostsStrictMode, forKey: AppSettingsKeys.knownHostsStrictMode)
         defaults.set(config.failConnectOnOpensshMergeError, forKey: AppSettingsKeys.failConnectOnOpensshMergeError)
+        NotificationCenter.default.post(name: .appConfigDidChange, object: config)
     }
 
     func resolvedOpensshKnownHostsPath(for config: AppConfig) -> String {
