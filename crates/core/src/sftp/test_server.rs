@@ -26,6 +26,7 @@ pub struct FailureConfig {
     pub fail_remote_read: AtomicBool,
     pub fail_remote_close: AtomicBool,
     pub fail_remote_rename: AtomicBool,
+    pub fail_mkdir: AtomicBool,
 }
 
 pub struct TestSftpServer {
@@ -310,6 +311,27 @@ impl russh_sftp::server::Handler for SftpHandler {
             return Ok(Self::err_status(id, StatusCode::Failure, "close failed"));
         }
         self.handles.remove(&handle);
+        Ok(Self::ok_status(id))
+    }
+
+    async fn mkdir(
+        &mut self,
+        id: u32,
+        path: String,
+        _attrs: FileAttributes,
+    ) -> Result<Status, Self::Error> {
+        if self.failures.fail_mkdir.swap(false, Ordering::SeqCst) {
+            return Ok(Self::err_status(id, StatusCode::Failure, "Failure"));
+        }
+
+        let local = self.resolve(&path);
+        if local.exists() {
+            return Ok(Self::err_status(id, StatusCode::Failure, "already exists"));
+        }
+
+        fs::create_dir(&local)
+            .await
+            .map_err(|_| StatusCode::Failure)?;
         Ok(Self::ok_status(id))
     }
 
