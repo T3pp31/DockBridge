@@ -296,10 +296,15 @@ impl<'a> SftpClient<'a> {
             if let Err(SftpError::MkdirFailed { path, message }) =
                 self.create_directory(&current).await
             {
-                if is_mkdir_already_exists_message(&message) {
-                    continue;
+                // A generic SSH_FX_FAILURE may mean anything (permission denied,
+                // disk full, etc.). Only treat it as "already exists" when the
+                // path can be stat'd and is actually a directory.
+                match self.sftp().metadata(&current).await {
+                    Ok(metadata) if metadata.file_type().is_dir() => continue,
+                    Ok(_) | Err(_) => {
+                        return Err(SftpError::MkdirFailed { path, message });
+                    }
                 }
-                return Err(SftpError::MkdirFailed { path, message });
             }
         }
 
@@ -1033,11 +1038,6 @@ fn is_remote_no_such_file_error(err: &SftpClientError) -> bool {
     }
 }
 
-fn is_mkdir_already_exists_message(message: &str) -> bool {
-    let lower = message.to_lowercase();
-    lower.contains("already exists") || lower.contains("file exists") || lower.contains("failure")
-}
-
 fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
     let normalized = normalize_remote_path(remote_path)?;
     if normalized == "/" {
@@ -1066,10 +1066,10 @@ mod tests {
 
     use super::{
         append_cleanup_context, create_exclusive_local_partial, download_to_writer,
-        is_mkdir_already_exists_message, normalize_remote_path, open_exclusive_local_file,
-        parent_remote_path, partial_file_name, partial_local_path_for_suffix,
-        partial_remote_path_for_suffix, prepare_local_finalize_destination, random_partial_suffix,
-        upload_from_reader, PartialLocalTransfer, PartialRemoteTransfer, SftpClient,
+        normalize_remote_path, open_exclusive_local_file, parent_remote_path, partial_file_name,
+        partial_local_path_for_suffix, partial_remote_path_for_suffix,
+        prepare_local_finalize_destination, random_partial_suffix, upload_from_reader,
+        PartialLocalTransfer, PartialRemoteTransfer, SftpClient,
     };
     use crate::error::SftpError;
     use crate::sftp::test_server::{list_partial_paths, TestSftpServer};
@@ -1348,13 +1348,32 @@ mod tests {
         assert_eq!(parent_remote_path("/").unwrap(), None);
     }
 
-    #[test]
-    fn mkdir_already_exists_messages_are_recognized() {
-        assert!(is_mkdir_already_exists_message("Failure"));
-        assert!(is_mkdir_already_exists_message("File already exists"));
-        assert!(is_mkdir_already_exists_message("file exists"));
-        assert!(!is_mkdir_already_exists_message("Permission denied"));
-        assert!(!is_mkdir_already_exists_message("No such file"));
+    #[tokio::test]
+    async fn create_directory_all_succeeds_when_directory_exists() {
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/upload/file.txt", b"").await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        client.create_directory_all("/upload").await.unwrap();
+        assert!(server.remote_file_exists("/upload/file.txt"));
+    }
+
+    #[tokio::test]
+    async fn create_directory_all_fails_on_generic_failure_without_existing_directory() {
+        let server = TestSftpServer::start().await;
+        server.failures.fail_mkdir.store(true, Ordering::SeqCst);
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let err = client
+            .create_directory_all("/upload/nested/dir")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, SftpError::MkdirFailed { ref path, .. } if path == "/upload"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
