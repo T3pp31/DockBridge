@@ -13,7 +13,7 @@ SCP support may be considered after v1.0.
 Pre-built macOS releases are available on the [download site](https://t3pp31.github.io/DockBridge/) and [GitHub Releases](https://github.com/T3pp31/DockBridge/releases).
 
 - Requires macOS 15 Sequoia or later
-- Releases are Developer ID signed and notarized
+- Public releases are unsigned; on first launch, right-click `DockBridge.app` in Applications and choose **Open** (or allow it under **System Settings → Privacy & Security**). Developer ID signing and notarization are planned for v1.0.
 
 ## Requirements
 

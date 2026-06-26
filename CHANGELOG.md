@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
 - Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
 
 ## [0.1.6] - 2026-06-22
@@ -19,8 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Release DMGs are Developer ID signed and notarized; CI verifies Gatekeeper acceptance before publishing
-- Removed quarantine-removal install script from public release DMGs and the download site
+- Removed quarantine-removal install script from public release DMGs and the download site (release DMGs remain unsigned; see #136)
 
 ### Removed
 
