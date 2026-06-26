@@ -47,6 +47,7 @@ final class TransferQueueViewModel: ObservableObject {
     func refresh() async {
         guard bridge.isConnected else {
             tasks = []
+            errorMessage = nil
             progressSamples.removeAll()
             transferSpeeds.removeAll()
             return
@@ -56,6 +57,7 @@ final class TransferQueueViewModel: ObservableObject {
             let fetched = try await bridge.fetchTransferTasks()
             guard bridge.isConnected else {
                 tasks = []
+                errorMessage = nil
                 progressSamples.removeAll()
                 transferSpeeds.removeAll()
                 return
