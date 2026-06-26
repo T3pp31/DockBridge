@@ -53,6 +53,7 @@ struct ImportedPlainEntry {
     algorithm: String,
     public_key_openssh: Option<String>,
     aliases: Vec<HostAlias>,
+    excluded_aliases: Vec<HostAlias>,
     marker: Option<KnownHostMarker>,
 }
 
@@ -85,6 +86,8 @@ struct KnownHostEntry {
     algorithm: String,
     #[serde(default)]
     aliases: Vec<HostAlias>,
+    #[serde(default)]
+    excluded_aliases: Vec<HostAlias>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     public_key_openssh: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -164,7 +167,7 @@ impl KnownHostsManager {
 
         if !strict_mode
             && self
-                .find_trusted_entry_by_fingerprint(port, &actual)
+                .find_trusted_entry_by_fingerprint(host, port, &actual)
                 .is_some()
         {
             return HostKeyCheckResult::Trust;
@@ -238,6 +241,7 @@ impl KnownHostsManager {
             fingerprint_sha256: fingerprint,
             algorithm: format!("{:?}", key.algorithm()),
             aliases: Vec::new(),
+            excluded_aliases: Vec::new(),
             public_key_openssh,
             marker: None,
         };
@@ -316,7 +320,7 @@ impl KnownHostsManager {
                     }
                 }
                 HostPatterns::Patterns(_) => {
-                    let hosts = openssh_host_patterns(entry.host_patterns());
+                    let (hosts, excluded_aliases) = openssh_host_patterns(entry.host_patterns());
                     if hosts.is_empty() {
                         continue;
                     }
@@ -337,6 +341,7 @@ impl KnownHostsManager {
                         algorithm,
                         public_key_openssh,
                         aliases,
+                        excluded_aliases,
                         marker,
                     }) {
                         merged += 1;
@@ -379,6 +384,9 @@ impl KnownHostsManager {
             for alias in &entry.aliases {
                 host_patterns.push(openssh_host_pattern(&alias.host, alias.port));
             }
+            for excluded in &entry.excluded_aliases {
+                host_patterns.push(openssh_negated_host_pattern(&excluded.host, excluded.port));
+            }
 
             lines.push(format!(
                 "{} {}",
@@ -410,6 +418,7 @@ impl KnownHostsManager {
 
     fn find_trusted_entry_by_fingerprint(
         &self,
+        host: &str,
         port: u16,
         fingerprint: &str,
     ) -> Option<&KnownHostEntry> {
@@ -417,6 +426,7 @@ impl KnownHostsManager {
             entry.port == port
                 && entry.fingerprint_sha256 == fingerprint
                 && !entry_is_non_trusting_marker(entry.marker)
+                && !entry_is_excluded_for_host(entry, host, port)
         })
     }
 
@@ -482,6 +492,7 @@ impl KnownHostsManager {
             algorithm,
             public_key_openssh,
             aliases,
+            excluded_aliases,
             marker,
         } = imported;
 
@@ -502,6 +513,7 @@ impl KnownHostsManager {
                     fingerprint_sha256,
                     algorithm,
                     aliases,
+                    excluded_aliases,
                     public_key_openssh,
                     marker: Some(KnownHostMarker::Revoked),
                 },
@@ -526,6 +538,7 @@ impl KnownHostsManager {
                     fingerprint_sha256,
                     algorithm,
                     aliases,
+                    excluded_aliases,
                     public_key_openssh,
                     marker: Some(KnownHostMarker::CertAuthority),
                 },
@@ -550,6 +563,7 @@ impl KnownHostsManager {
                     entry.aliases.push(alias);
                 }
             }
+            merge_excluded_aliases(entry, &excluded_aliases);
 
             if entry.public_key_openssh.is_none() {
                 entry.public_key_openssh = public_key_openssh;
@@ -577,6 +591,7 @@ impl KnownHostsManager {
                     entry.aliases.push(alias);
                 }
             }
+            merge_excluded_aliases(entry, &excluded_aliases);
 
             if entry.public_key_openssh.is_none() {
                 entry.public_key_openssh = public_key_openssh;
@@ -593,6 +608,7 @@ impl KnownHostsManager {
                 fingerprint_sha256,
                 algorithm,
                 aliases,
+                excluded_aliases,
                 public_key_openssh,
                 marker: None,
             },
@@ -646,11 +662,34 @@ fn fingerprint_check(entry: &KnownHostEntry, actual: &str) -> HostKeyCheckResult
 }
 
 fn entry_matches_host(entry: &KnownHostEntry, host: &str, port: u16) -> bool {
+    if entry_is_excluded_for_host(entry, host, port) {
+        return false;
+    }
+
     entry.host == host && entry.port == port
         || entry
             .aliases
             .iter()
             .any(|alias| alias.host == host && alias.port == port)
+}
+
+fn entry_is_excluded_for_host(entry: &KnownHostEntry, host: &str, port: u16) -> bool {
+    entry
+        .excluded_aliases
+        .iter()
+        .any(|alias| alias.host == host && alias.port == port)
+}
+
+fn merge_excluded_aliases(entry: &mut KnownHostEntry, excluded: &[HostAlias]) {
+    for alias in excluded {
+        if !entry
+            .excluded_aliases
+            .iter()
+            .any(|existing| existing.host == alias.host && existing.port == alias.port)
+        {
+            entry.excluded_aliases.push(alias.clone());
+        }
+    }
 }
 
 fn entry_key(host: &str, port: u16) -> String {
@@ -696,29 +735,63 @@ fn openssh_host_pattern(host: &str, port: u16) -> String {
     }
 }
 
-fn openssh_host_patterns(patterns: &HostPatterns) -> Vec<(String, u16)> {
+fn openssh_host_patterns(patterns: &HostPatterns) -> (Vec<(String, u16)>, Vec<HostAlias>) {
     match patterns {
-        HostPatterns::HashedName { .. } => Vec::new(),
-        HostPatterns::Patterns(items) => items
-            .iter()
-            .filter_map(|pattern| parse_openssh_host_pattern(pattern))
-            .collect(),
+        HostPatterns::HashedName { .. } => (Vec::new(), Vec::new()),
+        HostPatterns::Patterns(items) => {
+            let mut positive = Vec::new();
+            let mut excluded = Vec::new();
+            for pattern in items {
+                let Some(parsed) = parse_openssh_host_pattern(pattern) else {
+                    continue;
+                };
+                if parsed.negated {
+                    excluded.push(HostAlias {
+                        host: parsed.host,
+                        port: parsed.port,
+                    });
+                } else {
+                    positive.push((parsed.host, parsed.port));
+                }
+            }
+            (positive, excluded)
+        }
     }
 }
 
-fn parse_openssh_host_pattern(pattern: &str) -> Option<(String, u16)> {
-    if pattern.starts_with('!') || pattern.starts_with("|1|") {
+struct ParsedOpenSshHostPattern {
+    host: String,
+    port: u16,
+    negated: bool,
+}
+
+fn parse_openssh_host_pattern(pattern: &str) -> Option<ParsedOpenSshHostPattern> {
+    let negated = pattern.starts_with('!');
+    let pattern = pattern.strip_prefix('!').unwrap_or(pattern);
+    if pattern.starts_with("|1|") {
         return None;
     }
 
-    if let Some(rest) = pattern.strip_prefix('[') {
+    let (host, port) = if let Some(rest) = pattern.strip_prefix('[') {
         if let Some((host, port_str)) = rest.split_once("]:") {
             let port = port_str.parse().ok()?;
-            return Some((host.to_string(), port));
+            (host.to_string(), port)
+        } else {
+            return None;
         }
-    }
+    } else {
+        (pattern.to_string(), 22)
+    };
 
-    Some((pattern.to_string(), 22))
+    Some(ParsedOpenSshHostPattern {
+        host,
+        port,
+        negated,
+    })
+}
+
+fn openssh_negated_host_pattern(host: &str, port: u16) -> String {
+    format!("!{}", openssh_host_pattern(host, port))
 }
 
 /// Computes an OpenSSH-style SHA256 fingerprint (`SHA256:base64...`).
@@ -1008,13 +1081,81 @@ mod tests {
 
     #[test]
     fn parse_openssh_host_pattern_handles_bracketed_port() {
+        let parsed = parse_openssh_host_pattern("[example.com]:2222").unwrap();
+        assert_eq!(parsed.host, "example.com");
+        assert_eq!(parsed.port, 2222);
+        assert!(!parsed.negated);
+
+        let parsed = parse_openssh_host_pattern("example.com").unwrap();
+        assert_eq!(parsed.host, "example.com");
+        assert_eq!(parsed.port, 22);
+        assert!(!parsed.negated);
+    }
+
+    #[test]
+    fn parse_openssh_host_pattern_handles_negated_hosts() {
+        let parsed = parse_openssh_host_pattern("!.bad.example.com").unwrap();
+        assert_eq!(parsed.host, ".bad.example.com");
+        assert_eq!(parsed.port, 22);
+        assert!(parsed.negated);
+
+        let parsed = parse_openssh_host_pattern("![bad.example.com]:2222").unwrap();
+        assert_eq!(parsed.host, "bad.example.com");
+        assert_eq!(parsed.port, 2222);
+        assert!(parsed.negated);
+    }
+
+    #[test]
+    fn import_openssh_honors_negated_host_patterns() {
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+
+        fs::write(
+            &openssh_path,
+            format!("bad.example.com,!bad.example.com {openssh_key}\n"),
+        )
+        .unwrap();
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
         assert_eq!(
-            parse_openssh_host_pattern("[example.com]:2222"),
-            Some(("example.com".to_string(), 2222))
+            manager.check_host_key("bad.example.com", 22, &key, false),
+            HostKeyCheckResult::Unknown
+        );
+    }
+
+    #[test]
+    fn import_openssh_exports_negated_host_patterns() {
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+
+        fs::write(
+            &openssh_path,
+            format!("example.com,!bad.example.com {openssh_key}\n"),
+        )
+        .unwrap();
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+        manager.export_openssh(&openssh_path).unwrap();
+
+        let exported = fs::read_to_string(&openssh_path).unwrap();
+        assert!(exported.contains("example.com"));
+        assert!(exported.contains("!bad.example.com"));
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
         );
         assert_eq!(
-            parse_openssh_host_pattern("example.com"),
-            Some(("example.com".to_string(), 22))
+            manager.check_host_key("bad.example.com", 22, &key, false),
+            HostKeyCheckResult::Unknown
         );
     }
 
