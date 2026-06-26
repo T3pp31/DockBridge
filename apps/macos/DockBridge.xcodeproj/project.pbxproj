@@ -80,6 +80,10 @@
 		V3R5C0MP4R4T0T3ST5BF1 /* VersionComparatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = V3R5C0MP4R4T0T3ST5RC1 /* VersionComparatorTests.swift */; };
 		APPUPD4T3S3RV1C3T2 /* AppUpdateServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPUPD4T3S3RV1C3T1 /* AppUpdateServiceTests.swift */; };
 		UPD4T3CH3CKV13WT3ST5BF1 /* UpdateCheckViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPD4T3CH3CKV13WT3ST5RC1 /* UpdateCheckViewModelTests.swift */; };
+		P4THN4V1G4T10NH15T0BF1 /* PathNavigationHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = P4THN4V1G4T10NH15T0RC1 /* PathNavigationHistory.swift */; };
+		F1L3TYP31C0N5W1FT3BF1 /* FileTypeIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1L3TYP31C0N5W1FT3RC1 /* FileTypeIcon.swift */; };
+		P4THBR34DCRUMBV13WBF1 /* PathBreadcrumbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = P4THBR34DCRUMBV13WRC1 /* PathBreadcrumbView.swift */; };
+		P4THN4V1H15T0RYT3STBF1 /* PathNavigationHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = P4THN4V1H15T0RYT3STRC1 /* PathNavigationHistoryTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -126,6 +130,10 @@
 		C0NN3CT10NL15TV13W0D3LT3STRC4 /* ConnectionListViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionListViewModelTests.swift; sourceTree = "<group>"; };
 		18293A4B5C6D7E8F90123456 /* KeychainServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainServiceTests.swift; sourceTree = "<group>"; };
 		S3NS1T1V3STR1NGT3ST5RC2 /* SensitiveStringTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensitiveStringTests.swift; sourceTree = "<group>"; };
+		P4THN4V1G4T10NH15T0RC1 /* PathNavigationHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathNavigationHistory.swift; sourceTree = "<group>"; };
+		F1L3TYP31C0N5W1FT3RC1 /* FileTypeIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTypeIcon.swift; sourceTree = "<group>"; };
+		P4THBR34DCRUMBV13WRC1 /* PathBreadcrumbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathBreadcrumbView.swift; sourceTree = "<group>"; };
+		P4THN4V1H15T0RYT3STRC1 /* PathNavigationHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathNavigationHistoryTests.swift; sourceTree = "<group>"; };
 		3B4C5D6E7F8091A2B3C4D5E6 /* KnownHostsErrorMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KnownHostsErrorMessageTests.swift; sourceTree = "<group>"; };
 		293A4B5C6D7E8F9012345678 /* DockBridgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DockBridgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F1D2R3A4G5P6A7Y8L9O0A1D3 /* FileDragPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDragPayload.swift; sourceTree = "<group>"; };
@@ -259,6 +267,7 @@
 				D2B8765D556D65748132CE54 /* ErrorAlert.swift */,
 				P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */,
 				P4N3P4THB4R5F1L3B4 /* PanePathBars.swift */,
+				P4THBR34DCRUMBV13WRC1 /* PathBreadcrumbView.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -304,6 +313,7 @@
 				1E7FDBA4ECAABE2550A535FE /* UniFFIExtensions.swift */,
 				B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */,
 				0A40063842C3BF02492D35D4 /* SensitiveString.swift */,
+				P4THN4V1G4T10NH15T0RC1 /* PathNavigationHistory.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -371,6 +381,7 @@
 				T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */,
 				W1ND0WL4Y0U7T1F2B4 /* WindowLayout.swift */,
 				W1ND0WM1NS1Z3M0D1F14 /* WindowMinSizeModifier.swift */,
+				F1L3TYP31C0N5W1FT3RC1 /* FileTypeIcon.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -414,6 +425,7 @@
 				S3NS1T1V3STR1NGT3ST5RC2 /* SensitiveStringTests.swift */,
 				UPD4T3CH3CKV13WT3ST5RC1 /* UpdateCheckViewModelTests.swift */,
 				V3R5C0MP4R4T0T3ST5RC1 /* VersionComparatorTests.swift */,
+				P4THN4V1H15T0RYT3STRC1 /* PathNavigationHistoryTests.swift */,
 			);
 			path = DockBridgeTests;
 			sourceTree = "<group>";
@@ -601,6 +613,9 @@
 				APPUPD4T3S3RV1C3SW1FT3BF1 /* AppUpdateService.swift in Sources */,
 				UPD4T3CH3CKV13WT3BF1 /* UpdateCheckViewModel.swift in Sources */,
 				UPD4T34V4BL3V13WT3BF1 /* UpdateAvailableView.swift in Sources */,
+				P4THN4V1G4T10NH15T0BF1 /* PathNavigationHistory.swift in Sources */,
+				F1L3TYP31C0N5W1FT3BF1 /* FileTypeIcon.swift in Sources */,
+				P4THBR34DCRUMBV13WBF1 /* PathBreadcrumbView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -628,6 +643,7 @@
 				S3NS1T1V3STR1NGT3ST5RC1 /* SensitiveStringTests.swift in Sources */,
 				UPD4T3CH3CKV13WT3ST5BF1 /* UpdateCheckViewModelTests.swift in Sources */,
 				V3R5C0MP4R4T0T3ST5BF1 /* VersionComparatorTests.swift in Sources */,
+				P4THN4V1H15T0RYT3STBF1 /* PathNavigationHistoryTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
