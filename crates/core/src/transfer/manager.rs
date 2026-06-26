@@ -386,55 +386,60 @@ impl TransferManager {
         let normalized = normalize_remote_path(&remote_path).map_err(transfer_error_from_sftp)?;
         let client = SftpClient::new(session);
 
-        match client.list_directory(&normalized).await {
-            Ok(entries) => {
-                let directory_name = normalized
-                    .trim_end_matches('/')
-                    .rsplit('/')
-                    .next()
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or("download");
-                let local_root = local_directory.join(directory_name);
-                tokio::fs::create_dir_all(&local_root)
-                    .await
-                    .map_err(|err| transfer_error_from_message(err.to_string()))?;
+        if client
+            .remote_is_directory(&normalized)
+            .await
+            .map_err(transfer_error_from_sftp)?
+        {
+            let entries = client
+                .list_directory(&normalized)
+                .await
+                .map_err(transfer_error_from_sftp)?;
+            let directory_name = normalized
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .filter(|name| !name.is_empty())
+                .unwrap_or("download");
+            let local_root = local_directory.join(directory_name);
+            tokio::fs::create_dir_all(&local_root)
+                .await
+                .map_err(|err| transfer_error_from_message(err.to_string()))?;
 
-                if entries.is_empty() {
-                    return Ok(Vec::new());
-                }
+            if entries.is_empty() {
+                return Ok(Vec::new());
+            }
 
-                let files = walk_remote_directory(&client, &normalized)
-                    .await
+            let files = walk_remote_directory(&client, &normalized)
+                .await
+                .map_err(transfer_error_from_sftp)?;
+            let mut tasks = Vec::with_capacity(files.len());
+            for entry in files {
+                let local_path = local_root.join(&entry.relative_path);
+                ensure_local_path_within_root(&local_root, &local_path)
                     .map_err(transfer_error_from_sftp)?;
-                let mut tasks = Vec::with_capacity(files.len());
-                for entry in files {
-                    let local_path = local_root.join(&entry.relative_path);
-                    ensure_local_path_within_root(&local_root, &local_path)
-                        .map_err(transfer_error_from_sftp)?;
-                    if let Some(parent) = local_path.parent() {
-                        tokio::fs::create_dir_all(parent)
-                            .await
-                            .map_err(|err| transfer_error_from_message(err.to_string()))?;
-                    }
-                    let task = self
-                        .enqueue_download(session, &entry.remote_path, &local_path)
-                        .await?;
-                    tasks.push(task);
+                if let Some(parent) = local_path.parent() {
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .map_err(|err| transfer_error_from_message(err.to_string()))?;
                 }
-                Ok(tasks)
-            }
-            Err(_) => {
-                let file_name = normalized
-                    .rsplit('/')
-                    .next()
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or("download");
-                let local_path = local_directory.join(file_name);
                 let task = self
-                    .enqueue_download(session, &normalized, &local_path)
+                    .enqueue_download(session, &entry.remote_path, &local_path)
                     .await?;
-                Ok(vec![task])
+                tasks.push(task);
             }
+            Ok(tasks)
+        } else {
+            let file_name = normalized
+                .rsplit('/')
+                .next()
+                .filter(|name| !name.is_empty())
+                .unwrap_or("download");
+            let local_path = local_directory.join(file_name);
+            let task = self
+                .enqueue_download(session, &normalized, &local_path)
+                .await?;
+            Ok(vec![task])
         }
     }
 
