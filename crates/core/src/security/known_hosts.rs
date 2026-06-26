@@ -1671,6 +1671,7 @@ mod tests {
         let key = test_public_key();
         let openssh_key = key.to_openssh().unwrap();
         fs::write(&openssh_path, format!("example.com {openssh_key}\n")).unwrap();
+        set_test_file_mode(&openssh_path, 0o644);
 
         let mut manager = KnownHostsManager::load(&json_path).unwrap();
         let merged = manager.import_openssh(&openssh_path).unwrap();
