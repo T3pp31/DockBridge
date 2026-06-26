@@ -4,7 +4,7 @@
 
 - First-connection host key fingerprint display (SHA256)
 - User accept/reject for unknown host keys
-- Trusted keys stored in DockBridge `known_hosts.json` (0600)
+- Trusted keys stored in DockBridge `known_hosts.json` (written `0600`; on Unix, load and OpenSSH import reject files that are not owner-only `0600`/`0400`, owned by the current user, or accessed through a symlink)
 - Hostname/IP alias normalization: same port and fingerprint are trusted across identifiers (OpenSSH-style comma-separated hosts)
 - OpenSSH `known_hosts` import/export helpers on `KnownHostsManager`
 - Automatic merge with OpenSSH `known_hosts` on connect (configurable; see macOS Settings)
@@ -157,6 +157,8 @@ The macOS app runs in App Sandbox and cannot read `~/.ssh/known_hosts` without e
 3. If no file is selected or the path is unreadable, merge is skipped silently and connections continue.
 
 The CLI and non-sandboxed environments use `openssh_known_hosts_path` from `config/default.toml` (default: `~/.ssh/known_hosts`).
+
+On Unix, both `known_hosts.json` and the OpenSSH `known_hosts` file used for merge must be owned by the effective user, must not be a symbolic link, and must have permissions `0600` or `0400` (no group/other read or write). Files with looser permissions (for example `0644`) are rejected at load/import so a tampered trust anchor cannot be trusted silently. Repair with `chmod 600` on the affected file.
 
 ### Known hosts strict mode
 

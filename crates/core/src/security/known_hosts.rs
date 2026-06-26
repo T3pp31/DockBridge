@@ -106,6 +106,7 @@ impl KnownHostsManager {
     pub fn load(path: impl Into<PathBuf>) -> Result<Self, SecurityError> {
         let path = path.into();
         let (entries, hashed_entries) = if path.exists() {
+            validate_secure_known_hosts_file(&path)?;
             let contents =
                 fs::read_to_string(&path).map_err(|err| SecurityError::KnownHostsReadFailed {
                     path: path.display().to_string(),
@@ -288,6 +289,7 @@ impl KnownHostsManager {
     /// Imports plain and hashed entries, including `@revoked` and `@cert-authority` markers.
     /// Returns the number of newly merged entries.
     pub fn import_openssh(&mut self, path: &Path) -> Result<usize, SecurityError> {
+        validate_secure_known_hosts_file(path)?;
         let contents =
             fs::read_to_string(path).map_err(|err| SecurityError::KnownHostsReadFailed {
                 path: path.display().to_string(),
@@ -820,6 +822,49 @@ fn known_hosts_partial_file_name(suffix: &str) -> String {
 }
 
 #[cfg(unix)]
+fn validate_secure_known_hosts_file(path: &Path) -> Result<(), SecurityError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let path_str = path.display().to_string();
+    let metadata =
+        fs::symlink_metadata(path).map_err(|err| SecurityError::KnownHostsReadFailed {
+            path: path_str.clone(),
+            message: err.to_string(),
+        })?;
+
+    if metadata.file_type().is_symlink() {
+        return Err(SecurityError::KnownHostsReadFailed {
+            path: path_str,
+            message: "refusing to read known hosts through a symbolic link".to_string(),
+        });
+    }
+
+    let file_uid = metadata.uid();
+    let effective_uid = unsafe { libc::geteuid() };
+    if file_uid != effective_uid {
+        return Err(SecurityError::KnownHostsReadFailed {
+            path: path_str,
+            message: format!("owner uid {file_uid} does not match effective uid {effective_uid}"),
+        });
+    }
+
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode != 0o600 && mode != 0o400 {
+        return Err(SecurityError::KnownHostsReadFailed {
+            path: path_str,
+            message: format!("insecure permissions {mode:04o} (expected 0600 or 0400)"),
+        });
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_secure_known_hosts_file(_path: &Path) -> Result<(), SecurityError> {
+    Ok(())
+}
+
+#[cfg(unix)]
 fn open_exclusive_local_file_sync(path: &Path) -> std::io::Result<std::fs::File> {
     use std::os::unix::fs::OpenOptionsExt;
 
@@ -928,6 +973,21 @@ mod tests {
             .clone()
     }
 
+    fn write_test_file_mode_0600(path: &Path, contents: impl AsRef<[u8]>) {
+        fs::write(path, contents).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    fn set_test_file_mode(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
     #[test]
     fn accept_and_trust_host_key() {
         let dir = tempdir().unwrap();
@@ -1015,7 +1075,7 @@ mod tests {
     fn load_empty_entries_array_succeeds() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("known_hosts.json");
-        fs::write(&path, r#"{"entries":[]}"#).unwrap();
+        write_test_file_mode_0600(&path, r#"{"entries":[]}"#);
 
         let manager = KnownHostsManager::load(&path).unwrap();
         assert_eq!(
@@ -1028,7 +1088,7 @@ mod tests {
     fn load_invalid_empty_object_returns_read_failed() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("known_hosts.json");
-        fs::write(&path, "{}").unwrap();
+        write_test_file_mode_0600(&path, "{}");
 
         let err = KnownHostsManager::load(&path).unwrap_err();
         assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
@@ -1042,11 +1102,10 @@ mod tests {
         let key = test_public_key();
         let openssh_key = key.to_openssh().unwrap();
 
-        fs::write(
+        write_test_file_mode_0600(
             &openssh_path,
             format!("example.com,203.0.113.1 {openssh_key}\n"),
-        )
-        .unwrap();
+        );
 
         let mut manager = KnownHostsManager::load(&json_path).unwrap();
         let merged = manager.import_openssh(&openssh_path).unwrap();
@@ -1113,11 +1172,10 @@ mod tests {
         let key = test_public_key();
         let openssh_key = key.to_openssh().unwrap();
 
-        fs::write(
+        write_test_file_mode_0600(
             &openssh_path,
             format!("bad.example.com,!bad.example.com {openssh_key}\n"),
-        )
-        .unwrap();
+        );
 
         let mut manager = KnownHostsManager::load(&json_path).unwrap();
         manager.import_openssh(&openssh_path).unwrap();
@@ -1136,11 +1194,10 @@ mod tests {
         let key = test_public_key();
         let openssh_key = key.to_openssh().unwrap();
 
-        fs::write(
+        write_test_file_mode_0600(
             &openssh_path,
             format!("example.com,!bad.example.com {openssh_key}\n"),
-        )
-        .unwrap();
+        );
 
         let mut manager = KnownHostsManager::load(&json_path).unwrap();
         manager.import_openssh(&openssh_path).unwrap();
@@ -1180,11 +1237,10 @@ mod tests {
                     base64::Engine::encode(&base64::engine::general_purpose::STANDARD, salt);
                 let hash_b64 =
                     base64::Engine::encode(&base64::engine::general_purpose::STANDARD, hash);
-                fs::write(
+                write_test_file_mode_0600(
                     &openssh_path,
                     format!("|1|{salt_b64}|{hash_b64} {openssh_key}\n"),
-                )
-                .unwrap();
+                );
                 openssh_path
             })
             .unwrap();
@@ -1209,11 +1265,10 @@ mod tests {
         let openssh_path = dir.path().join("known_hosts");
         let salt_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, salt);
         let hash_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, hash);
-        fs::write(
+        write_test_file_mode_0600(
             &openssh_path,
             format!("|1|{salt_b64}|{hash_b64} {openssh_key}\n"),
-        )
-        .unwrap();
+        );
 
         let mut manager = KnownHostsManager::load(&path).unwrap();
         manager.import_openssh(&openssh_path).unwrap();
@@ -1234,11 +1289,10 @@ mod tests {
         let key = test_public_key();
         let openssh_key = key.to_openssh().unwrap();
         let openssh_path = dir.path().join("known_hosts");
-        fs::write(
+        write_test_file_mode_0600(
             &openssh_path,
             format!("@revoked example.com {openssh_key}\n"),
-        )
-        .unwrap();
+        );
 
         let mut manager = KnownHostsManager::load(&path).unwrap();
         manager.import_openssh(&openssh_path).unwrap();
@@ -1259,11 +1313,10 @@ mod tests {
         let key = test_public_key();
         let openssh_key = key.to_openssh().unwrap();
         let openssh_path = dir.path().join("known_hosts");
-        fs::write(
+        write_test_file_mode_0600(
             &openssh_path,
             format!("@cert-authority *.example.com {openssh_key}\n"),
-        )
-        .unwrap();
+        );
 
         let mut manager = KnownHostsManager::load(&path).unwrap();
         manager.import_openssh(&openssh_path).unwrap();
@@ -1302,7 +1355,7 @@ mod tests {
         let key = test_public_key();
         let openssh_key = key.to_openssh().unwrap();
         let openssh_path = dir.path().join("known_hosts");
-        fs::write(&openssh_path, format!("example.com {openssh_key}\n")).unwrap();
+        write_test_file_mode_0600(&openssh_path, format!("example.com {openssh_key}\n"));
 
         let mut manager = KnownHostsManager::load(&path).unwrap();
         let config = AppConfig {
@@ -1335,11 +1388,10 @@ mod tests {
         let openssh_path = dir.path().join("known_hosts");
         let salt_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, salt);
         let hash_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, hash);
-        fs::write(
+        write_test_file_mode_0600(
             &openssh_path,
             format!("@revoked |1|{salt_b64}|{hash_b64} {openssh_key}\n"),
-        )
-        .unwrap();
+        );
 
         let mut manager = KnownHostsManager::load(&path).unwrap();
         manager.import_openssh(&openssh_path).unwrap();
@@ -1361,7 +1413,7 @@ mod tests {
         let key = test_public_key();
         let openssh_key = key.to_openssh().unwrap();
 
-        fs::write(&openssh_path, format!("example.com {openssh_key}\n")).unwrap();
+        write_test_file_mode_0600(&openssh_path, format!("example.com {openssh_key}\n"));
 
         let mut manager = KnownHostsManager::load(&json_path).unwrap();
         let config = AppConfig {
@@ -1432,7 +1484,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("known_hosts.json");
         let openssh_path = dir.path().join("known_hosts");
-        fs::write(&openssh_path, "this is not a valid known_hosts line\n").unwrap();
+        write_test_file_mode_0600(&openssh_path, "this is not a valid known_hosts line\n");
 
         let mut manager = KnownHostsManager::load(&path).unwrap();
         let config = AppConfig {
@@ -1485,6 +1537,117 @@ mod tests {
 
         assert_eq!(fs::read(&secret).unwrap(), b"untouched");
         assert!(!path.is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_accepts_read_only_0400_permissions() {
+        // Given: a store file with mode 0400 and correct owner
+        // When: load is called
+        // Then: the store loads successfully
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        write_test_file_mode_0600(&path, r#"{"entries":[],"hashed_entries":[]}"#);
+        set_test_file_mode(&path, 0o400);
+
+        let manager = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            manager.check_host_key("localhost", 22, &test_public_key(), false),
+            HostKeyCheckResult::Unknown
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_rejects_insecure_permissions_0664() {
+        // Given: a store file with group-readable permissions
+        // When: load is called
+        // Then: KnownHostsReadFailed is returned
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        write_test_file_mode_0600(&path, r#"{"entries":[],"hashed_entries":[]}"#);
+        set_test_file_mode(&path, 0o664);
+
+        let err = KnownHostsManager::load(&path).unwrap_err();
+        assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
+        if let SecurityError::KnownHostsReadFailed { message, .. } = err {
+            assert!(message.contains("insecure permissions"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_rejects_insecure_permissions_0666() {
+        // Given: a world-writable store file
+        // When: load is called
+        // Then: KnownHostsReadFailed is returned
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        write_test_file_mode_0600(&path, r#"{"entries":[],"hashed_entries":[]}"#);
+        set_test_file_mode(&path, 0o666);
+
+        let err = KnownHostsManager::load(&path).unwrap_err();
+        assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_rejects_symlink_to_valid_file() {
+        // Given: the store path is a symlink to a valid store file
+        // When: load is called
+        // Then: KnownHostsReadFailed is returned
+        let dir = tempdir().unwrap();
+        let secret = dir.path().join("secret.json");
+        write_test_file_mode_0600(&secret, r#"{"entries":[],"hashed_entries":[]}"#);
+        let path = dir.path().join("known_hosts.json");
+        std::os::unix::fs::symlink(&secret, &path).unwrap();
+
+        let err = KnownHostsManager::load(&path).unwrap_err();
+        assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
+        if let SecurityError::KnownHostsReadFailed { message, .. } = err {
+            assert!(message.contains("symbolic link"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn import_openssh_rejects_insecure_permissions() {
+        // Given: an OpenSSH known_hosts file with default 0644 permissions
+        // When: import_openssh is called
+        // Then: KnownHostsReadFailed is returned
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        fs::write(&openssh_path, format!("example.com {openssh_key}\n")).unwrap();
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        let err = manager.import_openssh(&openssh_path).unwrap_err();
+        assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_rejects_file_with_wrong_owner_when_chown_available() {
+        // Given: a store file owned by another uid (requires root to set up)
+        // When: load is called
+        // Then: KnownHostsReadFailed is returned
+        if unsafe { libc::geteuid() } != 0 {
+            return;
+        }
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        write_test_file_mode_0600(&path, r#"{"entries":[],"hashed_entries":[]}"#);
+        let target_uid = 1_u32;
+        std::os::unix::fs::chown(&path, Some(target_uid), None).expect("chown failed");
+
+        let err = KnownHostsManager::load(&path).unwrap_err();
+        assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
+        if let SecurityError::KnownHostsReadFailed { message, .. } = err {
+            assert!(message.contains("owner uid"));
+        }
     }
 
     #[test]
