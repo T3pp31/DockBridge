@@ -356,14 +356,7 @@ impl KnownHostsManager {
     ///
     /// Entries without a stored OpenSSH public key representation are omitted.
     pub fn export_openssh(&self, path: &Path) -> Result<(), SecurityError> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent).map_err(|err| SecurityError::KnownHostsWriteFailed {
-                    path: path.display().to_string(),
-                    message: err.to_string(),
-                })?;
-            }
-        }
+        ensure_known_hosts_parent(path)?;
 
         let mut lines = Vec::new();
         let mut entries: Vec<&KnownHostEntry> = self.entries.values().collect();
@@ -1326,6 +1319,13 @@ mod tests {
 
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+
+        let parent_mode = fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(parent_mode, 0o700);
     }
 
     #[cfg(unix)]
