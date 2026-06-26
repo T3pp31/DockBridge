@@ -77,6 +77,45 @@ struct MainView: View {
         }
         .navigationTitle("DockBridge")
         .toolbar {
+            ToolbarItemGroup {
+                if let selected = connectionList.profiles.first(where: { $0.id == connectionList.selectedProfileID }) {
+                    Button {
+                        connectionList.requestConnect(profile: selected)
+                    } label: {
+                        Label("Connect", systemImage: "link")
+                    }
+                    .disabled(connectionList.connectionStatus.isConnected || connectionList.connectionStatus.isConnecting)
+
+                    Button {
+                        Task { await connectionList.disconnect() }
+                    } label: {
+                        Label("Disconnect", systemImage: "link.slash")
+                    }
+                    .disabled(!connectionList.connectionStatus.isConnected)
+                }
+
+                Button {
+                    Task { await viewModel.uploadSelected() }
+                } label: {
+                    Label("Upload", systemImage: "square.and.arrow.up")
+                }
+                .disabled(viewModel.selectedLocalItem == nil || !viewModel.bridge.isConnected)
+
+                Button {
+                    Task { await viewModel.downloadSelected() }
+                } label: {
+                    Label("Download", systemImage: "square.and.arrow.down")
+                }
+                .disabled(viewModel.selectedRemoteItem == nil || !viewModel.bridge.isConnected)
+
+                Button {
+                    viewModel.showMkdirPrompt = true
+                } label: {
+                    Label("New Folder", systemImage: "folder.badge.plus")
+                }
+                .disabled(!viewModel.bridge.isConnected)
+            }
+
             ToolbarItem(placement: .automatic) {
                 Button {
                     settingsConfig = AppSettingsService.shared.loadConfig()

@@ -16,7 +16,7 @@ enum FileDropTransferKickoff {
         viewModel: MainViewModel,
         displayedRemoteItems: [RemoteFileRecord]? = nil
     ) -> Bool {
-        let displayedItems = displayedRemoteItems ?? viewModel.remoteItems
+        let displayedItems = displayedRemoteItems ?? viewModel.remoteTableItems
         let validItems = items.filter {
             FileDropValidation.isDisplayedRemoteItem($0, in: displayedItems)
         }
@@ -39,7 +39,7 @@ enum FileDropTransferKickoff {
         viewModel: MainViewModel,
         displayedLocalItems: [LocalFileItem]? = nil
     ) -> Bool {
-        let displayedItems = displayedLocalItems ?? viewModel.localItems
+        let displayedItems = displayedLocalItems ?? viewModel.localTableItems
         let validItems = items.filter {
             FileDropValidation.isDisplayedLocalItem($0, in: displayedItems)
                 && FileDropValidation.canUploadLocalItem(at: $0.url)
@@ -100,7 +100,7 @@ enum FileDropTransferKickoff {
         viewModel: MainViewModel,
         displayedRemoteItems: [RemoteFileRecord]? = nil
     ) -> Bool {
-        let displayedItems = displayedRemoteItems ?? viewModel.remoteItems
+        let displayedItems = displayedRemoteItems ?? viewModel.remoteTableItems
         let validItems = items.filter {
             FileDropValidation.isDisplayedRemoteItem($0, in: displayedItems)
                 && FileDropValidation.canMoveRemoteItem(from: $0.path, to: remotePath)
@@ -143,7 +143,7 @@ struct LocalPaneDropModifier: ViewModifier {
     private func acceptLocalMoves(_ items: [LocalFileDragPayload]) -> Bool {
         var accepted = false
         for item in items {
-            guard FileDropValidation.isDisplayedLocalItem(item, in: viewModel.localItems) else {
+            guard FileDropValidation.isDisplayedLocalItem(item, in: viewModel.localTableItems) else {
                 continue
             }
             guard FileDropValidation.canMoveLocalItem(from: item.url, to: viewModel.localPath) else {
@@ -201,20 +201,28 @@ struct RemotePaneDropModifier: ViewModifier {
 
 struct LocalFileTable: View {
     @ObservedObject var viewModel: MainViewModel
+    @State private var sortOrder = [KeyPathComparator(\LocalFileItem.name, order: .forward)]
+
+    private var sortedItems: [LocalFileItem] {
+        viewModel.localItems.sorted(using: sortOrder)
+    }
 
     var body: some View {
-        Table(of: LocalFileItem.self, selection: $viewModel.selectedLocalItemID) {
-            TableColumn("Name") { item in
-                Label(item.name, systemImage: item.isDirectory ? "folder" : "doc")
+        Table(of: LocalFileItem.self, selection: $viewModel.selectedLocalItemID, sortOrder: $sortOrder) {
+            TableColumn("Name", value: \.name) { item in
+                Label(
+                    item.name,
+                    systemImage: FileTypeIcon.systemImage(for: item.name, isDirectory: item.isDirectory)
+                )
             }
             .width(
                 min: FileTableColumnLayout.nameMinWidth,
                 ideal: FileTableColumnLayout.nameIdealWidth
             )
-            TableColumn("Size") { item in
+            TableColumn("Size", value: \.size) { item in
                 Text(item.isDirectory ? "—" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
             }
-            TableColumn("Modified") { item in
+            TableColumn("Modified", value: \.modificationDate) { item in
                 if let date = item.modificationDate {
                     Text(date, style: .date)
                 } else {
@@ -222,7 +230,10 @@ struct LocalFileTable: View {
                 }
             }
         } rows: {
-            ForEach(viewModel.localItems, id: \.id) { item in
+            if viewModel.canNavigateLocalUp {
+                TableRow(LocalFileItem(parentOf: viewModel.localPath))
+            }
+            ForEach(sortedItems, id: \.id) { item in
                 TableRow(item)
                     .draggable(LocalFileDragPayload(url: item.url, isDirectory: item.isDirectory))
             }
@@ -233,26 +244,38 @@ struct LocalFileTable: View {
 
 struct RemoteFileTable: View {
     @ObservedObject var viewModel: MainViewModel
+    @State private var sortOrder = [KeyPathComparator(\RemoteFileRecord.name, order: .forward)]
+
+    private var sortedItems: [RemoteFileRecord] {
+        viewModel.remoteItems.sorted(using: sortOrder)
+    }
 
     var body: some View {
-        Table(of: RemoteFileRecord.self, selection: $viewModel.selectedRemoteItemID) {
-            TableColumn("Name") { item in
-                Label(item.name, systemImage: item.isDirectory ? "folder" : "doc")
+        Table(of: RemoteFileRecord.self, selection: $viewModel.selectedRemoteItemID, sortOrder: $sortOrder) {
+            TableColumn("Name", value: \.name) { item in
+                Label(
+                    item.name,
+                    systemImage: FileTypeIcon.systemImage(for: item.name, isDirectory: item.isDirectory)
+                )
             }
             .width(
                 min: FileTableColumnLayout.nameMinWidth,
                 ideal: FileTableColumnLayout.nameIdealWidth
             )
-            TableColumn("Size") { item in
+            TableColumn("Size", value: \.size) { item in
                 Text(remoteSizeLabel(for: item))
             }
-            TableColumn("Path") { item in
+            TableColumn("Path", value: \.path) { item in
                 Text(item.path)
                     .lineLimit(1)
                     .help(item.path)
             }
         } rows: {
-            ForEach(viewModel.remoteItems, id: \.id) { item in
+            if viewModel.canNavigateRemoteUp,
+               let parent = RemoteFileRecord.parentEntry(for: viewModel.remotePath) {
+                TableRow(parent)
+            }
+            ForEach(sortedItems, id: \.id) { item in
                 TableRow(item)
                     .draggable(RemoteFileDragPayload(path: item.path, isDirectory: item.isDirectory))
             }

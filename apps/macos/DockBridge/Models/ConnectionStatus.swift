@@ -25,11 +25,11 @@ enum ConnectionStatus: Equatable {
     var statusTitle: String {
         switch self {
         case .disconnected:
-            return "未接続"
+            return "Disconnected"
         case .connecting:
-            return "接続中…"
+            return "Connecting…"
         case .connected(let endpoint):
-            return "接続中: \(endpoint)"
+            return "Connected: \(endpoint)"
         }
     }
 }

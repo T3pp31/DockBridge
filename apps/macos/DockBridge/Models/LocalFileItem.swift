@@ -31,6 +31,17 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
         self.modificationDate = values.contentModificationDate
     }
 
+    init(parentOf directory: URL) {
+        let parent = directory.deletingLastPathComponent()
+        self.url = parent
+        self.name = ".."
+        self.isDirectory = true
+        self.size = 0
+        self.modificationDate = nil
+    }
+
+    var isParentDirectory: Bool { name == ".." }
+
     static func list(
         directory: URL,
         showHiddenFiles: Bool

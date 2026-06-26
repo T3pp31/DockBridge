@@ -21,14 +21,13 @@ struct LocalPaneView: View {
                             }
                         }
                     } primaryAction: { ids in
-                        if let item = singleSelectedLocalItem(from: ids) ?? viewModel.selectedLocalItem,
-                           item.isDirectory {
-                            viewModel.navigateLocal(into: item)
+                        if let item = singleSelectedLocalItem(from: ids) ?? viewModel.selectedLocalItem {
+                            viewModel.openLocalTableItem(item)
                         }
                     }
                     .onKeyPress(.return) {
-                        if let item = viewModel.selectedLocalItem, item.isDirectory {
-                            viewModel.navigateLocal(into: item)
+                        if let item = viewModel.selectedLocalItem {
+                            viewModel.openLocalTableItem(item)
                             return .handled
                         }
                         return .ignored

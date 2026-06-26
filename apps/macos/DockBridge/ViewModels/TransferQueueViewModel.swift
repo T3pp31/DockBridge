@@ -9,8 +9,20 @@ final class TransferQueueViewModel: ObservableObject {
         TransferProgressFormatter.activeTransferSummary(for: tasks)
     }
 
+    var hasFinishedTasks: Bool {
+        tasks.contains { task in
+            switch task.status {
+            case .completed, .failed, .cancelled:
+                return true
+            case .pending, .inProgress:
+                return false
+            }
+        }
+    }
+
     private let bridge: RustBridgeService
     private var refreshTask: Task<Void, Never>?
+    private var progressSamples: [UInt64: (bytes: UInt64, date: Date)] = [:]
 
     init(bridge: RustBridgeService) {
         self.bridge = bridge
@@ -34,6 +46,7 @@ final class TransferQueueViewModel: ObservableObject {
     func refresh() async {
         guard bridge.isConnected else {
             tasks = []
+            progressSamples.removeAll()
             return
         }
 
@@ -41,8 +54,10 @@ final class TransferQueueViewModel: ObservableObject {
             let fetched = try await bridge.fetchTransferTasks()
             guard bridge.isConnected else {
                 tasks = []
+                progressSamples.removeAll()
                 return
             }
+            updateProgressSamples(for: fetched)
             tasks = fetched
             errorMessage = nil
         } catch {
@@ -56,6 +71,62 @@ final class TransferQueueViewModel: ObservableObject {
             await refresh()
         } catch {
             errorMessage = error.dockBridgeUserMessage
+        }
+    }
+
+    func clearCompleted() async {
+        do {
+            try await bridge.clearCompletedTransfers()
+            await refresh()
+        } catch {
+            errorMessage = error.dockBridgeUserMessage
+        }
+    }
+
+    func clearAll() async {
+        do {
+            try await bridge.clearAllTransfers()
+            await refresh()
+        } catch {
+            errorMessage = error.dockBridgeUserMessage
+        }
+    }
+
+    func retry(task: TransferTaskRecord) async {
+        do {
+            try await bridge.retryTransfer(taskId: task.id)
+            await refresh()
+        } catch {
+            errorMessage = error.dockBridgeUserMessage
+        }
+    }
+
+    func bytesPerSecond(for task: TransferTaskRecord) -> Double? {
+        guard let sample = progressSamples[task.id] else { return nil }
+        let elapsed = Date().timeIntervalSince(sample.date)
+        guard elapsed > 0 else { return nil }
+        let delta = Double(task.bytesTransferred) - Double(sample.bytes)
+        guard delta >= 0 else { return nil }
+        return delta / elapsed
+    }
+
+    private func updateProgressSamples(for fetched: [TransferTaskRecord]) {
+        let now = Date()
+        let activeIDs = Set(
+            fetched
+                .filter { $0.status == .inProgress }
+                .map(\.id)
+        )
+        progressSamples = progressSamples.filter { activeIDs.contains($0.key) }
+
+        for task in fetched where task.status == .inProgress {
+            if let existing = progressSamples[task.id] {
+                if now.timeIntervalSince(existing.date) >= 1.0 {
+                    progressSamples[task.id] = (task.bytesTransferred, now)
+                }
+            } else {
+                progressSamples[task.id] = (task.bytesTransferred, now)
+            }
         }
     }
 }

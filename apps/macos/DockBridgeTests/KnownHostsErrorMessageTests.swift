@@ -4,7 +4,7 @@ import XCTest
 final class KnownHostsErrorMessageTests: XCTestCase {
     func testSessionClosedErrorMessageIsUserFriendly() {
         let message = DockBridgeError.friendlyMessage(for: "failed to upload: session closed")
-        XCTAssertTrue(message.contains("切断"))
+        XCTAssertTrue(message.contains("closed"))
     }
 
     func testConnectionLostMessageDetection() {
@@ -14,16 +14,16 @@ final class KnownHostsErrorMessageTests: XCTestCase {
     }
 
     func testConnectionStatusTitles() {
-        XCTAssertEqual(ConnectionStatus.disconnected.statusTitle, "未接続")
+        XCTAssertEqual(ConnectionStatus.disconnected.statusTitle, "Disconnected")
         XCTAssertEqual(
             ConnectionStatus.connected(endpoint: "user@host:22").statusTitle,
-            "接続中: user@host:22"
+            "Connected: user@host:22"
         )
     }
 
     func testPermissionDeniedErrorMessageMentionsRemoteDirectory() {
         let message = DockBridgeError.friendlyMessage(for: "failed to upload: permission denied")
-        XCTAssertTrue(message.contains("リモート"))
+        XCTAssertTrue(message.lowercased().contains("remote"))
     }
 
     func testCorruptedKnownHostsErrorMessageIsUserFriendly() {
@@ -31,7 +31,7 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         let message = DockBridgeError.friendlyMessage(for: raw).lowercased()
 
         XCTAssertTrue(
-            message.contains("known hosts") || message.contains("ホスト鍵"),
+            message.contains("known hosts") || message.contains("host key"),
             "Expected known hosts guidance, got: \(message)"
         )
     }
@@ -40,30 +40,30 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         let message = DockBridgeError.friendlyMessage(
             for: "failed to create directory '/home/demo': Permission denied"
         )
-        XCTAssertTrue(message.contains("リモート"))
-        XCTAssertTrue(message.contains("作業ディレクトリ"))
+        XCTAssertTrue(message.lowercased().contains("remote"))
+        XCTAssertTrue(message.lowercased().contains("working directory"))
     }
 
     func testUploadNoSuchFileErrorMessageMentionsRemoteDirectory() {
         let message = DockBridgeError.friendlyMessage(
             for: "failed to upload '/tmp/file.pdf' to '/home/demo/file.pdf': No such file: No such file"
         )
-        XCTAssertTrue(message.contains("リモート"))
-        XCTAssertTrue(message.contains("保存先"))
+        XCTAssertTrue(message.lowercased().contains("remote"))
+        XCTAssertTrue(message.lowercased().contains("destination"))
     }
 
     func testHostKeyRejectedErrorMessageIsUserFriendly() {
         let message = DockBridgeError.friendlyMessage(
             for: "host key rejected by user for example.com:22"
         )
-        XCTAssertEqual(message, "ホスト鍵の承認が拒否されたため、接続を中止しました。")
+        XCTAssertEqual(message, "Connection aborted because the host key was not approved.")
     }
 
     func testAuthenticationRejectedErrorIsNotMappedToHostKeyMessage() {
         let message = DockBridgeError.friendlyMessage(
             for: "connection rejected: authentication failed for user 'demo'"
         )
-        XCTAssertTrue(message.contains("ユーザー名") || message.contains("パスワード"))
-        XCTAssertFalse(message.contains("ホスト鍵"))
+        XCTAssertTrue(message.lowercased().contains("username") || message.lowercased().contains("password"))
+        XCTAssertFalse(message.lowercased().contains("host key"))
     }
 }

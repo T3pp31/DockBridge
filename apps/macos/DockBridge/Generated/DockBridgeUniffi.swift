@@ -550,6 +550,10 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
     
     func cancelTransfer(taskId: UInt64) throws 
     
+    func clearAllTransfers() throws 
+    
+    func clearCompletedTransfers() 
+    
     func connect(profile: ConnectionProfileRecord) throws  -> UInt64
     
     func createDirectory(sessionId: UInt64, remotePath: String) throws 
@@ -569,6 +573,8 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
     func listDirectory(sessionId: UInt64, path: String) throws  -> [RemoteFileRecord]
     
     func rename(sessionId: UInt64, from: String, to: String) throws 
+    
+    func retryTransfer(sessionId: UInt64, taskId: UInt64) throws 
     
     func upload(sessionId: UInt64, localPath: String, remotePath: String) throws 
     
@@ -645,6 +651,20 @@ open func cancelTransfer(taskId: UInt64)throws   {try rustCallWithError(FfiConve
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_cancel_transfer(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(taskId),$0
+    )
+}
+}
+    
+open func clearAllTransfers()throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_clear_all_transfers(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+    
+open func clearCompletedTransfers()  {try! rustCall() {
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_clear_completed_transfers(
+            self.uniffiCloneHandle(),$0
     )
 }
 }
@@ -737,6 +757,15 @@ open func rename(sessionId: UInt64, from: String, to: String)throws   {try rustC
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(from),
         FfiConverterString.lower(to),$0
+    )
+}
+}
+    
+open func retryTransfer(sessionId: UInt64, taskId: UInt64)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_retry_transfer(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterUInt64.lower(taskId),$0
     )
 }
 }
@@ -2019,6 +2048,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_cancel_transfer() != 17692) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_clear_all_transfers() != 10091) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_clear_completed_transfers() != 59034) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_connect() != 3874) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2047,6 +2082,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_rename() != 27195) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_retry_transfer() != 55102) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload() != 54637) {

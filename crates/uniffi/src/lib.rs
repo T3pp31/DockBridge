@@ -472,6 +472,36 @@ impl DockBridgeClient {
             .cancel_transfer(task_id)
             .map_err(map_error)
     }
+
+    fn clear_completed_transfers(&self) {
+        self.transfer_manager.clear_completed_transfers();
+    }
+
+    fn clear_all_transfers(&self) -> Result<(), DockBridgeError> {
+        self.transfer_manager.clear_all_transfers().map_err(map_error)
+    }
+
+    fn retry_transfer(&self, session_id: u64, task_id: u64) -> Result<(), DockBridgeError> {
+        let sessions = Arc::clone(&self.sessions);
+        let transfer_manager = Arc::clone(&self.transfer_manager);
+        self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let session = {
+                    let sessions = sessions.lock().await;
+                    sessions.get(&session_id).cloned().ok_or_else(|| {
+                        map_error_string(format!("session {session_id} not found"))
+                    })?
+                };
+                transfer_manager
+                    .retry_transfer(session.as_ref(), task_id)
+                    .await
+                    .map_err(map_error)?;
+                Ok(())
+            }),
+        )?;
+        Ok(())
+    }
 }
 
 impl DockBridgeClient {
