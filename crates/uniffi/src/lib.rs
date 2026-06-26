@@ -478,7 +478,9 @@ impl DockBridgeClient {
     }
 
     fn clear_all_transfers(&self) -> Result<(), DockBridgeError> {
-        self.transfer_manager.clear_all_transfers().map_err(map_error)
+        self.transfer_manager
+            .clear_all_transfers()
+            .map_err(map_error)
     }
 
     fn retry_transfer(&self, session_id: u64, task_id: u64) -> Result<(), DockBridgeError> {
