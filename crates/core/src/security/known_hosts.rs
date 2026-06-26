@@ -106,12 +106,8 @@ impl KnownHostsManager {
     pub fn load(path: impl Into<PathBuf>) -> Result<Self, SecurityError> {
         let path = path.into();
         let (entries, hashed_entries) = if path.exists() {
-            validate_secure_known_hosts_file(&path)?;
             let contents =
-                fs::read_to_string(&path).map_err(|err| SecurityError::KnownHostsReadFailed {
-                    path: path.display().to_string(),
-                    message: err.to_string(),
-                })?;
+                read_secure_known_hosts_file(&path, KnownHostsReadPolicy::DockBridgeStore)?;
             let file: KnownHostsFile = serde_json::from_str(&contents).map_err(|err| {
                 SecurityError::KnownHostsReadFailed {
                     path: path.display().to_string(),
@@ -289,12 +285,7 @@ impl KnownHostsManager {
     /// Imports plain and hashed entries, including `@revoked` and `@cert-authority` markers.
     /// Returns the number of newly merged entries.
     pub fn import_openssh(&mut self, path: &Path) -> Result<usize, SecurityError> {
-        validate_secure_known_hosts_file(path)?;
-        let contents =
-            fs::read_to_string(path).map_err(|err| SecurityError::KnownHostsReadFailed {
-                path: path.display().to_string(),
-                message: err.to_string(),
-            })?;
+        let contents = read_secure_known_hosts_file(path, KnownHostsReadPolicy::OpenSshImport)?;
 
         let mut merged = 0;
         for line_result in OpenSshKnownHosts::new(&contents) {
@@ -821,46 +812,108 @@ fn known_hosts_partial_file_name(suffix: &str) -> String {
     format!(".dockbridge-{suffix}.partial")
 }
 
+/// Permission policy applied when reading a known hosts file on Unix.
+enum KnownHostsReadPolicy {
+    /// DockBridge `known_hosts.json`: owner-only `0600` or `0400`.
+    DockBridgeStore,
+    /// External OpenSSH `known_hosts`: owner match, no group/other write (`0644` OK).
+    OpenSshImport,
+}
+
+fn read_secure_known_hosts_file(
+    path: &Path,
+    policy: KnownHostsReadPolicy,
+) -> Result<String, SecurityError> {
+    #[cfg(unix)]
+    {
+        read_secure_known_hosts_file_unix(path, policy)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = policy;
+        fs::read_to_string(path).map_err(|err| SecurityError::KnownHostsReadFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        })
+    }
+}
+
 #[cfg(unix)]
-fn validate_secure_known_hosts_file(path: &Path) -> Result<(), SecurityError> {
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+fn read_secure_known_hosts_file_unix(
+    path: &Path,
+    policy: KnownHostsReadPolicy,
+) -> Result<String, SecurityError> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
 
     let path_str = path.display().to_string();
-    let metadata =
-        fs::symlink_metadata(path).map_err(|err| SecurityError::KnownHostsReadFailed {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|err| SecurityError::KnownHostsReadFailed {
             path: path_str.clone(),
             message: err.to_string(),
         })?;
 
-    if metadata.file_type().is_symlink() {
-        return Err(SecurityError::KnownHostsReadFailed {
+    validate_known_hosts_fd_metadata(&file, &path_str, policy)?;
+
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)
+        .map_err(|err| SecurityError::KnownHostsReadFailed {
             path: path_str,
-            message: "refusing to read known hosts through a symbolic link".to_string(),
-        });
-    }
+            message: err.to_string(),
+        })?;
+
+    Ok(contents)
+}
+
+#[cfg(unix)]
+fn validate_known_hosts_fd_metadata(
+    file: &std::fs::File,
+    path_str: &str,
+    policy: KnownHostsReadPolicy,
+) -> Result<(), SecurityError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let metadata = file
+        .metadata()
+        .map_err(|err| SecurityError::KnownHostsReadFailed {
+            path: path_str.to_string(),
+            message: err.to_string(),
+        })?;
 
     let file_uid = metadata.uid();
     let effective_uid = unsafe { libc::geteuid() };
     if file_uid != effective_uid {
         return Err(SecurityError::KnownHostsReadFailed {
-            path: path_str,
+            path: path_str.to_string(),
             message: format!("owner uid {file_uid} does not match effective uid {effective_uid}"),
         });
     }
 
     let mode = metadata.permissions().mode() & 0o777;
-    if mode != 0o600 && mode != 0o400 {
-        return Err(SecurityError::KnownHostsReadFailed {
-            path: path_str,
-            message: format!("insecure permissions {mode:04o} (expected 0600 or 0400)"),
-        });
+    match policy {
+        KnownHostsReadPolicy::DockBridgeStore => {
+            if mode != 0o600 && mode != 0o400 {
+                return Err(SecurityError::KnownHostsReadFailed {
+                    path: path_str.to_string(),
+                    message: format!("insecure permissions {mode:04o} (expected 0600 or 0400)"),
+                });
+            }
+        }
+        KnownHostsReadPolicy::OpenSshImport => {
+            if mode & 0o022 != 0 {
+                return Err(SecurityError::KnownHostsReadFailed {
+                    path: path_str.to_string(),
+                    message: format!(
+                        "insecure permissions {mode:04o} (group/other write not permitted)"
+                    ),
+                });
+            }
+        }
     }
 
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn validate_secure_known_hosts_file(_path: &Path) -> Result<(), SecurityError> {
     Ok(())
 }
 
@@ -1604,15 +1657,34 @@ mod tests {
 
         let err = KnownHostsManager::load(&path).unwrap_err();
         assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
-        if let SecurityError::KnownHostsReadFailed { message, .. } = err {
-            assert!(message.contains("symbolic link"));
-        }
     }
 
     #[cfg(unix)]
     #[test]
-    fn import_openssh_rejects_insecure_permissions() {
-        // Given: an OpenSSH known_hosts file with default 0644 permissions
+    fn import_openssh_accepts_0644_permissions() {
+        // Given: an OpenSSH known_hosts file with standard 0644 permissions
+        // When: import_openssh is called
+        // Then: the entry is merged successfully
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        fs::write(&openssh_path, format!("example.com {openssh_key}\n")).unwrap();
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        let merged = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(merged, 1);
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn import_openssh_rejects_world_writable_permissions() {
+        // Given: an OpenSSH known_hosts file with mode 0666
         // When: import_openssh is called
         // Then: KnownHostsReadFailed is returned
         let dir = tempdir().unwrap();
@@ -1621,6 +1693,29 @@ mod tests {
         let key = test_public_key();
         let openssh_key = key.to_openssh().unwrap();
         fs::write(&openssh_path, format!("example.com {openssh_key}\n")).unwrap();
+        set_test_file_mode(&openssh_path, 0o666);
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        let err = manager.import_openssh(&openssh_path).unwrap_err();
+        assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
+        if let SecurityError::KnownHostsReadFailed { message, .. } = err {
+            assert!(message.contains("group/other write"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn import_openssh_rejects_group_writable_permissions() {
+        // Given: an OpenSSH known_hosts file with mode 0664
+        // When: import_openssh is called
+        // Then: KnownHostsReadFailed is returned
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        fs::write(&openssh_path, format!("example.com {openssh_key}\n")).unwrap();
+        set_test_file_mode(&openssh_path, 0o664);
 
         let mut manager = KnownHostsManager::load(&json_path).unwrap();
         let err = manager.import_openssh(&openssh_path).unwrap_err();

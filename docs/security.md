@@ -4,7 +4,7 @@
 
 - First-connection host key fingerprint display (SHA256)
 - User accept/reject for unknown host keys
-- Trusted keys stored in DockBridge `known_hosts.json` (written `0600`; on Unix, load and OpenSSH import reject files that are not owner-only `0600`/`0400`, owned by the current user, or accessed through a symlink)
+- Trusted keys stored in DockBridge `known_hosts.json` (written `0600`; on Unix, load rejects files that are not owner-only `0600`/`0400`, owned by the current user, or accessed through a symlink)
 - Hostname/IP alias normalization: same port and fingerprint are trusted across identifiers (OpenSSH-style comma-separated hosts)
 - OpenSSH `known_hosts` import/export helpers on `KnownHostsManager`
 - Automatic merge with OpenSSH `known_hosts` on connect (configurable; see macOS Settings)
@@ -158,7 +158,9 @@ The macOS app runs in App Sandbox and cannot read `~/.ssh/known_hosts` without e
 
 The CLI and non-sandboxed environments use `openssh_known_hosts_path` from `config/default.toml` (default: `~/.ssh/known_hosts`).
 
-On Unix, both `known_hosts.json` and the OpenSSH `known_hosts` file used for merge must be owned by the effective user, must not be a symbolic link, and must have permissions `0600` or `0400` (no group/other read or write). Files with looser permissions (for example `0644`) are rejected at load/import so a tampered trust anchor cannot be trusted silently. Repair with `chmod 600` on the affected file.
+On Unix, DockBridge `known_hosts.json` must be owned by the effective user, must not be a symbolic link, and must have permissions `0600` or `0400` when loaded. Files with looser permissions are rejected so a tampered trust anchor cannot be trusted silently. Repair with `chmod 600` on the DockBridge store file.
+
+When merging OpenSSH `known_hosts` on connect, the external file must be owned by the effective user, must not be a symbolic link, and must not be writable by group or others (standard `0644` is accepted). Files with group/other write bits (for example `0664` or `0666`) are rejected at import.
 
 ### Known hosts strict mode
 
