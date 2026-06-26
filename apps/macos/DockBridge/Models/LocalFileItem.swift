@@ -42,6 +42,8 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
 
     var isParentDirectory: Bool { name == ".." }
 
+    var modificationSortKey: Date { modificationDate ?? .distantPast }
+
     static func list(
         directory: URL,
         showHiddenFiles: Bool

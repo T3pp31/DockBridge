@@ -55,16 +55,11 @@ enum PathBreadcrumb {
             return [Segment(path: "/", title: "/")]
         }
 
-        var segments: [Segment] = []
+        var segments: [Segment] = [Segment(path: "/", title: "/")]
         var accumulated = ""
-        for component in normalized.split(separator: "/", omittingEmptySubsequences: false) {
-            if accumulated.isEmpty {
-                accumulated = component.isEmpty ? "/" : "/\(component)"
-            } else {
-                accumulated += "/\(component)"
-            }
-            let title = component.isEmpty ? "/" : String(component)
-            segments.append(Segment(path: accumulated, title: title))
+        for component in normalized.split(separator: "/").map(String.init) where !component.isEmpty {
+            accumulated += "/\(component)"
+            segments.append(Segment(path: accumulated, title: component))
         }
         return segments
     }

@@ -222,7 +222,7 @@ struct LocalFileTable: View {
             TableColumn("Size", value: \.size) { item in
                 Text(item.isDirectory ? "—" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
             }
-            TableColumn("Modified", value: \.modificationDate) { item in
+            TableColumn("Modified", value: \.modificationSortKey) { item in
                 if let date = item.modificationDate {
                     Text(date, style: .date)
                 } else {
