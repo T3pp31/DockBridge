@@ -252,8 +252,21 @@ pub async fn walk_local_directory_with_options(
 
     let mut entries = Vec::new();
     let mut pending = vec![root.to_path_buf()];
+    let mut visited = HashSet::<PathBuf>::new();
 
     while let Some(current) = pending.pop() {
+        let canonical =
+            tokio::fs::canonicalize(&current)
+                .await
+                .map_err(|err| SftpError::UploadFailed {
+                    local: current.display().to_string(),
+                    remote: String::new(),
+                    message: err.to_string(),
+                })?;
+        if !visited.insert(canonical) {
+            continue;
+        }
+
         let mut read_dir =
             tokio::fs::read_dir(&current)
                 .await
@@ -713,5 +726,34 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert!(relatives.contains(&"link_dir/nested.txt".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_local_directory_with_options_avoids_symlink_cycle_to_parent() {
+        // Given: a directory containing a symlink that points back to itself
+        // When: follow_symlinks is enabled
+        // Then: the cycle is detected and the walk terminates without duplicates
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("top.txt"), b"top").unwrap();
+        std::os::unix::fs::symlink(root, root.join("link_dir")).unwrap();
+
+        let entries = walk_local_directory_with_options(
+            root,
+            WalkLocalDirectoryOptions {
+                follow_symlinks: true,
+            },
+        )
+        .await
+        .unwrap();
+        let relatives: Vec<_> = entries
+            .iter()
+            .map(|entry| entry.relative_path.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(entries.len(), 1);
+        assert!(relatives.contains(&"top.txt".to_string()));
+        assert!(!relatives.iter().any(|path| path.contains("link_dir")));
     }
 }
