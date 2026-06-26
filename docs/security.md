@@ -15,6 +15,7 @@
 - Private key files require a security-scoped bookmark (selected via Browse…); plaintext path-only references are not used for connections
 - No passwords, keys, or passphrases in logs
 - Rust secrets use `Debug` redaction and `zeroize` where applicable
+- CLI `--password-stdin` read buffers use `Zeroizing<String>` so stdin input is zeroized on drop
 - UniFFI credentials use a `SecretCredential` custom type that zeroizes on drop after lift
 - Swift clears password/passphrase and `ConnectionProfileRecord` credentials after connect
 - Delete confirmation for destructive operations
