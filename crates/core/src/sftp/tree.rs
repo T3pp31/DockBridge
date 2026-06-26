@@ -255,13 +255,14 @@ pub async fn walk_local_directory_with_options(
     let mut visited = HashSet::<PathBuf>::new();
 
     while let Some(current) = pending.pop() {
-        let canonical = tokio::fs::canonicalize(&current)
-            .await
-            .map_err(|err| SftpError::UploadFailed {
-                local: current.display().to_string(),
-                remote: String::new(),
-                message: err.to_string(),
-            })?;
+        let canonical =
+            tokio::fs::canonicalize(&current)
+                .await
+                .map_err(|err| SftpError::UploadFailed {
+                    local: current.display().to_string(),
+                    remote: String::new(),
+                    message: err.to_string(),
+                })?;
         if !visited.insert(canonical) {
             continue;
         }
