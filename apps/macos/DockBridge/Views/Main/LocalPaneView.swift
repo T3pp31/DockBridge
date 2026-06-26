@@ -14,19 +14,19 @@ struct LocalPaneView: View {
                 LocalFileTable(viewModel: viewModel)
                     .frame(width: size.width, height: size.height)
                     .contextMenu(forSelectionType: String.self) { ids in
-                        if let item = singleSelectedLocalItem(from: ids) {
+                        if let item = singleSelectedLocalItem(from: ids), !item.isParentDirectory {
                             Button("Upload") {
                                 viewModel.selectedLocalItemID = item.id
                                 Task { await viewModel.uploadSelected() }
                             }
                         }
                     } primaryAction: { ids in
-                        if let item = singleSelectedLocalItem(from: ids) ?? viewModel.selectedLocalItem {
+                        if let item = singleSelectedLocalItem(from: ids) ?? viewModel.selectedLocalTableItem {
                             viewModel.openLocalTableItem(item)
                         }
                     }
                     .onKeyPress(.return) {
-                        if let item = viewModel.selectedLocalItem {
+                        if let item = viewModel.selectedLocalTableItem {
                             viewModel.openLocalTableItem(item)
                             return .handled
                         }
@@ -51,6 +51,6 @@ struct LocalPaneView: View {
 
     private func singleSelectedLocalItem(from ids: Set<String>) -> LocalFileItem? {
         guard ids.count == 1, let id = ids.first else { return nil }
-        return viewModel.localItems.first { $0.id == id }
+        return viewModel.localTableItems.first { $0.id == id }
     }
 }

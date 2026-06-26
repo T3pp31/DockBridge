@@ -30,6 +30,16 @@ final class MainViewModel: ObservableObject {
         guard let selectedRemoteItemID else { return nil }
         return remoteItems.first { $0.id == selectedRemoteItemID }
     }
+
+    var selectedLocalTableItem: LocalFileItem? {
+        guard let selectedLocalItemID else { return nil }
+        return localTableItems.first { $0.id == selectedLocalItemID }
+    }
+
+    var selectedRemoteTableItem: RemoteFileRecord? {
+        guard let selectedRemoteItemID else { return nil }
+        return remoteTableItems.first { $0.id == selectedRemoteItemID }
+    }
     @Published var errorMessage: String?
     @Published var showDeleteConfirmation = false
     @Published var pendingDeleteRemotePath: String?
@@ -333,6 +343,8 @@ final class MainViewModel: ObservableObject {
             navigateRemote(into: item)
         }
     }
+
+    func uploadSelected() async {
         guard let item = selectedLocalItem else { return }
         await upload(localURL: item.url, toRemoteDirectory: remotePath)
     }

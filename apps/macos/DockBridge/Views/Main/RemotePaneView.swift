@@ -15,7 +15,7 @@ struct RemotePaneView: View {
                     RemoteFileTable(viewModel: viewModel)
                         .frame(width: size.width, height: size.height)
                         .contextMenu(forSelectionType: String.self) { ids in
-                            if let item = singleSelectedRemoteItem(from: ids) {
+                            if let item = singleSelectedRemoteItem(from: ids), !item.isParentDirectory {
                                 Button("Download") {
                                     viewModel.selectedRemoteItemID = item.id
                                     Task { await viewModel.downloadSelected() }
@@ -28,12 +28,12 @@ struct RemotePaneView: View {
                                 }
                             }
                         } primaryAction: { ids in
-                            if let item = singleSelectedRemoteItem(from: ids) ?? viewModel.selectedRemoteItem {
+                            if let item = singleSelectedRemoteItem(from: ids) ?? viewModel.selectedRemoteTableItem {
                                 viewModel.openRemoteTableItem(item)
                             }
                         }
                         .onKeyPress(.return) {
-                            if let item = viewModel.selectedRemoteItem {
+                            if let item = viewModel.selectedRemoteTableItem {
                                 viewModel.openRemoteTableItem(item)
                                 return .handled
                             }
@@ -103,6 +103,6 @@ struct RemotePaneView: View {
 
     private func singleSelectedRemoteItem(from ids: Set<String>) -> RemoteFileRecord? {
         guard ids.count == 1, let id = ids.first else { return nil }
-        return viewModel.remoteItems.first { $0.id == id }
+        return viewModel.remoteTableItems.first { $0.id == id }
     }
 }
