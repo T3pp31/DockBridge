@@ -207,9 +207,10 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
     }
 
     func clearAllTransfers() async throws {
-        try await runOnBridge { client, _ in
+        guard let client else { return }
+        try await Task.detached(priority: .userInitiated) {
             try client.clearAllTransfers()
-        }
+        }.value
     }
 
     func retryTransfer(taskId: UInt64) async throws {
