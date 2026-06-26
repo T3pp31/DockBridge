@@ -206,7 +206,7 @@ enum DefaultLocalPathResolver {
 
     static func userMessage(for _: Error) -> String {
         """
-        デフォルトのローカルフォルダへのアクセス権がありません。設定を開き、「Choose…」からフォルダを再選択してください。
+        Access to the default local folder was denied. Open Settings and use Choose… to select the folder again.
         """
     }
 }

@@ -199,6 +199,25 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
         }
     }
 
+    func clearCompletedTransfers() async throws {
+        guard let client else { return }
+        try await Task.detached(priority: .userInitiated) {
+            client.clearCompletedTransfers()
+        }.value
+    }
+
+    func clearAllTransfers() async throws {
+        try await runOnBridge { client, _ in
+            try client.clearAllTransfers()
+        }
+    }
+
+    func retryTransfer(taskId: UInt64) async throws {
+        try await runOnBridge { client, sessionId in
+            try client.retryTransfer(sessionId: sessionId, taskId: taskId)
+        }
+    }
+
     func respondToHostKeyChallenge(accepted: Bool) {
         pendingHostKeyChallenge = nil
         guard let continuation = hostKeyContinuation else { return }

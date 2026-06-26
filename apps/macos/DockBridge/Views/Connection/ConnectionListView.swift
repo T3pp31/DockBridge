@@ -6,29 +6,35 @@ struct ConnectionListView: View {
     @Binding var editingProfile: ConnectionProfile?
 
     var body: some View {
-        List(selection: $viewModel.selectedProfileID) {
-            ForEach(viewModel.profiles) { profile in
-                HStack(spacing: 8) {
-                    connectionIndicator(for: profile)
+        VStack(spacing: 0) {
+            TextField("Search connections", text: $viewModel.searchText)
+                .textFieldStyle(.roundedBorder)
+                .padding([.horizontal, .top])
 
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(profile.displayName)
-                            .font(.headline)
-                        Text(profile.endpointLabel)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+            List(selection: $viewModel.selectedProfileID) {
+                ForEach(viewModel.filteredProfiles) { profile in
+                    HStack(spacing: 8) {
+                        connectionIndicator(for: profile)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(profile.displayName)
+                                .font(.headline)
+                            Text(profile.endpointLabel)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                }
-                .tag(profile.id)
-                .contextMenu {
-                    Button("Connect") {
-                        viewModel.requestConnect(profile: profile)
-                    }
-                    Button("Edit") {
-                        editingProfile = profile
-                    }
-                    Button("Delete", role: .destructive) {
-                        viewModel.delete(profile: profile)
+                    .tag(profile.id)
+                    .contextMenu {
+                        Button("Connect") {
+                            viewModel.requestConnect(profile: profile)
+                        }
+                        Button("Edit") {
+                            editingProfile = profile
+                        }
+                        Button("Delete", role: .destructive) {
+                            viewModel.delete(profile: profile)
+                        }
                     }
                 }
             }

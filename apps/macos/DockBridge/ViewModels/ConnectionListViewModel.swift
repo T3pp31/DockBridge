@@ -4,6 +4,7 @@ import Foundation
 final class ConnectionListViewModel: ObservableObject {
     @Published private(set) var profiles: [ConnectionProfile] = []
     @Published var selectedProfileID: UUID?
+    @Published var searchText = ""
     @Published var errorMessage: String?
     @Published var showRootWarning = false
     @Published var showRsaKeyWarning = false
@@ -26,6 +27,16 @@ final class ConnectionListViewModel: ObservableObject {
     var isConnected: Bool { bridge.isConnected }
     var connectionStatus: ConnectionStatus { bridge.connectionStatus }
     var connectedProfileID: UUID? { bridge.connectedProfileID }
+
+    var filteredProfiles: [ConnectionProfile] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return profiles }
+        return profiles.filter { profile in
+            profile.displayName.localizedCaseInsensitiveContains(query)
+                || profile.endpointLabel.localizedCaseInsensitiveContains(query)
+                || profile.host.localizedCaseInsensitiveContains(query)
+        }
+    }
 
     init(
         store: ConnectionStore = .shared,
@@ -64,7 +75,7 @@ final class ConnectionListViewModel: ObservableObject {
     func save(_ profile: ConnectionProfile, password: String?, passphrase: String?) {
         if profile.requiresPrivateKeyBookmark, !profile.hasPrivateKeyBookmark {
             errorMessage = """
-            秘密鍵は「Browse…」から選択してください。セキュリティスコープ付きブックマークが必要です。
+            Select the private key with Browse…. A security-scoped bookmark is required.
             """
             return
         }
@@ -261,7 +272,7 @@ final class ConnectionListViewModel: ObservableObject {
             if profile.authType == .privateKey {
                 guard let bookmark = profile.privateKeyBookmark else {
                     errorMessage = """
-                    秘密鍵へのアクセス権がありません。接続設定を開き、「Browse…」から秘密鍵を再選択してください。
+                    Access to the private key was denied. Open the connection settings and use Browse… to select the key again.
                     """
                     return
                 }
@@ -303,7 +314,7 @@ final class ConnectionListViewModel: ObservableObject {
     private func profileUsesRsaPrivateKey(_ profile: ConnectionProfile) -> Bool? {
         guard let bookmark = profile.privateKeyBookmark else {
             errorMessage = """
-            秘密鍵へのアクセス権がありません。接続設定を開き、「Browse…」から秘密鍵を再選択してください。
+            Access to the private key was denied. Open the connection settings and use Browse… to select the key again.
             """
             return nil
         }

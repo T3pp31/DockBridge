@@ -9,6 +9,14 @@ struct TransferQueueView: View {
                 Text("Transfer Queue")
                     .font(.headline)
                 Spacer()
+                if viewModel.hasFinishedTasks {
+                    Button("Clear Completed") {
+                        Task { await viewModel.clearCompleted() }
+                    }
+                    Button("Clear All") {
+                        Task { await viewModel.clearAll() }
+                    }
+                }
                 Button("Refresh") {
                     Task { await viewModel.refresh() }
                 }
@@ -50,13 +58,20 @@ struct TransferQueueView: View {
                 statusView(for: task)
             }
             TableColumn("") { task in
-                if canCancel(task: task) {
-                    Button("Cancel") {
-                        Task { await viewModel.cancel(task: task) }
+                HStack(spacing: 8) {
+                    if canRetry(task: task) {
+                        Button("Retry") {
+                            Task { await viewModel.retry(task: task) }
+                        }
+                    }
+                    if canCancel(task: task) {
+                        Button("Cancel") {
+                            Task { await viewModel.cancel(task: task) }
+                        }
                     }
                 }
             }
-            .width(80)
+            .width(120)
         }
     }
 
@@ -65,7 +80,8 @@ struct TransferQueueView: View {
         if case .inProgress = task.status,
            let progressLabel = TransferProgressFormatter.progressLabel(
                transferred: task.bytesTransferred,
-               total: task.totalBytes
+               total: task.totalBytes,
+               bytesPerSecond: viewModel.bytesPerSecond(for: task)
            ) {
             VStack(alignment: .leading, spacing: 4) {
                 ProgressView(
@@ -76,6 +92,10 @@ struct TransferQueueView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        } else if case .failed(let message) = task.status {
+            Text("Failed")
+                .foregroundStyle(.red)
+                .help(message)
         } else {
             Text(statusLabel(for: task.status))
         }
@@ -90,12 +110,21 @@ struct TransferQueueView: View {
         }
     }
 
+    private func canRetry(task: TransferTaskRecord) -> Bool {
+        switch task.status {
+        case .failed, .cancelled:
+            return true
+        case .pending, .inProgress, .completed:
+            return false
+        }
+    }
+
     private func statusLabel(for status: TransferStatusRecord) -> String {
         switch status {
         case .pending: "Pending"
         case .inProgress: "In Progress"
         case .completed: "Completed"
-        case .failed(let message): "Failed: \(message)"
+        case .failed: "Failed"
         case .cancelled: "Cancelled"
         }
     }

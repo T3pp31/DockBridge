@@ -4,7 +4,9 @@ enum FileDropValidation {
     static func isDisplayedLocalItem(_ payload: LocalFileDragPayload, in items: [LocalFileItem]) -> Bool {
         let payloadPath = normalizedLocalPath(payload.url)
         return items.contains { item in
-            normalizedLocalPath(item.url) == payloadPath && item.isDirectory == payload.isDirectory
+            !item.isParentDirectory
+                && normalizedLocalPath(item.url) == payloadPath
+                && item.isDirectory == payload.isDirectory
         }
     }
 
@@ -13,7 +15,8 @@ enum FileDropValidation {
             return false
         }
         return items.contains { item in
-            guard let normalizedItemPath = try? RemotePath.normalize(item.path) else {
+            guard !item.isParentDirectory,
+                  let normalizedItemPath = try? RemotePath.normalize(item.path) else {
                 return false
             }
             return normalizedItemPath == normalizedPayloadPath && item.isDirectory == payload.isDirectory

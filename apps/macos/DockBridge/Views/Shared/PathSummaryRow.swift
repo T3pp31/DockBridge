@@ -4,6 +4,8 @@ import SwiftUI
 struct PathSummaryRow<Actions: View>: View {
     let label: String
     let path: String
+    var breadcrumbSegments: [PathBreadcrumb.Segment] = []
+    var onBreadcrumbSelect: ((String) -> Void)?
     var showRevealInFinder: Bool = false
     @ViewBuilder var actions: () -> Actions
 
@@ -40,12 +42,17 @@ struct PathSummaryRow<Actions: View>: View {
                 }
             }
 
-            Text(path)
-                .font(.caption.monospaced())
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(path)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if let onBreadcrumbSelect, !breadcrumbSegments.isEmpty {
+                PathBreadcrumbView(segments: breadcrumbSegments, onSelect: onBreadcrumbSelect)
+                    .help(path)
+            } else {
+                Text(path)
+                    .font(.caption.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(path)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 
@@ -56,9 +63,17 @@ struct PathSummaryRow<Actions: View>: View {
 }
 
 extension PathSummaryRow where Actions == EmptyView {
-    init(label: String, path: String, showRevealInFinder: Bool = false) {
+    init(
+        label: String,
+        path: String,
+        breadcrumbSegments: [PathBreadcrumb.Segment] = [],
+        onBreadcrumbSelect: ((String) -> Void)? = nil,
+        showRevealInFinder: Bool = false
+    ) {
         self.label = label
         self.path = path
+        self.breadcrumbSegments = breadcrumbSegments
+        self.onBreadcrumbSelect = onBreadcrumbSelect
         self.showRevealInFinder = showRevealInFinder
         self.actions = { EmptyView() }
     }

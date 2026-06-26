@@ -235,7 +235,7 @@ final class ManualTestPlanVerificationTests: XCTestCase {
             self.bridge?.isConnected != true
         }
         XCTAssertTrue(disconnected, "Expected disconnected status within 12 seconds")
-        XCTAssertEqual(bridge?.connectionStatus.statusTitle, "未接続")
+        XCTAssertEqual(bridge?.connectionStatus.statusTitle, "Disconnected")
     }
 
     func testUnknownHostFirstConnectionShowsPromptAndContinuesAfterAccept() async throws {

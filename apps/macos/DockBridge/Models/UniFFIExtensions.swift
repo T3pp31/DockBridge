@@ -2,6 +2,18 @@ import Foundation
 
 extension RemoteFileRecord: Identifiable {
     public var id: String { path }
+
+    var isParentDirectory: Bool { name == ".." }
+
+    static func parentEntry(for path: String) -> RemoteFileRecord? {
+        guard path != "/", let parent = try? RemotePath.parent(of: path) else { return nil }
+        return RemoteFileRecord(
+            name: "..",
+            path: parent,
+            isDirectory: true,
+            size: 0
+        )
+    }
 }
 
 extension TransferTaskRecord: Identifiable {}
@@ -28,44 +40,44 @@ extension DockBridgeError {
 
         if lowercased.contains("known hosts") || lowercased.contains("known_hosts") {
             return """
-            ホスト鍵ストアを読み込めません。アプリを終了し、known_hosts.json を退避または削除してから再接続してください。
+            Unable to load the host key store. Quit the app, back up or remove known_hosts.json, then reconnect.
             """
         }
 
         if lowercased.contains("host key mismatch") || lowercased.contains("mismatch") {
-            return "サーバーの識別情報が前回と異なります。接続を中止し、サーバー管理者に確認してください。"
+            return "The server's identity has changed. Disconnect and verify with your server administrator."
         }
 
         if lowercased.contains("host key rejected") {
-            return "ホスト鍵の承認が拒否されたため、接続を中止しました。"
+            return "Connection aborted because the host key was not approved."
         }
 
         if lowercased.contains("authentication") || lowercased.contains("auth failed") {
-            return "ユーザー名またはパスワードを確認してください。"
+            return "Check the username and password."
         }
 
         if lowercased.contains("timed out") || lowercased.contains("timeout") {
-            return "接続先・ポート・ネットワークを確認してください。"
+            return "Check the host, port, and network connection."
         }
 
         if lowercased.contains("session closed") {
-            return "接続が切断されました。再接続してから再試行してください。"
+            return "The connection was closed. Reconnect and try again."
         }
 
         if lowercased.contains("permission denied") {
-            return "リモート先への書き込み権限がありません。リモートの作業ディレクトリを確認してください。"
+            return "You do not have write permission on the remote side. Check the remote working directory."
         }
 
         if lowercased.contains("failed to create directory") {
-            return "リモートの作業ディレクトリを作成できません。パスと書き込み権限を確認してください。"
+            return "Unable to create the remote working directory. Check the path and write permissions."
         }
 
         if lowercased.contains("failed to upload") && lowercased.contains("no such file") {
-            return "リモートの保存先ディレクトリが存在しません。リモートペインで有効なディレクトリに移動してから再試行してください。"
+            return "The remote destination directory does not exist. Open a valid directory in the remote pane and try again."
         }
 
         if lowercased.contains("not found") {
-            return "ファイルまたはディレクトリが見つかりません。"
+            return "The file or directory was not found."
         }
 
         return message

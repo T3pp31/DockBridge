@@ -70,6 +70,75 @@ impl TransferManager {
             .unwrap_or_default()
     }
 
+    /// Removes completed, failed, and cancelled tasks from the queue.
+    pub fn clear_completed_transfers(&self) {
+        if let Ok(mut tasks) = self.tasks.lock() {
+            tasks.retain(|task| {
+                matches!(
+                    task.status,
+                    TransferStatus::Pending | TransferStatus::InProgress
+                )
+            });
+        }
+    }
+
+    /// Removes every task from the queue, cancelling active transfers first.
+    pub fn clear_all_transfers(&self) -> Result<(), TransferError> {
+        let active_ids: Vec<u64> = self
+            .get_transfer_queue()
+            .into_iter()
+            .filter(|task| {
+                matches!(
+                    task.status,
+                    TransferStatus::Pending | TransferStatus::InProgress
+                )
+            })
+            .map(|task| task.id)
+            .collect();
+
+        for task_id in active_ids {
+            let _ = self.cancel_transfer(task_id);
+        }
+
+        if let Ok(mut tasks) = self.tasks.lock() {
+            tasks.clear();
+        }
+
+        Ok(())
+    }
+
+    /// Re-enqueues a failed or cancelled transfer task.
+    pub async fn retry_transfer(
+        &self,
+        session: &SshSession,
+        task_id: u64,
+    ) -> Result<TransferTask, TransferError> {
+        let task = self
+            .find_task(task_id)
+            .ok_or(TransferError::TaskNotFound { task_id })?;
+
+        match task.status {
+            TransferStatus::Failed { .. } | TransferStatus::Cancelled => {}
+            _ => return Err(TransferError::TaskNotFound { task_id }),
+        }
+
+        if let Ok(mut tasks) = self.tasks.lock() {
+            tasks.retain(|existing| existing.id != task_id);
+        }
+        self.remove_cancellation_flag(task_id);
+
+        match task.direction {
+            TransferDirection::Upload => {
+                self.enqueue_upload(session, &task.local_path, &task.remote_path)
+                    .await
+            }
+            TransferDirection::Download => {
+                self.enqueue_download(session, &task.remote_path, &task.local_path)
+                    .await
+            }
+        }
+    }
+
     /// Cancels a pending or in-progress transfer task.
     pub fn cancel_transfer(&self, task_id: u64) -> Result<(), TransferError> {
         let mut tasks = self
@@ -989,5 +1058,54 @@ mod tests {
         // Then: transferred bytes match total
         let queue = manager.get_transfer_queue();
         assert_eq!(queue[0].bytes_transferred, 1_000);
+    }
+
+    #[test]
+    fn clear_completed_transfers_removes_finished_tasks() {
+        let manager = TransferManager::new(&AppConfig::default());
+        manager.insert_task(TransferTask {
+            id: 1,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/a.txt"),
+            remote_path: "/remote/a.txt".to_string(),
+            status: TransferStatus::Completed,
+            bytes_transferred: 10,
+            total_bytes: 10,
+        });
+        manager.insert_task(TransferTask {
+            id: 2,
+            direction: TransferDirection::Download,
+            local_path: PathBuf::from("/tmp/b.txt"),
+            remote_path: "/remote/b.txt".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 5,
+            total_bytes: 10,
+        });
+
+        manager.clear_completed_transfers();
+
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].id, 2);
+    }
+
+    #[test]
+    fn clear_all_transfers_cancels_active_and_empties_queue() {
+        let manager = TransferManager::new(&AppConfig::default());
+        manager.insert_task(TransferTask {
+            id: 1,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/a.txt"),
+            remote_path: "/remote/a.txt".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 10,
+        });
+        manager.register_cancellation_flag(1);
+
+        manager.clear_all_transfers().unwrap();
+
+        assert!(manager.get_transfer_queue().is_empty());
+        assert!(manager.is_cancelled(1));
     }
 }

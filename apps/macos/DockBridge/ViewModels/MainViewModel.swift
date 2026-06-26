@@ -2,9 +2,21 @@ import Foundation
 
 @MainActor
 final class MainViewModel: ObservableObject {
-    @Published var localPath: URL
+    @Published var localPath: URL {
+        didSet {
+            if !isApplyingNavigationHistory {
+                localHistory.navigate(to: localPath.path)
+            }
+        }
+    }
     @Published private(set) var localItems: [LocalFileItem] = []
-    @Published var remotePath = "/"
+    @Published var remotePath = "/" {
+        didSet {
+            if !isApplyingNavigationHistory {
+                remoteHistory.navigate(to: remotePath)
+            }
+        }
+    }
     @Published private(set) var remoteItems: [RemoteFileRecord] = []
     @Published var selectedLocalItemID: String?
     @Published var selectedRemoteItemID: String?
@@ -17,6 +29,16 @@ final class MainViewModel: ObservableObject {
     var selectedRemoteItem: RemoteFileRecord? {
         guard let selectedRemoteItemID else { return nil }
         return remoteItems.first { $0.id == selectedRemoteItemID }
+    }
+
+    var selectedLocalTableItem: LocalFileItem? {
+        guard let selectedLocalItemID else { return nil }
+        return localTableItems.first { $0.id == selectedLocalItemID }
+    }
+
+    var selectedRemoteTableItem: RemoteFileRecord? {
+        guard let selectedRemoteItemID else { return nil }
+        return remoteTableItems.first { $0.id == selectedRemoteItemID }
     }
     @Published var errorMessage: String?
     @Published var showDeleteConfirmation = false
@@ -35,6 +57,20 @@ final class MainViewModel: ObservableObject {
     private var defaultLocalAccessURL: URL?
     private var localLoadGeneration = 0
     private var remoteLoadGeneration = 0
+    private var localHistory: PathNavigationHistory
+    private var remoteHistory = PathNavigationHistory(current: "/")
+    private var isApplyingNavigationHistory = false
+
+    var canNavigateLocalUp: Bool {
+        let parent = localPath.deletingLastPathComponent()
+        return parent.path != localPath.path
+    }
+
+    var canNavigateLocalBack: Bool { localHistory.canGoBack }
+    var canNavigateLocalForward: Bool { localHistory.canGoForward }
+    var canNavigateRemoteUp: Bool { remotePath != "/" }
+    var canNavigateRemoteBack: Bool { remoteHistory.canGoBack }
+    var canNavigateRemoteForward: Bool { remoteHistory.canGoForward }
 
     init(
         settings: AppSettingsService = .shared,
@@ -51,7 +87,10 @@ final class MainViewModel: ObservableObject {
         let config = settings.loadConfig()
         let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
         self.defaultLocalAccessURL = resolution.accessURL
+        self.localHistory = PathNavigationHistory(current: resolution.url.path)
+        isApplyingNavigationHistory = true
         self.localPath = resolution.url
+        isApplyingNavigationHistory = false
         if case .bookmarkFailed(_, let error) = resolution {
             self.errorMessage = DefaultLocalPathResolver.userMessage(for: error)
         }
@@ -65,7 +104,8 @@ final class MainViewModel: ObservableObject {
 
         let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
         defaultLocalAccessURL = resolution.accessURL
-        localPath = resolution.url
+        applyLocalPath(resolution.url, recordHistory: false)
+        localHistory.reset(to: resolution.url.path)
         if case .bookmarkFailed(_, let error) = resolution {
             errorMessage = DefaultLocalPathResolver.userMessage(for: error)
         }
@@ -111,20 +151,44 @@ final class MainViewModel: ObservableObject {
 
     func navigateLocal(into item: LocalFileItem) {
         guard item.isDirectory else { return }
-        localPath = item.url
+        applyLocalPath(item.url)
+        selectedLocalItemID = nil
+    }
+
+    func navigateLocal(to path: String) {
+        applyLocalPath(URL(fileURLWithPath: path, isDirectory: true))
         selectedLocalItemID = nil
     }
 
     func navigateLocalUp() {
         let parent = localPath.deletingLastPathComponent()
         guard parent.path != localPath.path else { return }
-        localPath = parent
+        applyLocalPath(parent)
         selectedLocalItemID = nil
+    }
+
+    func navigateLocalBack() {
+        guard let path = localHistory.goBack() else { return }
+        applyLocalPath(URL(fileURLWithPath: path, isDirectory: true), recordHistory: false)
+        selectedLocalItemID = nil
+    }
+
+    func navigateLocalForward() {
+        guard let path = localHistory.goForward() else { return }
+        applyLocalPath(URL(fileURLWithPath: path, isDirectory: true), recordHistory: false)
+        selectedLocalItemID = nil
+    }
+
+    private func applyLocalPath(_ url: URL, recordHistory: Bool = true) {
+        isApplyingNavigationHistory = !recordHistory
+        localPath = url
+        isApplyingNavigationHistory = false
     }
 
     func onConnectionChanged(isConnected: Bool) async {
         guard isConnected else {
-            remotePath = "/"
+            applyRemotePath("/", recordHistory: false)
+            remoteHistory.reset(to: "/")
             remoteItems = []
             await transferQueue.refresh()
             if let reason = bridge.lastDisconnectReason {
@@ -145,22 +209,27 @@ final class MainViewModel: ObservableObject {
         guard remotePath == "/" else { return }
 
         if let initialDirectory = bridge.initialRemoteDirectory {
-            remotePath = initialDirectory
+            applyRemotePath(initialDirectory, recordHistory: false)
+            remoteHistory.reset(to: initialDirectory)
             return
         }
 
         do {
-            remotePath = try await bridge.getInitialDirectory()
+            let directory = try await bridge.getInitialDirectory()
+            applyRemotePath(directory, recordHistory: false)
+            remoteHistory.reset(to: directory)
         } catch {
             if let fallback = await verifiedFallbackHomePath() {
-                remotePath = fallback
+                applyRemotePath(fallback, recordHistory: false)
+                remoteHistory.reset(to: fallback)
             } else {
                 throw error
             }
         }
 
         if remotePath == "/", let fallback = await verifiedFallbackHomePath() {
-            remotePath = fallback
+            applyRemotePath(fallback, recordHistory: false)
+            remoteHistory.reset(to: fallback)
         }
     }
 
@@ -207,7 +276,13 @@ final class MainViewModel: ObservableObject {
 
     func navigateRemote(into item: RemoteFileRecord) {
         guard item.isDirectory, let path = try? RemotePath.directoryPath(item.path) else { return }
-        remotePath = path
+        applyRemotePath(path)
+        selectedRemoteItemID = nil
+    }
+
+    func navigateRemote(to path: String) {
+        guard let normalized = try? RemotePath.directoryPath(path) else { return }
+        applyRemotePath(normalized)
         selectedRemoteItemID = nil
     }
 
@@ -215,8 +290,58 @@ final class MainViewModel: ObservableObject {
         guard remotePath != "/" else { return }
         guard let parent = try? RemotePath.parent(of: remotePath),
               let path = try? RemotePath.directoryPath(parent) else { return }
-        remotePath = path
+        applyRemotePath(path)
         selectedRemoteItemID = nil
+    }
+
+    func navigateRemoteBack() {
+        guard let path = remoteHistory.goBack() else { return }
+        applyRemotePath(path, recordHistory: false)
+        selectedRemoteItemID = nil
+    }
+
+    func navigateRemoteForward() {
+        guard let path = remoteHistory.goForward() else { return }
+        applyRemotePath(path, recordHistory: false)
+        selectedRemoteItemID = nil
+    }
+
+    private func applyRemotePath(_ path: String, recordHistory: Bool = true) {
+        isApplyingNavigationHistory = !recordHistory
+        remotePath = path
+        isApplyingNavigationHistory = false
+    }
+
+    var localTableItems: [LocalFileItem] {
+        var items = localItems
+        if canNavigateLocalUp {
+            items.insert(LocalFileItem(parentOf: localPath), at: 0)
+        }
+        return items
+    }
+
+    var remoteTableItems: [RemoteFileRecord] {
+        var items = remoteItems
+        if canNavigateRemoteUp, let parent = RemoteFileRecord.parentEntry(for: remotePath) {
+            items.insert(parent, at: 0)
+        }
+        return items
+    }
+
+    func openLocalTableItem(_ item: LocalFileItem) {
+        if item.isParentDirectory {
+            navigateLocalUp()
+        } else if item.isDirectory {
+            navigateLocal(into: item)
+        }
+    }
+
+    func openRemoteTableItem(_ item: RemoteFileRecord) {
+        if item.isParentDirectory {
+            navigateRemoteUp()
+        } else if item.isDirectory {
+            navigateRemote(into: item)
+        }
     }
 
     func uploadSelected() async {
