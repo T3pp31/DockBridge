@@ -157,13 +157,39 @@ fn default_fail_connect_on_openssh_merge_error() -> bool {
 
 /// Ensures the parent directory for the known hosts file exists.
 pub fn ensure_known_hosts_parent(path: &Path) -> Result<(), SecurityError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| SecurityError::KnownHostsWriteFailed {
-            path: path.display().to_string(),
-            message: err.to_string(),
-        })?;
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(());
     }
+
+    create_known_hosts_parent_dir(parent).map_err(|err| SecurityError::KnownHostsWriteFailed {
+        path: path.display().to_string(),
+        message: err.to_string(),
+    })
+}
+
+#[cfg(unix)]
+fn create_known_hosts_parent_dir(parent: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    match std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(parent)
+    {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(err) => return Err(err),
+    }
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
     Ok(())
+}
+
+#[cfg(not(unix))]
+fn create_known_hosts_parent_dir(parent: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(parent)
 }
 
 #[cfg(test)]
@@ -278,5 +304,54 @@ mod tests {
 
         let err = AppConfig::from_toml_file(&path).unwrap_err();
         assert!(matches!(err, ConfigError::InvalidTransferChunkSize { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_known_hosts_parent_creates_parent_with_0700_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Given: a known_hosts path whose parent directory does not exist yet
+        let dir = std::env::temp_dir().join(format!(
+            "dockbridge-known-hosts-parent-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("nested/known_hosts.json");
+
+        // When: ensure_known_hosts_parent is called
+        ensure_known_hosts_parent(&path).unwrap();
+
+        // Then: the parent directory is created with mode 0700
+        let parent = path.parent().unwrap();
+        let mode = std::fs::metadata(parent).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_known_hosts_parent_tightens_existing_parent_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Given: an existing parent directory with permissive mode 0755
+        let dir = std::env::temp_dir().join(format!(
+            "dockbridge-known-hosts-tighten-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = dir.join("known_hosts.json");
+
+        // When: ensure_known_hosts_parent is called
+        ensure_known_hosts_parent(&path).unwrap();
+
+        // Then: the parent directory mode is tightened to 0700
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
