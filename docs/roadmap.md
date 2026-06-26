@@ -18,7 +18,7 @@
 - Drag and drop
 - chmod, hidden files, symlinks
 - Encrypted connection-profile storage (AES-GCM envelope + Keychain master key) — implemented; see [security.md](security.md#connection-profiles-profilesjson)
-- Developer ID signing and notarization for release DMGs — implemented; see [security.md](security.md#release-signing-pipeline)
+- Developer ID signing and notarization for release DMGs — planned for v1.0; see [security.md](security.md#code-signing-and-distribution)
 
 ## v0.3
 

@@ -3,7 +3,7 @@
 #
 # Installs an unsigned local build, removes quarantine attributes, and launches
 # the app. This bypasses Gatekeeper download protection and must not be used for
-# public distribution. Release builds are Developer ID signed and notarized.
+# public distribution. GitHub Release DMGs are also unsigned (see README).
 
 set -euo pipefail
 

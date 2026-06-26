@@ -214,12 +214,12 @@ Entitlements not granted include `network.server`, `temporary-exception.files.ab
 ### Code signing and distribution
 
 - Hardened Runtime enabled for Release builds
-- CI builds the macOS app unsigned (`CODE_SIGNING_ALLOWED=NO`) for compile and test verification only
-- Public releases are signed with a Developer ID Application certificate, notarized with Apple Notary Service, and verified before upload
+- GitHub Release workflow (`.github/workflows/release.yml`) sets `SIGN_AND_NOTARIZE=false` and publishes unsigned DMGs (`CODE_SIGNING_ALLOWED=NO` during the Xcode build)
+- Developer ID signing, Apple Notarization, and Gatekeeper verification are planned for v1.0; the scripts below are ready when repository secrets are configured
 
-#### Release signing pipeline
+#### Release signing pipeline (planned for v1.0)
 
-GitHub Release workflow (`.github/workflows/release.yml`) requires these repository secrets:
+When signing is enabled, the release workflow will require these repository secrets:
 
 | Secret | Purpose |
 |--------|---------|
@@ -229,22 +229,22 @@ GitHub Release workflow (`.github/workflows/release.yml`) requires these reposit
 | `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password for `notarytool` |
 | `APPLE_TEAM_ID` | Apple Developer Team ID |
 
-Release packaging runs `scripts/sign-and-notarize-macos.sh`, which:
+With `SIGN_AND_NOTARIZE=true`, release packaging runs `scripts/sign-and-notarize-macos.sh`, which:
 
 1. Signs the Release `.app` with a Developer ID Application certificate (`codesign --options runtime`)
 2. Submits the build to Apple's Notary Service (`notarytool submit --wait`)
 3. Staples the notarization ticket to the app bundle (`stapler staple`)
 4. Verifies Gatekeeper acceptance (`spctl --assess --type execute`)
 
-If signing or notarization fails, the release workflow stops before publishing assets.
+If signing or notarization fails, the release workflow must stop before publishing assets.
 
-Local unsigned builds for development:
+Local unsigned builds for development and current public releases:
 
 ```bash
 SIGN_AND_NOTARIZE=false ./scripts/package-macos-release.sh
 ```
 
-Do not distribute unsigned DMGs. The dev-only helper `scripts/dev-install-unsigned.command` removes quarantine attributes and must not be shipped in release DMGs.
+Do not remove Gatekeeper quarantine on public release DMGs. The dev-only helper `scripts/dev-install-unsigned.command` removes quarantine attributes and must not be shipped in release DMGs.
 
 ## Dependency vulnerability management
 
