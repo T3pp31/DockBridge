@@ -62,6 +62,20 @@ impl<'a> SftpClient<'a> {
         self.canonicalize_path(".").await.map(|_| ())
     }
 
+    /// Returns whether the remote path refers to a directory.
+    pub(crate) async fn remote_is_directory(&self, path: &str) -> Result<bool, SftpError> {
+        let path = normalize_remote_path(path)?;
+        let metadata = self
+            .sftp()
+            .metadata(&path)
+            .await
+            .map_err(|err| SftpError::ListFailed {
+                path: path.clone(),
+                message: err.to_string(),
+            })?;
+        Ok(metadata.file_type().is_dir())
+    }
+
     /// Lists entries in a remote directory.
     pub async fn list_directory(&self, path: &str) -> Result<Vec<RemoteFile>, SftpError> {
         let path = normalize_remote_path(path)?;
@@ -348,53 +362,51 @@ impl<'a> SftpClient<'a> {
         local_directory: &Path,
     ) -> Result<(), SftpError> {
         let normalized = normalize_remote_path(remote_path)?;
-        match self.list_directory(&normalized).await {
-            Ok(entries) => {
-                let directory_name = normalized
-                    .trim_end_matches('/')
-                    .rsplit('/')
-                    .next()
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or("download");
-                let local_root = local_directory.join(directory_name);
-                tokio::fs::create_dir_all(&local_root)
-                    .await
-                    .map_err(|err| SftpError::DownloadFailed {
-                        remote: normalized.clone(),
-                        local: local_root.display().to_string(),
-                        message: err.to_string(),
+        if self.remote_is_directory(&normalized).await? {
+            let entries = self.list_directory(&normalized).await?;
+            let directory_name = normalized
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .filter(|name| !name.is_empty())
+                .unwrap_or("download");
+            let local_root = local_directory.join(directory_name);
+            tokio::fs::create_dir_all(&local_root)
+                .await
+                .map_err(|err| SftpError::DownloadFailed {
+                    remote: normalized.clone(),
+                    local: local_root.display().to_string(),
+                    message: err.to_string(),
+                })?;
+
+            if entries.is_empty() {
+                return Ok(());
+            }
+
+            let files = walk_remote_directory(self, &normalized).await?;
+            for entry in files {
+                let local_path = local_root.join(&entry.relative_path);
+                ensure_local_path_within_root(&local_root, &local_path)?;
+                if let Some(parent) = local_path.parent() {
+                    tokio::fs::create_dir_all(parent).await.map_err(|err| {
+                        SftpError::DownloadFailed {
+                            remote: entry.remote_path.clone(),
+                            local: local_path.display().to_string(),
+                            message: err.to_string(),
+                        }
                     })?;
-
-                if entries.is_empty() {
-                    return Ok(());
                 }
-
-                let files = walk_remote_directory(self, &normalized).await?;
-                for entry in files {
-                    let local_path = local_root.join(&entry.relative_path);
-                    ensure_local_path_within_root(&local_root, &local_path)?;
-                    if let Some(parent) = local_path.parent() {
-                        tokio::fs::create_dir_all(parent).await.map_err(|err| {
-                            SftpError::DownloadFailed {
-                                remote: entry.remote_path.clone(),
-                                local: local_path.display().to_string(),
-                                message: err.to_string(),
-                            }
-                        })?;
-                    }
-                    self.download(&entry.remote_path, &local_path).await?;
-                }
-                Ok(())
+                self.download(&entry.remote_path, &local_path).await?;
             }
-            Err(_) => {
-                let file_name = normalized
-                    .rsplit('/')
-                    .next()
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or("download");
-                let local_path = local_directory.join(file_name);
-                self.download(&normalized, &local_path).await
-            }
+            Ok(())
+        } else {
+            let file_name = normalized
+                .rsplit('/')
+                .next()
+                .filter(|name| !name.is_empty())
+                .unwrap_or("download");
+            let local_path = local_directory.join(file_name);
+            self.download(&normalized, &local_path).await
         }
     }
 }
@@ -1620,6 +1632,92 @@ mod tests {
             list_partial_paths(local_dir.path()).is_empty(),
             "partial local files must be cleaned up: {:?}",
             list_partial_paths(local_dir.path())
+        );
+    }
+
+    #[tokio::test]
+    async fn list_directory_marks_files_correctly() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/tree/nested/file.txt", b"x")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let entries = client
+            .list_directory("/download/tree/nested")
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "file.txt");
+        assert!(!entries[0].is_directory, "{entries:?}");
+    }
+
+    #[tokio::test]
+    async fn download_entry_downloads_remote_file() {
+        // Given: a remote file on the test SFTP server
+        let server = TestSftpServer::start().await;
+        let payload = b"download entry file payload";
+        server
+            .write_remote_file("/download/file.txt", payload)
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+
+        // When: download_entry is called for the file path
+        client
+            .download_entry("/download/file.txt", local_dir.path())
+            .await
+            .unwrap();
+
+        // Then: the file is saved under the local directory
+        let local_path = local_dir.path().join("file.txt");
+        let contents = tokio::fs::read(&local_path).await.unwrap();
+        assert_eq!(contents, payload);
+    }
+
+    #[tokio::test]
+    async fn download_entry_downloads_remote_directory() {
+        // Given: a remote directory tree on the test SFTP server
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/tree/nested/file.txt", b"nested payload")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+
+        // When: download_entry is called for the directory path
+        client
+            .download_entry("/download/tree", local_dir.path())
+            .await
+            .unwrap();
+
+        // Then: the directory tree is mirrored locally
+        let local_path = local_dir.path().join("tree/nested/file.txt");
+        let contents = tokio::fs::read(&local_path).await.unwrap();
+        assert_eq!(contents, b"nested payload");
+    }
+
+    #[tokio::test]
+    async fn download_entry_propagates_missing_path_list_error() {
+        // Given: a remote path that does not exist
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+
+        // When: download_entry is called for the missing path
+        let err = client
+            .download_entry("/download/missing.txt", local_dir.path())
+            .await
+            .unwrap_err();
+
+        // Then: the original list/metadata error is returned instead of a download fallback error
+        assert!(matches!(err, SftpError::ListFailed { .. }));
+        assert!(
+            !matches!(err, SftpError::DownloadFailed { .. }),
+            "unexpected download fallback error: {err}"
         );
     }
 }

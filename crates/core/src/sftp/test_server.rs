@@ -96,6 +96,7 @@ impl russh::server::Handler for ServerImpl {
             root: self.root.clone(),
             failures: Arc::clone(&self.failures),
             handles: HashMap::new(),
+            dir_handles: HashMap::new(),
             next_handle: 1,
         };
         session.channel_success(channel_id)?;
@@ -108,10 +109,16 @@ struct OpenHandle {
     file: tokio::fs::File,
 }
 
+struct DirHandle {
+    entries: Vec<File>,
+    read_offset: usize,
+}
+
 struct SftpHandler {
     root: PathBuf,
     failures: Arc<FailureConfig>,
     handles: HashMap<String, OpenHandle>,
+    dir_handles: HashMap<String, DirHandle>,
     next_handle: u64,
 }
 
@@ -137,11 +144,45 @@ impl SftpHandler {
     }
 
     fn attrs_for(path: &Path) -> FileAttributes {
-        let mut attrs = FileAttributes::default();
-        if path.is_file() {
+        let mut attrs = FileAttributes::empty();
+        if path.is_dir() {
+            attrs.set_dir(true);
+        } else if path.is_file() {
+            attrs.set_regular(true);
             attrs.size = std::fs::metadata(path).ok().map(|meta| meta.len());
         }
         attrs
+    }
+
+    async fn read_directory_entries(&self, path: &str) -> Result<Vec<File>, StatusCode> {
+        let local = self.resolve(path);
+        if !local.is_dir() {
+            return Err(StatusCode::Failure);
+        }
+
+        let mut entries = Vec::new();
+        let mut read_dir = fs::read_dir(&local)
+            .await
+            .map_err(|_| StatusCode::Failure)?;
+        while let Some(entry) = read_dir
+            .next_entry()
+            .await
+            .map_err(|_| StatusCode::Failure)?
+        {
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            if file_name == "." || file_name == ".." {
+                continue;
+            }
+            let child_remote = if path == "/" {
+                format!("/{file_name}")
+            } else {
+                format!("{path}/{file_name}")
+            };
+            let local = self.resolve(&child_remote);
+            entries.push(File::new(file_name, Self::attrs_for(&local)));
+        }
+        entries.sort_by(|left, right| left.filename.cmp(&right.filename));
+        Ok(entries)
     }
 
     fn ok_status(id: u32) -> Status {
@@ -308,10 +349,40 @@ impl russh_sftp::server::Handler for SftpHandler {
             .swap(false, Ordering::SeqCst)
         {
             self.handles.remove(&handle);
+            self.dir_handles.remove(&handle);
             return Ok(Self::err_status(id, StatusCode::Failure, "close failed"));
         }
         self.handles.remove(&handle);
+        self.dir_handles.remove(&handle);
         Ok(Self::ok_status(id))
+    }
+
+    async fn opendir(&mut self, id: u32, path: String) -> Result<Handle, Self::Error> {
+        let entries = self.read_directory_entries(&path).await?;
+        let handle_id = self.next_handle;
+        self.next_handle += 1;
+        let handle = format!("dir-{handle_id}");
+        self.dir_handles.insert(
+            handle.clone(),
+            DirHandle {
+                entries,
+                read_offset: 0,
+            },
+        );
+        Ok(Handle { id, handle })
+    }
+
+    async fn readdir(&mut self, id: u32, handle: String) -> Result<Name, Self::Error> {
+        let dir = self
+            .dir_handles
+            .get_mut(&handle)
+            .ok_or(StatusCode::Failure)?;
+        if dir.read_offset >= dir.entries.len() {
+            return Err(StatusCode::Eof);
+        }
+        let files = dir.entries[dir.read_offset..].to_vec();
+        dir.read_offset = dir.entries.len();
+        Ok(Name { id, files })
     }
 
     async fn mkdir(
