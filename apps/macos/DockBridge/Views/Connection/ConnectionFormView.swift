@@ -80,7 +80,7 @@ struct ConnectionFormView: View {
             }
         }
         .padding()
-        .frame(minWidth: DialogCard.minWidth, minHeight: 380)
+        .frame(minWidth: DialogCardMetrics.minWidth, minHeight: 380)
         .alert("File Selection", isPresented: Binding(
             get: { pickerErrorMessage != nil },
             set: { if !$0 { pickerErrorMessage = nil } }

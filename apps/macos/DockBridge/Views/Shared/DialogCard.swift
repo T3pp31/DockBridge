@@ -7,6 +7,18 @@ struct DialogCard<Content: View, Footer: View>: View {
     @ViewBuilder let content: () -> Content
     @ViewBuilder let footer: () -> Footer
 
+    init(
+        title: String,
+        titleSystemImage: String? = nil,
+        @ViewBuilder content: @escaping () -> Content,
+        @ViewBuilder footer: @escaping () -> Footer
+    ) {
+        self.title = title
+        self.titleSystemImage = titleSystemImage
+        self.content = content
+        self.footer = footer
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: DialogCardMetrics.contentSpacing) {
             titleRow
@@ -37,7 +49,7 @@ struct DialogCard<Content: View, Footer: View>: View {
     }
 }
 
-private enum DialogCardMetrics {
+enum DialogCardMetrics {
     static let minWidth: CGFloat = 480
     static let padding: CGFloat = 28
     static let cornerRadius: CGFloat = 16
@@ -48,6 +60,11 @@ private enum DialogCardMetrics {
 struct DialogDetailSection<Content: View>: View {
     let title: String
     @ViewBuilder let content: () -> Content
+
+    init(_ title: String, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.content = content
+    }
 
     var body: some View {
         GroupBox(title) {
