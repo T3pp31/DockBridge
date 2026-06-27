@@ -96,7 +96,10 @@ final class AppSettingsService: @unchecked Sendable {
             knownHostsStrictMode: defaults.bool(forKey: AppSettingsKeys.knownHostsStrictMode),
             failConnectOnOpensshMergeError: defaults.bool(
                 forKey: AppSettingsKeys.failConnectOnOpensshMergeError
-            )
+            ),
+            directoryWalkMaxFiles: AppConfig.default.directoryWalkMaxFiles,
+            directoryWalkMaxDepth: AppConfig.default.directoryWalkMaxDepth,
+            directoryWalkMaxTotalBytes: AppConfig.default.directoryWalkMaxTotalBytes
         )
     }
 
