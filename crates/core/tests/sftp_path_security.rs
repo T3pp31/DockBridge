@@ -84,7 +84,11 @@ fn remote_walk_paths_must_stay_within_selected_root() {
     // When: ensure_remote_path_within_root validates each candidate path
     // Then: sibling or unrelated absolute paths are rejected
     let root = "/remote/safe-download";
-    for path in ["/remote/safe-download2", "/etc/passwd", "/remote/other/file.txt"] {
+    for path in [
+        "/remote/safe-download2",
+        "/etc/passwd",
+        "/remote/other/file.txt",
+    ] {
         let err = ensure_remote_path_within_root(root, path).unwrap_err();
         assert!(
             matches!(err, SftpError::InvalidRemotePath { .. }),

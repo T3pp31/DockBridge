@@ -1702,9 +1702,7 @@ mod tests {
 
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
-        let entries = walk_remote_directory(&client, "/download")
-            .await
-            .unwrap();
+        let entries = walk_remote_directory(&client, "/download").await.unwrap();
         let relatives: Vec<_> = entries
             .iter()
             .map(|entry| entry.relative_path.to_string_lossy().into_owned())
