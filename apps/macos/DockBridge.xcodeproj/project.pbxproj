@@ -56,6 +56,7 @@
 		CL1PB04RDH3LP3R1N5RC1 /* ClipboardHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = CL1PB04RDH3LP3R1N5RC2 /* ClipboardHelper.swift */; };
 		P4TH5UMM4RYR0W1N5RC1 /* PathSummaryRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */; };
 		P4N3P4THB4R5F1L3B3 /* PanePathBars.swift in Sources */ = {isa = PBXBuildFile; fileRef = P4N3P4THB4R5F1L3B4 /* PanePathBars.swift */; };
+		D5R0PT4RG3T0V3RL4Y1D2B3 /* DropTargetOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0PT4RG3T0V3RL4Y1D2B4 /* DropTargetOverlay.swift */; };
 		C0NN3CT10N5T4TU5M0D3L1N5RC /* ConnectionStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */; };
 		T4BL3C0L7MN8L4Y0U7T1F2B3 /* TableColumnLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */; };
 		W1ND0WL4Y0U7T1F2B3 /* WindowLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1ND0WL4Y0U7T1F2B4 /* WindowLayout.swift */; };
@@ -145,6 +146,7 @@
 		CL1PB04RDH3LP3R1N5RC2 /* ClipboardHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHelper.swift; sourceTree = "<group>"; };
 		P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathSummaryRow.swift; sourceTree = "<group>"; };
 		P4N3P4THB4R5F1L3B4 /* PanePathBars.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanePathBars.swift; sourceTree = "<group>"; };
+		D5R0PT4RG3T0V3RL4Y1D2B4 /* DropTargetOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropTargetOverlay.swift; sourceTree = "<group>"; };
 		C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatus.swift; sourceTree = "<group>"; };
 		T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableColumnLayout.swift; sourceTree = "<group>"; };
 		W1ND0WL4Y0U7T1F2B4 /* WindowLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowLayout.swift; sourceTree = "<group>"; };
@@ -264,6 +266,7 @@
 			isa = PBXGroup;
 			children = (
 				C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */,
+				D5R0PT4RG3T0V3RL4Y1D2B4 /* DropTargetOverlay.swift */,
 				D2B8765D556D65748132CE54 /* ErrorAlert.swift */,
 				P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */,
 				P4N3P4THB4R5F1L3B4 /* PanePathBars.swift */,
@@ -592,6 +595,7 @@
 				CL1PB04RDH3LP3R1N5RC1 /* ClipboardHelper.swift in Sources */,
 				P4TH5UMM4RYR0W1N5RC1 /* PathSummaryRow.swift in Sources */,
 				P4N3P4THB4R5F1L3B3 /* PanePathBars.swift in Sources */,
+				D5R0PT4RG3T0V3RL4Y1D2B3 /* DropTargetOverlay.swift in Sources */,
 				C0NN3CT10N5T4TU5M0D3L1N5RC /* ConnectionStatus.swift in Sources */,
 				C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */,
 				B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */,

@@ -34,10 +34,15 @@ struct LocalPaneView: View {
                     }
                     .overlay {
                         if isDropTargeted {
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.accentColor, lineWidth: 2)
+                            DropTargetOverlay(
+                                title: "Drop to move or download",
+                                systemImage: "arrow.down.circle"
+                            )
+                            .padding(4)
+                            .transition(.opacity.combined(with: .scale(scale: 0.98)))
                         }
                     }
+                    .animation(.easeInOut(duration: 0.2), value: isDropTargeted)
                     .modifier(LocalPaneDropModifier(viewModel: viewModel, isTargeted: $isDropTargeted))
             }
             .layoutPriority(0)
