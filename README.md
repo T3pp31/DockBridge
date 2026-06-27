@@ -40,9 +40,15 @@ printf '%s\n' "$PASSWORD" | cargo run -q -p dockbridge-cli -- list \
   --host 127.0.0.1 --user demo --password-stdin --path upload
 ```
 
-The `--password` flag is for local development and testing only. Passwords on the command line may appear in shell history and process listings (CWE-214). In CI and release builds, the CLI prints a warning when `--password` is used.
+**Development builds** (`cargo build` / `cargo run` without extra features) include `--password` for local testing. Passwords on the command line may appear in shell history and process listings (CWE-214). In CI and release builds, the CLI prints a warning when `--password` is used.
 
-To remove `--password` entirely, build with `--features disable-cli-password` on `dockbridge-cli`.
+**Release builds** (`.github/workflows/release.yml`) compile the CLI with `--features disable-cli-password`, which removes `--password` at compile time. Release artifacts accept only `--password-stdin`. To reproduce a release build locally:
+
+```bash
+cargo build -p dockbridge-cli --release --features disable-cli-password
+```
+
+See [docs/security.md](docs/security.md#cli-password-authentication) for the full distribution policy.
 
 ### macOS app (Rust + UniFFI)
 

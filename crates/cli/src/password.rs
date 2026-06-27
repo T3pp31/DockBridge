@@ -72,7 +72,7 @@ pub fn resolve_password(
 
     #[cfg(feature = "disable-cli-password")]
     {
-        anyhow::bail!("--password is disabled in this build; use --password-stdin instead");
+        anyhow::bail!("--password-stdin is required for password authentication");
     }
 
     #[cfg(not(feature = "disable-cli-password"))]
