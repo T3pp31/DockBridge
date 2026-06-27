@@ -851,10 +851,13 @@ public struct AppConfigRecord: Equatable, Hashable {
     public var mergeOpensshKnownHostsOnConnect: Bool
     public var knownHostsStrictMode: Bool
     public var failConnectOnOpensshMergeError: Bool
+    public var directoryWalkMaxFiles: UInt64
+    public var directoryWalkMaxDepth: UInt32
+    public var directoryWalkMaxTotalBytes: UInt64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool, knownHostsStrictMode: Bool, failConnectOnOpensshMergeError: Bool) {
+    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool, knownHostsStrictMode: Bool, failConnectOnOpensshMergeError: Bool, directoryWalkMaxFiles: UInt64, directoryWalkMaxDepth: UInt32, directoryWalkMaxTotalBytes: UInt64) {
         self.connectionTimeoutSecs = connectionTimeoutSecs
         self.sessionHealthCheckIntervalSecs = sessionHealthCheckIntervalSecs
         self.transferRetryCount = transferRetryCount
@@ -864,6 +867,9 @@ public struct AppConfigRecord: Equatable, Hashable {
         self.mergeOpensshKnownHostsOnConnect = mergeOpensshKnownHostsOnConnect
         self.knownHostsStrictMode = knownHostsStrictMode
         self.failConnectOnOpensshMergeError = failConnectOnOpensshMergeError
+        self.directoryWalkMaxFiles = directoryWalkMaxFiles
+        self.directoryWalkMaxDepth = directoryWalkMaxDepth
+        self.directoryWalkMaxTotalBytes = directoryWalkMaxTotalBytes
     }
 
     
@@ -890,7 +896,10 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
                 opensshKnownHostsPath: FfiConverterString.read(from: &buf), 
                 mergeOpensshKnownHostsOnConnect: FfiConverterBool.read(from: &buf), 
                 knownHostsStrictMode: FfiConverterBool.read(from: &buf), 
-                failConnectOnOpensshMergeError: FfiConverterBool.read(from: &buf)
+                failConnectOnOpensshMergeError: FfiConverterBool.read(from: &buf), 
+                directoryWalkMaxFiles: FfiConverterUInt64.read(from: &buf), 
+                directoryWalkMaxDepth: FfiConverterUInt32.read(from: &buf), 
+                directoryWalkMaxTotalBytes: FfiConverterUInt64.read(from: &buf)
         )
     }
 
@@ -904,6 +913,9 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
         FfiConverterBool.write(value.mergeOpensshKnownHostsOnConnect, into: &buf)
         FfiConverterBool.write(value.knownHostsStrictMode, into: &buf)
         FfiConverterBool.write(value.failConnectOnOpensshMergeError, into: &buf)
+        FfiConverterUInt64.write(value.directoryWalkMaxFiles, into: &buf)
+        FfiConverterUInt32.write(value.directoryWalkMaxDepth, into: &buf)
+        FfiConverterUInt64.write(value.directoryWalkMaxTotalBytes, into: &buf)
     }
 }
 

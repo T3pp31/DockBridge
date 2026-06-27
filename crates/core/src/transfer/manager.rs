@@ -3,11 +3,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, DirectoryWalkLimits};
 use crate::error::{SftpError, TransferError};
 use crate::sftp::{
     ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
-    normalize_remote_path, walk_local_directory, walk_remote_directory, SftpClient,
+    normalize_remote_path, walk_local_directory_with_options, walk_remote_directory_with_limits,
+    SftpClient, WalkLocalDirectoryOptions,
 };
 use crate::ssh::SshSession;
 use crate::transfer::TransferOverwritePolicy;
@@ -46,6 +47,7 @@ pub struct TransferManager {
     next_id: AtomicU64,
     retry_count: u32,
     chunk_size: usize,
+    directory_walk_limits: DirectoryWalkLimits,
     tasks: Mutex<Vec<TransferTask>>,
     cancellation_flags: Mutex<HashMap<u64, Arc<AtomicBool>>>,
 }
@@ -57,6 +59,7 @@ impl TransferManager {
             next_id: AtomicU64::new(1),
             retry_count: config.transfer_retry_count,
             chunk_size: config.transfer_chunk_size_bytes,
+            directory_walk_limits: config.directory_walk_limits(),
             tasks: Mutex::new(Vec::new()),
             cancellation_flags: Mutex::new(HashMap::new()),
         }
@@ -403,9 +406,15 @@ impl TransferManager {
                 .await
                 .map_err(transfer_error_from_sftp)?;
 
-            let files = walk_local_directory(local_path)
-                .await
-                .map_err(transfer_error_from_sftp)?;
+            let files = walk_local_directory_with_options(
+                local_path,
+                WalkLocalDirectoryOptions {
+                    limits: self.directory_walk_limits,
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(transfer_error_from_sftp)?;
             let mut tasks = Vec::with_capacity(files.len());
             for entry in files {
                 let remote_path = join_remote_path(&remote_root, &entry.relative_path)
@@ -479,9 +488,10 @@ impl TransferManager {
                 return Ok(Vec::new());
             }
 
-            let files = walk_remote_directory(&client, &normalized)
-                .await
-                .map_err(transfer_error_from_sftp)?;
+            let files =
+                walk_remote_directory_with_limits(&client, &normalized, self.directory_walk_limits)
+                    .await
+                    .map_err(transfer_error_from_sftp)?;
             let mut tasks = Vec::with_capacity(files.len());
             for entry in files {
                 let local_path = local_root.join(&entry.relative_path);

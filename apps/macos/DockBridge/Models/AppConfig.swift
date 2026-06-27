@@ -14,6 +14,9 @@ struct AppConfig: Codable, Equatable, Sendable {
     var opensshKnownHostsBookmark: Data?
     var knownHostsStrictMode: Bool
     var failConnectOnOpensshMergeError: Bool
+    var directoryWalkMaxFiles: UInt64
+    var directoryWalkMaxDepth: UInt32
+    var directoryWalkMaxTotalBytes: UInt64
 
     static let `default` = AppConfig(
         connectionTimeoutSecs: 30,
@@ -28,7 +31,10 @@ struct AppConfig: Codable, Equatable, Sendable {
         opensshKnownHostsPath: "~/.ssh/known_hosts",
         opensshKnownHostsBookmark: nil,
         knownHostsStrictMode: true,
-        failConnectOnOpensshMergeError: true
+        failConnectOnOpensshMergeError: true,
+        directoryWalkMaxFiles: 100_000,
+        directoryWalkMaxDepth: 64,
+        directoryWalkMaxTotalBytes: 107_374_182_400
     )
 
     func toRecord(knownHostsPath: String, opensshKnownHostsPath: String) -> AppConfigRecord {
@@ -41,7 +47,10 @@ struct AppConfig: Codable, Equatable, Sendable {
             opensshKnownHostsPath: opensshKnownHostsPath,
             mergeOpensshKnownHostsOnConnect: mergeOpensshKnownHostsOnConnect,
             knownHostsStrictMode: knownHostsStrictMode,
-            failConnectOnOpensshMergeError: failConnectOnOpensshMergeError
+            failConnectOnOpensshMergeError: failConnectOnOpensshMergeError,
+            directoryWalkMaxFiles: directoryWalkMaxFiles,
+            directoryWalkMaxDepth: directoryWalkMaxDepth,
+            directoryWalkMaxTotalBytes: directoryWalkMaxTotalBytes
         )
     }
 }

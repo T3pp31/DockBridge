@@ -11,6 +11,34 @@ pub const MAX_TRANSFER_CHUNK_SIZE_BYTES: usize = 8 * 1024 * 1024;
 /// Default read/write chunk size for cancellable SFTP transfers.
 pub const DEFAULT_TRANSFER_CHUNK_SIZE_BYTES: usize = 262_144;
 
+/// Default maximum number of files collected during a recursive directory walk.
+pub const DEFAULT_DIRECTORY_WALK_MAX_FILES: u64 = 100_000;
+/// Default maximum directory nesting depth during a recursive directory walk.
+pub const DEFAULT_DIRECTORY_WALK_MAX_DEPTH: u32 = 64;
+/// Default maximum total file bytes collected during a recursive directory walk (100 GiB).
+pub const DEFAULT_DIRECTORY_WALK_MAX_TOTAL_BYTES: u64 = 100 * 1024 * 1024 * 1024;
+
+/// Resource limits applied while recursively walking local or remote directory trees.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectoryWalkLimits {
+    /// Maximum number of file entries to collect.
+    pub max_files: u64,
+    /// Maximum directory nesting depth (root directory depth is 0).
+    pub max_depth: u32,
+    /// Maximum combined size in bytes of collected files.
+    pub max_total_bytes: u64,
+}
+
+impl Default for DirectoryWalkLimits {
+    fn default() -> Self {
+        Self {
+            max_files: DEFAULT_DIRECTORY_WALK_MAX_FILES,
+            max_depth: DEFAULT_DIRECTORY_WALK_MAX_DEPTH,
+            max_total_bytes: DEFAULT_DIRECTORY_WALK_MAX_TOTAL_BYTES,
+        }
+    }
+}
+
 /// Runtime configuration passed into DockBridge core.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AppConfig {
@@ -36,6 +64,15 @@ pub struct AppConfig {
     /// When true, aborts connection if merging OpenSSH `known_hosts` fails.
     #[serde(default = "default_fail_connect_on_openssh_merge_error")]
     pub fail_connect_on_openssh_merge_error: bool,
+    /// Maximum number of files collected during recursive directory walks.
+    #[serde(default = "default_directory_walk_max_files")]
+    pub directory_walk_max_files: u64,
+    /// Maximum directory nesting depth during recursive directory walks.
+    #[serde(default = "default_directory_walk_max_depth")]
+    pub directory_walk_max_depth: u32,
+    /// Maximum combined file bytes collected during recursive directory walks.
+    #[serde(default = "default_directory_walk_max_total_bytes")]
+    pub directory_walk_max_total_bytes: u64,
 }
 
 impl Default for AppConfig {
@@ -50,6 +87,9 @@ impl Default for AppConfig {
             merge_openssh_known_hosts_on_connect: true,
             known_hosts_strict_mode: true,
             fail_connect_on_openssh_merge_error: true,
+            directory_walk_max_files: DEFAULT_DIRECTORY_WALK_MAX_FILES,
+            directory_walk_max_depth: DEFAULT_DIRECTORY_WALK_MAX_DEPTH,
+            directory_walk_max_total_bytes: DEFAULT_DIRECTORY_WALK_MAX_TOTAL_BYTES,
         }
     }
 }
@@ -87,6 +127,15 @@ impl AppConfig {
     /// Returns the resolved known hosts path.
     pub fn known_hosts_path(&self) -> &Path {
         &self.known_hosts_path
+    }
+
+    /// Returns directory walk resource limits derived from this configuration.
+    pub fn directory_walk_limits(&self) -> DirectoryWalkLimits {
+        DirectoryWalkLimits {
+            max_files: self.directory_walk_max_files,
+            max_depth: self.directory_walk_max_depth,
+            max_total_bytes: self.directory_walk_max_total_bytes,
+        }
     }
 }
 
@@ -155,6 +204,18 @@ fn default_fail_connect_on_openssh_merge_error() -> bool {
     true
 }
 
+fn default_directory_walk_max_files() -> u64 {
+    DEFAULT_DIRECTORY_WALK_MAX_FILES
+}
+
+fn default_directory_walk_max_depth() -> u32 {
+    DEFAULT_DIRECTORY_WALK_MAX_DEPTH
+}
+
+fn default_directory_walk_max_total_bytes() -> u64 {
+    DEFAULT_DIRECTORY_WALK_MAX_TOTAL_BYTES
+}
+
 /// Ensures the parent directory for the known hosts file exists.
 pub fn ensure_known_hosts_parent(path: &Path) -> Result<(), SecurityError> {
     let Some(parent) = path.parent() else {
@@ -204,6 +265,15 @@ mod tests {
         let config = AppConfig::default();
         assert!(config.known_hosts_strict_mode);
         assert!(config.fail_connect_on_openssh_merge_error);
+    }
+
+    #[test]
+    fn default_config_uses_directory_walk_limits() {
+        let config = AppConfig::default();
+        assert_eq!(
+            config.directory_walk_limits(),
+            DirectoryWalkLimits::default()
+        );
     }
 
     #[test]
