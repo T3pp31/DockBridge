@@ -26,6 +26,7 @@ pub struct RemoteFile {
     pub name: String,
     pub path: String,
     pub is_directory: bool,
+    pub is_symlink: bool,
     pub size: u64,
     pub modified_at_secs: Option<u64>,
 }
@@ -107,10 +108,12 @@ impl<'a> SftpClient<'a> {
             let name = entry.file_name();
             let validated_path = validated_remote_entry(&path, &name, &entry.path())?;
             let metadata = entry.metadata();
+            let file_type = metadata.file_type();
             files.push(RemoteFile {
                 name: name.clone(),
                 path: validated_path,
-                is_directory: metadata.is_dir(),
+                is_directory: file_type.is_dir(),
+                is_symlink: file_type.is_symlink(),
                 size: metadata.size.unwrap_or(0),
                 modified_at_secs: metadata.mtime.map(|mtime| mtime as u64),
             });
@@ -1109,6 +1112,7 @@ mod tests {
     };
     use crate::error::SftpError;
     use crate::sftp::test_server::{list_partial_paths, TestSftpServer};
+    use crate::sftp::tree::walk_remote_directory;
     use crate::transfer::TransferOverwritePolicy;
 
     struct FailOnRead {
@@ -1674,6 +1678,64 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "file.txt");
         assert!(!entries[0].is_directory, "{entries:?}");
+        assert!(!entries[0].is_symlink, "{entries:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_remote_directory_skips_symlinks_by_default() {
+        // Given: a remote directory with a symlink to an outside file and a normal file
+        // When: walk_remote_directory collects files for bulk download
+        // Then: symlink targets outside the selected subtree are not included
+        let server = TestSftpServer::start().await;
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), b"secret").unwrap();
+        let download_dir = server.root.join("download");
+        std::fs::create_dir_all(&download_dir).unwrap();
+        std::fs::write(download_dir.join("normal.txt"), b"ok").unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("secret.txt"),
+            download_dir.join("link.txt"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), download_dir.join("link_dir")).unwrap();
+
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let entries = walk_remote_directory(&client, "/download").await.unwrap();
+        let relatives: Vec<_> = entries
+            .iter()
+            .map(|entry| entry.relative_path.to_string_lossy().into_owned())
+            .collect();
+
+        assert_eq!(entries.len(), 1);
+        assert!(relatives.contains(&"normal.txt".to_string()));
+        assert!(!relatives.iter().any(|path| path.contains("secret")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_directory_marks_symlinks_without_following() {
+        let server = TestSftpServer::start().await;
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("target.txt"), b"x").unwrap();
+        let download_dir = server.root.join("download");
+        std::fs::create_dir_all(&download_dir).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("target.txt"),
+            download_dir.join("link.txt"),
+        )
+        .unwrap();
+
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let entries = client.list_directory("/download").await.unwrap();
+        let link = entries
+            .iter()
+            .find(|entry| entry.name == "link.txt")
+            .expect("symlink entry");
+        assert!(link.is_symlink, "{link:?}");
+        assert!(!link.is_directory, "{link:?}");
     }
 
     #[tokio::test]
