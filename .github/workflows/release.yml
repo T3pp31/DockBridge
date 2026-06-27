@@ -64,6 +64,20 @@ jobs:
           fi
           echo "path=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
 
+      - name: Build hardened CLI
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build -p dockbridge-cli --release --features disable-cli-password --target "$target"
+          done
+          CLI_NAME="dockbridge-${VERSION}-macOS"
+          lipo -create \
+            target/aarch64-apple-darwin/release/dockbridge \
+            target/x86_64-apple-darwin/release/dockbridge \
+            -output "dist/${CLI_NAME}"
+          shasum -a 256 "dist/${CLI_NAME}" > "dist/${CLI_NAME}.sha256"
+
       - name: Package macOS app
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -79,8 +93,11 @@ jobs:
           ASSET_TEMPLATE="$(awk -F'"' '/^asset_name_template / { print $2; exit }' config/release.toml)"
           ASSET_NAME="${ASSET_TEMPLATE//\{app_name\}/${APP_NAME}}"
           ASSET_NAME="${ASSET_NAME//\{version\}/${VERSION}}"
+          CLI_NAME="dockbridge-${VERSION}-macOS"
           echo "dmg=dist/${ASSET_NAME}" >> "$GITHUB_OUTPUT"
           echo "sha256=dist/${ASSET_NAME}.sha256" >> "$GITHUB_OUTPUT"
+          echo "cli=dist/${CLI_NAME}" >> "$GITHUB_OUTPUT"
+          echo "cli_sha256=dist/${CLI_NAME}.sha256" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -93,4 +110,6 @@ jobs:
           files: |
             ${{ steps.assets.outputs.dmg }}
             ${{ steps.assets.outputs.sha256 }}
+            ${{ steps.assets.outputs.cli }}
+            ${{ steps.assets.outputs.cli_sha256 }}
           generate_release_notes: false
