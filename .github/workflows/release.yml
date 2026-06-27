@@ -76,7 +76,7 @@ jobs:
             target/aarch64-apple-darwin/release/dockbridge \
             target/x86_64-apple-darwin/release/dockbridge \
             -output "dist/${CLI_NAME}"
-          shasum -a 256 "dist/${CLI_NAME}" > "dist/${CLI_NAME}.sha256"
+          (cd dist && shasum -a 256 "${CLI_NAME}" > "${CLI_NAME}.sha256")
 
       - name: Package macOS app
         env:
