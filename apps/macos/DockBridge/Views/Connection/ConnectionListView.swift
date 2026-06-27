@@ -157,19 +157,14 @@ struct ConnectionListView: View {
     private func connectionIndicator(for profile: ConnectionProfile) -> some View {
         let isActiveProfile = viewModel.connectedProfileID == profile.id
 
-        if isActiveProfile, viewModel.connectionStatus.isConnected {
-            Circle()
-                .fill(.green)
-                .frame(width: 8, height: 8)
-                .accessibilityLabel("Connected")
-        } else if isActiveProfile, viewModel.connectionStatus.isConnecting {
-            ProgressView()
-                .controlSize(.small)
-                .accessibilityLabel("Connecting")
+        if isActiveProfile,
+           viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting
+        {
+            ConnectionStatusIndicator(status: viewModel.connectionStatus)
         } else {
-            Circle()
-                .fill(.clear)
-                .frame(width: 8, height: 8)
+            Image(systemName: "circle")
+                .foregroundStyle(.clear)
+                .accessibilityHidden(true)
         }
     }
 }

@@ -94,6 +94,9 @@ struct TransferQueueView: View {
                bytesPerSecond: viewModel.bytesPerSecond(for: task)
            ) {
             VStack(alignment: .leading, spacing: 4) {
+                Label("In Progress", systemImage: "arrow.up.arrow.down.circle")
+                    .font(.caption.weight(.semibold))
+                    .accessibilityHidden(true)
                 ProgressView(
                     value: Double(task.bytesTransferred),
                     total: Double(task.totalBytes)
@@ -104,12 +107,48 @@ struct TransferQueueView: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("In progress, \(progressLabel)")
         } else if case .failed(let message) = task.status {
-            Text("Failed")
-                .foregroundStyle(.red)
-                .help(message)
+            let summary = DockBridgeError.friendlyMessage(for: message)
+            VStack(alignment: .leading, spacing: 2) {
+                Label("Failed", systemImage: "xmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color(nsColor: .systemRed))
+                    .accessibilityHidden(true)
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Failed: \(summary). \(message)")
+            .help(message)
         } else {
-            Text(statusLabel(for: task.status))
+            statusLabelView(for: task.status)
+        }
+    }
+
+    @ViewBuilder
+    private func statusLabelView(for status: TransferStatusRecord) -> some View {
+        switch status {
+        case .pending:
+            Label("Pending", systemImage: "clock")
+                .accessibilityLabel("Pending")
+        case .inProgress:
+            Label("In Progress", systemImage: "arrow.up.arrow.down.circle")
+                .accessibilityLabel("In progress")
+        case .completed:
+            Label("Completed", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(Color(nsColor: .systemGreen))
+                .accessibilityLabel("Completed")
+        case .failed:
+            EmptyView()
+        case .cancelled:
+            Label("Cancelled", systemImage: "minus.circle")
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .accessibilityLabel("Cancelled")
         }
     }
 
@@ -128,16 +167,6 @@ struct TransferQueueView: View {
             return true
         case .pending, .inProgress, .completed:
             return false
-        }
-    }
-
-    private func statusLabel(for status: TransferStatusRecord) -> String {
-        switch status {
-        case .pending: "Pending"
-        case .inProgress: "In Progress"
-        case .completed: "Completed"
-        case .failed: "Failed"
-        case .cancelled: "Cancelled"
         }
     }
 }

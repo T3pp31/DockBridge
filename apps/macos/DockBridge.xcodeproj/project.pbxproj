@@ -53,6 +53,7 @@
 		F1I2L3E4D5R6O7P8M9O0D1I2F3 /* FileDropModifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */; };
 		F1D2R3O4P5V6A7L8I9D0T1E2S3T4 /* FileDropValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */; };
 		C0NN3CT10N5T4TU5B4R1N5RC3 /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */; };
+		C0NN3CT10N5T4TU5M1ND1C4T0R1 /* ConnectionStatusIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5M1ND1C4T0R2 /* ConnectionStatusIndicator.swift */; };
 		CL1PB04RDH3LP3R1N5RC1 /* ClipboardHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = CL1PB04RDH3LP3R1N5RC2 /* ClipboardHelper.swift */; };
 		P4TH5UMM4RYR0W1N5RC1 /* PathSummaryRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */; };
 		P4N3P4THB4R5F1L3B3 /* PanePathBars.swift in Sources */ = {isa = PBXBuildFile; fileRef = P4N3P4THB4R5F1L3B4 /* PanePathBars.swift */; };
@@ -143,6 +144,7 @@
 		F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropModifiers.swift; sourceTree = "<group>"; };
 		F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropValidationTests.swift; sourceTree = "<group>"; };
 		C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusBar.swift; sourceTree = "<group>"; };
+		C0NN3CT10N5T4TU5M1ND1C4T0R2 /* ConnectionStatusIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusIndicator.swift; sourceTree = "<group>"; };
 		CL1PB04RDH3LP3R1N5RC2 /* ClipboardHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHelper.swift; sourceTree = "<group>"; };
 		P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathSummaryRow.swift; sourceTree = "<group>"; };
 		P4N3P4THB4R5F1L3B4 /* PanePathBars.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanePathBars.swift; sourceTree = "<group>"; };
@@ -266,6 +268,7 @@
 			isa = PBXGroup;
 			children = (
 				C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */,
+				C0NN3CT10N5T4TU5M1ND1C4T0R2 /* ConnectionStatusIndicator.swift */,
 				D5R0PT4RG3T0V3RL4Y1D2B4 /* DropTargetOverlay.swift */,
 				D2B8765D556D65748132CE54 /* ErrorAlert.swift */,
 				P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */,
@@ -592,6 +595,7 @@
 				4F485BCC460E809CBC369F6D /* HostKeyConfirmView.swift in Sources */,
 				629A59E59C65594C7998652C /* SettingsView.swift in Sources */,
 				C0NN3CT10N5T4TU5B4R1N5RC3 /* ConnectionStatusBar.swift in Sources */,
+				C0NN3CT10N5T4TU5M1ND1C4T0R1 /* ConnectionStatusIndicator.swift in Sources */,
 				CL1PB04RDH3LP3R1N5RC1 /* ClipboardHelper.swift in Sources */,
 				P4TH5UMM4RYR0W1N5RC1 /* PathSummaryRow.swift in Sources */,
 				P4N3P4THB4R5F1L3B3 /* PanePathBars.swift in Sources */,
