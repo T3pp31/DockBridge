@@ -33,6 +33,7 @@
 		59E97F8DE7D811CC4EA1A6B0 /* RemotePaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A2E6F8AA6C510156A8DABD /* RemotePaneView.swift */; };
 		4F485BCC460E809CBC369F6D /* HostKeyConfirmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCE9B37ED92AB8C2C21CC1E /* HostKeyConfirmView.swift */; };
 		629A59E59C65594C7998652C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 072538B66BFEE10642314E67 /* SettingsView.swift */; };
+		34CA58A3F2B38019A03EF761 /* DialogCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C7BC8DA9077658C709FF8E4 /* DialogCard.swift */; };
 		C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2B8765D556D65748132CE54 /* ErrorAlert.swift */; };
 		B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB9667933C17755C399E575 /* TransferQueueView.swift */; };
 		4D3B078A85CF43E4F57F1AD1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9AED1666CA758F242828EB4F /* Assets.xcassets */; };
@@ -121,6 +122,7 @@
 		E1A2E6F8AA6C510156A8DABD /* RemotePaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePaneView.swift; sourceTree = "<group>"; };
 		FFCE9B37ED92AB8C2C21CC1E /* HostKeyConfirmView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyConfirmView.swift; sourceTree = "<group>"; };
 		072538B66BFEE10642314E67 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		1C7BC8DA9077658C709FF8E4 /* DialogCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialogCard.swift; sourceTree = "<group>"; };
 		D2B8765D556D65748132CE54 /* ErrorAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorAlert.swift; sourceTree = "<group>"; };
 		BBB9667933C17755C399E575 /* TransferQueueView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferQueueView.swift; sourceTree = "<group>"; };
 		9AED1666CA758F242828EB4F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -277,6 +279,7 @@
 			children = (
 				C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */,
 				C0NN3CT10N5T4TU5M1ND1C4T0R2 /* ConnectionStatusIndicator.swift */,
+				1C7BC8DA9077658C709FF8E4 /* DialogCard.swift */,
 				D5R0PT4RG3T0V3RL4Y1D2B4 /* DropTargetOverlay.swift */,
 				D2B8765D556D65748132CE54 /* ErrorAlert.swift */,
 				P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */,
@@ -613,6 +616,7 @@
 				P4N3P4THB4R5F1L3B3 /* PanePathBars.swift in Sources */,
 				D5R0PT4RG3T0V3RL4Y1D2B3 /* DropTargetOverlay.swift in Sources */,
 				C0NN3CT10N5T4TU5M0D3L1N5RC /* ConnectionStatus.swift in Sources */,
+				34CA58A3F2B38019A03EF761 /* DialogCard.swift in Sources */,
 				C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */,
 				B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* RemotePath.swift in Sources */,
