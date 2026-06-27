@@ -5,21 +5,31 @@ struct TransferQueueView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
-            HStack {
+            HStack(spacing: 8) {
                 Text("Transfer Queue")
                     .font(.headline)
                 Spacer()
                 if viewModel.hasFinishedTasks {
-                    Button("Clear Completed") {
-                        Task { await viewModel.clearCompleted() }
+                    Menu {
+                        Button("Clear Completed") {
+                            Task { await viewModel.clearCompleted() }
+                        }
+                        Button("Clear All", role: .destructive) {
+                            Task { await viewModel.clearAll() }
+                        }
+                    } label: {
+                        Label("Clear", systemImage: "trash")
                     }
-                    Button("Clear All") {
-                        Task { await viewModel.clearAll() }
-                    }
+                    .fixedSize()
                 }
-                Button("Refresh") {
+                Button {
                     Task { await viewModel.refresh() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
                 }
+                .buttonStyle(.borderless)
+                .fixedSize()
+                .help("Refresh")
             }
 
             if viewModel.tasks.isEmpty {
@@ -88,8 +98,10 @@ struct TransferQueueView: View {
                     value: Double(task.bytesTransferred),
                     total: Double(task.totalBytes)
                 )
+                .monospacedDigit()
                 Text(progressLabel)
                     .font(.caption)
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
         } else if case .failed(let message) = task.status {
