@@ -157,7 +157,9 @@ struct ConnectionListView: View {
     private func connectionIndicator(for profile: ConnectionProfile) -> some View {
         let isActiveProfile = viewModel.connectedProfileID == profile.id
 
-        if isActiveProfile {
+        if isActiveProfile,
+           viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting
+        {
             ConnectionStatusIndicator(status: viewModel.connectionStatus)
         } else {
             Image(systemName: "circle")
