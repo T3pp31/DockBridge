@@ -148,7 +148,13 @@ struct MainView: View {
                 UpdateAvailableView(
                     update: update,
                     currentVersion: VersionComparator.currentAppVersion,
-                    onDownload: updateCheck.downloadUpdate,
+                    isDownloading: updateCheck.isDownloadingUpdate,
+                    downloadErrorMessage: updateCheck.downloadErrorMessage,
+                    onDownload: {
+                        Task {
+                            await updateCheck.downloadUpdate()
+                        }
+                    },
                     onLater: updateCheck.skipUpdate
                 )
             }

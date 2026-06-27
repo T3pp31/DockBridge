@@ -62,10 +62,12 @@ final class AppUpdateService: @unchecked Sendable {
         }
 
         let releasePageURL = validatedReleasePageURL(release.htmlURL) ?? downloadURL
+        let checksumURL = checksumDownloadURL(from: release, version: latestVersion)
 
         return AppUpdateInfo(
             version: latestVersion,
             downloadURL: downloadURL,
+            checksumURL: checksumURL,
             releasePageURL: releasePageURL
         )
     }
@@ -85,6 +87,14 @@ final class AppUpdateService: @unchecked Sendable {
 
     private func dmgDownloadURL(from release: GitHubReleaseResponse, version: String) -> URL? {
         let expectedAssetName = AppUpdateConfig.expectedAssetName(for: version)
+        guard let asset = release.assets.first(where: { $0.name == expectedAssetName }) else {
+            return nil
+        }
+        return validatedDownloadURL(asset.browserDownloadURL, expectedAssetName: expectedAssetName)
+    }
+
+    private func checksumDownloadURL(from release: GitHubReleaseResponse, version: String) -> URL? {
+        let expectedAssetName = AppUpdateConfig.expectedChecksumAssetName(for: version)
         guard let asset = release.assets.first(where: { $0.name == expectedAssetName }) else {
             return nil
         }
