@@ -11,6 +11,7 @@ struct ConnectionFormView: View {
     @State private var saveSecrets = true
     @State private var pickerErrorMessage: String?
 
+    private let isEditing: Bool
     let onSave: (ConnectionProfile, String?, String?) -> Void
 
     init(
@@ -22,60 +23,64 @@ struct ConnectionFormView: View {
             host: "",
             username: ""
         ))
+        isEditing = profile != nil
         self.onSave = onSave
     }
 
     var body: some View {
-        Form {
-            Section("General") {
-                TextField("Name", text: $profile.name)
-                TextField("Host", text: $profile.host)
-                TextField("Port", value: $profile.port, format: .number.grouping(.never))
-                TextField("Username", text: $profile.username)
+        NavigationStack {
+            Form {
+                Section("General") {
+                    TextField("Name", text: $profile.name)
+                    TextField("Host", text: $profile.host)
+                    TextField("Port", value: $profile.port, format: .number.grouping(.never))
+                    TextField("Username", text: $profile.username)
+                }
+
+                Section("Authentication") {
+                    Picker("Method", selection: $profile.authType) {
+                        ForEach(AuthType.allCases) { type in
+                            Text(type.label).tag(type)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    if profile.authType == .password {
+                        SecureField("Password", text: $password.text)
+                    } else {
+                        HStack {
+                            TextField("Private key path", text: Binding(
+                                get: { profile.privateKeyPath ?? "" },
+                                set: { profile.privateKeyPath = $0.isEmpty ? nil : $0 }
+                            ))
+                            .disabled(true)
+                            Button("Browse…") { pickPrivateKey() }
+                        }
+                        if profile.privateKeyBookmark == nil {
+                            Text("Use Browse… to grant access to the private key file.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        SecureField("Passphrase (optional)", text: $passphrase.text)
+                    }
+
+                    Toggle("Save credentials in Keychain", isOn: $saveSecrets)
+                }
             }
-
-            Section("Authentication") {
-                Picker("Method", selection: $profile.authType) {
-                    ForEach(AuthType.allCases) { type in
-                        Text(type.label).tag(type)
-                    }
+            .formStyle(.grouped)
+            .navigationTitle(isEditing ? "Edit Connection" : "New Connection")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { closeForm() }
                 }
-                .pickerStyle(.segmented)
-
-                if profile.authType == .password {
-                    SecureField("Password", text: $password.text)
-                } else {
-                    HStack {
-                        TextField("Private key path", text: Binding(
-                            get: { profile.privateKeyPath ?? "" },
-                            set: { profile.privateKeyPath = $0.isEmpty ? nil : $0 }
-                        ))
-                        .disabled(true)
-                        Button("Browse…") { pickPrivateKey() }
-                    }
-                    if profile.privateKeyBookmark == nil {
-                        Text("Use Browse… to grant access to the private key file.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    SecureField("Passphrase (optional)", text: $passphrase.text)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                        .disabled(!canSave)
                 }
-
-                Toggle("Save credentials in Keychain", isOn: $saveSecrets)
             }
         }
-        .formStyle(.grouped)
         .padding()
-        .frame(minWidth: 460, minHeight: 380)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { closeForm() }
-            }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Save") { save() }
-                    .disabled(!canSave)
-            }
-        }
+        .frame(minWidth: DialogCardMetrics.minWidth, minHeight: 380)
         .alert("File Selection", isPresented: Binding(
             get: { pickerErrorMessage != nil },
             set: { if !$0 { pickerErrorMessage = nil } }

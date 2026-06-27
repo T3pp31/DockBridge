@@ -139,7 +139,10 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
             opensshKnownHostsPath: "~/.ssh/known_hosts",
             opensshKnownHostsBookmark: nil,
             knownHostsStrictMode: true,
-            failConnectOnOpensshMergeError: true
+            failConnectOnOpensshMergeError: true,
+            directoryWalkMaxFiles: 100_000,
+            directoryWalkMaxDepth: 64,
+            directoryWalkMaxTotalBytes: 107_374_182_400
         )
 
         let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: service)
@@ -167,7 +170,10 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
             opensshKnownHostsPath: "~/.ssh/known_hosts",
             opensshKnownHostsBookmark: nil,
             knownHostsStrictMode: true,
-            failConnectOnOpensshMergeError: true
+            failConnectOnOpensshMergeError: true,
+            directoryWalkMaxFiles: 100_000,
+            directoryWalkMaxDepth: 64,
+            directoryWalkMaxTotalBytes: 107_374_182_400
         )
 
         let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: service)

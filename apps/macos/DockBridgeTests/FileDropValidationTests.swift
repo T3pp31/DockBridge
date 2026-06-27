@@ -88,7 +88,8 @@ final class FileDropValidationTests: XCTestCase {
             name: "visible.txt",
             path: "/remote/visible.txt",
             isDirectory: false,
-            size: 10
+            size: 10,
+            modifiedAtSecs: nil
         )
         let spoofedPayload = RemoteFileDragPayload(path: "/remote/secret.txt", isDirectory: false)
 

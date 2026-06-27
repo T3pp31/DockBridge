@@ -68,6 +68,9 @@ pub struct AppConfigRecord {
     pub merge_openssh_known_hosts_on_connect: bool,
     pub known_hosts_strict_mode: bool,
     pub fail_connect_on_openssh_merge_error: bool,
+    pub directory_walk_max_files: u64,
+    pub directory_walk_max_depth: u32,
+    pub directory_walk_max_total_bytes: u64,
 }
 
 /// Authentication method for a connection profile.
@@ -98,6 +101,7 @@ pub struct RemoteFileRecord {
     pub path: String,
     pub is_directory: bool,
     pub size: u64,
+    pub modified_at_secs: Option<u64>,
 }
 
 /// Direction of a file transfer task.
@@ -242,6 +246,9 @@ impl DockBridgeClient {
             merge_openssh_known_hosts_on_connect: app_config.merge_openssh_known_hosts_on_connect,
             known_hosts_strict_mode: app_config.known_hosts_strict_mode,
             fail_connect_on_openssh_merge_error: app_config.fail_connect_on_openssh_merge_error,
+            directory_walk_max_files: app_config.directory_walk_max_files,
+            directory_walk_max_depth: app_config.directory_walk_max_depth,
+            directory_walk_max_total_bytes: app_config.directory_walk_max_total_bytes,
         };
         let known_hosts_manager =
             KnownHostsManager::load(config.known_hosts_path()).map_err(map_error)?;
@@ -605,6 +612,7 @@ fn to_remote_file_record(file: RemoteFile) -> RemoteFileRecord {
         path: file.path,
         is_directory: file.is_directory,
         size: file.size,
+        modified_at_secs: file.modified_at_secs,
     }
 }
 

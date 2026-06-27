@@ -5,13 +5,21 @@ extension RemoteFileRecord: Identifiable {
 
     var isParentDirectory: Bool { name == ".." }
 
+    var modificationDate: Date? {
+        guard let modifiedAtSecs else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(modifiedAtSecs))
+    }
+
+    var modificationSortKey: Date { modificationDate ?? .distantPast }
+
     static func parentEntry(for path: String) -> RemoteFileRecord? {
         guard path != "/", let parent = try? RemotePath.parent(of: path) else { return nil }
         return RemoteFileRecord(
             name: "..",
             path: parent,
             isDirectory: true,
-            size: 0
+            size: 0,
+            modifiedAtSecs: nil
         )
     }
 }

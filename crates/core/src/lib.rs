@@ -9,16 +9,18 @@ pub mod transfer;
 
 pub use config::{
     clamp_transfer_chunk_size, ensure_known_hosts_parent, expand_tilde,
-    validate_transfer_chunk_size, AppConfig, DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
-    MAX_TRANSFER_CHUNK_SIZE_BYTES, MIN_TRANSFER_CHUNK_SIZE_BYTES,
+    validate_transfer_chunk_size, AppConfig, DirectoryWalkLimits, DEFAULT_DIRECTORY_WALK_MAX_DEPTH,
+    DEFAULT_DIRECTORY_WALK_MAX_FILES, DEFAULT_DIRECTORY_WALK_MAX_TOTAL_BYTES,
+    DEFAULT_TRANSFER_CHUNK_SIZE_BYTES, MAX_TRANSFER_CHUNK_SIZE_BYTES,
+    MIN_TRANSFER_CHUNK_SIZE_BYTES,
 };
 pub use error::{
     AppError, AuthError, ConfigError, ConnectionError, SecurityError, SftpError, TransferError,
 };
 pub use security::{fingerprint_sha256, HostAlias, HostKeyCheckResult, KnownHostsManager};
 pub use sftp::{
-    ensure_local_path_within_root, normalize_remote_path, validate_remote_entry_name,
-    validated_remote_entry, RemoteFile, SftpClient,
+    ensure_local_path_within_root, ensure_remote_path_within_root, normalize_remote_path,
+    validate_remote_entry_name, validated_remote_entry, RemoteFile, SftpClient,
 };
 pub use ssh::{
     inspect_private_key_algorithm, is_connection_lost_message, AuthType, ConnectionProfile,

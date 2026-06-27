@@ -851,10 +851,13 @@ public struct AppConfigRecord: Equatable, Hashable {
     public var mergeOpensshKnownHostsOnConnect: Bool
     public var knownHostsStrictMode: Bool
     public var failConnectOnOpensshMergeError: Bool
+    public var directoryWalkMaxFiles: UInt64
+    public var directoryWalkMaxDepth: UInt32
+    public var directoryWalkMaxTotalBytes: UInt64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool, knownHostsStrictMode: Bool, failConnectOnOpensshMergeError: Bool) {
+    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool, knownHostsStrictMode: Bool, failConnectOnOpensshMergeError: Bool, directoryWalkMaxFiles: UInt64, directoryWalkMaxDepth: UInt32, directoryWalkMaxTotalBytes: UInt64) {
         self.connectionTimeoutSecs = connectionTimeoutSecs
         self.sessionHealthCheckIntervalSecs = sessionHealthCheckIntervalSecs
         self.transferRetryCount = transferRetryCount
@@ -864,6 +867,9 @@ public struct AppConfigRecord: Equatable, Hashable {
         self.mergeOpensshKnownHostsOnConnect = mergeOpensshKnownHostsOnConnect
         self.knownHostsStrictMode = knownHostsStrictMode
         self.failConnectOnOpensshMergeError = failConnectOnOpensshMergeError
+        self.directoryWalkMaxFiles = directoryWalkMaxFiles
+        self.directoryWalkMaxDepth = directoryWalkMaxDepth
+        self.directoryWalkMaxTotalBytes = directoryWalkMaxTotalBytes
     }
 
     
@@ -890,7 +896,10 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
                 opensshKnownHostsPath: FfiConverterString.read(from: &buf), 
                 mergeOpensshKnownHostsOnConnect: FfiConverterBool.read(from: &buf), 
                 knownHostsStrictMode: FfiConverterBool.read(from: &buf), 
-                failConnectOnOpensshMergeError: FfiConverterBool.read(from: &buf)
+                failConnectOnOpensshMergeError: FfiConverterBool.read(from: &buf), 
+                directoryWalkMaxFiles: FfiConverterUInt64.read(from: &buf), 
+                directoryWalkMaxDepth: FfiConverterUInt32.read(from: &buf), 
+                directoryWalkMaxTotalBytes: FfiConverterUInt64.read(from: &buf)
         )
     }
 
@@ -904,6 +913,9 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
         FfiConverterBool.write(value.mergeOpensshKnownHostsOnConnect, into: &buf)
         FfiConverterBool.write(value.knownHostsStrictMode, into: &buf)
         FfiConverterBool.write(value.failConnectOnOpensshMergeError, into: &buf)
+        FfiConverterUInt64.write(value.directoryWalkMaxFiles, into: &buf)
+        FfiConverterUInt32.write(value.directoryWalkMaxDepth, into: &buf)
+        FfiConverterUInt64.write(value.directoryWalkMaxTotalBytes, into: &buf)
     }
 }
 
@@ -1061,14 +1073,16 @@ public struct RemoteFileRecord: Equatable, Hashable {
     public var path: String
     public var isDirectory: Bool
     public var size: UInt64
+    public var modifiedAtSecs: UInt64?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(name: String, path: String, isDirectory: Bool, size: UInt64) {
+    public init(name: String, path: String, isDirectory: Bool, size: UInt64, modifiedAtSecs: UInt64?) {
         self.name = name
         self.path = path
         self.isDirectory = isDirectory
         self.size = size
+        self.modifiedAtSecs = modifiedAtSecs
     }
 
     
@@ -1090,7 +1104,8 @@ public struct FfiConverterTypeRemoteFileRecord: FfiConverterRustBuffer {
                 name: FfiConverterString.read(from: &buf), 
                 path: FfiConverterString.read(from: &buf), 
                 isDirectory: FfiConverterBool.read(from: &buf), 
-                size: FfiConverterUInt64.read(from: &buf)
+                size: FfiConverterUInt64.read(from: &buf), 
+                modifiedAtSecs: FfiConverterOptionUInt64.read(from: &buf)
         )
     }
 
@@ -1099,6 +1114,7 @@ public struct FfiConverterTypeRemoteFileRecord: FfiConverterRustBuffer {
         FfiConverterString.write(value.path, into: &buf)
         FfiConverterBool.write(value.isDirectory, into: &buf)
         FfiConverterUInt64.write(value.size, into: &buf)
+        FfiConverterOptionUInt64.write(value.modifiedAtSecs, into: &buf)
     }
 }
 
@@ -1875,6 +1891,30 @@ public func FfiConverterCallbackInterfaceHostKeyHandler_lift(_ handle: UInt64) t
 #endif
 public func FfiConverterCallbackInterfaceHostKeyHandler_lower(_ v: HostKeyHandler) -> UInt64 {
     return FfiConverterCallbackInterfaceHostKeyHandler.lower(v)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
 }
 
 #if swift(>=5.8)

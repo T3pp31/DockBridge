@@ -122,6 +122,8 @@ enum FileDropTransferKickoff {
 struct LocalPaneDropModifier: ViewModifier {
     @ObservedObject var viewModel: MainViewModel
     @Binding var isTargeted: Bool
+    @State private var isRemoteDragTargeted = false
+    @State private var isLocalDragTargeted = false
 
     func body(content: Content) -> some View {
         content
@@ -129,10 +131,14 @@ struct LocalPaneDropModifier: ViewModifier {
                 guard viewModel.bridge.isConnected else { return false }
                 return acceptRemoteDownloads(items)
             } isTargeted: { targeted in
-                isTargeted = targeted
+                isRemoteDragTargeted = targeted
+                isTargeted = isRemoteDragTargeted || isLocalDragTargeted
             }
             .dropDestination(for: LocalFileDragPayload.self) { items, _ in
                 acceptLocalMoves(items)
+            } isTargeted: { targeted in
+                isLocalDragTargeted = targeted
+                isTargeted = isRemoteDragTargeted || isLocalDragTargeted
             }
     }
 
@@ -163,6 +169,9 @@ struct LocalPaneDropModifier: ViewModifier {
 struct RemotePaneDropModifier: ViewModifier {
     @ObservedObject var viewModel: MainViewModel
     @Binding var isTargeted: Bool
+    @State private var isLocalDragTargeted = false
+    @State private var isExternalDragTargeted = false
+    @State private var isRemoteDragTargeted = false
 
     func body(content: Content) -> some View {
         content
@@ -170,15 +179,22 @@ struct RemotePaneDropModifier: ViewModifier {
                 guard viewModel.bridge.isConnected else { return false }
                 return acceptLocalUploads(items)
             } isTargeted: { targeted in
-                isTargeted = targeted
+                isLocalDragTargeted = targeted
+                isTargeted = isLocalDragTargeted || isExternalDragTargeted || isRemoteDragTargeted
             }
             .dropDestination(for: URL.self) { urls, _ in
                 guard viewModel.bridge.isConnected else { return false }
                 return acceptExternalUploads(urls)
+            } isTargeted: { targeted in
+                isExternalDragTargeted = targeted
+                isTargeted = isLocalDragTargeted || isExternalDragTargeted || isRemoteDragTargeted
             }
             .dropDestination(for: RemoteFileDragPayload.self) { items, _ in
                 guard viewModel.bridge.isConnected else { return false }
                 return acceptRemoteMoves(items)
+            } isTargeted: { targeted in
+                isRemoteDragTargeted = targeted
+                isTargeted = isLocalDragTargeted || isExternalDragTargeted || isRemoteDragTargeted
             }
     }
 
@@ -265,10 +281,12 @@ struct RemoteFileTable: View {
             TableColumn("Size", value: \.size) { item in
                 Text(remoteSizeLabel(for: item))
             }
-            TableColumn("Path", value: \.path) { item in
-                Text(item.path)
-                    .lineLimit(1)
-                    .help(item.path)
+            TableColumn("Modified", value: \.modificationSortKey) { item in
+                if let date = item.modificationDate {
+                    Text(date, style: .date)
+                } else {
+                    Text("—")
+                }
             }
         } rows: {
             if viewModel.canNavigateRemoteUp,

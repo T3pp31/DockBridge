@@ -10,7 +10,7 @@ struct PathSummaryRow<Actions: View>: View {
     @ViewBuilder var actions: () -> Actions
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Text(label)
                     .font(.caption.weight(.semibold))
@@ -21,24 +21,22 @@ struct PathSummaryRow<Actions: View>: View {
 
                 actions()
 
-                Button {
-                    ClipboardHelper.copy(path)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                }
-                .buttonStyle(.borderless)
-                .fixedSize()
-                .help("Copy path")
-
-                if showRevealInFinder {
+                ControlGroup {
                     Button {
-                        revealInFinder()
+                        ClipboardHelper.copy(path)
                     } label: {
-                        Image(systemName: "folder")
+                        Image(systemName: "doc.on.doc")
                     }
-                    .buttonStyle(.borderless)
-                    .fixedSize()
-                    .help("Reveal in Finder")
+                    .help("Copy path")
+
+                    if showRevealInFinder {
+                        Button {
+                            revealInFinder()
+                        } label: {
+                            Image(systemName: "folder")
+                        }
+                        .help("Reveal in Finder")
+                    }
                 }
             }
 

@@ -33,13 +33,16 @@ Password-based CLI connections support two mechanisms:
 
 ### Distribution policy
 
-For production deployments and release artifacts, build the CLI **without** inline `--password` support:
+| Build | `--password` | How to build |
+|-------|--------------|--------------|
+| Development (default) | Available | `cargo build -p dockbridge-cli` or `cargo run -p dockbridge-cli` |
+| Release / production | Removed at compile time | `cargo build -p dockbridge-cli --release --features disable-cli-password` |
 
-```bash
-cargo build -p dockbridge-cli --release --features disable-cli-password
-```
+The GitHub Release workflow (`.github/workflows/release.yml`) builds the CLI with `disable-cli-password` by default and publishes a universal macOS binary alongside the app DMG. Development builds keep `--password` for local testing; the feature flag is opt-in hardening, not opt-out.
 
-This removes the `--password` flag at compile time so operators cannot accidentally pass secrets on the command line. Use `--password-stdin` exclusively in scripts, CI, and automation.
+CI (`.github/workflows/ci.yml`) verifies that the hardened configuration compiles on every pull request while the default workspace build remains suitable for development.
+
+This removes `--password` from release artifacts so operators cannot accidentally pass secrets on the command line. Use `--password-stdin` exclusively in scripts, CI, and automation.
 
 Example (recommended):
 

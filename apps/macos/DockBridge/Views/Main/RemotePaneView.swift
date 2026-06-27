@@ -16,6 +16,9 @@ struct RemotePaneView: View {
                         .frame(width: size.width, height: size.height)
                         .contextMenu(forSelectionType: String.self) { ids in
                             if let item = singleSelectedRemoteItem(from: ids), !item.isParentDirectory {
+                                Button("Copy Path") {
+                                    ClipboardHelper.copy(item.path)
+                                }
                                 Button("Download") {
                                     viewModel.selectedRemoteItemID = item.id
                                     Task { await viewModel.downloadSelected() }
@@ -39,6 +42,17 @@ struct RemotePaneView: View {
                             }
                             return .ignored
                         }
+                        .overlay {
+                            if isDropTargeted {
+                                DropTargetOverlay(
+                                    title: "Drop to upload",
+                                    systemImage: "arrow.up.doc"
+                                )
+                                .padding(4)
+                                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                            }
+                        }
+                        .animation(.easeInOut(duration: 0.2), value: isDropTargeted)
                 }
                 .layoutPriority(0)
             } else {
@@ -52,52 +66,32 @@ struct RemotePaneView: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .padding(WindowLayout.panePadding)
-        .overlay {
-            if isDropTargeted {
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.accentColor, lineWidth: 2)
-            }
-        }
         .modifier(RemotePaneDropModifier(viewModel: viewModel, isTargeted: $isDropTargeted))
         .task(id: viewModel.remotePath) {
             await viewModel.reloadRemote()
         }
-        .alert("Delete remote item?", isPresented: $viewModel.showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) {
-                viewModel.pendingDeleteRemotePath = nil
+        .sheet(isPresented: $viewModel.showDeleteConfirmation) {
+            if let path = viewModel.pendingDeleteRemotePath {
+                RemoteDeleteConfirmSheet(
+                    path: path,
+                    onCancel: {
+                        viewModel.pendingDeleteRemotePath = nil
+                        viewModel.showDeleteConfirmation = false
+                    },
+                    onDelete: {
+                        Task { await viewModel.confirmDeleteRemote() }
+                    }
+                )
             }
-            Button("Delete", role: .destructive) {
-                Task { await viewModel.confirmDeleteRemote() }
-            }
-        } message: {
-            Text(viewModel.pendingDeleteRemotePath ?? "")
         }
-        .alert("Rename", isPresented: Binding(
+        .sheet(isPresented: Binding(
             get: { viewModel.renameTarget != nil },
             set: { if !$0 { viewModel.renameTarget = nil } }
         )) {
-            TextField("New name", text: $viewModel.renameText)
-            Button("Cancel", role: .cancel) {
-                viewModel.renameTarget = nil
-            }
-            Button("Rename") {
-                Task { await viewModel.commitRename() }
-            }
-            .disabled(!RemotePath.isValidEntryName(
-                viewModel.renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-            ))
+            RemoteRenameSheet(viewModel: viewModel)
         }
-        .alert("New Folder", isPresented: $viewModel.showMkdirPrompt) {
-            TextField("Folder name", text: $viewModel.mkdirName)
-            Button("Cancel", role: .cancel) {
-                viewModel.mkdirName = ""
-            }
-            Button("Create") {
-                Task { await viewModel.commitMkdir() }
-            }
-            .disabled(!RemotePath.isValidEntryName(
-                viewModel.mkdirName.trimmingCharacters(in: .whitespacesAndNewlines)
-            ))
+        .sheet(isPresented: $viewModel.showMkdirPrompt) {
+            RemoteNewFolderSheet(viewModel: viewModel)
         }
     }
 

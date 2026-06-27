@@ -31,8 +31,10 @@
 		AEEC8329F755346C8087472D /* LocalPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B82BEACF7A445BC9ED50F71A /* LocalPaneView.swift */; };
 		1855FA75811F909D6558F748 /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116D1D17B76FB470390330BC /* MainView.swift */; };
 		59E97F8DE7D811CC4EA1A6B0 /* RemotePaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A2E6F8AA6C510156A8DABD /* RemotePaneView.swift */; };
+		R3M0T3P4N3SH33T5BF1 /* RemotePaneSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3M0T3P4N3SH33T5RC1 /* RemotePaneSheets.swift */; };
 		4F485BCC460E809CBC369F6D /* HostKeyConfirmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCE9B37ED92AB8C2C21CC1E /* HostKeyConfirmView.swift */; };
 		629A59E59C65594C7998652C /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 072538B66BFEE10642314E67 /* SettingsView.swift */; };
+		34CA58A3F2B38019A03EF761 /* DialogCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C7BC8DA9077658C709FF8E4 /* DialogCard.swift */; };
 		C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2B8765D556D65748132CE54 /* ErrorAlert.swift */; };
 		B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB9667933C17755C399E575 /* TransferQueueView.swift */; };
 		4D3B078A85CF43E4F57F1AD1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9AED1666CA758F242828EB4F /* Assets.xcassets */; };
@@ -53,9 +55,11 @@
 		F1I2L3E4D5R6O7P8M9O0D1I2F3 /* FileDropModifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */; };
 		F1D2R3O4P5V6A7L8I9D0T1E2S3T4 /* FileDropValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */; };
 		C0NN3CT10N5T4TU5B4R1N5RC3 /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */; };
+		C0NN3CT10N5T4TU5M1ND1C4T0R1 /* ConnectionStatusIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5M1ND1C4T0R2 /* ConnectionStatusIndicator.swift */; };
 		CL1PB04RDH3LP3R1N5RC1 /* ClipboardHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = CL1PB04RDH3LP3R1N5RC2 /* ClipboardHelper.swift */; };
 		P4TH5UMM4RYR0W1N5RC1 /* PathSummaryRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */; };
 		P4N3P4THB4R5F1L3B3 /* PanePathBars.swift in Sources */ = {isa = PBXBuildFile; fileRef = P4N3P4THB4R5F1L3B4 /* PanePathBars.swift */; };
+		D5R0PT4RG3T0V3RL4Y1D2B3 /* DropTargetOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0PT4RG3T0V3RL4Y1D2B4 /* DropTargetOverlay.swift */; };
 		C0NN3CT10N5T4TU5M0D3L1N5RC /* ConnectionStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */; };
 		T4BL3C0L7MN8L4Y0U7T1F2B3 /* TableColumnLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */; };
 		W1ND0WL4Y0U7T1F2B3 /* WindowLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1ND0WL4Y0U7T1F2B4 /* WindowLayout.swift */; };
@@ -64,6 +68,7 @@
 		M4NU4LT3STP14N5V3R1F1C4T5 /* ManualTestPlanVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = M4NU4LT3STP14N5V3R1F1C4T6 /* ManualTestPlanVerificationTests.swift */; };
 		H0STK3YPR0MPTV3R1F1C4T5 /* HostKeyPromptVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = H0STK3YPR0MPTV3R1F1C4T6 /* HostKeyPromptVerificationTests.swift */; };
 		H0STK3YC0NF1RMV13WT3ST5 /* HostKeyConfirmViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = H0STK3YC0NF1RMV13WT3ST6 /* HostKeyConfirmViewTests.swift */; };
+		R3M0T3P4N3SH33T3ST5 /* RemotePaneSheetsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3M0T3P4N3SH33T3ST1 /* RemotePaneSheetsTests.swift */; };
 		D5R0P0P3R4T10N5Y5N0C1N5RC /* DropOperationSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */; };
 		T7R4N5F3R0P4R0G3F0RM4T3RC /* TransferProgressFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = T7R4N5F3R0P4R0G3F0RM4T3RD /* TransferProgressFormatter.swift */; };
 		T7R4N5F3R0P4R0G3F0RM4T3TS /* TransferProgressFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T7R4N5F3R0P4R0G3F0RM4T3TS5 /* TransferProgressFormatterTests.swift */; };
@@ -75,10 +80,14 @@
 		APPD4T31NF05W1FT3BF1 /* AppUpdateInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPD4T31NF05W1FT3RC1 /* AppUpdateInfo.swift */; };
 		V3R5C0MP4R4T0R5W1FT3BF1 /* VersionComparator.swift in Sources */ = {isa = PBXBuildFile; fileRef = V3R5C0MP4R4T0R5W1FT3RC1 /* VersionComparator.swift */; };
 		APPUPD4T3S3RV1C3SW1FT3BF1 /* AppUpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPUPD4T3S3RV1C3SW1FT3RC1 /* AppUpdateService.swift */; };
+		APPUPD4T3DWNL0ADS3RV1C3BF1 /* AppUpdateDownloadService.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPUPD4T3DWNL0ADS3RV1C3RC1 /* AppUpdateDownloadService.swift */; };
+		R3L34S3C0D35IGNV3R1F1C3BF1 /* ReleaseCodeSignatureVerifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3L34S3C0D35IGNV3R1F1C3RC1 /* ReleaseCodeSignatureVerifier.swift */; };
 		UPD4T3CH3CKV13WT3BF1 /* UpdateCheckViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPD4T3CH3CKV13WT3RC1 /* UpdateCheckViewModel.swift */; };
 		UPD4T34V4BL3V13WT3BF1 /* UpdateAvailableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPD4T34V4BL3V13WT3RC1 /* UpdateAvailableView.swift */; };
 		V3R5C0MP4R4T0T3ST5BF1 /* VersionComparatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = V3R5C0MP4R4T0T3ST5RC1 /* VersionComparatorTests.swift */; };
 		APPUPD4T3S3RV1C3T2 /* AppUpdateServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPUPD4T3S3RV1C3T1 /* AppUpdateServiceTests.swift */; };
+		APPUPD4T3DWNL0ADS3RV1C3T2 /* AppUpdateDownloadServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPUPD4T3DWNL0ADS3RV1C3T1 /* AppUpdateDownloadServiceTests.swift */; };
+		R3L34S3C0D35IGNV3R1F1C3T2 /* ReleaseCodeSignatureVerifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3L34S3C0D35IGNV3R1F1C3T1 /* ReleaseCodeSignatureVerifierTests.swift */; };
 		UPD4T3CH3CKV13WT3ST5BF1 /* UpdateCheckViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPD4T3CH3CKV13WT3ST5RC1 /* UpdateCheckViewModelTests.swift */; };
 		P4THN4V1G4T10NH15T0BF1 /* PathNavigationHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = P4THN4V1G4T10NH15T0RC1 /* PathNavigationHistory.swift */; };
 		F1L3TYP31C0N5W1FT3BF1 /* FileTypeIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1L3TYP31C0N5W1FT3RC1 /* FileTypeIcon.swift */; };
@@ -113,8 +122,10 @@
 		B82BEACF7A445BC9ED50F71A /* LocalPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPaneView.swift; sourceTree = "<group>"; };
 		116D1D17B76FB470390330BC /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
 		E1A2E6F8AA6C510156A8DABD /* RemotePaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePaneView.swift; sourceTree = "<group>"; };
+		R3M0T3P4N3SH33T5RC1 /* RemotePaneSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePaneSheets.swift; sourceTree = "<group>"; };
 		FFCE9B37ED92AB8C2C21CC1E /* HostKeyConfirmView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyConfirmView.swift; sourceTree = "<group>"; };
 		072538B66BFEE10642314E67 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		1C7BC8DA9077658C709FF8E4 /* DialogCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialogCard.swift; sourceTree = "<group>"; };
 		D2B8765D556D65748132CE54 /* ErrorAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorAlert.swift; sourceTree = "<group>"; };
 		BBB9667933C17755C399E575 /* TransferQueueView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferQueueView.swift; sourceTree = "<group>"; };
 		9AED1666CA758F242828EB4F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -142,9 +153,11 @@
 		F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropModifiers.swift; sourceTree = "<group>"; };
 		F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropValidationTests.swift; sourceTree = "<group>"; };
 		C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusBar.swift; sourceTree = "<group>"; };
+		C0NN3CT10N5T4TU5M1ND1C4T0R2 /* ConnectionStatusIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusIndicator.swift; sourceTree = "<group>"; };
 		CL1PB04RDH3LP3R1N5RC2 /* ClipboardHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHelper.swift; sourceTree = "<group>"; };
 		P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathSummaryRow.swift; sourceTree = "<group>"; };
 		P4N3P4THB4R5F1L3B4 /* PanePathBars.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanePathBars.swift; sourceTree = "<group>"; };
+		D5R0PT4RG3T0V3RL4Y1D2B4 /* DropTargetOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropTargetOverlay.swift; sourceTree = "<group>"; };
 		C0NN3CT10N5T4TU5M0D3L1N5RD /* ConnectionStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatus.swift; sourceTree = "<group>"; };
 		T4BL3C0L7MN8L4Y0U7T1F2B4 /* TableColumnLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableColumnLayout.swift; sourceTree = "<group>"; };
 		W1ND0WL4Y0U7T1F2B4 /* WindowLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowLayout.swift; sourceTree = "<group>"; };
@@ -153,6 +166,7 @@
 		M4NU4LT3STP14N5V3R1F1C4T6 /* ManualTestPlanVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualTestPlanVerificationTests.swift; sourceTree = "<group>"; };
 		H0STK3YPR0MPTV3R1F1C4T6 /* HostKeyPromptVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyPromptVerificationTests.swift; sourceTree = "<group>"; };
 		H0STK3YC0NF1RMV13WT3ST6 /* HostKeyConfirmViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyConfirmViewTests.swift; sourceTree = "<group>"; };
+		R3M0T3P4N3SH33T3ST1 /* RemotePaneSheetsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePaneSheetsTests.swift; sourceTree = "<group>"; };
 		D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropOperationSync.swift; sourceTree = "<group>"; };
 		T7R4N5F3R0P4R0G3F0RM4T3RD /* TransferProgressFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferProgressFormatter.swift; sourceTree = "<group>"; };
 		T7R4N5F3R0P4R0G3F0RM4T3TS5 /* TransferProgressFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferProgressFormatterTests.swift; sourceTree = "<group>"; };
@@ -164,10 +178,14 @@
 		APPD4T31NF05W1FT3RC1 /* AppUpdateInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateInfo.swift; sourceTree = "<group>"; };
 		V3R5C0MP4R4T0R5W1FT3RC1 /* VersionComparator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VersionComparator.swift; sourceTree = "<group>"; };
 		APPUPD4T3S3RV1C3SW1FT3RC1 /* AppUpdateService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateService.swift; sourceTree = "<group>"; };
+		APPUPD4T3DWNL0ADS3RV1C3RC1 /* AppUpdateDownloadService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateDownloadService.swift; sourceTree = "<group>"; };
+		R3L34S3C0D35IGNV3R1F1C3RC1 /* ReleaseCodeSignatureVerifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseCodeSignatureVerifier.swift; sourceTree = "<group>"; };
 		UPD4T3CH3CKV13WT3RC1 /* UpdateCheckViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateCheckViewModel.swift; sourceTree = "<group>"; };
 		UPD4T34V4BL3V13WT3RC1 /* UpdateAvailableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateAvailableView.swift; sourceTree = "<group>"; };
 		V3R5C0MP4R4T0T3ST5RC1 /* VersionComparatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VersionComparatorTests.swift; sourceTree = "<group>"; };
 		APPUPD4T3S3RV1C3T1 /* AppUpdateServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateServiceTests.swift; sourceTree = "<group>"; };
+		APPUPD4T3DWNL0ADS3RV1C3T1 /* AppUpdateDownloadServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateDownloadServiceTests.swift; sourceTree = "<group>"; };
+		R3L34S3C0D35IGNV3R1F1C3T1 /* ReleaseCodeSignatureVerifierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseCodeSignatureVerifierTests.swift; sourceTree = "<group>"; };
 		UPD4T3CH3CKV13WT3ST5RC1 /* UpdateCheckViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateCheckViewModelTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -224,6 +242,7 @@
 				B82BEACF7A445BC9ED50F71A /* LocalPaneView.swift */,
 				116D1D17B76FB470390330BC /* MainView.swift */,
 				E1A2E6F8AA6C510156A8DABD /* RemotePaneView.swift */,
+				R3M0T3P4N3SH33T5RC1 /* RemotePaneSheets.swift */,
 			);
 			path = Main;
 			sourceTree = "<group>";
@@ -264,6 +283,9 @@
 			isa = PBXGroup;
 			children = (
 				C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */,
+				C0NN3CT10N5T4TU5M1ND1C4T0R2 /* ConnectionStatusIndicator.swift */,
+				1C7BC8DA9077658C709FF8E4 /* DialogCard.swift */,
+				D5R0PT4RG3T0V3RL4Y1D2B4 /* DropTargetOverlay.swift */,
 				D2B8765D556D65748132CE54 /* ErrorAlert.swift */,
 				P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */,
 				P4N3P4THB4R5F1L3B4 /* PanePathBars.swift */,
@@ -333,6 +355,8 @@
 			children = (
 				DBE43F47539AA08723B7C33A /* AppSettingsService.swift */,
 				APPUPD4T3S3RV1C3SW1FT3RC1 /* AppUpdateService.swift */,
+				APPUPD4T3DWNL0ADS3RV1C3RC1 /* AppUpdateDownloadService.swift */,
+				R3L34S3C0D35IGNV3R1F1C3RC1 /* ReleaseCodeSignatureVerifier.swift */,
 				AA9B9731537045170D199A2B /* ConnectionStore.swift */,
 				PR0F1L3ENCRYP7S3RV1C3SW2 /* ProfileEncryptionService.swift */,
 				6D9B83DAFF9C7E5919036C99 /* ProfileTrustStore.swift */,
@@ -406,6 +430,8 @@
 			isa = PBXGroup;
 			children = (
 				APPUPD4T3S3RV1C3T1 /* AppUpdateServiceTests.swift */,
+				APPUPD4T3DWNL0ADS3RV1C3T1 /* AppUpdateDownloadServiceTests.swift */,
+				R3L34S3C0D35IGNV3R1F1C3T1 /* ReleaseCodeSignatureVerifierTests.swift */,
 				D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */,
 				F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */,
 				T7R4N5F3R0P4R0G3F0RM4T3TS5 /* TransferProgressFormatterTests.swift */,
@@ -421,6 +447,7 @@
 				M4NU4LT3STP14N5V3R1F1C4T6 /* ManualTestPlanVerificationTests.swift */,
 				H0STK3YPR0MPTV3R1F1C4T6 /* HostKeyPromptVerificationTests.swift */,
 				H0STK3YC0NF1RMV13WT3ST6 /* HostKeyConfirmViewTests.swift */,
+				R3M0T3P4N3SH33T3ST1 /* RemotePaneSheetsTests.swift */,
 				S3C8K0P3B00KM4RKS3RV1C3T2 /* SecurityScopedBookmarkServiceTests.swift */,
 				S3NS1T1V3STR1NGT3ST5RC2 /* SensitiveStringTests.swift */,
 				UPD4T3CH3CKV13WT3ST5RC1 /* UpdateCheckViewModelTests.swift */,
@@ -586,13 +613,17 @@
 				AEEC8329F755346C8087472D /* LocalPaneView.swift in Sources */,
 				1855FA75811F909D6558F748 /* MainView.swift in Sources */,
 				59E97F8DE7D811CC4EA1A6B0 /* RemotePaneView.swift in Sources */,
+				R3M0T3P4N3SH33T5BF1 /* RemotePaneSheets.swift in Sources */,
 				4F485BCC460E809CBC369F6D /* HostKeyConfirmView.swift in Sources */,
 				629A59E59C65594C7998652C /* SettingsView.swift in Sources */,
 				C0NN3CT10N5T4TU5B4R1N5RC3 /* ConnectionStatusBar.swift in Sources */,
+				C0NN3CT10N5T4TU5M1ND1C4T0R1 /* ConnectionStatusIndicator.swift in Sources */,
 				CL1PB04RDH3LP3R1N5RC1 /* ClipboardHelper.swift in Sources */,
 				P4TH5UMM4RYR0W1N5RC1 /* PathSummaryRow.swift in Sources */,
 				P4N3P4THB4R5F1L3B3 /* PanePathBars.swift in Sources */,
+				D5R0PT4RG3T0V3RL4Y1D2B3 /* DropTargetOverlay.swift in Sources */,
 				C0NN3CT10N5T4TU5M0D3L1N5RC /* ConnectionStatus.swift in Sources */,
+				34CA58A3F2B38019A03EF761 /* DialogCard.swift in Sources */,
 				C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */,
 				B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* RemotePath.swift in Sources */,
@@ -611,6 +642,8 @@
 				APPD4T31NF05W1FT3BF1 /* AppUpdateInfo.swift in Sources */,
 				V3R5C0MP4R4T0R5W1FT3BF1 /* VersionComparator.swift in Sources */,
 				APPUPD4T3S3RV1C3SW1FT3BF1 /* AppUpdateService.swift in Sources */,
+				APPUPD4T3DWNL0ADS3RV1C3BF1 /* AppUpdateDownloadService.swift in Sources */,
+				R3L34S3C0D35IGNV3R1F1C3BF1 /* ReleaseCodeSignatureVerifier.swift in Sources */,
 				UPD4T3CH3CKV13WT3BF1 /* UpdateCheckViewModel.swift in Sources */,
 				UPD4T34V4BL3V13WT3BF1 /* UpdateAvailableView.swift in Sources */,
 				P4THN4V1G4T10NH15T0BF1 /* PathNavigationHistory.swift in Sources */,
@@ -624,6 +657,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				APPUPD4T3S3RV1C3T2 /* AppUpdateServiceTests.swift in Sources */,
+				APPUPD4T3DWNL0ADS3RV1C3T2 /* AppUpdateDownloadServiceTests.swift in Sources */,
+				R3L34S3C0D35IGNV3R1F1C3T2 /* ReleaseCodeSignatureVerifierTests.swift in Sources */,
 				D5R0P0P3R4T10N5Y5N0C1T5ST /* DropOperationSyncTests.swift in Sources */,
 				F1L3D3R0P4C3C3P7T4N5C3T5ST /* FileDropAcceptanceTests.swift in Sources */,
 				T7R4N5F3R0P4R0G3F0RM4T3TS /* TransferProgressFormatterTests.swift in Sources */,
@@ -639,6 +674,7 @@
 				M4NU4LT3STP14N5V3R1F1C4T5 /* ManualTestPlanVerificationTests.swift in Sources */,
 				H0STK3YPR0MPTV3R1F1C4T5 /* HostKeyPromptVerificationTests.swift in Sources */,
 				H0STK3YC0NF1RMV13WT3ST5 /* HostKeyConfirmViewTests.swift in Sources */,
+				R3M0T3P4N3SH33T3ST5 /* RemotePaneSheetsTests.swift in Sources */,
 				S3C8K0P3B00KM4RKS3RV1C3T1 /* SecurityScopedBookmarkServiceTests.swift in Sources */,
 				S3NS1T1V3STR1NGT3ST5RC1 /* SensitiveStringTests.swift in Sources */,
 				UPD4T3CH3CKV13WT3ST5BF1 /* UpdateCheckViewModelTests.swift in Sources */,

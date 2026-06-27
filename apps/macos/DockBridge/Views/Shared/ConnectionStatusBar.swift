@@ -6,24 +6,19 @@ struct ConnectionStatusBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Circle()
-                .fill(indicatorColor)
-                .frame(width: 8, height: 8)
-
-            if status.isConnecting {
-                ProgressView()
-                    .controlSize(.small)
-            }
+            ConnectionStatusIndicator(status: status)
 
             Text(status.statusTitle)
                 .font(.subheadline)
                 .foregroundStyle(.primary)
+                .accessibilityHidden(true)
 
             if let transferSummary {
                 Text(transferSummary)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .accessibilityLabel("Transfer activity: \(transferSummary)")
             }
 
             Spacer()
@@ -31,16 +26,5 @@ struct ConnectionStatusBar: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(.bar)
-    }
-
-    private var indicatorColor: Color {
-        switch status {
-        case .disconnected:
-            return .secondary
-        case .connecting:
-            return .orange
-        case .connected:
-            return .green
-        }
     }
 }

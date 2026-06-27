@@ -51,6 +51,9 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace
 
+      - name: Build hardened CLI (release configuration)
+        run: cargo build -p dockbridge-cli --release --features disable-cli-password
+
   # macOS job: compile/test only (unsigned). Release signing and notarization run in
   # .github/workflows/release.yml — see docs/security.md#release-signing-pipeline.
   macos:

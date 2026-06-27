@@ -6,37 +6,49 @@ struct ConnectionListView: View {
     @Binding var editingProfile: ConnectionProfile?
 
     var body: some View {
-        VStack(spacing: 0) {
-            TextField("Search connections", text: $viewModel.searchText)
-                .textFieldStyle(.roundedBorder)
-                .padding([.horizontal, .top])
-
-            List(selection: $viewModel.selectedProfileID) {
-                ForEach(viewModel.filteredProfiles) { profile in
-                    HStack(spacing: 8) {
-                        connectionIndicator(for: profile)
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(profile.displayName)
-                                .font(.headline)
-                            Text(profile.endpointLabel)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+        Group {
+            if viewModel.profiles.isEmpty {
+                ContentUnavailableView {
+                    Label("No connections", systemImage: "server.rack")
+                } description: {
+                    Text("Add a connection profile to connect to a remote host.")
+                } actions: {
+                    Button("Add Connection") {
+                        showNewConnection = true
                     }
-                    .tag(profile.id)
-                    .contextMenu {
-                        Button("Connect") {
-                            viewModel.requestConnect(profile: profile)
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(selection: $viewModel.selectedProfileID) {
+                    ForEach(viewModel.filteredProfiles) { profile in
+                        HStack(spacing: 8) {
+                            connectionIndicator(for: profile)
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(profile.displayName)
+                                    .font(.headline)
+                                Text(profile.endpointLabel)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                        Button("Edit") {
-                            editingProfile = profile
-                        }
-                        Button("Delete", role: .destructive) {
-                            viewModel.delete(profile: profile)
+                        .tag(profile.id)
+                        .contextMenu {
+                            Button("Connect") {
+                                viewModel.requestConnect(profile: profile)
+                            }
+                            Button("Edit") {
+                                editingProfile = profile
+                            }
+                            Button("Delete", role: .destructive) {
+                                viewModel.delete(profile: profile)
+                            }
                         }
                     }
                 }
+                .searchable(text: $viewModel.searchText, prompt: "Search connections")
             }
         }
         .navigationTitle("Connections")
@@ -52,6 +64,7 @@ struct ConnectionListView: View {
                     Button("Connect") {
                         viewModel.requestConnect(profile: selected)
                     }
+                    .buttonStyle(.borderedProminent)
                     .disabled(viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting)
 
                     Button("Disconnect") {
@@ -144,19 +157,14 @@ struct ConnectionListView: View {
     private func connectionIndicator(for profile: ConnectionProfile) -> some View {
         let isActiveProfile = viewModel.connectedProfileID == profile.id
 
-        if isActiveProfile, viewModel.connectionStatus.isConnected {
-            Circle()
-                .fill(.green)
-                .frame(width: 8, height: 8)
-                .accessibilityLabel("Connected")
-        } else if isActiveProfile, viewModel.connectionStatus.isConnecting {
-            ProgressView()
-                .controlSize(.small)
-                .accessibilityLabel("Connecting")
+        if isActiveProfile,
+           viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting
+        {
+            ConnectionStatusIndicator(status: viewModel.connectionStatus)
         } else {
-            Circle()
-                .fill(.clear)
-                .frame(width: 8, height: 8)
+            Image(systemName: "circle")
+                .foregroundStyle(.clear)
+                .accessibilityHidden(true)
         }
     }
 }

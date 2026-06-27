@@ -12,16 +12,25 @@ use dockbridge_core::{
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
-#[derive(Parser, Debug)]
-#[command(
-    name = "dockbridge",
-    about = "DockBridge SFTP CLI",
-    after_help = "\
+#[cfg(feature = "disable-cli-password")]
+const PASSWORD_AFTER_HELP: &str = "\
+Password authentication:\n  \
+Use --password-stdin for scripts, CI, and production. Example:\n  \
+  printf '%s\\n' \"$PASSWORD\" | dockbridge list --host HOST --user USER --password-stdin";
+
+#[cfg(not(feature = "disable-cli-password"))]
+const PASSWORD_AFTER_HELP: &str = "\
 Password authentication:\n  \
 Prefer --password-stdin for scripts, CI, and production. Example:\n  \
   printf '%s\\n' \"$PASSWORD\" | dockbridge list --host HOST --user USER --password-stdin\n\n  \
 --password is for local development and testing only. Passwords passed on the \
-command line may appear in argv, shell history, and process listings (CWE-214)."
+command line may appear in argv, shell history, and process listings (CWE-214).";
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "dockbridge",
+    about = "DockBridge SFTP CLI",
+    after_help = PASSWORD_AFTER_HELP
 )]
 struct Cli {
     /// Path to TOML config file.
