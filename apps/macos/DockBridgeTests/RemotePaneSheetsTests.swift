@@ -1,6 +1,7 @@
 import XCTest
 @testable import DockBridge
 
+@MainActor
 final class RemotePaneSheetsTests: XCTestCase {
     func testEntryNameSheetBuildsForRename() {
         let bridge = RustBridgeService()
