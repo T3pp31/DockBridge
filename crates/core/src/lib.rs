@@ -9,8 +9,10 @@ pub mod transfer;
 
 pub use config::{
     clamp_transfer_chunk_size, ensure_known_hosts_parent, expand_tilde,
-    validate_transfer_chunk_size, AppConfig, DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
-    MAX_TRANSFER_CHUNK_SIZE_BYTES, MIN_TRANSFER_CHUNK_SIZE_BYTES,
+    validate_transfer_chunk_size, AppConfig, DirectoryWalkLimits, DEFAULT_DIRECTORY_WALK_MAX_DEPTH,
+    DEFAULT_DIRECTORY_WALK_MAX_FILES, DEFAULT_DIRECTORY_WALK_MAX_TOTAL_BYTES,
+    DEFAULT_TRANSFER_CHUNK_SIZE_BYTES, MAX_TRANSFER_CHUNK_SIZE_BYTES,
+    MIN_TRANSFER_CHUNK_SIZE_BYTES,
 };
 pub use error::{
     AppError, AuthError, ConfigError, ConnectionError, SecurityError, SftpError, TransferError,

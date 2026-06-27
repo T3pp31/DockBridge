@@ -106,6 +106,13 @@ pub enum SftpError {
     #[error("invalid remote path '{path}': parent directory traversal ('..') is not allowed")]
     InvalidRemotePath { path: String },
 
+    #[error("directory walk limit exceeded: {limit} (value {value}) at '{path}'")]
+    DirectoryWalkLimitExceeded {
+        limit: String,
+        value: u64,
+        path: String,
+    },
+
     #[error("transfer was cancelled")]
     Cancelled,
 

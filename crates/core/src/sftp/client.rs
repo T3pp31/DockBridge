@@ -7,14 +7,17 @@ use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::config::{clamp_transfer_chunk_size, DEFAULT_TRANSFER_CHUNK_SIZE_BYTES};
+use crate::config::{
+    clamp_transfer_chunk_size, DirectoryWalkLimits, DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
+};
 use crate::error::SftpError;
 use crate::ssh::session::SshSession;
 use crate::transfer::TransferOverwritePolicy;
 
 use super::tree::{
     ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
-    normalize_remote_path, validated_remote_entry, walk_local_directory, walk_remote_directory,
+    normalize_remote_path, validated_remote_entry, walk_local_directory_with_options,
+    walk_remote_directory_with_limits, WalkLocalDirectoryOptions,
 };
 
 /// Metadata for a remote file or directory entry.
@@ -30,12 +33,22 @@ pub struct RemoteFile {
 /// High-level SFTP client built on top of an SSH session.
 pub struct SftpClient<'a> {
     session: &'a SshSession,
+    directory_walk_limits: DirectoryWalkLimits,
 }
 
 impl<'a> SftpClient<'a> {
     /// Creates a new SFTP client for the given SSH session.
     pub fn new(session: &'a SshSession) -> Self {
-        Self { session }
+        Self {
+            session,
+            directory_walk_limits: DirectoryWalkLimits::default(),
+        }
+    }
+
+    /// Sets resource limits applied during recursive directory walks.
+    pub fn with_directory_walk_limits(mut self, limits: DirectoryWalkLimits) -> Self {
+        self.directory_walk_limits = limits;
+        self
     }
 
     fn sftp(&self) -> &SftpSession {
@@ -338,7 +351,14 @@ impl<'a> SftpClient<'a> {
             let remote_root = join_remote_path(remote_directory, Path::new(&directory_name))?;
             self.create_directory_all(&remote_root).await?;
 
-            let files = walk_local_directory(local_path).await?;
+            let files = walk_local_directory_with_options(
+                local_path,
+                WalkLocalDirectoryOptions {
+                    limits: self.directory_walk_limits,
+                    ..Default::default()
+                },
+            )
+            .await?;
             for entry in files {
                 let remote_path = join_remote_path(&remote_root, &entry.relative_path)?;
                 if let Some(parent) = parent_remote_path(&remote_path)? {
@@ -385,7 +405,9 @@ impl<'a> SftpClient<'a> {
                 return Ok(());
             }
 
-            let files = walk_remote_directory(self, &normalized).await?;
+            let files =
+                walk_remote_directory_with_limits(self, &normalized, self.directory_walk_limits)
+                    .await?;
             for entry in files {
                 let local_path = local_root.join(&entry.relative_path);
                 ensure_local_path_within_root(&local_root, &local_path)?;

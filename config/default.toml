@@ -13,3 +13,6 @@ merge_openssh_known_hosts_on_connect = true
 known_hosts_strict_mode = true
 # When true, abort connection if merging OpenSSH known_hosts fails.
 fail_connect_on_openssh_merge_error = true
+directory_walk_max_files = 100000
+directory_walk_max_depth = 64
+directory_walk_max_total_bytes = 107374182400

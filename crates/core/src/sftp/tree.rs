@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
+use crate::config::DirectoryWalkLimits;
 use crate::error::SftpError;
 
 use super::client::SftpClient;
@@ -208,6 +209,57 @@ pub fn normalize_remote_path(path: &str) -> Result<String, SftpError> {
 pub struct WalkLocalDirectoryOptions {
     /// When `true`, symlinks are followed during traversal. Defaults to `false` for security.
     pub follow_symlinks: bool,
+    /// Resource limits applied while collecting file entries.
+    pub limits: DirectoryWalkLimits,
+}
+
+struct DirectoryWalkAccumulator {
+    limits: DirectoryWalkLimits,
+    file_count: u64,
+    total_bytes: u64,
+}
+
+impl DirectoryWalkAccumulator {
+    fn new(limits: DirectoryWalkLimits) -> Self {
+        Self {
+            limits,
+            file_count: 0,
+            total_bytes: 0,
+        }
+    }
+
+    fn check_depth(&self, depth: u32, path: &str) -> Result<(), SftpError> {
+        if depth > self.limits.max_depth {
+            return Err(SftpError::DirectoryWalkLimitExceeded {
+                limit: "max_depth".to_string(),
+                value: u64::from(depth),
+                path: path.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn record_file(&mut self, size: u64, path: &str) -> Result<(), SftpError> {
+        self.file_count += 1;
+        if self.file_count > self.limits.max_files {
+            return Err(SftpError::DirectoryWalkLimitExceeded {
+                limit: "max_files".to_string(),
+                value: self.file_count,
+                path: path.to_string(),
+            });
+        }
+
+        self.total_bytes = self.total_bytes.saturating_add(size);
+        if self.total_bytes > self.limits.max_total_bytes {
+            return Err(SftpError::DirectoryWalkLimitExceeded {
+                limit: "max_total_bytes".to_string(),
+                value: self.total_bytes,
+                path: path.to_string(),
+            });
+        }
+
+        Ok(())
+    }
 }
 
 /// Recursively walks a local directory and returns all files with relative paths.
@@ -236,6 +288,8 @@ pub async fn walk_local_directory_with_options(
             .file_name()
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("file"));
+        let mut accumulator = DirectoryWalkAccumulator::new(options.limits);
+        accumulator.record_file(metadata.len(), &root.display().to_string())?;
         return Ok(vec![LocalFileEntry {
             local_path: root.to_path_buf(),
             relative_path: file_name,
@@ -251,10 +305,12 @@ pub async fn walk_local_directory_with_options(
     }
 
     let mut entries = Vec::new();
-    let mut pending = vec![root.to_path_buf()];
+    let mut pending = vec![(root.to_path_buf(), 0_u32)];
     let mut visited = HashSet::<PathBuf>::new();
+    let mut accumulator = DirectoryWalkAccumulator::new(options.limits);
 
-    while let Some(current) = pending.pop() {
+    while let Some((current, depth)) = pending.pop() {
+        accumulator.check_depth(depth, &current.display().to_string())?;
         let canonical =
             tokio::fs::canonicalize(&current)
                 .await
@@ -311,7 +367,9 @@ pub async fn walk_local_directory_with_options(
                         })?;
 
                 if target_metadata.is_dir() {
-                    pending.push(path);
+                    let child_depth = depth.saturating_add(1);
+                    accumulator.check_depth(child_depth, &path.display().to_string())?;
+                    pending.push((path, child_depth));
                 } else if target_metadata.is_file() {
                     let relative_path =
                         path.strip_prefix(root).map(PathBuf::from).map_err(|err| {
@@ -321,6 +379,7 @@ pub async fn walk_local_directory_with_options(
                                 message: err.to_string(),
                             }
                         })?;
+                    accumulator.record_file(target_metadata.len(), &path.display().to_string())?;
                     entries.push(LocalFileEntry {
                         local_path: path,
                         relative_path,
@@ -330,8 +389,18 @@ pub async fn walk_local_directory_with_options(
             }
 
             if file_type.is_dir() {
-                pending.push(path);
+                let child_depth = depth.saturating_add(1);
+                accumulator.check_depth(child_depth, &path.display().to_string())?;
+                pending.push((path, child_depth));
             } else if file_type.is_file() {
+                let file_metadata =
+                    tokio::fs::metadata(&path)
+                        .await
+                        .map_err(|err| SftpError::UploadFailed {
+                            local: path.display().to_string(),
+                            remote: String::new(),
+                            message: err.to_string(),
+                        })?;
                 let relative_path = path.strip_prefix(root).map(PathBuf::from).map_err(|err| {
                     SftpError::UploadFailed {
                         local: path.display().to_string(),
@@ -339,6 +408,7 @@ pub async fn walk_local_directory_with_options(
                         message: err.to_string(),
                     }
                 })?;
+                accumulator.record_file(file_metadata.len(), &path.display().to_string())?;
                 entries.push(LocalFileEntry {
                     local_path: path,
                     relative_path,
@@ -355,14 +425,25 @@ pub async fn walk_remote_directory<'a>(
     client: &SftpClient<'a>,
     root: &str,
 ) -> Result<Vec<RemoteFileEntry>, SftpError> {
+    walk_remote_directory_with_limits(client, root, DirectoryWalkLimits::default()).await
+}
+
+/// Recursively walks a remote directory with configurable resource limits.
+pub async fn walk_remote_directory_with_limits<'a>(
+    client: &SftpClient<'a>,
+    root: &str,
+    limits: DirectoryWalkLimits,
+) -> Result<Vec<RemoteFileEntry>, SftpError> {
     let normalized_root = normalize_remote_path(root)?;
     let _entries = client.list_directory(&normalized_root).await?;
     let mut files = Vec::new();
-    let mut pending = vec![(normalized_root.clone(), PathBuf::new())];
+    let mut pending = vec![(normalized_root.clone(), PathBuf::new(), 0_u32)];
     let mut visited = HashSet::new();
     visited.insert(normalized_root);
+    let mut accumulator = DirectoryWalkAccumulator::new(limits);
 
-    while let Some((current_remote, relative_prefix)) = pending.pop() {
+    while let Some((current_remote, relative_prefix, depth)) = pending.pop() {
+        accumulator.check_depth(depth, &current_remote)?;
         let entries = client.list_directory(&current_remote).await?;
         for entry in entries {
             let child_remote = validated_remote_entry(&current_remote, &entry.name, &entry.path)?;
@@ -374,10 +455,13 @@ pub async fn walk_remote_directory<'a>(
             };
 
             if entry.is_directory {
+                let child_depth = depth.saturating_add(1);
+                accumulator.check_depth(child_depth, &child_remote)?;
                 if visited.insert(child_remote.clone()) {
-                    pending.push((child_remote, relative_path));
+                    pending.push((child_remote, relative_path, child_depth));
                 }
             } else {
+                accumulator.record_file(entry.size, &child_remote)?;
                 files.push(RemoteFileEntry {
                     remote_path: child_remote,
                     relative_path,
@@ -689,6 +773,7 @@ mod tests {
             root,
             WalkLocalDirectoryOptions {
                 follow_symlinks: true,
+                ..Default::default()
             },
         )
         .await
@@ -715,6 +800,7 @@ mod tests {
             root,
             WalkLocalDirectoryOptions {
                 follow_symlinks: true,
+                ..Default::default()
             },
         )
         .await
@@ -743,6 +829,7 @@ mod tests {
             root,
             WalkLocalDirectoryOptions {
                 follow_symlinks: true,
+                ..Default::default()
             },
         )
         .await
@@ -755,5 +842,124 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(relatives.contains(&"top.txt".to_string()));
         assert!(!relatives.iter().any(|path| path.contains("link_dir")));
+    }
+
+    fn tight_walk_limits() -> DirectoryWalkLimits {
+        DirectoryWalkLimits {
+            max_files: 2,
+            max_depth: 2,
+            max_total_bytes: 10,
+        }
+    }
+
+    #[tokio::test]
+    async fn walk_local_directory_respects_max_files_limit() {
+        // Given: a directory with more files than the configured limit
+        // When: walk_local_directory_with_options is called
+        // Then: DirectoryWalkLimitExceeded for max_files is returned
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("a.txt"), b"a").unwrap();
+        fs::write(root.join("b.txt"), b"b").unwrap();
+        fs::write(root.join("c.txt"), b"c").unwrap();
+
+        let err = walk_local_directory_with_options(
+            root,
+            WalkLocalDirectoryOptions {
+                limits: DirectoryWalkLimits {
+                    max_files: 2,
+                    ..DirectoryWalkLimits::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            SftpError::DirectoryWalkLimitExceeded { limit, .. } if limit == "max_files"
+        ));
+    }
+
+    #[tokio::test]
+    async fn walk_local_directory_respects_max_depth_limit() {
+        // Given: a directory tree deeper than the configured limit
+        // When: walk_local_directory_with_options is called
+        // Then: DirectoryWalkLimitExceeded for max_depth is returned
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("a/b/c")).unwrap();
+        fs::write(root.join("a/b/c/deep.txt"), b"x").unwrap();
+
+        let err = walk_local_directory_with_options(
+            root,
+            WalkLocalDirectoryOptions {
+                limits: DirectoryWalkLimits {
+                    max_depth: 2,
+                    ..DirectoryWalkLimits::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            SftpError::DirectoryWalkLimitExceeded { limit, .. } if limit == "max_depth"
+        ));
+    }
+
+    #[tokio::test]
+    async fn walk_local_directory_respects_max_total_bytes_limit() {
+        // Given: files whose combined size exceeds the configured byte limit
+        // When: walk_local_directory_with_options is called
+        // Then: DirectoryWalkLimitExceeded for max_total_bytes is returned
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("one.txt"), b"12345").unwrap();
+        fs::write(root.join("two.txt"), b"67890").unwrap();
+
+        let err = walk_local_directory_with_options(
+            root,
+            WalkLocalDirectoryOptions {
+                limits: DirectoryWalkLimits {
+                    max_total_bytes: 8,
+                    ..DirectoryWalkLimits::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            SftpError::DirectoryWalkLimitExceeded { limit, .. } if limit == "max_total_bytes"
+        ));
+    }
+
+    #[tokio::test]
+    async fn walk_local_directory_within_limits_succeeds() {
+        // Given: a small tree within tight limits
+        // When: walk_local_directory_with_options is called
+        // Then: all files are collected
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("a.txt"), b"ab").unwrap();
+        fs::write(root.join("b.txt"), b"cd").unwrap();
+
+        let entries = walk_local_directory_with_options(
+            root,
+            WalkLocalDirectoryOptions {
+                limits: tight_walk_limits(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(entries.len(), 2);
     }
 }
