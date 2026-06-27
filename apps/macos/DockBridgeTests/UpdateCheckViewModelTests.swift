@@ -7,6 +7,7 @@ final class UpdateCheckViewModelTests: XCTestCase {
     private var settingsService: AppSettingsService!
     private var mockSession: MockUpdateURLSession!
     private var updateService: AppUpdateService!
+    private var mockDownloadService: MockAppUpdateDownloadService!
     private var viewModel: UpdateCheckViewModel!
 
     override func setUp() {
@@ -16,7 +17,12 @@ final class UpdateCheckViewModelTests: XCTestCase {
         settingsService = AppSettingsService(defaults: defaults)
         mockSession = MockUpdateURLSession()
         updateService = AppUpdateService(session: mockSession)
-        viewModel = UpdateCheckViewModel(updateService: updateService, settingsService: settingsService)
+        mockDownloadService = MockAppUpdateDownloadService()
+        viewModel = UpdateCheckViewModel(
+            updateService: updateService,
+            downloadService: mockDownloadService,
+            settingsService: settingsService
+        )
     }
 
     func testCheckOnLaunchDefersSheetWhileHostKeyBlocking() async {
@@ -41,7 +47,11 @@ final class UpdateCheckViewModelTests: XCTestCase {
         XCTAssertEqual(settingsService.loadSkippedUpdateVersion(), "0.2.0")
         XCTAssertFalse(viewModel.showUpdateSheet)
 
-        viewModel = UpdateCheckViewModel(updateService: updateService, settingsService: settingsService)
+        viewModel = UpdateCheckViewModel(
+            updateService: updateService,
+            downloadService: mockDownloadService,
+            settingsService: settingsService
+        )
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
 
         XCTAssertFalse(viewModel.showUpdateSheet)
@@ -54,6 +64,20 @@ final class UpdateCheckViewModelTests: XCTestCase {
 
         XCTAssertNil(viewModel.pendingUpdate)
         XCTAssertFalse(viewModel.showUpdateSheet)
+    }
+
+    func testDownloadUpdateSurfacesVerificationFailure() async {
+        mockSession.responseJSON = newerReleaseJSON
+        mockDownloadService.error = .signatureVerificationFailed(.unsignedBundle)
+
+        await viewModel.checkOnLaunch(isHostKeyBlocking: false)
+        await viewModel.downloadUpdate()
+
+        XCTAssertEqual(
+            viewModel.downloadErrorMessage,
+            AppUpdateDownloadError.signatureVerificationFailed(.unsignedBundle).localizedDescription
+        )
+        XCTAssertFalse(viewModel.isDownloadingUpdate)
     }
 
     private var newerReleaseJSON: String {
@@ -87,5 +111,15 @@ private final class MockUpdateURLSession: URLSessionDataProviding, @unchecked Se
             headerFields: nil
         )!
         return (Data(responseJSON.utf8), response)
+    }
+}
+
+private final class MockAppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable {
+    var error: AppUpdateDownloadError?
+
+    func downloadVerifyAndReveal(update: AppUpdateInfo) async throws {
+        if let error {
+            throw error
+        }
     }
 }
