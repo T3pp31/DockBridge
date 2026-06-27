@@ -39,6 +39,17 @@ struct RemotePaneView: View {
                             }
                             return .ignored
                         }
+                        .overlay {
+                            if isDropTargeted {
+                                DropTargetOverlay(
+                                    title: "Drop to upload",
+                                    systemImage: "arrow.up.doc"
+                                )
+                                .padding(4)
+                                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                            }
+                        }
+                        .animation(.easeInOut(duration: 0.2), value: isDropTargeted)
                 }
                 .layoutPriority(0)
             } else {
@@ -52,12 +63,6 @@ struct RemotePaneView: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .padding(WindowLayout.panePadding)
-        .overlay {
-            if isDropTargeted {
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.accentColor, lineWidth: 2)
-            }
-        }
         .modifier(RemotePaneDropModifier(viewModel: viewModel, isTargeted: $isDropTargeted))
         .task(id: viewModel.remotePath) {
             await viewModel.reloadRemote()
