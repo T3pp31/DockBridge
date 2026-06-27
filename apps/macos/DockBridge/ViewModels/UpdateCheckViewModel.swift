@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 @MainActor
@@ -40,6 +41,11 @@ final class UpdateCheckViewModel: ObservableObject {
 
     func downloadUpdate() async {
         guard let pendingUpdate, !isDownloadingUpdate else { return }
+
+        if pendingUpdate.downloadURL == pendingUpdate.releasePageURL {
+            NSWorkspace.shared.open(pendingUpdate.releasePageURL)
+            return
+        }
 
         isDownloadingUpdate = true
         downloadErrorMessage = nil

@@ -120,6 +120,7 @@ protocol AppUpdateDownloading: Sendable {
     func downloadVerifyAndReveal(update: AppUpdateInfo) async throws
 }
 
+// All stored properties are immutable `let` constants set at init, so this is safe for concurrent access.
 final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable {
     private let downloadSession: URLSessionDownloadProviding
     private let dataSession: URLSessionDataProviding
@@ -172,6 +173,8 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
             try signatureVerifier.verifyAppBundle(at: appBundleURL)
         } catch let error as ReleaseCodeSignatureVerifierError {
             throw AppUpdateDownloadError.signatureVerificationFailed(error)
+        } catch {
+            throw AppUpdateDownloadError.signatureVerificationFailed(.unsignedBundle)
         }
 
         NSWorkspace.shared.open(mountPoint)
