@@ -70,42 +70,28 @@ struct RemotePaneView: View {
         .task(id: viewModel.remotePath) {
             await viewModel.reloadRemote()
         }
-        .alert("Delete remote item?", isPresented: $viewModel.showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) {
-                viewModel.pendingDeleteRemotePath = nil
+        .sheet(isPresented: $viewModel.showDeleteConfirmation) {
+            if let path = viewModel.pendingDeleteRemotePath {
+                RemoteDeleteConfirmSheet(
+                    path: path,
+                    onCancel: {
+                        viewModel.pendingDeleteRemotePath = nil
+                        viewModel.showDeleteConfirmation = false
+                    },
+                    onDelete: {
+                        Task { await viewModel.confirmDeleteRemote() }
+                    }
+                )
             }
-            Button("Delete", role: .destructive) {
-                Task { await viewModel.confirmDeleteRemote() }
-            }
-        } message: {
-            Text(viewModel.pendingDeleteRemotePath ?? "")
         }
-        .alert("Rename", isPresented: Binding(
+        .sheet(isPresented: Binding(
             get: { viewModel.renameTarget != nil },
             set: { if !$0 { viewModel.renameTarget = nil } }
         )) {
-            TextField("New name", text: $viewModel.renameText)
-            Button("Cancel", role: .cancel) {
-                viewModel.renameTarget = nil
-            }
-            Button("Rename") {
-                Task { await viewModel.commitRename() }
-            }
-            .disabled(!RemotePath.isValidEntryName(
-                viewModel.renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-            ))
+            RemoteRenameSheet(viewModel: viewModel)
         }
-        .alert("New Folder", isPresented: $viewModel.showMkdirPrompt) {
-            TextField("Folder name", text: $viewModel.mkdirName)
-            Button("Cancel", role: .cancel) {
-                viewModel.mkdirName = ""
-            }
-            Button("Create") {
-                Task { await viewModel.commitMkdir() }
-            }
-            .disabled(!RemotePath.isValidEntryName(
-                viewModel.mkdirName.trimmingCharacters(in: .whitespacesAndNewlines)
-            ))
+        .sheet(isPresented: $viewModel.showMkdirPrompt) {
+            RemoteNewFolderSheet(viewModel: viewModel)
         }
     }
 
