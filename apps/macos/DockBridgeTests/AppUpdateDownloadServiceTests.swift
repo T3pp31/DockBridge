@@ -35,17 +35,12 @@ private struct MockChecksumURLSession: URLSessionDataProviding {
 
 private struct MockDMGImageMounter: DMGImageMounting {
     let mountPoint: URL
-    var mountedURLs: [URL] = []
-    var unmountedURLs: [URL] = []
 
     func mount(dmgURL: URL) throws -> URL {
-        mountedURLs.append(dmgURL)
         return mountPoint
     }
 
-    func unmount(mountPoint: URL) throws {
-        unmountedURLs.append(mountPoint)
-    }
+    func unmount(mountPoint: URL) throws {}
 }
 
 private struct MockSignatureVerifier: AppBundleSignatureVerifying {
@@ -79,7 +74,7 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
 
         let service = AppUpdateDownloadService(
             downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 200),
-            dataSession: MockChecksumURLSession(checksumLine: "deadbeef update.dmg", statusCode: 200),
+            dataSession: MockChecksumURLSession(checksumLine: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef update.dmg", statusCode: 200),
             signatureVerifier: MockSignatureVerifier(),
             dmgMounter: MockDMGImageMounter(mountPoint: temporaryDirectory.appendingPathComponent("mount")),
             fileManager: .default

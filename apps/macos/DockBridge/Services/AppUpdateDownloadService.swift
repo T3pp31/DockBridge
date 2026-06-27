@@ -6,7 +6,11 @@ protocol URLSessionDownloadProviding: Sendable {
     func download(for request: URLRequest) async throws -> (URL, URLResponse)
 }
 
-extension URLSession: URLSessionDownloadProviding {}
+extension URLSession: URLSessionDownloadProviding {
+    func download(for request: URLRequest) async throws -> (URL, URLResponse) {
+        try await download(for: request, delegate: nil)
+    }
+}
 
 protocol DMGImageMounting: Sendable {
     func mount(dmgURL: URL) throws -> URL
@@ -139,14 +143,26 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
 
     func downloadVerifyAndReveal(update: AppUpdateInfo) async throws {
         let downloadedURL = try await downloadDMG(from: update.downloadURL)
-        defer { try? fileManager.removeItem(at: downloadedURL) }
+
+        var shouldCleanUpDownload = true
+        defer {
+            if shouldCleanUpDownload {
+                try? fileManager.removeItem(at: downloadedURL)
+            }
+        }
 
         if let checksumURL = update.checksumURL {
             try await verifyChecksum(of: downloadedURL, checksumURL: checksumURL)
         }
 
         let mountPoint = try dmgMounter.mount(dmgURL: downloadedURL)
-        defer { try? dmgMounter.unmount(mountPoint: mountPoint) }
+
+        var shouldUnmount = true
+        defer {
+            if shouldUnmount {
+                try? dmgMounter.unmount(mountPoint: mountPoint)
+            }
+        }
 
         guard let appBundleURL = findAppBundle(in: mountPoint) else {
             throw AppUpdateDownloadError.appBundleNotFound
@@ -159,10 +175,12 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
         }
 
         NSWorkspace.shared.open(mountPoint)
+        shouldUnmount = false
+        shouldCleanUpDownload = false
     }
 
     private func downloadDMG(from url: URL) async throws -> URL {
-        var request = URLRequest(url: url)
+        let request = URLRequest(url: url)
         let (temporaryURL, response) = try await downloadSession.download(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
@@ -179,7 +197,7 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
     }
 
     private func verifyChecksum(of fileURL: URL, checksumURL: URL) async throws {
-        var request = URLRequest(url: checksumURL)
+        let request = URLRequest(url: checksumURL)
         let (data, response) = try await dataSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
@@ -193,10 +211,16 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
             throw AppUpdateDownloadError.checksumFetchFailed
         }
 
+        let expectedChecksum = String(checksumLine)
+        guard expectedChecksum.count == 64,
+              expectedChecksum.allSatisfy({ $0.isHexDigit }) else {
+            throw AppUpdateDownloadError.checksumFetchFailed
+        }
+
         let fileData = try Data(contentsOf: fileURL)
         let digest = SHA256.hash(data: fileData)
         let actualChecksum = digest.map { String(format: "%02x", $0) }.joined()
-        guard actualChecksum == String(checksumLine).lowercased() else {
+        guard actualChecksum == expectedChecksum.lowercased() else {
             throw AppUpdateDownloadError.checksumMismatch
         }
     }
