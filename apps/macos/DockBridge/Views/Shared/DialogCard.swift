@@ -8,7 +8,7 @@ struct DialogCard<Content: View, Footer: View>: View {
     @ViewBuilder let footer: () -> Footer
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Self.contentSpacing) {
+        VStack(alignment: .leading, spacing: DialogCardMetrics.contentSpacing) {
             titleRow
 
             content()
@@ -18,9 +18,9 @@ struct DialogCard<Content: View, Footer: View>: View {
                 footer()
             }
         }
-        .padding(Self.padding)
-        .frame(minWidth: Self.minWidth)
-        .background(.background, in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
+        .padding(DialogCardMetrics.padding)
+        .frame(minWidth: DialogCardMetrics.minWidth)
+        .background(.background, in: RoundedRectangle(cornerRadius: DialogCardMetrics.cornerRadius, style: .continuous))
     }
 
     @ViewBuilder
@@ -37,7 +37,7 @@ struct DialogCard<Content: View, Footer: View>: View {
     }
 }
 
-extension DialogCard {
+private enum DialogCardMetrics {
     static let minWidth: CGFloat = 480
     static let padding: CGFloat = 28
     static let cornerRadius: CGFloat = 16
