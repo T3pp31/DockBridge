@@ -190,6 +190,36 @@ pub fn join_remote_path(base: &str, relative: &Path) -> Result<String, SftpError
     Ok(result)
 }
 
+fn invalid_remote_path(path: &str) -> SftpError {
+    SftpError::InvalidRemotePath {
+        path: path.to_string(),
+    }
+}
+
+/// Ensures `path` stays under `root` after normalizing both as absolute POSIX paths.
+///
+/// Used during remote directory walks so a malicious SFTP server cannot steer collection
+/// outside the user-selected subtree via symlink targets or mismatched listing paths.
+pub fn ensure_remote_path_within_root(root: &str, path: &str) -> Result<(), SftpError> {
+    let normalized_root = normalize_remote_path(root)?;
+    let normalized_path = normalize_remote_path(path)?;
+
+    if normalized_path == normalized_root {
+        return Ok(());
+    }
+
+    if normalized_root == "/" {
+        return Ok(());
+    }
+
+    let prefix = format!("{normalized_root}/");
+    if normalized_path.starts_with(&prefix) {
+        Ok(())
+    } else {
+        Err(invalid_remote_path(path))
+    }
+}
+
 /// Normalizes a remote path to an absolute POSIX path.
 pub fn normalize_remote_path(path: &str) -> Result<String, SftpError> {
     reject_parent_dir_segment(path)?;
@@ -421,6 +451,9 @@ pub async fn walk_local_directory_with_options(
 }
 
 /// Recursively walks a remote directory and returns all files with relative paths.
+///
+/// Symlinks are not followed, matching [`walk_local_directory`] and OpenSSH `ls -l` behaviour:
+/// only non-link directory entries are descended and only regular files are collected.
 pub async fn walk_remote_directory<'a>(
     client: &SftpClient<'a>,
     root: &str,
@@ -439,7 +472,7 @@ pub async fn walk_remote_directory_with_limits<'a>(
     let mut files = Vec::new();
     let mut pending = vec![(normalized_root.clone(), PathBuf::new(), 0_u32)];
     let mut visited = HashSet::new();
-    visited.insert(normalized_root);
+    visited.insert(normalized_root.clone());
     let mut accumulator = DirectoryWalkAccumulator::new(limits);
 
     while let Some((current_remote, relative_prefix, depth)) = pending.pop() {
@@ -447,6 +480,11 @@ pub async fn walk_remote_directory_with_limits<'a>(
         let entries = client.list_directory(&current_remote).await?;
         for entry in entries {
             let child_remote = validated_remote_entry(&current_remote, &entry.name, &entry.path)?;
+            ensure_remote_path_within_root(&normalized_root, &child_remote)?;
+
+            if entry.is_symlink {
+                continue;
+            }
 
             let relative_path = if relative_prefix.as_os_str().is_empty() {
                 PathBuf::from(&entry.name)
@@ -697,6 +735,30 @@ mod tests {
             normalize_remote_path("/foo..bar/baz").unwrap(),
             "/foo..bar/baz"
         );
+    }
+
+    #[test]
+    fn ensure_remote_path_within_root_accepts_root_and_nested_paths() {
+        let root = "/remote/download";
+        assert!(ensure_remote_path_within_root(root, root).is_ok());
+        assert!(ensure_remote_path_within_root(root, "/remote/download/nested/file.txt").is_ok());
+    }
+
+    #[test]
+    fn ensure_remote_path_within_root_rejects_prefix_escape() {
+        for path in ["/remote/download2", "/remote/download-evil", "/etc/passwd"] {
+            let err = ensure_remote_path_within_root("/remote/download", path).unwrap_err();
+            assert!(
+                matches!(err, SftpError::InvalidRemotePath { .. }),
+                "expected InvalidRemotePath for {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ensure_remote_path_within_root_accepts_any_path_under_filesystem_root() {
+        assert!(ensure_remote_path_within_root("/", "/etc/passwd").is_ok());
+        assert!(ensure_remote_path_within_root("/", "/remote/nested/file.txt").is_ok());
     }
 
     #[tokio::test]

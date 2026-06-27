@@ -145,11 +145,19 @@ impl SftpHandler {
 
     fn attrs_for(path: &Path) -> FileAttributes {
         let mut attrs = FileAttributes::empty();
+        #[cfg(unix)]
+        if path.is_symlink() {
+            attrs.set_symlink(true);
+            return attrs;
+        }
         if path.is_dir() {
             attrs.set_dir(true);
         } else if path.is_file() {
             attrs.set_regular(true);
-            attrs.size = std::fs::metadata(path).ok().map(|meta| meta.len());
+            attrs.size = std::fs::symlink_metadata(path)
+                .ok()
+                .or_else(|| std::fs::metadata(path).ok())
+                .map(|meta| meta.len());
         }
         attrs
     }
@@ -238,6 +246,17 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
+        let local = self.resolve(&path);
+        if !local.exists() {
+            return Err(StatusCode::NoSuchFile);
+        }
+        #[cfg(unix)]
+        if local.is_symlink() {
+            return Ok(Attrs {
+                id,
+                attrs: Self::attrs_for(&local),
+            });
+        }
         self.stat(id, path).await
     }
 
