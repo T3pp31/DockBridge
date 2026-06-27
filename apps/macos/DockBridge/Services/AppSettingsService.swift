@@ -29,6 +29,9 @@ enum AppSettingsKeys {
     static let opensshKnownHostsBookmark = "opensshKnownHostsBookmark"
     static let knownHostsStrictMode = "knownHostsStrictMode"
     static let failConnectOnOpensshMergeError = "failConnectOnOpensshMergeError"
+    static let directoryWalkMaxFiles = "directoryWalkMaxFiles"
+    static let directoryWalkMaxDepth = "directoryWalkMaxDepth"
+    static let directoryWalkMaxTotalBytes = "directoryWalkMaxTotalBytes"
     static let skippedUpdateVersion = "skippedUpdateVersion"
 }
 
@@ -64,6 +67,9 @@ final class AppSettingsService: @unchecked Sendable {
             AppSettingsKeys.opensshKnownHostsPath: AppConfig.default.opensshKnownHostsPath,
             AppSettingsKeys.knownHostsStrictMode: AppConfig.default.knownHostsStrictMode,
             AppSettingsKeys.failConnectOnOpensshMergeError: AppConfig.default.failConnectOnOpensshMergeError,
+            AppSettingsKeys.directoryWalkMaxFiles: Int(AppConfig.default.directoryWalkMaxFiles),
+            AppSettingsKeys.directoryWalkMaxDepth: Int(AppConfig.default.directoryWalkMaxDepth),
+            AppSettingsKeys.directoryWalkMaxTotalBytes: Int(AppConfig.default.directoryWalkMaxTotalBytes),
         ])
     }
 
@@ -97,9 +103,18 @@ final class AppSettingsService: @unchecked Sendable {
             failConnectOnOpensshMergeError: defaults.bool(
                 forKey: AppSettingsKeys.failConnectOnOpensshMergeError
             ),
-            directoryWalkMaxFiles: AppConfig.default.directoryWalkMaxFiles,
-            directoryWalkMaxDepth: AppConfig.default.directoryWalkMaxDepth,
-            directoryWalkMaxTotalBytes: AppConfig.default.directoryWalkMaxTotalBytes
+            directoryWalkMaxFiles: UInt64(
+                defaults.object(forKey: AppSettingsKeys.directoryWalkMaxFiles) as? Int
+                    ?? Int(AppConfig.default.directoryWalkMaxFiles)
+            ),
+            directoryWalkMaxDepth: UInt32(
+                defaults.object(forKey: AppSettingsKeys.directoryWalkMaxDepth) as? Int
+                    ?? Int(AppConfig.default.directoryWalkMaxDepth)
+            ),
+            directoryWalkMaxTotalBytes: UInt64(
+                defaults.object(forKey: AppSettingsKeys.directoryWalkMaxTotalBytes) as? Int
+                    ?? Int(AppConfig.default.directoryWalkMaxTotalBytes)
+            )
         )
     }
 
@@ -117,6 +132,9 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(config.opensshKnownHostsBookmark, forKey: AppSettingsKeys.opensshKnownHostsBookmark)
         defaults.set(config.knownHostsStrictMode, forKey: AppSettingsKeys.knownHostsStrictMode)
         defaults.set(config.failConnectOnOpensshMergeError, forKey: AppSettingsKeys.failConnectOnOpensshMergeError)
+        defaults.set(Int(config.directoryWalkMaxFiles), forKey: AppSettingsKeys.directoryWalkMaxFiles)
+        defaults.set(Int(config.directoryWalkMaxDepth), forKey: AppSettingsKeys.directoryWalkMaxDepth)
+        defaults.set(Int(config.directoryWalkMaxTotalBytes), forKey: AppSettingsKeys.directoryWalkMaxTotalBytes)
         NotificationCenter.default.post(name: .appConfigDidChange, object: config)
     }
 
