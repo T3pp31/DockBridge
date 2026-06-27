@@ -19,8 +19,8 @@ pub use error::{
 };
 pub use security::{fingerprint_sha256, HostAlias, HostKeyCheckResult, KnownHostsManager};
 pub use sftp::{
-    ensure_local_path_within_root, normalize_remote_path, validate_remote_entry_name,
-    validated_remote_entry, RemoteFile, SftpClient,
+    ensure_local_path_within_root, ensure_remote_path_within_root, normalize_remote_path,
+    validate_remote_entry_name, validated_remote_entry, RemoteFile, SftpClient,
 };
 pub use ssh::{
     inspect_private_key_algorithm, is_connection_lost_message, AuthType, ConnectionProfile,

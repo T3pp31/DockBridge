@@ -3,7 +3,7 @@ import SwiftUI
 struct UpdateAvailableView: View {
     let update: AppUpdateInfo
     let currentVersion: String
-    var releaseNotes: String?
+    var releaseNotes: String? = nil
     let isDownloading: Bool
     let downloadErrorMessage: String?
     let onDownload: () -> Void
