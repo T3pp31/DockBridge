@@ -281,10 +281,12 @@ struct RemoteFileTable: View {
             TableColumn("Size", value: \.size) { item in
                 Text(remoteSizeLabel(for: item))
             }
-            TableColumn("Path", value: \.path) { item in
-                Text(item.path)
-                    .lineLimit(1)
-                    .help(item.path)
+            TableColumn("Modified", value: \.modificationSortKey) { item in
+                if let date = item.modificationDate {
+                    Text(date, style: .date)
+                } else {
+                    Text("—")
+                }
             }
         } rows: {
             if viewModel.canNavigateRemoteUp,

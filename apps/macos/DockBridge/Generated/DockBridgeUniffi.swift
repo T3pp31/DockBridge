@@ -1061,14 +1061,16 @@ public struct RemoteFileRecord: Equatable, Hashable {
     public var path: String
     public var isDirectory: Bool
     public var size: UInt64
+    public var modifiedAtSecs: UInt64?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(name: String, path: String, isDirectory: Bool, size: UInt64) {
+    public init(name: String, path: String, isDirectory: Bool, size: UInt64, modifiedAtSecs: UInt64?) {
         self.name = name
         self.path = path
         self.isDirectory = isDirectory
         self.size = size
+        self.modifiedAtSecs = modifiedAtSecs
     }
 
     
@@ -1090,7 +1092,8 @@ public struct FfiConverterTypeRemoteFileRecord: FfiConverterRustBuffer {
                 name: FfiConverterString.read(from: &buf), 
                 path: FfiConverterString.read(from: &buf), 
                 isDirectory: FfiConverterBool.read(from: &buf), 
-                size: FfiConverterUInt64.read(from: &buf)
+                size: FfiConverterUInt64.read(from: &buf), 
+                modifiedAtSecs: FfiConverterOptionUInt64.read(from: &buf)
         )
     }
 
@@ -1099,6 +1102,7 @@ public struct FfiConverterTypeRemoteFileRecord: FfiConverterRustBuffer {
         FfiConverterString.write(value.path, into: &buf)
         FfiConverterBool.write(value.isDirectory, into: &buf)
         FfiConverterUInt64.write(value.size, into: &buf)
+        FfiConverterOptionUInt64.write(value.modifiedAtSecs, into: &buf)
     }
 }
 
@@ -1875,6 +1879,30 @@ public func FfiConverterCallbackInterfaceHostKeyHandler_lift(_ handle: UInt64) t
 #endif
 public func FfiConverterCallbackInterfaceHostKeyHandler_lower(_ v: HostKeyHandler) -> UInt64 {
     return FfiConverterCallbackInterfaceHostKeyHandler.lower(v)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
+    typealias SwiftType = UInt64?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt64.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
 }
 
 #if swift(>=5.8)

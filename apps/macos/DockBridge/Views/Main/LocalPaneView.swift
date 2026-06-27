@@ -15,6 +15,9 @@ struct LocalPaneView: View {
                     .frame(width: size.width, height: size.height)
                     .contextMenu(forSelectionType: String.self) { ids in
                         if let item = singleSelectedLocalItem(from: ids), !item.isParentDirectory {
+                            Button("Copy Path") {
+                                ClipboardHelper.copy(item.url.path)
+                            }
                             Button("Upload") {
                                 viewModel.selectedLocalItemID = item.id
                                 Task { await viewModel.uploadSelected() }

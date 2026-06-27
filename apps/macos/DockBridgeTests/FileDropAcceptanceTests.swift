@@ -181,7 +181,7 @@ final class FileDropAcceptanceTests: XCTestCase {
         let viewModel = try makeKickoffViewModel()
         let items = [RemoteFileDragPayload(path: "/remote/folder", isDirectory: true)]
         let displayedItems = [
-            RemoteFileRecord(name: "folder", path: "/remote/folder", isDirectory: true, size: 0),
+            RemoteFileRecord(name: "folder", path: "/remote/folder", isDirectory: true, size: 0, modifiedAtSecs: nil),
         ]
 
         // When: kickoff is invoked
@@ -288,7 +288,7 @@ final class FileDropAcceptanceTests: XCTestCase {
         viewModel.remotePath = "/destination"
         let items = [RemoteFileDragPayload(path: "/source/file.txt", isDirectory: false)]
         let displayedItems = [
-            RemoteFileRecord(name: "file.txt", path: "/source/file.txt", isDirectory: false, size: 10),
+            RemoteFileRecord(name: "file.txt", path: "/source/file.txt", isDirectory: false, size: 10, modifiedAtSecs: nil),
         ]
 
         // When: kickoff is invoked
