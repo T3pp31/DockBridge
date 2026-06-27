@@ -78,27 +78,12 @@ struct MainView: View {
         .navigationTitle("DockBridge")
         .toolbar {
             ToolbarItemGroup {
-                if let selected = connectionList.profiles.first(where: { $0.id == connectionList.selectedProfileID }) {
-                    Button {
-                        connectionList.requestConnect(profile: selected)
-                    } label: {
-                        Label("Connect", systemImage: "link")
-                    }
-                    .disabled(connectionList.connectionStatus.isConnected || connectionList.connectionStatus.isConnecting)
-
-                    Button {
-                        Task { await connectionList.disconnect() }
-                    } label: {
-                        Label("Disconnect", systemImage: "link.slash")
-                    }
-                    .disabled(!connectionList.connectionStatus.isConnected)
-                }
-
                 Button {
                     Task { await viewModel.uploadSelected() }
                 } label: {
                     Label("Upload", systemImage: "square.and.arrow.up")
                 }
+                .buttonStyle(.borderedProminent)
                 .disabled(viewModel.selectedLocalItem == nil || !viewModel.bridge.isConnected)
 
                 Button {
@@ -106,6 +91,7 @@ struct MainView: View {
                 } label: {
                     Label("Download", systemImage: "square.and.arrow.down")
                 }
+                .buttonStyle(.borderedProminent)
                 .disabled(viewModel.selectedRemoteItem == nil || !viewModel.bridge.isConnected)
 
                 Button {
