@@ -64,6 +64,7 @@ struct ConnectionListView: View {
                     Button("Connect") {
                         viewModel.requestConnect(profile: selected)
                     }
+                    .buttonStyle(.borderedProminent)
                     .disabled(viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting)
 
                     Button("Disconnect") {

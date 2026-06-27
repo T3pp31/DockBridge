@@ -41,16 +41,6 @@ struct LocalPanePathBar: View {
             .buttonStyle(.borderless)
             .fixedSize()
             .help("Refresh")
-
-            Button {
-                Task { await viewModel.uploadSelected() }
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-            }
-            .buttonStyle(.borderless)
-            .fixedSize()
-            .help("Upload")
-            .disabled(viewModel.selectedLocalItem == nil || !viewModel.bridge.isConnected)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
@@ -112,26 +102,6 @@ struct RemotePanePathBar: View {
             .buttonStyle(.borderless)
             .fixedSize()
             .help("Refresh")
-            .disabled(!viewModel.bridge.isConnected)
-
-            Button {
-                Task { await viewModel.downloadSelected() }
-            } label: {
-                Image(systemName: "square.and.arrow.down")
-            }
-            .buttonStyle(.borderless)
-            .fixedSize()
-            .help("Download")
-            .disabled(viewModel.selectedRemoteItem == nil || !viewModel.bridge.isConnected)
-
-            Button {
-                viewModel.showMkdirPrompt = true
-            } label: {
-                Image(systemName: "folder.badge.plus")
-            }
-            .buttonStyle(.borderless)
-            .fixedSize()
-            .help("New Folder")
             .disabled(!viewModel.bridge.isConnected)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
