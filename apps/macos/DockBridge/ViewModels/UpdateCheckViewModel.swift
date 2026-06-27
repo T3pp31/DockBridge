@@ -1,19 +1,23 @@
-import AppKit
 import Foundation
 
 @MainActor
 final class UpdateCheckViewModel: ObservableObject {
     @Published private(set) var pendingUpdate: AppUpdateInfo?
     @Published var showUpdateSheet = false
+    @Published private(set) var isDownloadingUpdate = false
+    @Published var downloadErrorMessage: String?
 
     private let updateService: AppUpdateService
+    private let downloadService: AppUpdateDownloading
     private let settingsService: AppSettingsService
 
     init(
         updateService: AppUpdateService = AppUpdateService(),
+        downloadService: AppUpdateDownloading = AppUpdateDownloadService(),
         settingsService: AppSettingsService = .shared
     ) {
         self.updateService = updateService
+        self.downloadService = downloadService
         self.settingsService = settingsService
     }
 
@@ -34,9 +38,18 @@ final class UpdateCheckViewModel: ObservableObject {
         presentIfAllowed(isHostKeyBlocking: false)
     }
 
-    func downloadUpdate() {
-        guard let pendingUpdate else { return }
-        NSWorkspace.shared.open(pendingUpdate.downloadURL)
+    func downloadUpdate() async {
+        guard let pendingUpdate, !isDownloadingUpdate else { return }
+
+        isDownloadingUpdate = true
+        downloadErrorMessage = nil
+        defer { isDownloadingUpdate = false }
+
+        do {
+            try await downloadService.downloadVerifyAndReveal(update: pendingUpdate)
+        } catch {
+            downloadErrorMessage = error.localizedDescription
+        }
     }
 
     func skipUpdate() {
@@ -47,6 +60,7 @@ final class UpdateCheckViewModel: ObservableObject {
 
     func dismissSheet() {
         showUpdateSheet = false
+        downloadErrorMessage = nil
     }
 
     private func presentIfAllowed(isHostKeyBlocking: Bool) {
