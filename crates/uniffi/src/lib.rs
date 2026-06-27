@@ -98,6 +98,7 @@ pub struct RemoteFileRecord {
     pub path: String,
     pub is_directory: bool,
     pub size: u64,
+    pub modified_at_secs: Option<u64>,
 }
 
 /// Direction of a file transfer task.
@@ -605,6 +606,7 @@ fn to_remote_file_record(file: RemoteFile) -> RemoteFileRecord {
         path: file.path,
         is_directory: file.is_directory,
         size: file.size,
+        modified_at_secs: file.modified_at_secs,
     }
 }
 

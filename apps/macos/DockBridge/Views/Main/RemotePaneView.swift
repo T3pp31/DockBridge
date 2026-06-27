@@ -16,6 +16,9 @@ struct RemotePaneView: View {
                         .frame(width: size.width, height: size.height)
                         .contextMenu(forSelectionType: String.self) { ids in
                             if let item = singleSelectedRemoteItem(from: ids), !item.isParentDirectory {
+                                Button("Copy Path") {
+                                    ClipboardHelper.copy(item.path)
+                                }
                                 Button("Download") {
                                     viewModel.selectedRemoteItemID = item.id
                                     Task { await viewModel.downloadSelected() }

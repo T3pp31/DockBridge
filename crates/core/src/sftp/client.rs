@@ -24,6 +24,7 @@ pub struct RemoteFile {
     pub path: String,
     pub is_directory: bool,
     pub size: u64,
+    pub modified_at_secs: Option<u64>,
 }
 
 /// High-level SFTP client built on top of an SSH session.
@@ -98,6 +99,7 @@ impl<'a> SftpClient<'a> {
                 path: validated_path,
                 is_directory: metadata.is_dir(),
                 size: metadata.size.unwrap_or(0),
+                modified_at_secs: metadata.mtime.map(|mtime| mtime as u64),
             });
         }
 
