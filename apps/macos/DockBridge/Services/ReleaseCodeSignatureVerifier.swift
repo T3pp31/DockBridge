@@ -88,7 +88,7 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
         }
 
         if policy.requireNotarizedUpdates {
-            guard info[kSecCodeInfoNotarizationDate as String] != nil else {
+            guard info["NotarizationDate"] != nil else {
                 throw ReleaseCodeSignatureVerifierError.notarizationMissing
             }
         }
