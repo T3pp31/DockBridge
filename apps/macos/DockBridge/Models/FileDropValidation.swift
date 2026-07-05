@@ -39,6 +39,9 @@ enum FileDropValidation {
     }
 
     static func canMoveLocalItem(from source: URL, to directory: URL) -> Bool {
+        // NOTE: This resolves symlinks at check time. Callers should re-run
+        // this validation immediately before the actual move to narrow the
+        // TOCTOU window (see MainViewModel.moveLocalItem).
         let sourcePath = normalizedLocalPath(source)
         let directoryPath = normalizedLocalPath(directory)
 

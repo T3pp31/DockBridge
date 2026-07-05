@@ -174,6 +174,30 @@ final class FileDropAcceptanceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: sourceFile.path))
     }
 
+    func testLocalMoveRejectsExistingDestinationWithoutOverwriting() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("local-drop-existing-\(UUID().uuidString)", isDirectory: true)
+        let sourceDirectory = root.appendingPathComponent("source", isDirectory: true)
+        let destinationDirectory = root.appendingPathComponent("destination", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try FileManager.default.createDirectory(at: sourceDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destinationDirectory, withIntermediateDirectories: true)
+
+        let sourceFile = sourceDirectory.appendingPathComponent("duplicate.txt")
+        let destinationFile = destinationDirectory.appendingPathComponent("duplicate.txt")
+        try "source".write(to: sourceFile, atomically: true, encoding: .utf8)
+        try "destination".write(to: destinationFile, atomically: true, encoding: .utf8)
+
+        let viewModel = try makeKickoffViewModel()
+
+        XCTAssertThrowsError(
+            try viewModel.moveLocalItem(from: sourceFile, toDirectory: destinationDirectory)
+        )
+        XCTAssertEqual(try String(contentsOf: sourceFile, encoding: .utf8), "source")
+        XCTAssertEqual(try String(contentsOf: destinationFile, encoding: .utf8), "destination")
+    }
+
     // MARK: - Async kickoff (non-blocking D&D accept)
 
     func testRemoteDownloadKickoffAcceptsImmediatelyWithoutBlocking() throws {
