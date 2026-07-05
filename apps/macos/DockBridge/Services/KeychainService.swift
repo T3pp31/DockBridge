@@ -105,17 +105,15 @@ final class KeychainService: @unchecked Sendable {
             if updateStatus == errSecSuccess {
                 return
             }
-            if isRecoverableKeychainFailure(updateStatus) {
-                try replaceItem(account: account, kind: kind, attributes: attributes)
-                return
-            }
             throw KeychainServiceError.unexpectedStatus(updateStatus)
 
         case errSecItemNotFound:
             try addItem(account: account, kind: kind, attributes: attributes)
 
         case errSecAuthFailed, errSecMissingEntitlement:
-            try replaceItem(account: account, kind: kind, attributes: attributes)
+            // Access and entitlement failures do not prove that the item is
+            // corrupt. Never delete data in response to either condition.
+            throw KeychainServiceError.unexpectedStatus(status)
 
         default:
             throw KeychainServiceError.unexpectedStatus(status)
@@ -146,9 +144,10 @@ final class KeychainService: @unchecked Sendable {
 
         case errSecAuthFailed:
             // Transient failure (e.g. keychain locked). Do NOT delete the
-            // item — deleting here causes data loss when the keychain is
-            // merely locked. Return nil so callers can retry or prompt.
-            return nil
+            // item or report it as missing: callers such as
+            // loadOrCreateMasterKey would otherwise generate a replacement
+            // key and make existing encrypted profiles unrecoverable.
+            throw KeychainServiceError.unexpectedStatus(status)
 
         case errSecMissingEntitlement:
             // Configuration error, not a user-data issue. Surface it rather
@@ -185,25 +184,12 @@ final class KeychainService: @unchecked Sendable {
         }
     }
 
-    private func replaceItem(
-        account: String,
-        kind: String,
-        attributes: [String: Any]
-    ) throws {
-        try deleteSecret(account: account, kind: kind)
-        try addItem(account: account, kind: kind, attributes: attributes)
-    }
-
     private func makeQuery(account: String, kind: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
             kSecAttrAccount as String: accountLabel(account: account, kind: kind),
         ]
-    }
-
-    private func isRecoverableKeychainFailure(_ status: OSStatus) -> Bool {
-        status == errSecAuthFailed || status == errSecMissingEntitlement
     }
 
     private func accountLabel(account: String, kind: String) -> String {
