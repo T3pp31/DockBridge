@@ -160,20 +160,36 @@ pub fn clamp_transfer_chunk_size(bytes: usize) -> usize {
 }
 
 /// Expands a leading `~` to the user's home directory.
+///
+/// `HOME` must be an absolute path; relative values are ignored to avoid
+/// redirecting config paths (e.g. `known_hosts`) to unexpected locations.
+/// The `~/` remainder is rejected if it contains `..` segments to prevent
+/// traversal outside the home directory.
 pub fn expand_tilde(path: &Path) -> PathBuf {
+    expand_tilde_with_home(path, home_dir().as_deref())
+}
+
+fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBuf {
     let Some(path_str) = path.to_str() else {
         return path.to_path_buf();
     };
 
+    // Only accept absolute home directories; a relative HOME could redirect
+    // config paths (e.g. known_hosts) to unexpected locations.
+    let home = home.filter(|h| h.is_absolute());
+
     if let Some(rest) = path_str.strip_prefix("~/") {
-        if let Some(home) = home_dir() {
+        if let Some(home) = home {
+            if rest.split('/').any(|segment| segment == "..") {
+                return path.to_path_buf();
+            }
             return home.join(rest);
         }
     }
 
     if path_str == "~" {
-        if let Some(home) = home_dir() {
-            return home;
+        if let Some(home) = home {
+            return home.to_path_buf();
         }
     }
 
@@ -181,7 +197,13 @@ pub fn expand_tilde(path: &Path) -> PathBuf {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    let home = std::env::var_os("HOME")?;
+    let path = PathBuf::from(home);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 fn default_known_hosts_path() -> PathBuf {
@@ -278,11 +300,31 @@ mod tests {
 
     #[test]
     fn expand_tilde_replaces_home_prefix() {
-        std::env::set_var("HOME", "/tmp/home");
-        let expanded = expand_tilde(Path::new("~/.dockbridge/known_hosts.json"));
+        let home = PathBuf::from("/tmp/home");
+        let expanded =
+            expand_tilde_with_home(Path::new("~/.dockbridge/known_hosts.json"), Some(&home));
         assert_eq!(
             expanded,
             PathBuf::from("/tmp/home/.dockbridge/known_hosts.json")
+        );
+    }
+
+    #[test]
+    fn expand_tilde_ignores_relative_home() {
+        // A relative HOME should not be used to expand ~.
+        let relative = PathBuf::from("relative/path");
+        assert_eq!(
+            expand_tilde_with_home(Path::new("~/known_hosts.json"), Some(&relative)),
+            PathBuf::from("~/known_hosts.json")
+        );
+    }
+
+    #[test]
+    fn expand_tilde_rejects_parent_dir_in_remainder() {
+        let home = PathBuf::from("/tmp/home");
+        assert_eq!(
+            expand_tilde_with_home(Path::new("~/../etc/passwd"), Some(&home)),
+            PathBuf::from("~/../etc/passwd")
         );
     }
 
