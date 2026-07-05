@@ -9,6 +9,7 @@ use sha1::{Digest, Sha1};
 use ssh_key::known_hosts::{
     HostPatterns, KnownHosts as OpenSshKnownHosts, Marker as OpenSshMarker,
 };
+use subtle::ConstantTimeEq;
 
 use crate::config::{ensure_known_hosts_parent, AppConfig};
 use crate::error::SecurityError;
@@ -417,7 +418,7 @@ impl KnownHostsManager {
     ) -> Option<&KnownHostEntry> {
         self.entries.values().find(|entry| {
             entry.port == port
-                && entry.fingerprint_sha256 == fingerprint
+                && fingerprints_match(&entry.fingerprint_sha256, fingerprint)
                 && !entry_is_non_trusting_marker(entry.marker)
                 && !entry_is_excluded_for_host(entry, host, port)
         })
@@ -426,7 +427,7 @@ impl KnownHostsManager {
     fn is_revoked(&self, host: &str, port: u16, fingerprint: &str) -> bool {
         if self.entries.values().any(|entry| {
             entry.marker == Some(KnownHostMarker::Revoked)
-                && entry.fingerprint_sha256 == fingerprint
+                && fingerprints_match(&entry.fingerprint_sha256, fingerprint)
                 && entry_matches_host(entry, host, port)
         }) {
             return true;
@@ -434,7 +435,7 @@ impl KnownHostsManager {
 
         self.hashed_entries.iter().any(|entry| {
             entry.marker == Some(KnownHostMarker::Revoked)
-                && entry.fingerprint_sha256 == fingerprint
+                && fingerprints_match(&entry.fingerprint_sha256, fingerprint)
                 && hashed_entry_matches_host(entry, host, port)
         })
     }
@@ -446,7 +447,7 @@ impl KnownHostsManager {
         fingerprint: &str,
     ) -> Option<&HashedHostEntry> {
         self.hashed_entries.iter().find(|entry| {
-            entry.fingerprint_sha256 == fingerprint
+            fingerprints_match(&entry.fingerprint_sha256, fingerprint)
                 && entry.marker != Some(KnownHostMarker::Revoked)
                 && entry.marker != Some(KnownHostMarker::CertAuthority)
                 && hashed_entry_matches_host(entry, host, port)
@@ -455,7 +456,7 @@ impl KnownHostsManager {
 
     fn find_canonical_key_by_fingerprint(&self, port: u16, fingerprint: &str) -> Option<String> {
         self.entries.iter().find_map(|(key, entry)| {
-            if entry.port == port && entry.fingerprint_sha256 == fingerprint {
+            if entry.port == port && fingerprints_match(&entry.fingerprint_sha256, fingerprint) {
                 Some(key.clone())
             } else {
                 None
@@ -467,7 +468,7 @@ impl KnownHostsManager {
         if self.hashed_entries.iter().any(|existing| {
             existing.salt == entry.salt
                 && existing.hash == entry.hash
-                && existing.fingerprint_sha256 == entry.fingerprint_sha256
+                && fingerprints_match(&existing.fingerprint_sha256, &entry.fingerprint_sha256)
                 && existing.marker == entry.marker
         }) {
             return false;
@@ -493,7 +494,7 @@ impl KnownHostsManager {
             if self.entries.values().any(|entry| {
                 entry.marker == Some(KnownHostMarker::Revoked)
                     && entry_matches_host(entry, &host, port)
-                    && entry.fingerprint_sha256 == fingerprint_sha256
+                    && fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256)
             }) {
                 return false;
             }
@@ -518,7 +519,7 @@ impl KnownHostsManager {
             if self.entries.values().any(|entry| {
                 entry.marker == Some(KnownHostMarker::CertAuthority)
                     && entry_matches_host(entry, &host, port)
-                    && entry.fingerprint_sha256 == fingerprint_sha256
+                    && fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256)
             }) {
                 return false;
             }
@@ -575,7 +576,7 @@ impl KnownHostsManager {
             let canonical_key = entry_key(&existing.host, existing.port);
             let entry = self.entries.get_mut(&canonical_key).expect("entry exists");
 
-            if entry.fingerprint_sha256 != fingerprint_sha256 {
+            if !fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256) {
                 return false;
             }
 
@@ -644,7 +645,7 @@ impl KnownHostsManager {
 }
 
 fn fingerprint_check(entry: &KnownHostEntry, actual: &str) -> HostKeyCheckResult {
-    if entry.fingerprint_sha256 == *actual {
+    if fingerprints_match(&entry.fingerprint_sha256, actual) {
         HostKeyCheckResult::Trust
     } else {
         HostKeyCheckResult::Mismatch {
@@ -716,8 +717,17 @@ fn openssh_hostname_hash(salt: &[u8], host: &str, port: u16) -> [u8; 20] {
     hasher.finalize().into()
 }
 
+/// Constant-time comparison of two fingerprint strings to mitigate timing
+/// attacks on fingerprint comparisons (CWE-208). Uses `subtle::ConstantTimeEq`
+/// which is resistant to compiler optimizations that could short-circuit
+/// the comparison.
+fn fingerprints_match(a: &str, b: &str) -> bool {
+    a.as_bytes().ct_eq(b.as_bytes()).into()
+}
+
 fn hashed_entry_matches_host(entry: &HashedHostEntry, host: &str, port: u16) -> bool {
-    openssh_hostname_hash(&entry.salt, host, port) == entry.hash
+    let computed = openssh_hostname_hash(&entry.salt, host, port);
+    computed.as_slice().ct_eq(&entry.hash).into()
 }
 
 fn openssh_host_pattern(host: &str, port: u16) -> String {
@@ -1789,5 +1799,13 @@ mod tests {
 
         let err = open_exclusive_local_file_sync(&link).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn fingerprints_match_handles_equal_and_unequal_strings() {
+        assert!(fingerprints_match("SHA256:abc", "SHA256:abc"));
+        assert!(!fingerprints_match("SHA256:abc", "SHA256:abd"));
+        assert!(!fingerprints_match("SHA256:abc", "SHA256:ab"));
+        assert!(fingerprints_match("", ""));
     }
 }
