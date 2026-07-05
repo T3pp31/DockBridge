@@ -23,7 +23,12 @@ struct SensitiveString: Equatable {
 
     static func clear(_ value: inout String?) {
         if var current = value {
+            // Drop the original reference before mutating `current`; otherwise
+            // String's copy-on-write storage can leave the original buffer
+            // untouched.
+            value = nil
             zeroize(&current)
+            return
         }
         value = nil
     }
@@ -35,7 +40,8 @@ struct SensitiveString: Equatable {
         // backing memory rather than a temporary copy.
         value.withUTF8 { buffer in
             guard let base = buffer.baseAddress, buffer.count > 0 else { return }
-            memset(UnsafeMutableRawPointer(mutating: base), 0, buffer.count)
+            // explicit_bzero is guaranteed not to be removed as a dead store.
+            explicit_bzero(UnsafeMutableRawPointer(mutating: base), buffer.count)
         }
         value = ""
     }
