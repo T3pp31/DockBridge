@@ -230,8 +230,15 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
     // MARK: - HostKeyHandler
 
     nonisolated func promptUnknownHost(challenge: HostKeyChallenge) -> Bool {
-        DropOperationSync.run { @MainActor in
-            await self.awaitHostKeyDecision(for: challenge)
+        // The HostKeyHandler protocol requires a non-throwing Bool return, so
+        // any error from the synchronous bridge is treated as a rejection —
+        // the safe default for an unverified host key.
+        do {
+            return try DropOperationSync.run { @MainActor in
+                await self.awaitHostKeyDecision(for: challenge)
+            }
+        } catch {
+            return false
         }
     }
 
