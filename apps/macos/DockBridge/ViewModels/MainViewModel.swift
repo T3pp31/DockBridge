@@ -364,7 +364,8 @@ final class MainViewModel: ObservableObject {
         do {
             try await prepareRemoteWorkingDirectory()
             let directory = toRemoteDirectory == "/" ? remotePath : toRemoteDirectory
-            try await bridge.upload(localPath: localURL.path, remoteDirectory: directory)
+            let normalizedDirectory = try RemotePath.normalize(directory)
+            try await bridge.upload(localPath: localURL.path, remoteDirectory: normalizedDirectory)
             await transferQueue.refresh()
             await reloadRemote()
             return true
@@ -382,7 +383,8 @@ final class MainViewModel: ObservableObject {
         }
 
         do {
-            try await bridge.download(remotePath: remotePath, localDirectory: toLocalDirectory.path)
+            let normalizedRemotePath = try RemotePath.normalize(remotePath)
+            try await bridge.download(remotePath: normalizedRemotePath, localDirectory: toLocalDirectory.path)
             await transferQueue.refresh()
             reloadLocal()
             return true
