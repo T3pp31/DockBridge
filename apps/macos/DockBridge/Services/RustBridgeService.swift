@@ -264,11 +264,16 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
                         continuation.resume()
                     }
                 }
-                self.respondToHostKeyChallenge(accepted: false)
+                // Only reject if the user hasn't already responded.
+                if self.hostKeyContinuation != nil {
+                    self.respondToHostKeyChallenge(accepted: false)
+                }
                 return false
             }
 
-            let result = await group.next()!
+            // Avoid force-unwrapping; default to false (reject) if the group
+            // unexpectedly yields no result.
+            let result = await group.next() ?? false
             group.cancelAll()
             return result
         }
