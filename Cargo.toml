@@ -31,4 +31,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zeroize = { version = "1", features = ["derive"] }
 russh = { version = "0.61", features = ["async-trait", "des"] }
 russh-sftp = "2.3"
-uniffi = { version = "0.31", features = ["cli"] }
+uniffi = { version = "0.32", features = ["cli"] }

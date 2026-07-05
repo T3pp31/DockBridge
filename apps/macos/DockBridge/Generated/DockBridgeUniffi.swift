@@ -39,6 +39,52 @@ fileprivate extension ForeignBytes {
     init(bufferPointer: UnsafeBufferPointer<UInt8>) {
         self.init(len: Int32(bufferPointer.count), data: bufferPointer.baseAddress)
     }
+
+    init(rawBufferPointer: UnsafeRawBufferPointer) {
+        self.init(
+            len: Int32(rawBufferPointer.count),
+            data: rawBufferPointer.baseAddress?.assumingMemoryBound(to: UInt8.self)
+        )
+    }
+}
+
+// Converter for `&[u8]` / `[ByRef] bytes` arguments.
+//
+// Conforms to `FfiConverter` so the compiler enforces the full converter
+// method set. Only the scope-bound `lower(_:_body:)` overload is sound —
+// zero-copy byte buffers only flow foreign -> Rust, and only in argument
+// position. The four protocol-witness methods (`lift`, `lower`, `read`,
+// `write`) `fatalError` at runtime if anyone reaches them.
+//
+// The scope-bound `lower` takes a closure because the `ForeignBytes`
+// pointer is only guaranteed valid for the duration of
+// `Data.withUnsafeBytes`. Callers must run the full FFI call inside
+// the closure body.
+fileprivate enum FfiConverterByRefBytes: FfiConverter {
+    typealias SwiftType = Data
+    typealias FfiType = ForeignBytes
+
+    static func lower<R>(_ value: Data, _ body: (ForeignBytes) throws -> R) rethrows -> R {
+        return try value.withUnsafeBytes { rawBuf in
+            try body(ForeignBytes(rawBufferPointer: rawBuf))
+        }
+    }
+
+    static func lower(_ value: Data) -> ForeignBytes {
+        fatalError("ByRef bytes cannot use the plain lower: returning ForeignBytes escapes the Data.withUnsafeBytes scope. Use the scope-bound lower(_:_body:) overload instead.")
+    }
+
+    static func lift(_ value: ForeignBytes) throws -> Data {
+        fatalError("ByRef bytes cannot be lifted: zero-copy &[u8] only flows foreign->Rust")
+    }
+
+    static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        fatalError("ByRef bytes cannot be read from a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+    }
+
+    static func write(_ value: Data, into buf: inout [UInt8]) {
+        fatalError("ByRef bytes cannot be written to a buffer: zero-copy &[u8] is only supported in argument position, not nested in records/options/etc.")
+    }
 }
 
 // For every type used in the interface, we provide helper methods for conveniently
@@ -626,10 +672,11 @@ open class DockBridgeClient: DockBridgeClientProtocol, @unchecked Sendable {
 public convenience init(appConfig: AppConfigRecord, hostKeyHandler: HostKeyHandler, connectionEventHandler: ConnectionEventHandler)throws  {
     let handle =
         try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_constructor_dockbridgeclient_new(
         FfiConverterTypeAppConfigRecord_lower(appConfig),
         FfiConverterCallbackInterfaceHostKeyHandler_lower(hostKeyHandler),
-        FfiConverterCallbackInterfaceConnectionEventHandler_lower(connectionEventHandler),$0
+        FfiConverterCallbackInterfaceConnectionEventHandler_lower(connectionEventHandler),uniffiCallStatus
     )
 }
     self.init(unsafeFromHandle: handle)
@@ -648,144 +695,160 @@ public convenience init(appConfig: AppConfigRecord, hostKeyHandler: HostKeyHandl
 
     
 open func cancelTransfer(taskId: UInt64)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_cancel_transfer(
             self.uniffiCloneHandle(),
-        FfiConverterUInt64.lower(taskId),$0
+        FfiConverterUInt64.lower(taskId),uniffiCallStatus
     )
 }
 }
     
 open func clearAllTransfers()throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_clear_all_transfers(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
     
 open func clearCompletedTransfers()  {try! rustCall() {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_clear_completed_transfers(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
 }
     
 open func connect(profile: ConnectionProfileRecord)throws  -> UInt64  {
     return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_connect(
             self.uniffiCloneHandle(),
-        FfiConverterTypeConnectionProfileRecord_lower(profile),$0
+        FfiConverterTypeConnectionProfileRecord_lower(profile),uniffiCallStatus
     )
 })
 }
     
 open func createDirectory(sessionId: UInt64, remotePath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_create_directory(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
-        FfiConverterString.lower(remotePath),$0
+        FfiConverterString.lower(remotePath),uniffiCallStatus
     )
 }
 }
     
 open func delete(sessionId: UInt64, remotePath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_delete(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
-        FfiConverterString.lower(remotePath),$0
+        FfiConverterString.lower(remotePath),uniffiCallStatus
     )
 }
 }
     
 open func disconnect(sessionId: UInt64)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_disconnect(
             self.uniffiCloneHandle(),
-        FfiConverterUInt64.lower(sessionId),$0
+        FfiConverterUInt64.lower(sessionId),uniffiCallStatus
     )
 }
 }
     
 open func download(sessionId: UInt64, remotePath: String, localPath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(remotePath),
-        FfiConverterString.lower(localPath),$0
+        FfiConverterString.lower(localPath),uniffiCallStatus
     )
 }
 }
     
 open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download_entry(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(remotePath),
-        FfiConverterString.lower(localDirectory),$0
+        FfiConverterString.lower(localDirectory),uniffiCallStatus
     )
 }
 }
     
 open func getInitialDirectory(sessionId: UInt64)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_get_initial_directory(
             self.uniffiCloneHandle(),
-        FfiConverterUInt64.lower(sessionId),$0
+        FfiConverterUInt64.lower(sessionId),uniffiCallStatus
     )
 })
 }
     
 open func getTransferQueue() -> [TransferTaskRecord]  {
     return try!  FfiConverterSequenceTypeTransferTaskRecord.lift(try! rustCall() {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_get_transfer_queue(
-            self.uniffiCloneHandle(),$0
+            self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
 }
     
 open func listDirectory(sessionId: UInt64, path: String)throws  -> [RemoteFileRecord]  {
     return try  FfiConverterSequenceTypeRemoteFileRecord.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_list_directory(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
-        FfiConverterString.lower(path),$0
+        FfiConverterString.lower(path),uniffiCallStatus
     )
 })
 }
     
 open func rename(sessionId: UInt64, from: String, to: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_rename(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(from),
-        FfiConverterString.lower(to),$0
+        FfiConverterString.lower(to),uniffiCallStatus
     )
 }
 }
     
 open func retryTransfer(sessionId: UInt64, taskId: UInt64)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_retry_transfer(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
-        FfiConverterUInt64.lower(taskId),$0
+        FfiConverterUInt64.lower(taskId),uniffiCallStatus
     )
 }
 }
     
 open func upload(sessionId: UInt64, localPath: String, remotePath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(localPath),
-        FfiConverterString.lower(remotePath),$0
+        FfiConverterString.lower(remotePath),uniffiCallStatus
     )
 }
 }
     
 open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload_entry(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(localPath),
-        FfiConverterString.lower(remoteDirectory),$0
+        FfiConverterString.lower(remoteDirectory),uniffiCallStatus
     )
 }
 }
@@ -1210,8 +1273,7 @@ public func FfiConverterTypeTransferTaskRecord_lower(_ value: TransferTaskRecord
     return FfiConverterTypeTransferTaskRecord.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * Authentication method for a connection profile.
  */
@@ -1291,7 +1353,8 @@ public func FfiConverterTypeAuthTypeRecord_lower(_ value: AuthTypeRecord) -> Rus
 /**
  * Flat error type exposed to Swift.
  */
-public enum DockBridgeError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public 
+enum DockBridgeError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
     
     
@@ -1364,8 +1427,7 @@ public func FfiConverterTypeDockBridgeError_lower(_ value: DockBridgeError) -> R
     return FfiConverterTypeDockBridgeError.lower(value)
 }
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * Private key algorithm classification exposed to Swift.
  */
@@ -1451,8 +1513,7 @@ public func FfiConverterTypePrivateKeyAlgorithmRecord_lower(_ value: PrivateKeyA
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * Direction of a file transfer task.
  */
@@ -1521,8 +1582,7 @@ public func FfiConverterTypeTransferDirectionRecord_lower(_ value: TransferDirec
 }
 
 
-// Note that we don't yet support `indirect` for enums.
-// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
 /**
  * Lifecycle status of a transfer task.
  */
@@ -2016,10 +2076,6 @@ fileprivate struct FfiConverterSequenceTypeTransferTaskRecord: FfiConverterRustB
 }
 
 
-/**
- * Typealias from the type name used in the UDL file to the builtin type.  This
- * is needed because the UDL type name is used in function/method signatures.
- */
 public typealias SecretCredential = String
 
 #if swift(>=5.8)
@@ -2060,9 +2116,10 @@ public func FfiConverterTypeSecretCredential_lower(_ value: SecretCredential) ->
 
 public func inspectPrivateKeyAlgorithm(keyPath: String, passphrase: SecretCredential?)throws  -> PrivateKeyAlgorithmRecord  {
     return try  FfiConverterTypePrivateKeyAlgorithmRecord_lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_func_inspect_private_key_algorithm(
         FfiConverterString.lower(keyPath),
-        FfiConverterOptionTypeSecretCredential.lower(passphrase),$0
+        FfiConverterOptionTypeSecretCredential.lower(passphrase),uniffiCallStatus
     )
 })
 }
@@ -2082,64 +2139,64 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_func_inspect_private_key_algorithm() != 17776) {
+    if (uniffi_dockbridge_uniffi_checksum_func_inspect_private_key_algorithm() != 4189) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_cancel_transfer() != 17692) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_cancel_transfer() != 21319) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_clear_all_transfers() != 10091) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_clear_all_transfers() != 38537) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_clear_completed_transfers() != 59034) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_clear_completed_transfers() != 5947) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_connect() != 3874) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_connect() != 40134) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_create_directory() != 61517) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_create_directory() != 12127) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_delete() != 53272) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_delete() != 12825) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_disconnect() != 3529) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_disconnect() != 49600) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download() != 58889) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download() != 30887) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download_entry() != 36929) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download_entry() != 26836) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_initial_directory() != 10511) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_initial_directory() != 50950) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_transfer_queue() != 62228) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_transfer_queue() != 37741) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_list_directory() != 36315) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_list_directory() != 32015) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_rename() != 27195) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_rename() != 64839) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_retry_transfer() != 55102) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_retry_transfer() != 32174) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload() != 54637) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload() != 61017) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload_entry() != 14643) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload_entry() != 59035) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_constructor_dockbridgeclient_new() != 5215) {
+    if (uniffi_dockbridge_uniffi_checksum_constructor_dockbridgeclient_new() != 38617) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_connectioneventhandler_on_session_disconnected() != 54402) {
+    if (uniffi_dockbridge_uniffi_checksum_method_connectioneventhandler_on_session_disconnected() != 23970) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_hostkeyhandler_prompt_unknown_host() != 7522) {
+    if (uniffi_dockbridge_uniffi_checksum_method_hostkeyhandler_prompt_unknown_host() != 16113) {
         return InitializationResult.apiChecksumMismatch
     }
 
