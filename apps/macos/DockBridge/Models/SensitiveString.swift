@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 /// Holds sensitive text entered in the UI and supports explicit clearing.
@@ -24,9 +23,10 @@ struct SensitiveString: Equatable {
     }
 
     private mutating func zeroizeStorage() {
-        storage.withUnsafeMutableBytes { buffer in
-            guard let base = buffer.baseAddress, buffer.count > 0 else { return }
-            explicit_bzero(base, buffer.count)
+        if !storage.isEmpty {
+            // Data exposes supported mutable storage; resetBytes overwrites
+            // that storage without casting away constness from a String.
+            storage.resetBytes(in: 0..<storage.count)
         }
         storage.removeAll(keepingCapacity: false)
     }
