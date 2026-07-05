@@ -17,14 +17,10 @@ enum DropOperationSync {
             if Thread.isMainThread {
                 pumpMainRunLoop()
             } else {
-                // Use async instead of sync to avoid deadlocking when the
-                // main thread is occupied by another synchronous call.
-                DispatchQueue.main.async(execute: pumpMainRunLoop)
+                DispatchQueue.main.sync(execute: pumpMainRunLoop)
             }
         }
 
-        // The semaphore is only signaled after `result` is assigned, so this
-        // force-unwrap is safe. Use guard for a clearer crash message.
         guard let result else {
             preconditionFailure("DropOperationSync: semaphore signaled without a result")
         }
