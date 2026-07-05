@@ -46,7 +46,7 @@ final class AppUpdateService: @unchecked Sendable {
         let release = try await fetchLatestRelease()
         let latestVersion = VersionComparator.normalize(release.tagName)
 
-        guard VersionComparator.isNewer(latestVersion, than: currentVersion) else {
+        guard VersionComparator.isNewerStrict(latestVersion, than: currentVersion) else {
             return nil
         }
 
