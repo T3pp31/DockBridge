@@ -17,7 +17,7 @@ enum RemotePathError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidPath(let path):
-            return "The remote path '\(path)' contains an invalid '..' segment."
+            return "The remote path '\(path)' contains an invalid '..', or null character."
         }
     }
 }
@@ -86,7 +86,7 @@ enum RemotePath {
     }
 
     private static func rejectParentSegment(in path: String) throws {
-        if path.split(separator: "/").contains(where: { $0 == ".." }) {
+        if path.contains("\0") || path.split(separator: "/").contains(where: { $0 == ".." }) {
             throw RemotePathError.invalidPath(path)
         }
     }

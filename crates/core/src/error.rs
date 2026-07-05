@@ -103,7 +103,9 @@ pub enum SftpError {
     #[error("failed to canonicalize remote path '{path}': {message}")]
     CanonicalizeFailed { path: String, message: String },
 
-    #[error("invalid remote path '{path}': parent directory traversal ('..') is not allowed")]
+    #[error(
+        "invalid remote path '{path}': parent directory traversal ('..') and null bytes are not allowed"
+    )]
     InvalidRemotePath { path: String },
 
     #[error("directory walk limit exceeded: {limit} (value {value}) at '{path}'")]
