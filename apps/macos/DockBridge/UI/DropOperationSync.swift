@@ -2,7 +2,7 @@ import Foundation
 
 enum DropOperationSync {
     static func run<T: Sendable>(_ operation: @escaping @MainActor () async -> T) -> T {
-        var result: T!
+        var result: T?
         let semaphore = DispatchSemaphore(value: 0)
         Task { @MainActor in
             result = await operation()
@@ -17,9 +17,17 @@ enum DropOperationSync {
             if Thread.isMainThread {
                 pumpMainRunLoop()
             } else {
-                DispatchQueue.main.sync(execute: pumpMainRunLoop)
+                // Use async instead of sync to avoid deadlocking when the
+                // main thread is occupied by another synchronous call.
+                DispatchQueue.main.async(execute: pumpMainRunLoop)
             }
         }
-        return result!
+
+        // The semaphore is only signaled after `result` is assigned, so this
+        // force-unwrap is safe. Use guard for a clearer crash message.
+        guard let result else {
+            preconditionFailure("DropOperationSync: semaphore signaled without a result")
+        }
+        return result
     }
 }
