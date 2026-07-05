@@ -144,9 +144,16 @@ final class KeychainService: @unchecked Sendable {
         case errSecItemNotFound:
             return nil
 
-        case errSecAuthFailed, errSecMissingEntitlement:
-            try deleteData(account: account, kind: kind)
+        case errSecAuthFailed:
+            // Transient failure (e.g. keychain locked). Do NOT delete the
+            // item — deleting here causes data loss when the keychain is
+            // merely locked. Return nil so callers can retry or prompt.
             return nil
+
+        case errSecMissingEntitlement:
+            // Configuration error, not a user-data issue. Surface it rather
+            // than silently deleting a potentially valid item.
+            throw KeychainServiceError.unexpectedStatus(status)
 
         default:
             throw KeychainServiceError.unexpectedStatus(status)
