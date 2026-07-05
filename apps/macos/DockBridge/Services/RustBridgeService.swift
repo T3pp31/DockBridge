@@ -259,15 +259,16 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
             }
 
             group.addTask { @MainActor in
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    DispatchQueue.main.asyncAfter(deadline: .now() + TimeInterval(timeoutSecs)) {
-                        continuation.resume()
-                    }
+                do {
+                    try await Task.sleep(for: .seconds(timeoutSecs))
+                } catch is CancellationError {
+                    // The decision task completed first. Cooperatively stop
+                    // without touching a later host-key challenge.
+                    return false
+                } catch {
+                    return false
                 }
-                // Only reject if the user hasn't already responded.
-                if self.hostKeyContinuation != nil {
-                    self.respondToHostKeyChallenge(accepted: false)
-                }
+                self.respondToHostKeyChallenge(accepted: false)
                 return false
             }
 
