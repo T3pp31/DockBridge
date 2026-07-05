@@ -21,7 +21,7 @@ pub struct RemoteFileEntry {
 }
 
 fn reject_parent_dir_segment(path: &str) -> Result<(), SftpError> {
-    if path.split('/').any(|segment| segment == "..") {
+    if path.contains('\0') || path.split('/').any(|segment| segment == "..") {
         return Err(SftpError::InvalidRemotePath {
             path: path.to_string(),
         });
@@ -735,6 +735,17 @@ mod tests {
             normalize_remote_path("/foo..bar/baz").unwrap(),
             "/foo..bar/baz"
         );
+    }
+
+    #[test]
+    fn normalize_remote_path_rejects_null_bytes() {
+        for path in ["/safe\0/secret", "dir\0file", "/\0"] {
+            let err = normalize_remote_path(path).unwrap_err();
+            assert!(
+                matches!(err, SftpError::InvalidRemotePath { .. }),
+                "expected InvalidRemotePath for path with null byte"
+            );
+        }
     }
 
     #[test]

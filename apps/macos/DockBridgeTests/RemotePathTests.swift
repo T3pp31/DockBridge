@@ -41,6 +41,14 @@ final class RemotePathTests: XCTestCase {
         XCTAssertEqual(try RemotePath.normalize("/foo..bar/baz"), "/foo..bar/baz")
     }
 
+    func testNormalizeRejectsNullBytes() {
+        XCTAssertThrowsError(try RemotePath.normalize("/safe\0/secret")) { error in
+            XCTAssertTrue(error is RemotePathError)
+        }
+        XCTAssertThrowsError(try RemotePath.normalize("dir\0file"))
+        XCTAssertThrowsError(try RemotePath.normalize("/\0"))
+    }
+
     func testIsValidEntryNameAcceptsSimpleNames() {
         XCTAssertTrue(RemotePath.isValidEntryName("file.txt"))
         XCTAssertTrue(RemotePath.isValidEntryName("my-folder"))
