@@ -400,6 +400,12 @@ final class MainViewModel: ObservableObject {
         }
 
         let destination = directory.appendingPathComponent(source.lastPathComponent)
+        // Re-validate immediately before the move to narrow the TOCTOU
+        // window between symlink resolution and the actual file operation.
+        guard FileDropValidation.canMoveLocalItem(from: source, to: directory),
+              !FileManager.default.fileExists(atPath: destination.path) else {
+            throw FileDropError.invalidMove
+        }
         try FileManager.default.moveItem(at: source, to: destination)
         reloadLocal()
     }
