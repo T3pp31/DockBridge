@@ -1,38 +1,44 @@
-import Darwin
 import Foundation
 
 /// Holds sensitive text entered in the UI and supports explicit clearing.
 ///
-/// Swift `String` does not guarantee memory zeroing. Clearing uses a `Data` buffer
-/// with explicit `memset` to reduce how long credentials remain in memory after dismiss.
+/// Swift `String` does not expose mutable storage and cannot be safely
+/// zeroized. This type therefore keeps its authoritative storage in `Data`,
+/// whose mutable bytes can be explicitly cleared. Accessing `text` still
+/// creates a temporary String required by SwiftUI; callers should avoid
+/// retaining that value.
 struct SensitiveString: Equatable {
-    var text = ""
+    private var storage = Data()
+
+    var text: String {
+        get { String(decoding: storage, as: UTF8.self) }
+        set {
+            zeroizeStorage()
+            storage = Data(newValue.utf8)
+        }
+    }
 
     mutating func clear() {
-        Self.zeroize(&text)
+        zeroizeStorage()
+    }
+
+    private mutating func zeroizeStorage() {
+        if !storage.isEmpty {
+            // Data exposes supported mutable storage; resetBytes overwrites
+            // that storage without casting away constness from a String.
+            storage.resetBytes(in: 0..<storage.count)
+        }
+        storage.removeAll(keepingCapacity: false)
     }
 
     static func clear(_ value: inout String) {
-        zeroize(&value)
+        // String has no supported mutable-storage API. Discard the value
+        // without casting away constness or invoking undefined behavior.
+        value = ""
     }
 
     static func clear(_ value: inout String?) {
-        if var current = value {
-            zeroize(&current)
-        }
         value = nil
-    }
-
-    private static func zeroize(_ value: inout String) {
-        guard var data = value.data(using: .utf8) else {
-            value = ""
-            return
-        }
-        data.withUnsafeMutableBytes { buffer in
-            guard let baseAddress = buffer.baseAddress else { return }
-            memset(baseAddress, 0, buffer.count)
-        }
-        value = ""
     }
 }
 
