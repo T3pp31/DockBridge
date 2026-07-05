@@ -9,6 +9,7 @@ use sha1::{Digest, Sha1};
 use ssh_key::known_hosts::{
     HostPatterns, KnownHosts as OpenSshKnownHosts, Marker as OpenSshMarker,
 };
+use subtle::ConstantTimeEq;
 
 use crate::config::{ensure_known_hosts_parent, AppConfig};
 use crate::error::SecurityError;
@@ -716,27 +717,17 @@ fn openssh_hostname_hash(salt: &[u8], host: &str, port: u16) -> [u8; 20] {
     hasher.finalize().into()
 }
 
-/// Constant-time byte slice comparison to mitigate timing attacks on
-/// fingerprint and hostname-hash comparisons (CWE-208).
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
-}
-
-/// Constant-time comparison of two fingerprint strings.
+/// Constant-time comparison of two fingerprint strings to mitigate timing
+/// attacks on fingerprint comparisons (CWE-208). Uses `subtle::ConstantTimeEq`
+/// which is resistant to compiler optimizations that could short-circuit
+/// the comparison.
 fn fingerprints_match(a: &str, b: &str) -> bool {
-    constant_time_eq(a.as_bytes(), b.as_bytes())
+    a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
 fn hashed_entry_matches_host(entry: &HashedHostEntry, host: &str, port: u16) -> bool {
     let computed = openssh_hostname_hash(&entry.salt, host, port);
-    constant_time_eq(&computed, &entry.hash)
+    computed.as_slice().ct_eq(&entry.hash).into()
 }
 
 fn openssh_host_pattern(host: &str, port: u16) -> String {
@@ -1811,12 +1802,10 @@ mod tests {
     }
 
     #[test]
-    fn constant_time_eq_handles_equal_and_unequal_slices() {
-        assert!(constant_time_eq(b"abc", b"abc"));
-        assert!(!constant_time_eq(b"abc", b"abd"));
-        assert!(!constant_time_eq(b"abc", b"ab"));
-        assert!(constant_time_eq(b"", b""));
+    fn fingerprints_match_handles_equal_and_unequal_strings() {
         assert!(fingerprints_match("SHA256:abc", "SHA256:abc"));
         assert!(!fingerprints_match("SHA256:abc", "SHA256:abd"));
+        assert!(!fingerprints_match("SHA256:abc", "SHA256:ab"));
+        assert!(fingerprints_match("", ""));
     }
 }
