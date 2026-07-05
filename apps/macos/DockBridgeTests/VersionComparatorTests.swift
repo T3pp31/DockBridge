@@ -27,4 +27,24 @@ final class VersionComparatorTests: XCTestCase {
         XCTAssertFalse(VersionComparator.isNewer("0.1.0", than: "0.1.2"))
         XCTAssertFalse(VersionComparator.isNewer("0.1.2", than: "0.1.2"))
     }
+
+    func testIsNewerStrictRejectsMalformedCandidate() {
+        XCTAssertFalse(VersionComparator.isNewerStrict("v999.0.bad", than: "0.1.2"))
+        XCTAssertFalse(VersionComparator.isNewerStrict("1.2.3-alpha", than: "0.1.2"))
+        XCTAssertFalse(VersionComparator.isNewerStrict("", than: "0.1.2"))
+    }
+
+    func testIsNewerStrictAcceptsValidNewerVersion() {
+        XCTAssertTrue(VersionComparator.isNewerStrict("0.1.3", than: "0.1.2"))
+        XCTAssertTrue(VersionComparator.isNewerStrict("v0.2.0", than: "0.1.9"))
+    }
+
+    func testIsNewerStrictRejectsMalformedCurrent() {
+        XCTAssertFalse(VersionComparator.isNewerStrict("0.1.3", than: "bad.version"))
+    }
+
+    func testCompareStrictThrowsOnInvalidVersion() {
+        XCTAssertThrowsError(try VersionComparator.compareStrict("1.2.bad", "1.2.3"))
+        XCTAssertThrowsError(try VersionComparator.compareStrict("1.2.3", "1.2.bad"))
+    }
 }
