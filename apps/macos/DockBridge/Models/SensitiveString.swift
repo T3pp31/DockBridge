@@ -13,10 +13,17 @@ struct SensitiveString: Equatable {
 
     var text: String {
         get { String(decoding: storage, as: UTF8.self) }
-        set { storage = Data(newValue.utf8) }
+        set {
+            zeroizeStorage()
+            storage = Data(newValue.utf8)
+        }
     }
 
     mutating func clear() {
+        zeroizeStorage()
+    }
+
+    private mutating func zeroizeStorage() {
         storage.withUnsafeMutableBytes { buffer in
             guard let base = buffer.baseAddress, buffer.count > 0 else { return }
             explicit_bzero(base, buffer.count)
