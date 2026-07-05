@@ -807,6 +807,9 @@ impl PartialLocalTransfer {
     ) -> Result<(), SftpError> {
         self.local_file.take();
 
+        // Always check for symlinks and existing files first. This provides
+        // an early failure path and rejects symlink targets that hard_link
+        // would otherwise follow.
         if let Err(err) = prepare_local_finalize_destination(
             final_path,
             self.overwrite_policy,
@@ -819,20 +822,65 @@ impl PartialLocalTransfer {
             return Err(err);
         }
 
-        match tokio::fs::rename(&self.partial_path, final_path).await {
-            Ok(()) => {
-                self.committed = true;
-                Ok(())
+        match self.overwrite_policy {
+            TransferOverwritePolicy::FailIfExists => {
+                // Use hard_link + unlink to atomically reserve the final path.
+                // hard_link fails with AlreadyExists if the target appears
+                // between prepare_local_finalize_destination and here,
+                // closing the TOCTOU window.
+                match tokio::fs::hard_link(&self.partial_path, final_path).await {
+                    Ok(()) => {
+                        if let Err(err) = tokio::fs::remove_file(&self.partial_path).await {
+                            tracing::warn!(
+                                local = %self.partial_path.display(),
+                                error = %err,
+                                "failed to remove partial after hard_link"
+                            );
+                        }
+                        self.committed = true;
+                        Ok(())
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                        let remote = self.remote.clone();
+                        let local = self.local.clone();
+                        self.abort(true, remote_file).await?;
+                        Err(SftpError::DownloadFailed {
+                            remote,
+                            local,
+                            message: TransferOverwritePolicy::destination_exists_message(
+                                &final_path.display().to_string(),
+                            ),
+                        })
+                    }
+                    Err(err) => {
+                        let remote = self.remote.clone();
+                        let local = self.local.clone();
+                        self.abort(true, remote_file).await?;
+                        Err(SftpError::DownloadFailed {
+                            remote,
+                            local,
+                            message: err.to_string(),
+                        })
+                    }
+                }
             }
-            Err(err) => {
-                let remote = self.remote.clone();
-                let local = self.local.clone();
-                self.abort(true, remote_file).await?;
-                Err(SftpError::DownloadFailed {
-                    remote,
-                    local,
-                    message: err.to_string(),
-                })
+            TransferOverwritePolicy::Replace => {
+                match tokio::fs::rename(&self.partial_path, final_path).await {
+                    Ok(()) => {
+                        self.committed = true;
+                        Ok(())
+                    }
+                    Err(err) => {
+                        let remote = self.remote.clone();
+                        let local = self.local.clone();
+                        self.abort(true, remote_file).await?;
+                        Err(SftpError::DownloadFailed {
+                            remote,
+                            local,
+                            message: err.to_string(),
+                        })
+                    }
+                }
             }
         }
     }
