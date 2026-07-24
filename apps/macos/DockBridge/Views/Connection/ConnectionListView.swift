@@ -35,18 +35,29 @@ struct ConnectionListView: View {
                             }
                         }
                         .tag(profile.id)
-                        .contextMenu {
-                            Button("Connect") {
-                                viewModel.requestConnect(profile: profile)
-                            }
-                            Button("Edit") {
-                                editingProfile = profile
-                            }
-                            Button("Delete", role: .destructive) {
-                                viewModel.delete(profile: profile)
-                            }
+                    }
+                }
+                .contextMenu(forSelectionType: UUID.self) { ids in
+                    if let profile = singleSelectedProfile(from: ids) {
+                        Button("Connect") {
+                            viewModel.requestConnect(profile: profile)
+                        }
+                        .disabled(viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting)
+
+                        Button("Edit") {
+                            editingProfile = profile
+                        }
+
+                        Button("Delete", role: .destructive) {
+                            viewModel.delete(profile: profile)
                         }
                     }
+                } primaryAction: { ids in
+                    guard let profile = singleSelectedProfile(from: ids) else { return }
+                    guard !viewModel.connectionStatus.isConnected,
+                          !viewModel.connectionStatus.isConnecting
+                    else { return }
+                    viewModel.requestConnect(profile: profile)
                 }
                 .searchable(text: $viewModel.searchText, prompt: "Search connections")
             }
@@ -166,5 +177,10 @@ struct ConnectionListView: View {
                 .foregroundStyle(.clear)
                 .accessibilityHidden(true)
         }
+    }
+
+    private func singleSelectedProfile(from ids: Set<UUID>) -> ConnectionProfile? {
+        guard ids.count == 1, let id = ids.first else { return nil }
+        return viewModel.profiles.first { $0.id == id }
     }
 }
