@@ -185,6 +185,29 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertTrue(result.pendingNewProfileTrust.isEmpty)
     }
 
+    func testLoadProfilesRejectsSymlinkedStoreFile() throws {
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+
+        try store.saveProfiles([profile])
+
+        let profilesURL = URL(fileURLWithPath: storeProfilesPath)
+        let secretURL = baseDirectory.appendingPathComponent("secret-profiles.json", isDirectory: false)
+        try FileManager.default.copyItem(at: profilesURL, to: secretURL)
+        try FileManager.default.removeItem(at: profilesURL)
+        try FileManager.default.createSymbolicLink(at: profilesURL, withDestinationURL: secretURL)
+
+        XCTAssertThrowsError(try store.loadProfiles()) { error in
+            guard case ConnectionStoreError.readFailed(let message) = error else {
+                return XCTFail("Expected readFailed, got \(error)")
+            }
+            XCTAssertTrue(message.contains("symbolic link"))
+        }
+    }
+
     private var storeProfilesPath: String {
         baseDirectory.appendingPathComponent("profiles.json", isDirectory: false).path
     }
