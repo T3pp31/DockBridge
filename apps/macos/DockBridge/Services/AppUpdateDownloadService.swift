@@ -70,6 +70,7 @@ struct HdiutilDMGImageMounter: DMGImageMounting {
 
 enum AppUpdateDownloadError: Error, Equatable {
     case invalidDownloadResponse
+    case checksumMissing
     case checksumFetchFailed
     case checksumMismatch
     case mountFailed
@@ -83,6 +84,8 @@ extension AppUpdateDownloadError: LocalizedError {
         switch self {
         case .invalidDownloadResponse:
             return "The update download could not be completed."
+        case .checksumMissing:
+            return "The update checksum is not available. Download the update manually from the release page."
         case .checksumFetchFailed:
             return "The update checksum could not be verified."
         case .checksumMismatch:
@@ -154,6 +157,8 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
 
         if let checksumURL = update.checksumURL {
             try await verifyChecksum(of: downloadedURL, checksumURL: checksumURL)
+        } else {
+            throw AppUpdateDownloadError.checksumMissing
         }
 
         let mountPoint = try dmgMounter.mount(dmgURL: downloadedURL)
