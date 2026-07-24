@@ -10,3 +10,8 @@ team_id = ""
 signing_certificate_fingerprint_sha256 = ""
 require_signed_updates = false
 require_notarized_updates = false
+# SBOM (CycloneDX JSON, source SBOM from Cargo.lock via cargo-cyclonedx)
+sbom_name_template = "{app_name}-{version}.cdx.json"
+sbom_manifest_path = "crates/cli/Cargo.toml"
+cargo_cyclonedx_version = "0.5.9"
+cyclonedx_spec_version = "1.5"

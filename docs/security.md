@@ -256,6 +256,25 @@ Do not remove Gatekeeper quarantine on public release DMGs. The dev-only helper 
 - **CI (`cargo audit`)**: Every push to `main` and every pull request runs `rustsec/audit-check` against `Cargo.lock`. The job fails when a new advisory is reported.
 - **Dependabot**: Weekly pull requests for `cargo` and `github-actions` dependency updates (see `.github/dependabot.yml`).
 
+### Software Bill of Materials (SBOM)
+
+DockBridge publishes a CycloneDX JSON SBOM for each release and verifies SBOM generation in CI.
+
+- **Format**: CycloneDX JSON (`.cdx.json`, spec version 1.5)
+- **Generator**: [`cargo-cyclonedx`](https://crates.io/crates/cargo-cyclonedx) (pinned in `config/release.toml`)
+- **Scope**: Source SBOM from `Cargo.lock`, generated from `crates/cli/Cargo.toml` (the release CLI entry point and its dependency graph)
+- **CI**: The `rust` job in `.github/workflows/ci.yml` runs `./scripts/generate-sbom.sh` and uploads the artifact for review
+- **Release**: `.github/workflows/release.yml` attaches `{app_name}-{version}.cdx.json` and its SHA-256 checksum to GitHub Releases alongside the DMG and CLI binaries
+
+Generate an SBOM locally:
+
+```bash
+cargo install cargo-cyclonedx --version "$(awk -F'"' '/^cargo_cyclonedx_version / { print $2; exit }' config/release.toml)" --locked
+./scripts/generate-sbom.sh --out dist
+```
+
+Swift/SPM dependencies are not included (the macOS app has no SPM packages).
+
 ### Response workflow when a vulnerability is detected
 
 1. **Triage** — Read the advisory (ID, CVSS severity, affected crate/version, upstream fix).

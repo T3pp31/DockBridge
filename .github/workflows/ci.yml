@@ -30,6 +30,8 @@ jobs:
   rust:
     name: Rust
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -53,6 +55,24 @@ jobs:
 
       - name: Build hardened CLI (release configuration)
         run: cargo build -p dockbridge-cli --release --features disable-cli-password
+
+      - name: Install cargo-cyclonedx
+        run: |
+          VERSION="$(awk -F'"' '/^cargo_cyclonedx_version / { print $2; exit }' config/release.toml)"
+          cargo install cargo-cyclonedx --version "${VERSION}" --locked
+
+      - name: Generate and verify SBOM
+        run: ./scripts/generate-sbom.sh --out dist
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dockbridge-sbom
+          path: |
+            dist/*.cdx.json
+            dist/*.cdx.json.sha256
+          if-no-files-found: error
+          retention-days: 14
 
   # macOS job: compile/test only (unsigned). Release signing and notarization run in
   # .github/workflows/release.yml — see docs/security.md#release-signing-pipeline.
