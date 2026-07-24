@@ -39,10 +39,16 @@ struct ConnectionListView: View {
                 }
                 .contextMenu(forSelectionType: UUID.self) { ids in
                     if let profile = singleSelectedProfile(from: ids) {
-                        Button("Connect") {
-                            viewModel.requestConnect(profile: profile)
+                        if isConnectedProfile(profile) {
+                            Button("Disconnect") {
+                                Task { await viewModel.disconnect() }
+                            }
+                        } else {
+                            Button("Connect") {
+                                viewModel.requestConnect(profile: profile)
+                            }
+                            .disabled(viewModel.connectionStatus.isConnecting)
                         }
-                        .disabled(viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting)
 
                         Button("Edit") {
                             editingProfile = profile
@@ -51,6 +57,7 @@ struct ConnectionListView: View {
                         Button("Delete", role: .destructive) {
                             viewModel.delete(profile: profile)
                         }
+                        .disabled(isConnectedProfile(profile))
                     }
                 } primaryAction: { ids in
                     guard let profile = singleSelectedProfile(from: ids) else { return }
@@ -182,5 +189,9 @@ struct ConnectionListView: View {
     private func singleSelectedProfile(from ids: Set<UUID>) -> ConnectionProfile? {
         guard ids.count == 1, let id = ids.first else { return nil }
         return viewModel.profiles.first { $0.id == id }
+    }
+
+    private func isConnectedProfile(_ profile: ConnectionProfile) -> Bool {
+        viewModel.connectedProfileID == profile.id && viewModel.connectionStatus.isConnected
     }
 }
