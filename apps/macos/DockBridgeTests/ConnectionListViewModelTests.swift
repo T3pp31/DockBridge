@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import DockBridge
 
@@ -93,6 +94,78 @@ final class ConnectionListViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.pendingEndpointChange?.current.host, "evil.example.com")
         XCTAssertEqual(viewModel.pendingEndpointChange?.trusted.host, "example.com")
     }
+
+    #if DEBUG
+    func testBridgeConnectionStateChangeNotifiesViewModel() {
+        let bridge = RustBridgeService()
+        let viewModel = ConnectionListViewModel(
+            store: store,
+            keychain: keychain,
+            bridge: bridge
+        )
+        let profileID = UUID()
+
+        let expectation = expectation(description: "viewModel objectWillChange on connect")
+        var cancellable: AnyCancellable?
+        cancellable = viewModel.objectWillChange.sink { _ in
+            expectation.fulfill()
+        }
+
+        bridge.applyConnectionStateForTesting(
+            status: .connected(endpoint: "example.com:22"),
+            profileID: profileID
+        )
+
+        waitForExpectations(timeout: 1)
+        cancellable?.cancel()
+
+        XCTAssertEqual(viewModel.connectedProfileID, profileID)
+        XCTAssertTrue(viewModel.connectionStatus.isConnected)
+    }
+
+    func testBridgeDisconnectStateChangeNotifiesViewModel() {
+        let bridge = RustBridgeService()
+        let viewModel = ConnectionListViewModel(
+            store: store,
+            keychain: keychain,
+            bridge: bridge
+        )
+        let profileID = UUID()
+        bridge.applyConnectionStateForTesting(
+            status: .connected(endpoint: "example.com:22"),
+            profileID: profileID
+        )
+
+        let expectation = expectation(description: "viewModel objectWillChange on disconnect")
+        var cancellable: AnyCancellable?
+        cancellable = viewModel.objectWillChange.sink { _ in
+            expectation.fulfill()
+        }
+
+        bridge.applyConnectionStateForTesting(status: .disconnected, profileID: nil)
+
+        waitForExpectations(timeout: 1)
+        cancellable?.cancel()
+
+        XCTAssertNil(viewModel.connectedProfileID)
+        XCTAssertFalse(viewModel.connectionStatus.isConnected)
+    }
+
+    func testImplicitDisconnectClearsConnectedProfileID() {
+        let bridge = RustBridgeService()
+        let profileID = UUID()
+        bridge.applyConnectionStateForTesting(
+            status: .connected(endpoint: "example.com:22"),
+            profileID: profileID
+        )
+        bridge.setSessionIdForTesting(42)
+
+        bridge.onSessionDisconnected(sessionId: 42, reason: "connection lost")
+
+        XCTAssertNil(bridge.connectedProfileID)
+        XCTAssertFalse(bridge.connectionStatus.isConnected)
+    }
+    #endif
 
     func testLoadShowsInitialTrustConfirmationWhenTrustStoreEmpty() throws {
         let profile = ConnectionProfile(
