@@ -52,7 +52,6 @@ final class ConnectionListViewModel: ObservableObject {
         self.bridge = bridge
 
         bridge.objectWillChange
-            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }

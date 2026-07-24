@@ -383,5 +383,10 @@ extension RustBridgeService {
     func setSessionIdForTesting(_ id: UInt64?) {
         sessionId = id
     }
+
+    func simulateSessionDisconnectedForTesting(sessionId: UInt64, reason: String) {
+        guard self.sessionId == sessionId else { return }
+        handleImplicitDisconnect(reason: reason)
+    }
 }
 #endif
