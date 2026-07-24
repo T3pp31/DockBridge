@@ -157,8 +157,42 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         }
     }
 
-    private func makeTestBundle(bundleIdentifier: String, in directory: URL) throws -> URL {
-        let bundleURL = directory.appendingPathComponent("DockBridge.app", isDirectory: true)
+    func testDownloadVerifyAndRevealIgnoresUnexpectedAppBundles() async throws {
+        let dmgURL = temporaryDirectory.appendingPathComponent("update.dmg")
+        try Data("dmg-contents".utf8).write(to: dmgURL)
+        let mountPoint = temporaryDirectory.appendingPathComponent("mount", isDirectory: true)
+        try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
+        _ = try makeTestBundle(bundleIdentifier: "com.evil.app", bundleName: "Evil.app", in: mountPoint)
+
+        let service = AppUpdateDownloadService(
+            downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 200),
+            dataSession: MockChecksumURLSession(checksumLine: "", statusCode: 200),
+            signatureVerifier: MockSignatureVerifier(),
+            dmgMounter: MockDMGImageMounter(mountPoint: mountPoint),
+            fileManager: .default
+        )
+
+        let update = AppUpdateInfo(
+            version: "0.2.0",
+            downloadURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg")!,
+            checksumURL: nil,
+            releasePageURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0")!
+        )
+
+        do {
+            try await service.downloadVerifyAndReveal(update: update)
+            XCTFail("Expected missing app bundle error")
+        } catch let error as AppUpdateDownloadError {
+            XCTAssertEqual(error, .appBundleNotFound)
+        }
+    }
+
+    private func makeTestBundle(
+        bundleIdentifier: String,
+        bundleName: String = "DockBridge.app",
+        in directory: URL
+    ) throws -> URL {
+        let bundleURL = directory.appendingPathComponent(bundleName, isDirectory: true)
         let contentsURL = bundleURL.appendingPathComponent("Contents", isDirectory: true)
         try FileManager.default.createDirectory(
             at: contentsURL.appendingPathComponent("MacOS", isDirectory: true),

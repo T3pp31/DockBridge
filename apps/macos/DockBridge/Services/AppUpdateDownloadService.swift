@@ -229,16 +229,15 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
     }
 
     private func findAppBundle(in directory: URL) -> URL? {
-        guard let contents = try? fileManager.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
+        let expectedBundleURL = directory.appendingPathComponent(
+            "\(AppUpdateConfig.appName).app",
+            isDirectory: true
+        )
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: expectedBundleURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
             return nil
         }
-
-        return contents.first { url in
-            url.pathExtension == "app"
-        }
+        return expectedBundleURL
     }
 }
