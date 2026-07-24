@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 @MainActor
@@ -23,6 +24,7 @@ final class ConnectionListViewModel: ObservableObject {
     private var pendingNewProfileTrustProfiles: [ConnectionProfile] = []
     private var rootWarningAcknowledged = false
     private var rsaWarningAcknowledged = false
+    private var cancellables = Set<AnyCancellable>()
 
     var isConnected: Bool { bridge.isConnected }
     var connectionStatus: ConnectionStatus { bridge.connectionStatus }
@@ -48,6 +50,13 @@ final class ConnectionListViewModel: ObservableObject {
         self.keychain = keychain
         self.bookmarkService = bookmarkService
         self.bridge = bridge
+
+        bridge.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
     }
 
     func load() {

@@ -297,6 +297,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
         guard connectionStatus.isConnected || connectionStatus.isConnecting else { return }
         lastDisconnectReason = reason
         resetSessionFields()
+        connectedProfileID = nil
     }
 
     private func clearConnectionState() {
@@ -368,3 +369,19 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
         }
     }
 }
+
+#if DEBUG
+extension RustBridgeService {
+    func applyConnectionStateForTesting(
+        status: ConnectionStatus,
+        profileID: UUID? = nil
+    ) {
+        connectionStatus = status
+        connectedProfileID = profileID
+    }
+
+    func setSessionIdForTesting(_ id: UInt64?) {
+        sessionId = id
+    }
+}
+#endif
