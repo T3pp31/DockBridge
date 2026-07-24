@@ -106,6 +106,7 @@ final class ConnectionListViewModelTests: XCTestCase {
         let profileID = UUID()
 
         let expectation = expectation(description: "viewModel objectWillChange on connect")
+        expectation.expectedFulfillmentCount = 2
         var cancellable: AnyCancellable?
         cancellable = viewModel.objectWillChange.sink { _ in
             expectation.fulfill()
@@ -137,6 +138,7 @@ final class ConnectionListViewModelTests: XCTestCase {
         )
 
         let expectation = expectation(description: "viewModel objectWillChange on disconnect")
+        expectation.expectedFulfillmentCount = 2
         var cancellable: AnyCancellable?
         cancellable = viewModel.objectWillChange.sink { _ in
             expectation.fulfill()
@@ -160,7 +162,7 @@ final class ConnectionListViewModelTests: XCTestCase {
         )
         bridge.setSessionIdForTesting(42)
 
-        bridge.onSessionDisconnected(sessionId: 42, reason: "connection lost")
+        bridge.simulateSessionDisconnectedForTesting(sessionId: 42, reason: "connection lost")
 
         XCTAssertNil(bridge.connectedProfileID)
         XCTAssertFalse(bridge.connectionStatus.isConnected)
