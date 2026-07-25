@@ -134,11 +134,41 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         let mountPoint = temporaryDirectory.appendingPathComponent("empty-mount", isDirectory: true)
         try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
 
+        let digest = SHA256.hash(data: Data("dmg-contents".utf8))
+        let checksum = digest.map { String(format: "%02x", $0) }.joined()
+
+        let service = AppUpdateDownloadService(
+            downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 200),
+            dataSession: MockChecksumURLSession(checksumLine: "\(checksum) update.dmg", statusCode: 200),
+            signatureVerifier: MockSignatureVerifier(),
+            dmgMounter: MockDMGImageMounter(mountPoint: mountPoint),
+            fileManager: .default
+        )
+
+        let update = AppUpdateInfo(
+            version: "0.2.0",
+            downloadURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg")!,
+            checksumURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg.sha256")!,
+            releasePageURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0")!
+        )
+
+        do {
+            try await service.downloadVerifyAndReveal(update: update)
+            XCTFail("Expected missing app bundle error")
+        } catch let error as AppUpdateDownloadError {
+            XCTAssertEqual(error, .appBundleNotFound)
+        }
+    }
+
+    func testDownloadVerifyAndRevealRejectsMissingChecksum() async throws {
+        let dmgURL = temporaryDirectory.appendingPathComponent("update.dmg")
+        try Data("dmg-contents".utf8).write(to: dmgURL)
+
         let service = AppUpdateDownloadService(
             downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 200),
             dataSession: MockChecksumURLSession(checksumLine: "", statusCode: 200),
             signatureVerifier: MockSignatureVerifier(),
-            dmgMounter: MockDMGImageMounter(mountPoint: mountPoint),
+            dmgMounter: MockDMGImageMounter(mountPoint: temporaryDirectory.appendingPathComponent("mount")),
             fileManager: .default
         )
 
@@ -151,9 +181,9 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
 
         do {
             try await service.downloadVerifyAndReveal(update: update)
-            XCTFail("Expected missing app bundle error")
+            XCTFail("Expected missing checksum error")
         } catch let error as AppUpdateDownloadError {
-            XCTAssertEqual(error, .appBundleNotFound)
+            XCTAssertEqual(error, .checksumMissing)
         }
     }
 
@@ -164,9 +194,12 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
         _ = try makeTestBundle(bundleIdentifier: "com.evil.app", bundleName: "Evil.app", in: mountPoint)
 
+        let digest = SHA256.hash(data: Data("dmg-contents".utf8))
+        let checksum = digest.map { String(format: "%02x", $0) }.joined()
+
         let service = AppUpdateDownloadService(
             downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 200),
-            dataSession: MockChecksumURLSession(checksumLine: "", statusCode: 200),
+            dataSession: MockChecksumURLSession(checksumLine: "\(checksum) update.dmg", statusCode: 200),
             signatureVerifier: MockSignatureVerifier(),
             dmgMounter: MockDMGImageMounter(mountPoint: mountPoint),
             fileManager: .default
@@ -175,7 +208,7 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         let update = AppUpdateInfo(
             version: "0.2.0",
             downloadURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg")!,
-            checksumURL: nil,
+            checksumURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg.sha256")!,
             releasePageURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0")!
         )
 

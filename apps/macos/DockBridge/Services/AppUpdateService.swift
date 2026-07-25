@@ -54,21 +54,30 @@ final class AppUpdateService: @unchecked Sendable {
             return nil
         }
 
-        let downloadURL = dmgDownloadURL(from: release, version: latestVersion)
-            ?? validatedReleasePageURL(release.htmlURL)
+        let dmgDownloadURL = dmgDownloadURL(from: release, version: latestVersion)
+        let checksumURL = checksumDownloadURL(from: release, version: latestVersion)
+        let releasePageURL = validatedReleasePageURL(release.htmlURL)
+
+        let downloadURL: URL?
+        if let dmgDownloadURL, let checksumURL {
+            downloadURL = dmgDownloadURL
+        } else if let releasePageURL {
+            downloadURL = releasePageURL
+        } else {
+            downloadURL = dmgDownloadURL
+        }
 
         guard let downloadURL else {
             return nil
         }
 
-        let releasePageURL = validatedReleasePageURL(release.htmlURL) ?? downloadURL
-        let checksumURL = checksumDownloadURL(from: release, version: latestVersion)
+        let resolvedReleasePageURL = releasePageURL ?? downloadURL
 
         return AppUpdateInfo(
             version: latestVersion,
             downloadURL: downloadURL,
             checksumURL: checksumURL,
-            releasePageURL: releasePageURL
+            releasePageURL: resolvedReleasePageURL
         )
     }
 
