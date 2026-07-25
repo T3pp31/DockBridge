@@ -89,6 +89,10 @@ final class UpdateCheckViewModelTests: XCTestCase {
             {
               "name": "DockBridge-0.2.0-macOS.dmg",
               "browser_download_url": "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg"
+            },
+            {
+              "name": "DockBridge-0.2.0-macOS.dmg.sha256",
+              "browser_download_url": "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg.sha256"
             }
           ]
         }
