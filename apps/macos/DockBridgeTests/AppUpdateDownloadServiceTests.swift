@@ -194,9 +194,12 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
         _ = try makeTestBundle(bundleIdentifier: "com.evil.app", bundleName: "Evil.app", in: mountPoint)
 
+        let digest = SHA256.hash(data: Data("dmg-contents".utf8))
+        let checksum = digest.map { String(format: "%02x", $0) }.joined()
+
         let service = AppUpdateDownloadService(
             downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 200),
-            dataSession: MockChecksumURLSession(checksumLine: "", statusCode: 200),
+            dataSession: MockChecksumURLSession(checksumLine: "\(checksum) update.dmg", statusCode: 200),
             signatureVerifier: MockSignatureVerifier(),
             dmgMounter: MockDMGImageMounter(mountPoint: mountPoint),
             fileManager: .default
@@ -205,7 +208,7 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         let update = AppUpdateInfo(
             version: "0.2.0",
             downloadURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg")!,
-            checksumURL: nil,
+            checksumURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg.sha256")!,
             releasePageURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0")!
         )
 
