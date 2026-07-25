@@ -43,6 +43,7 @@
 		C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */; };
 		E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */; };
 		C0NN3CT10N5T0R3T3ST5RC3 /* ConnectionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T0R3T3ST5RC4 /* ConnectionStoreTests.swift */; };
+		SECUREL0CALF1LERE4D3RT1 /* SecureLocalFileReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SECUREL0CALF1LERE4D3RT2 /* SecureLocalFileReaderTests.swift */; };
 		PR0F1L3ENCRYP7S3RV1C3T1 /* ProfileEncryptionServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PR0F1L3ENCRYP7S3RV1C3T2 /* ProfileEncryptionServiceTests.swift */; };
 		PR0F1L3TRU5T5T0R3T3ST5RC3 /* ProfileTrustStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = PR0F1L3TRU5T5T0R3T3ST5RC4 /* ProfileTrustStoreTests.swift */; };
 		C0NN3CT10NL15TV13W0D3LT3STRC3 /* ConnectionListViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10NL15TV13W0D3LT3STRC4 /* ConnectionListViewModelTests.swift */; };
@@ -75,6 +76,7 @@
 		D5R0P0P3R4T10N5Y5N0C1T5ST /* DropOperationSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */; };
 		F1L3D3R0P4C3C3P7T4N5C3T5ST /* FileDropAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */; };
 		S3C8K0P3B00KM4RKS3RV1C3SW1 /* SecurityScopedBookmarkService.swift in Sources */ = {isa = PBXBuildFile; fileRef = S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */; };
+		SECUREL0CALF1LERE4D3R1N5RC1 /* SecureLocalFileReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = SECUREL0CALF1LERE4D3R1N5RC2 /* SecureLocalFileReader.swift */; };
 		S3C8K0P3B00KM4RKS3RV1C3T1 /* SecurityScopedBookmarkServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = S3C8K0P3B00KM4RKS3RV1C3T2 /* SecurityScopedBookmarkServiceTests.swift */; };
 		APPD4T3C0NF1G5W1FT3BF1 /* AppUpdateConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPD4T3C0NF1G5W1FT3RC1 /* AppUpdateConfig.swift */; };
 		APPD4T31NF05W1FT3BF1 /* AppUpdateInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPD4T31NF05W1FT3RC1 /* AppUpdateInfo.swift */; };
@@ -136,6 +138,7 @@
 		D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePathTests.swift; sourceTree = "<group>"; };
 		F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyStoreTests.swift; sourceTree = "<group>"; };
 		C0NN3CT10N5T0R3T3ST5RC4 /* ConnectionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStoreTests.swift; sourceTree = "<group>"; };
+		SECUREL0CALF1LERE4D3RT2 /* SecureLocalFileReaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureLocalFileReaderTests.swift; sourceTree = "<group>"; };
 		PR0F1L3ENCRYP7S3RV1C3T2 /* ProfileEncryptionServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEncryptionServiceTests.swift; sourceTree = "<group>"; };
 		PR0F1L3TRU5T5T0R3T3ST5RC4 /* ProfileTrustStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTrustStoreTests.swift; sourceTree = "<group>"; };
 		C0NN3CT10NL15TV13W0D3LT3STRC4 /* ConnectionListViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionListViewModelTests.swift; sourceTree = "<group>"; };
@@ -173,6 +176,7 @@
 		D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropOperationSyncTests.swift; sourceTree = "<group>"; };
 		F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropAcceptanceTests.swift; sourceTree = "<group>"; };
 		S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityScopedBookmarkService.swift; sourceTree = "<group>"; };
+		SECUREL0CALF1LERE4D3R1N5RC2 /* SecureLocalFileReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureLocalFileReader.swift; sourceTree = "<group>"; };
 		S3C8K0P3B00KM4RKS3RV1C3T2 /* SecurityScopedBookmarkServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityScopedBookmarkServiceTests.swift; sourceTree = "<group>"; };
 		APPD4T3C0NF1G5W1FT3RC1 /* AppUpdateConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateConfig.swift; sourceTree = "<group>"; };
 		APPD4T31NF05W1FT3RC1 /* AppUpdateInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateInfo.swift; sourceTree = "<group>"; };
@@ -365,6 +369,7 @@
 				6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */,
 				5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */,
 				S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */,
+				SECUREL0CALF1LERE4D3R1N5RC2 /* SecureLocalFileReader.swift */,
 				V3R5C0MP4R4T0R5W1FT3RC1 /* VersionComparator.swift */,
 			);
 			path = Services;
@@ -439,6 +444,7 @@
 				D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */,
 				F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */,
 				C0NN3CT10N5T0R3T3ST5RC4 /* ConnectionStoreTests.swift */,
+				SECUREL0CALF1LERE4D3RT2 /* SecureLocalFileReaderTests.swift */,
 				PR0F1L3ENCRYP7S3RV1C3T2 /* ProfileEncryptionServiceTests.swift */,
 				PR0F1L3TRU5T5T0R3T3ST5RC4 /* ProfileTrustStoreTests.swift */,
 				C0NN3CT10NL15TV13W0D3LT3STRC4 /* ConnectionListViewModelTests.swift */,
@@ -605,6 +611,7 @@
 				6B644EEA7799402A90D59AAA /* KeychainService.swift in Sources */,
 				14A839F4D61A1075B5ACF82D /* RustBridgeService.swift in Sources */,
 				S3C8K0P3B00KM4RKS3RV1C3SW1 /* SecurityScopedBookmarkService.swift in Sources */,
+				SECUREL0CALF1LERE4D3R1N5RC1 /* SecureLocalFileReader.swift in Sources */,
 				9207DDB127B46575474EC6F5 /* ConnectionListViewModel.swift in Sources */,
 				67E6AD45895AF44CA96D83BB /* MainViewModel.swift in Sources */,
 				5061A717EBE8AB1160ED99D1 /* TransferQueueViewModel.swift in Sources */,
@@ -666,6 +673,7 @@
 				C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */,
 				E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */,
 				C0NN3CT10N5T0R3T3ST5RC3 /* ConnectionStoreTests.swift in Sources */,
+				SECUREL0CALF1LERE4D3RT1 /* SecureLocalFileReaderTests.swift in Sources */,
 				PR0F1L3ENCRYP7S3RV1C3T1 /* ProfileEncryptionServiceTests.swift in Sources */,
 				PR0F1L3TRU5T5T0R3T3ST5RC3 /* ProfileTrustStoreTests.swift in Sources */,
 				C0NN3CT10NL15TV13W0D3LT3STRC3 /* ConnectionListViewModelTests.swift in Sources */,

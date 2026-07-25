@@ -181,6 +181,27 @@ final class ProfileTrustStoreTests: XCTestCase {
         let migratedData = try Data(contentsOf: trustURL)
         XCTAssertNoThrow(try JSONDecoder().decode(SignedTrustedEndpointsEnvelopeForTests.self, from: migratedData))
     }
+    func testLoadTrustedEndpointsRejectsSymlinkedStoreFile() throws {
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+        try trustStore.seedInitialTrust(from: [profile])
+
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        let secretURL = baseDirectory.appendingPathComponent("secret-trusted.json", isDirectory: false)
+        try FileManager.default.copyItem(at: trustURL, to: secretURL)
+        try FileManager.default.removeItem(at: trustURL)
+        try FileManager.default.createSymbolicLink(at: trustURL, withDestinationURL: secretURL)
+
+        XCTAssertThrowsError(try trustStore.loadTrustedEndpoints()) { error in
+            guard case ProfileTrustStoreError.readFailed(let message) = error else {
+                return XCTFail("Expected readFailed, got \(error)")
+            }
+            XCTAssertTrue(message.contains("symbolic link"))
+        }
+    }
 }
 
 private struct SignedTrustedEndpointsEnvelopeForTests: Codable {

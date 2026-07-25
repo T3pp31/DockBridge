@@ -152,7 +152,7 @@ final class ConnectionStore: @unchecked Sendable {
 
         let data: Data
         do {
-            data = try Data(contentsOf: url)
+            data = try SecureLocalFileReader.readData(from: url)
         } catch {
             throw ConnectionStoreError.readFailed(error.localizedDescription)
         }

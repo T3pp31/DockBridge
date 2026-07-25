@@ -66,7 +66,7 @@ final class ProfileTrustStore: @unchecked Sendable {
         try setSecurePermissions(for: url)
 
         do {
-            let data = try Data(contentsOf: url)
+            let data = try SecureLocalFileReader.readData(from: url)
             return try decodeTrustedEndpoints(from: data)
         } catch let error as ProfileTrustStoreError {
             throw error
