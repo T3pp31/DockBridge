@@ -1854,4 +1854,481 @@ mod tests {
             "unexpected download fallback error: {err}"
         );
     }
+
+    #[tokio::test]
+    async fn upload_writes_remote_file_matching_local_bytes() {
+        // Given: a local file with a known payload
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let payload = b"characterization upload payload";
+        let local_path = local_dir.path().join("file.txt");
+        tokio::fs::write(&local_path, payload).await.unwrap();
+
+        // When: the file is uploaded to a remote path
+        client
+            .upload(&local_path, "/upload/file.txt")
+            .await
+            .unwrap();
+
+        // Then: the remote file bytes match the local payload and no partial remains
+        let remote_bytes = tokio::fs::read(server.root.join("upload/file.txt"))
+            .await
+            .unwrap();
+        assert_eq!(remote_bytes, payload);
+        assert!(
+            server.remote_partial_paths().is_empty(),
+            "partial remote files must not remain after success: {:?}",
+            server.remote_partial_paths()
+        );
+        assert!(server.remote_file_exists("/upload/file.txt"));
+    }
+
+    #[tokio::test]
+    async fn walk_remote_directory_collects_nested_files() {
+        // Given: a remote directory with a top-level file and a nested file
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/walk/top.txt", b"a").await;
+        server
+            .write_remote_file("/walk/nested/inner.txt", b"b")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // When: the remote directory is walked
+        let entries = walk_remote_directory(&client, "/walk").await.unwrap();
+
+        // Then: both files are collected with relative paths from the walk root
+        assert_eq!(entries.len(), 2);
+        let relatives: Vec<_> = entries
+            .iter()
+            .map(|entry| entry.relative_path.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            relatives.contains(&"top.txt".to_string()),
+            "missing top.txt: {relatives:?}"
+        );
+        assert!(
+            relatives.contains(&"nested/inner.txt".to_string()),
+            "missing nested/inner.txt: {relatives:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_writes_empty_file() {
+        // Given: an empty local file
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("empty.txt");
+        tokio::fs::write(&local_path, b"").await.unwrap();
+
+        // When: the empty file is uploaded
+        client
+            .upload(&local_path, "/upload/empty.txt")
+            .await
+            .unwrap();
+
+        // Then: the remote file exists with empty contents and no partial remains
+        let remote_bytes = tokio::fs::read(server.root.join("upload/empty.txt"))
+            .await
+            .unwrap();
+        assert_eq!(remote_bytes, b"");
+        assert!(
+            server.remote_partial_paths().is_empty(),
+            "partial remote files must not remain after empty upload: {:?}",
+            server.remote_partial_paths()
+        );
+        assert!(server.remote_file_exists("/upload/empty.txt"));
+    }
+
+    #[tokio::test]
+    async fn walk_remote_directory_empty_directory() {
+        // Given: an empty remote directory
+        let server = TestSftpServer::start().await;
+        tokio::fs::create_dir_all(server.root.join("emptywalk"))
+            .await
+            .unwrap();
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // When: the empty directory is walked
+        let entries = walk_remote_directory(&client, "/emptywalk").await.unwrap();
+
+        // Then: an empty vector is returned rather than an error
+        assert!(
+            entries.is_empty(),
+            "expected no files in empty directory, got {entries:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_missing_local_file_returns_upload_failed() {
+        // Given: a local path that does not exist
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("missing.txt");
+
+        // When: upload is called for the missing local file
+        let err = client
+            .upload(&local_path, "/upload/missing.txt")
+            .await
+            .unwrap_err();
+
+        // Then: UploadFailed is returned with a non-empty message and nothing is written remotely
+        assert!(matches!(err, SftpError::UploadFailed { .. }));
+        assert!(
+            !err.to_string().is_empty(),
+            "error message must not be empty"
+        );
+        assert!(
+            !server.remote_file_exists("/upload/missing.txt"),
+            "final remote file must not exist after failed upload"
+        );
+        assert!(
+            server.remote_partial_paths().is_empty(),
+            "partial remote files must not remain: {:?}",
+            server.remote_partial_paths()
+        );
+    }
+
+    #[tokio::test]
+    async fn walk_remote_directory_propagates_missing_path_list_error() {
+        // Given: a remote path that does not exist
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // When: a missing directory is walked
+        let err = walk_remote_directory(&client, "/walk/missing")
+            .await
+            .unwrap_err();
+
+        // Then: the original list error is returned instead of a download fallback
+        assert!(matches!(err, SftpError::ListFailed { .. }));
+        assert!(
+            !matches!(err, SftpError::DownloadFailed { .. }),
+            "unexpected download fallback error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn walk_remote_directory_rejects_parent_segments() {
+        // Given: a connected SFTP client
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // When: walk is requested with a parent-directory segment
+        let err = walk_remote_directory(&client, "/walk/../secret")
+            .await
+            .unwrap_err();
+
+        // Then: InvalidRemotePath is returned
+        assert!(
+            matches!(err, SftpError::InvalidRemotePath { .. }),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn walk_remote_directory_lists_each_directory_once() {
+        // Given: `/walkonce/top.txt` and `/walkonce/nested/inner.txt`
+        // (same tree as walk_remote_directory_collects_nested_files)
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/walkonce/top.txt", b"a").await;
+        server
+            .write_remote_file("/walkonce/nested/inner.txt", b"b")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // When: the remote directory is walked
+        let entries = walk_remote_directory(&client, "/walkonce").await.unwrap();
+
+        // Then: both files are collected and each directory is listed once
+        // (no discarded root listing).
+        assert_eq!(entries.len(), 2);
+        let relatives: Vec<_> = entries
+            .iter()
+            .map(|entry| entry.relative_path.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            relatives.contains(&"top.txt".to_string()),
+            "missing top.txt: {relatives:?}"
+        );
+        assert!(
+            relatives.contains(&"nested/inner.txt".to_string()),
+            "missing nested/inner.txt: {relatives:?}"
+        );
+        assert_eq!(
+            server.opendir_count(),
+            2,
+            "expected one OPENDIR per directory (root + nested), got {}",
+            server.opendir_count()
+        );
+    }
+
+    #[tokio::test]
+    async fn walk_remote_directory_lists_empty_directory_once() {
+        // Given: an empty remote directory
+        let server = TestSftpServer::start().await;
+        tokio::fs::create_dir_all(server.root.join("emptyonce"))
+            .await
+            .unwrap();
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // When: the empty directory is walked
+        let entries = walk_remote_directory(&client, "/emptyonce").await.unwrap();
+
+        // Then: no files are collected and the empty root is listed once
+        assert!(
+            entries.is_empty(),
+            "expected no files in empty directory, got {entries:?}"
+        );
+        assert_eq!(
+            server.opendir_count(),
+            1,
+            "expected one OPENDIR for the empty root, got {}",
+            server.opendir_count()
+        );
+    }
+
+    #[tokio::test]
+    async fn walk_remote_directory_missing_path_opens_directory_once() {
+        // Given: a remote path that does not exist
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // When: a missing directory is walked
+        let err = walk_remote_directory(&client, "/missingonce")
+            .await
+            .unwrap_err();
+
+        // Then: ListFailed is returned (not DownloadFailed) after a single OPENDIR
+        assert!(matches!(err, SftpError::ListFailed { .. }));
+        assert!(
+            !matches!(err, SftpError::DownloadFailed { .. }),
+            "unexpected download fallback error: {err}"
+        );
+        assert_eq!(
+            server.opendir_count(),
+            1,
+            "expected one OPENDIR for the failed list, got {}",
+            server.opendir_count()
+        );
+    }
+
+    #[tokio::test]
+    async fn walk_remote_directory_file_path_returns_list_failed() {
+        // Given: a remote file (not a directory)
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/notadir/file.txt", b"payload")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // When: walk is requested on the file path
+        let err = walk_remote_directory(&client, "/notadir/file.txt")
+            .await
+            .unwrap_err();
+
+        // Then: ListFailed is returned because the path is not a directory
+        assert!(
+            matches!(err, SftpError::ListFailed { .. }),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            !err.to_string().is_empty(),
+            "error message must not be empty"
+        );
+        assert!(
+            server.opendir_count() <= 1,
+            "file-path walk must OPENDIR at most once, got {}",
+            server.opendir_count()
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_rejects_parent_segments_in_remote_path() {
+        // Given: an existing local file and a traversal remote path
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("source.txt");
+        tokio::fs::write(&local_path, b"should not escape")
+            .await
+            .unwrap();
+
+        // When: upload is called with a parent-directory segment in the remote path
+        let err = client
+            .upload(&local_path, "/upload/../escape.txt")
+            .await
+            .unwrap_err();
+
+        // Then: the public upload API rejects traversal and does not create escape.txt
+        assert!(
+            matches!(err, SftpError::InvalidRemotePath { .. }),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            !server.remote_file_exists("/escape.txt"),
+            "traversal must not create /escape.txt"
+        );
+        assert!(
+            !server.remote_file_exists("/upload/escape.txt"),
+            "traversal must not create /upload/escape.txt"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn bench_walk_remote_directory_counts_opendir() {
+        // Given: root `/benchwalk` with 40 child directories, each containing one file
+        const CHILD_DIR_COUNT: usize = 40;
+        let server = TestSftpServer::start().await;
+        for index in 0..CHILD_DIR_COUNT {
+            let remote_path = format!("/benchwalk/dir{index:02}/file.txt");
+            server.write_remote_file(&remote_path, b"x").await;
+        }
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // When: walk_remote_directory collects files under /benchwalk
+        let started = std::time::Instant::now();
+        let entries = walk_remote_directory(&client, "/benchwalk").await.unwrap();
+        let elapsed_ms = started.elapsed().as_millis();
+
+        // Then: collected file count is 40; elapsed time and OPENDIR count are reported
+        assert_eq!(entries.len(), CHILD_DIR_COUNT);
+        eprintln!(
+            "bench_walk_remote_directory_counts_opendir elapsed_ms={elapsed_ms} opendir_count={}",
+            server.opendir_count()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn bench_upload_32mib_default_chunk() {
+        // Given: a connected client, a 1 MiB warmup file, and a 32 MiB zero-filled payload
+        const WARMUP_BYTES: usize = 1024 * 1024;
+        const BENCH_BYTES: usize = 32 * 1024 * 1024;
+        let chunk_size = crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let warmup_path = local_dir.path().join("warmup.bin");
+        let payload_path = local_dir.path().join("payload.bin");
+        tokio::fs::write(&warmup_path, vec![0_u8; WARMUP_BYTES])
+            .await
+            .unwrap();
+        tokio::fs::write(&payload_path, vec![0_u8; BENCH_BYTES])
+            .await
+            .unwrap();
+        client
+            .upload_cancellable(
+                &warmup_path,
+                "/bench/warmup.bin",
+                chunk_size,
+                TransferOverwritePolicy::Replace,
+                || false,
+                |_| {},
+            )
+            .await
+            .unwrap();
+
+        // When: the 32 MiB file is uploaded with the default chunk size and noop callbacks
+        let started = std::time::Instant::now();
+        client
+            .upload_cancellable(
+                &payload_path,
+                "/bench/payload.bin",
+                chunk_size,
+                TransferOverwritePolicy::Replace,
+                || false,
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let elapsed_ms = started.elapsed().as_millis();
+
+        // Then: remote size matches and elapsed wall time is reported
+        let remote_size = client.remote_file_size("/bench/payload.bin").await.unwrap();
+        assert_eq!(remote_size, BENCH_BYTES as u64);
+        eprintln!("bench_upload_32mib_default_chunk elapsed_ms={elapsed_ms}");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn bench_upload_32mib_with_mutex_progress() {
+        // Given: a connected client, warmup, 32 MiB payload, and Mutex callbacks like TransferManager
+        const WARMUP_BYTES: usize = 1024 * 1024;
+        const BENCH_BYTES: usize = 32 * 1024 * 1024;
+        let chunk_size = crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let warmup_path = local_dir.path().join("warmup.bin");
+        let payload_path = local_dir.path().join("payload.bin");
+        tokio::fs::write(&warmup_path, vec![0_u8; WARMUP_BYTES])
+            .await
+            .unwrap();
+        tokio::fs::write(&payload_path, vec![0_u8; BENCH_BYTES])
+            .await
+            .unwrap();
+        client
+            .upload_cancellable(
+                &warmup_path,
+                "/bench/warmup.bin",
+                chunk_size,
+                TransferOverwritePolicy::Replace,
+                || false,
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let transferred = std::sync::Mutex::new(0_u64);
+        let cancelled = std::sync::Mutex::new(false);
+
+        // When: the 32 MiB file is uploaded while locking Mutex on every progress/cancel check
+        let started = std::time::Instant::now();
+        client
+            .upload_cancellable(
+                &payload_path,
+                "/bench/payload-mutex.bin",
+                chunk_size,
+                TransferOverwritePolicy::Replace,
+                || {
+                    *cancelled
+                        .lock()
+                        .expect("cancel mutex should not be poisoned")
+                },
+                |bytes| {
+                    *transferred
+                        .lock()
+                        .expect("progress mutex should not be poisoned") = bytes;
+                },
+            )
+            .await
+            .unwrap();
+        let elapsed_ms = started.elapsed().as_millis();
+
+        // Then: remote size matches and elapsed wall time is reported
+        let remote_size = client
+            .remote_file_size("/bench/payload-mutex.bin")
+            .await
+            .unwrap();
+        assert_eq!(remote_size, BENCH_BYTES as u64);
+        eprintln!("bench_upload_32mib_with_mutex_progress elapsed_ms={elapsed_ms}");
+    }
 }
