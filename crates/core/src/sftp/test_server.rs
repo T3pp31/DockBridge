@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -27,6 +27,7 @@ pub struct FailureConfig {
     pub fail_remote_close: AtomicBool,
     pub fail_remote_rename: AtomicBool,
     pub fail_mkdir: AtomicBool,
+    pub opendir_count: AtomicU64,
 }
 
 pub struct TestSftpServer {
@@ -377,6 +378,7 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn opendir(&mut self, id: u32, path: String) -> Result<Handle, Self::Error> {
+        self.failures.opendir_count.fetch_add(1, Ordering::Relaxed);
         let entries = self.read_directory_entries(&path).await?;
         let handle_id = self.next_handle;
         self.next_handle += 1;
@@ -548,6 +550,11 @@ impl TestSftpServer {
 
     pub fn remote_file_exists(&self, remote_path: &str) -> bool {
         self.resolve(remote_path).is_file()
+    }
+
+    /// Returns how many OPENDIR requests this server has handled.
+    pub fn opendir_count(&self) -> u64 {
+        self.failures.opendir_count.load(Ordering::Relaxed)
     }
 
     fn resolve(&self, path: &str) -> PathBuf {

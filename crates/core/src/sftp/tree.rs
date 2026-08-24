@@ -468,7 +468,6 @@ pub async fn walk_remote_directory_with_limits<'a>(
     limits: DirectoryWalkLimits,
 ) -> Result<Vec<RemoteFileEntry>, SftpError> {
     let normalized_root = normalize_remote_path(root)?;
-    let _entries = client.list_directory(&normalized_root).await?;
     let mut files = Vec::new();
     let mut pending = vec![(normalized_root.clone(), PathBuf::new(), 0_u32)];
     let mut visited = HashSet::new();
