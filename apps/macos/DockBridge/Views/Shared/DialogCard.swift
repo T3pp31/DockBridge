@@ -32,7 +32,7 @@ struct DialogCard<Content: View, Footer: View>: View {
         }
         .padding(DialogCardMetrics.padding)
         .frame(minWidth: DialogCardMetrics.minWidth)
-        .background(.background, in: RoundedRectangle(cornerRadius: DialogCardMetrics.cornerRadius, style: .continuous))
+        .background(.background, in: RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.large, style: .continuous))
     }
 
     @ViewBuilder
@@ -52,7 +52,7 @@ struct DialogCard<Content: View, Footer: View>: View {
 enum DialogCardMetrics {
     static let minWidth: CGFloat = 480
     static let padding: CGFloat = 28
-    static let cornerRadius: CGFloat = 16
+    static let cornerRadius: CGFloat = DesignTokens.CornerRadius.large
     static let contentSpacing: CGFloat = 16
 }
 
