@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @State private var config: AppConfig
     @State private var pickerErrorMessage: String?
+    @Environment(\.dismiss) private var dismiss
     let onSave: (AppConfig) -> Void
 
     init(config: AppConfig, onSave: @escaping (AppConfig) -> Void) {
@@ -12,7 +13,8 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        Form {
+        VStack(spacing: 0) {
+            Form {
             Section("Connection") {
                 Stepper(
                     "Timeout: \(config.connectionTimeoutSecs)s",
@@ -88,15 +90,24 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+
+        HStack(spacing: 12) {
+            Spacer()
+            Button("Cancel", role: .cancel) {
+                dismiss()
+            }
+            .keyboardShortcut(.cancelAction)
+            Button("Save") {
+                onSave(config)
+                dismiss()
+            }
+            .keyboardShortcut(.defaultAction)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        }
         .padding()
         .frame(minWidth: 420, minHeight: 400)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
-                    onSave(config)
-                }
-            }
-        }
         .alert("File Selection", isPresented: Binding(
             get: { pickerErrorMessage != nil },
             set: { if !$0 { pickerErrorMessage = nil } }

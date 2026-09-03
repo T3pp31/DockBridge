@@ -28,7 +28,7 @@ struct ConnectionFormView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
             Form {
                 Section("General") {
                     TextField("Name", text: $profile.name)
@@ -68,16 +68,21 @@ struct ConnectionFormView: View {
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle(isEditing ? "Edit Connection" : "New Connection")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { closeForm() }
+
+            HStack(spacing: 12) {
+                Spacer()
+                Button("Cancel", role: .cancel) {
+                    closeForm()
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
-                        .disabled(!canSave)
+                .keyboardShortcut(.cancelAction)
+                Button("Save") {
+                    save()
                 }
+                .disabled(!canSave)
+                .keyboardShortcut(.defaultAction)
             }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
         }
         .padding()
         .frame(minWidth: DialogCardMetrics.minWidth, minHeight: 380)
