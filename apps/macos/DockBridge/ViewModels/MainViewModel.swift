@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 @MainActor
@@ -440,6 +441,19 @@ final class MainViewModel: ObservableObject {
         } else if item.isDirectory {
             navigateLocal(into: item)
         }
+    }
+
+    /// Opens a local file in its default app (Issue #228).
+    func openLocalFile(_ item: LocalFileItem) {
+        guard !item.isDirectory else { navigateLocal(into: item); return }
+        NSWorkspace.shared.open(item.url)
+    }
+
+    /// Downloads a remote file into the local pane directory, then opens it
+    /// in its default app (Issue #228).
+    func openRemoteFile(_ item: RemoteFileRecord) async {
+        guard !item.isDirectory else { navigateRemote(into: item); return }
+        _ = await download(remotePath: item.path, toLocalDirectory: localPath)
     }
 
     func openRemoteTableItem(_ item: RemoteFileRecord) {

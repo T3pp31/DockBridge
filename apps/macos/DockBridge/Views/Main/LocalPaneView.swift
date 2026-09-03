@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct LocalPaneView: View {
@@ -22,6 +23,12 @@ struct LocalPaneView: View {
                         if items.count == 1, let item = items.first {
                             Button("Copy Path") {
                                 ClipboardHelper.copy(item.url.path)
+                            }
+                            Button("Open") {
+                                viewModel.openLocalFile(item)
+                            }
+                            Button("Reveal in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([item.url])
                             }
                         }
 
