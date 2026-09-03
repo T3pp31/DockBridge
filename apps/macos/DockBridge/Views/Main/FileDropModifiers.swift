@@ -128,7 +128,10 @@ struct LocalPaneDropModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .dropDestination(for: RemoteFileDragPayload.self) { items, _ in
-                guard viewModel.bridge.isConnected else { return false }
+                guard viewModel.bridge.isConnected else {
+                    viewModel.errorMessage = FileDropError.notConnected.localizedDescription
+                    return false
+                }
                 return acceptRemoteDownloads(items)
             } isTargeted: { targeted in
                 isRemoteDragTargeted = targeted
@@ -143,15 +146,21 @@ struct LocalPaneDropModifier: ViewModifier {
     }
 
     private func acceptRemoteDownloads(_ items: [RemoteFileDragPayload]) -> Bool {
-        FileDropTransferKickoff.acceptRemoteDownloads(items: items, viewModel: viewModel)
+        let accepted = FileDropTransferKickoff.acceptRemoteDownloads(items: items, viewModel: viewModel)
+        if !accepted {
+            viewModel.errorMessage = FileDropError.emptyPayload.localizedDescription
+        }
+        return accepted
     }
 
     private func acceptLocalMoves(_ items: [LocalFileDragPayload]) -> Bool {
         var accepted = false
+        var hasDisplayedItem = false
         for item in items {
             guard FileDropValidation.isDisplayedLocalItem(item, in: viewModel.localTableItems) else {
                 continue
             }
+            hasDisplayedItem = true
             guard FileDropValidation.canMoveLocalItem(from: item.url, to: viewModel.localPath) else {
                 continue
             }
@@ -161,6 +170,9 @@ struct LocalPaneDropModifier: ViewModifier {
             } catch {
                 viewModel.errorMessage = error.dockBridgeUserMessage
             }
+        }
+        if !accepted, hasDisplayedItem {
+            viewModel.errorMessage = FileDropError.invalidMove.localizedDescription
         }
         return accepted
     }
@@ -176,21 +188,30 @@ struct RemotePaneDropModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .dropDestination(for: LocalFileDragPayload.self) { items, _ in
-                guard viewModel.bridge.isConnected else { return false }
+                guard viewModel.bridge.isConnected else {
+                    viewModel.errorMessage = FileDropError.notConnected.localizedDescription
+                    return false
+                }
                 return acceptLocalUploads(items)
             } isTargeted: { targeted in
                 isLocalDragTargeted = targeted
                 isTargeted = isLocalDragTargeted || isExternalDragTargeted || isRemoteDragTargeted
             }
             .dropDestination(for: URL.self) { urls, _ in
-                guard viewModel.bridge.isConnected else { return false }
+                guard viewModel.bridge.isConnected else {
+                    viewModel.errorMessage = FileDropError.notConnected.localizedDescription
+                    return false
+                }
                 return acceptExternalUploads(urls)
             } isTargeted: { targeted in
                 isExternalDragTargeted = targeted
                 isTargeted = isLocalDragTargeted || isExternalDragTargeted || isRemoteDragTargeted
             }
             .dropDestination(for: RemoteFileDragPayload.self) { items, _ in
-                guard viewModel.bridge.isConnected else { return false }
+                guard viewModel.bridge.isConnected else {
+                    viewModel.errorMessage = FileDropError.notConnected.localizedDescription
+                    return false
+                }
                 return acceptRemoteMoves(items)
             } isTargeted: { targeted in
                 isRemoteDragTargeted = targeted
@@ -199,19 +220,31 @@ struct RemotePaneDropModifier: ViewModifier {
     }
 
     private func acceptLocalUploads(_ items: [LocalFileDragPayload]) -> Bool {
-        FileDropTransferKickoff.acceptLocalPayloadUploads(items: items, viewModel: viewModel)
+        let accepted = FileDropTransferKickoff.acceptLocalPayloadUploads(items: items, viewModel: viewModel)
+        if !accepted {
+            viewModel.errorMessage = FileDropError.emptyPayload.localizedDescription
+        }
+        return accepted
     }
 
     private func acceptExternalUploads(_ urls: [URL]) -> Bool {
-        FileDropTransferKickoff.acceptExternalUploads(urls: urls, viewModel: viewModel)
+        let accepted = FileDropTransferKickoff.acceptExternalUploads(urls: urls, viewModel: viewModel)
+        if !accepted {
+            viewModel.errorMessage = FileDropError.emptyPayload.localizedDescription
+        }
+        return accepted
     }
 
     private func acceptRemoteMoves(_ items: [RemoteFileDragPayload]) -> Bool {
-        FileDropTransferKickoff.acceptRemoteMoves(
+        let accepted = FileDropTransferKickoff.acceptRemoteMoves(
             items: items,
             toDirectory: viewModel.remotePath,
             viewModel: viewModel
         )
+        if !accepted {
+            viewModel.errorMessage = FileDropError.emptyPayload.localizedDescription
+        }
+        return accepted
     }
 }
 
