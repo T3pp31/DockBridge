@@ -2,13 +2,35 @@ import SwiftUI
 
 struct TransferQueueView: View {
     @ObservedObject var viewModel: TransferQueueViewModel
+    @Binding var isExpanded: Bool
+
+    private var activeTransferCount: Int {
+        viewModel.tasks.filter { task in
+            switch task.status {
+            case .pending, .inProgress: return true
+            default: return false
+            }
+        }.count
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
             HStack(spacing: 8) {
                 Text("Transfer Queue")
                     .font(.headline)
+
+                if activeTransferCount > 0 {
+                    Text("\(activeTransferCount)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(DesignTokens.Status.connecting.opacity(0.2)))
+                        .accessibilityLabel("\(activeTransferCount) active transfers")
+                }
+
                 Spacer()
+
                 if viewModel.hasFinishedTasks {
                     Menu {
                         Button("Clear Completed") {
@@ -30,25 +52,41 @@ struct TransferQueueView: View {
                 .buttonStyle(.borderless)
                 .fixedSize()
                 .help("Refresh")
+
+                Button {
+                    isExpanded.toggle()
+                } label: {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
+                }
+                .buttonStyle(.borderless)
+                .fixedSize()
+                .help(isExpanded ? "Collapse transfer queue" : "Expand transfer queue")
             }
 
-            if viewModel.tasks.isEmpty {
-                ContentUnavailableView(
-                    "No transfers",
-                    systemImage: "arrow.up.arrow.down.circle",
-                    description: Text("Upload or download files to see progress here.")
-                )
-                .frame(maxWidth: .infinity, minHeight: WindowLayout.transferQueueMinHeight)
-            } else {
-                ExpandingFrame { size in
-                    transferTable
-                        .frame(width: size.width, height: size.height)
-                }
+            if isExpanded {
+                expandedContent
             }
         }
         .frame(maxWidth: .infinity)
         .padding(WindowLayout.panePadding)
         .errorAlert(message: $viewModel.errorMessage)
+    }
+
+    @ViewBuilder
+    private var expandedContent: some View {
+        if viewModel.tasks.isEmpty {
+            ContentUnavailableView(
+                "No transfers",
+                systemImage: "arrow.up.arrow.down.circle",
+                description: Text("Upload or download files to see progress here.")
+            )
+            .frame(maxWidth: .infinity, minHeight: WindowLayout.transferQueueMinHeight)
+        } else {
+            ExpandingFrame { size in
+                transferTable
+                    .frame(width: size.width, height: size.height)
+            }
+        }
     }
 
     private var transferTable: some View {
