@@ -27,6 +27,7 @@
 		67E6AD45895AF44CA96D83BB /* MainViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C973CCD1AFF29E5BC535CC /* MainViewModel.swift */; };
 		5061A717EBE8AB1160ED99D1 /* TransferQueueViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD683D1BCC635FB229692D63 /* TransferQueueViewModel.swift */; };
 		E4EF5F2D30150DB88A95D17E /* ConnectionFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B662D1D9B28F3ED6B42DE7F6 /* ConnectionFormView.swift */; };
+		Cr3D3NT14LPromptSh33t1N5rc /* CredentialPromptSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = Cr3D3NT14LPromptSh33t1L3F /* CredentialPromptSheet.swift */; };
 		8DF8897F5DCB796CC1AA4A0F /* ConnectionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACFD402808165BB5530BCC09 /* ConnectionListView.swift */; };
 		AEEC8329F755346C8087472D /* LocalPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B82BEACF7A445BC9ED50F71A /* LocalPaneView.swift */; };
 		1855FA75811F909D6558F748 /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116D1D17B76FB470390330BC /* MainView.swift */; };
@@ -124,6 +125,7 @@
 		29C973CCD1AFF29E5BC535CC /* MainViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewModel.swift; sourceTree = "<group>"; };
 		CD683D1BCC635FB229692D63 /* TransferQueueViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferQueueViewModel.swift; sourceTree = "<group>"; };
 		B662D1D9B28F3ED6B42DE7F6 /* ConnectionFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionFormView.swift; sourceTree = "<group>"; };
+		Cr3D3NT14LPromptSh33t1L3F /* CredentialPromptSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialPromptSheet.swift; sourceTree = "<group>"; };
 		ACFD402808165BB5530BCC09 /* ConnectionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionListView.swift; sourceTree = "<group>"; };
 		B82BEACF7A445BC9ED50F71A /* LocalPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPaneView.swift; sourceTree = "<group>"; };
 		116D1D17B76FB470390330BC /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
@@ -242,6 +244,7 @@
 			isa = PBXGroup;
 			children = (
 				B662D1D9B28F3ED6B42DE7F6 /* ConnectionFormView.swift */,
+				Cr3D3NT14LPromptSh33t1L3F /* CredentialPromptSheet.swift */,
 				ACFD402808165BB5530BCC09 /* ConnectionListView.swift */,
 			);
 			path = Connection;
@@ -628,6 +631,7 @@
 				67E6AD45895AF44CA96D83BB /* MainViewModel.swift in Sources */,
 				5061A717EBE8AB1160ED99D1 /* TransferQueueViewModel.swift in Sources */,
 				E4EF5F2D30150DB88A95D17E /* ConnectionFormView.swift in Sources */,
+				Cr3D3NT14LPromptSh33t1N5rc /* CredentialPromptSheet.swift in Sources */,
 				8DF8897F5DCB796CC1AA4A0F /* ConnectionListView.swift in Sources */,
 				AEEC8329F755346C8087472D /* LocalPaneView.swift in Sources */,
 				1855FA75811F909D6558F748 /* MainView.swift in Sources */,

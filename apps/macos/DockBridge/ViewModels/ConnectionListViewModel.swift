@@ -279,7 +279,56 @@ final class ConnectionListViewModel: ObservableObject {
         continueConnectAfterWarnings()
     }
 
-    func connect(profile: ConnectionProfile) async {
+    // MARK: - Interactive credential prompt (Issue #213)
+
+    enum CredentialPromptKind {
+        case password
+        case passphrase
+    }
+
+    @Published var pendingCredentialPrompt: (profile: ConnectionProfile, kind: CredentialPromptKind)?
+
+    /// One-time credential supplied by the prompt for the next connect attempt.
+    private var promptPasswordOverride: String?
+    private var promptPassphraseOverride: String?
+
+    func beginPasswordPrompt(for profile: ConnectionProfile) {
+        pendingCredentialPrompt = (profile, .password)
+    }
+
+    func beginPassphrasePrompt(for profile: ConnectionProfile) {
+        pendingCredentialPrompt = (profile, .passphrase)
+    }
+
+    func confirmCredentialPrompt(text: String, saveToKeychain: Bool) {
+        guard let prompt = pendingCredentialPrompt else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let account = keychain.keychainAccount(for: prompt.profile.id, kind: "profile")
+
+        switch prompt.kind {
+        case .password:
+            promptPasswordOverride = trimmed.isEmpty ? nil : trimmed
+            if saveToKeychain, !trimmed.isEmpty {
+                try? keychain.savePassword(trimmed, account: account)
+            }
+        case .passphrase:
+            promptPassphraseOverride = trimmed.isEmpty ? nil : trimmed
+            if saveToKeychain, !trimmed.isEmpty {
+                try? keychain.savePassphrase(trimmed, account: account)
+            }
+        }
+
+        pendingCredentialPrompt = nil
+        Task { await connect(profile: prompt.profile, allowCredentialPrompt: false) }
+    }
+
+    func cancelCredentialPrompt() {
+        pendingCredentialPrompt = nil
+    }
+
+    // MARK: - Connect
+
+    func connect(profile: ConnectionProfile, allowCredentialPrompt: Bool = true) async {
         do {
             if profile.authType == .privateKey {
                 guard let bookmark = profile.privateKeyBookmark else {
@@ -292,17 +341,31 @@ final class ConnectionListViewModel: ObservableObject {
                 try await bookmarkService.withAccess(to: bookmark) { keyURL in
                     var connectProfile = profile
                     connectProfile.privateKeyPath = keyURL.path
-                    try await performConnect(profile: profile, connectProfile: connectProfile)
+                    try await performConnect(
+                        profile: profile,
+                        connectProfile: connectProfile,
+                        allowCredentialPrompt: allowCredentialPrompt
+                    )
                 }
             } else {
-                try await performConnect(profile: profile, connectProfile: profile)
+                try await performConnect(
+                    profile: profile,
+                    connectProfile: profile,
+                    allowCredentialPrompt: allowCredentialPrompt
+                )
             }
         } catch {
-            errorMessage = error.dockBridgeUserMessage
+            if pendingCredentialPrompt == nil {
+                errorMessage = error.dockBridgeUserMessage
+            }
         }
     }
 
-    private func performConnect(profile: ConnectionProfile, connectProfile: ConnectionProfile) async throws {
+    private func performConnect(
+        profile: ConnectionProfile,
+        connectProfile: ConnectionProfile,
+        allowCredentialPrompt: Bool = true
+    ) async throws {
         let account = keychain.keychainAccount(for: profile.id, kind: "profile")
         var password = connectProfile.authType == .password
             ? try keychain.loadPassword(account: account)
@@ -310,17 +373,51 @@ final class ConnectionListViewModel: ObservableObject {
         var passphrase = connectProfile.authType == .privateKey
             ? try keychain.loadPassphrase(account: account)
             : nil
+
+        if password == nil, let override = promptPasswordOverride {
+            password = override
+            promptPasswordOverride = nil
+        }
+        if passphrase == nil, let override = promptPassphraseOverride {
+            passphrase = override
+            promptPassphraseOverride = nil
+        }
+
         defer {
             SensitiveString.clear(&password)
             SensitiveString.clear(&passphrase)
         }
 
-        try await bridge.connect(profile: connectProfile, password: password, passphrase: passphrase)
+        if allowCredentialPrompt, connectProfile.authType == .password,
+           password == nil || password?.isEmpty == true {
+            beginPasswordPrompt(for: profile)
+            return
+        }
+
+        do {
+            try await bridge.connect(profile: connectProfile, password: password, passphrase: passphrase)
+        } catch {
+            if allowCredentialPrompt, Self.isAuthenticationError(error) {
+                if connectProfile.authType == .password {
+                    beginPasswordPrompt(for: profile)
+                } else if connectProfile.authType == .privateKey {
+                    beginPassphrasePrompt(for: profile)
+                }
+            }
+            throw error
+        }
 
         var updated = profile
         updated.lastConnectedAt = Date()
         profiles = try store.upsert(updated)
         selectedProfileID = updated.id
+    }
+
+    private static func isAuthenticationError(_ error: Error) -> Bool {
+        let message = error.dockBridgeUserMessage.lowercased()
+        return message.contains("username and password")
+            || message.contains("authentication")
+            || message.contains("auth failed")
     }
 
     private func profileUsesRsaPrivateKey(_ profile: ConnectionProfile) -> Bool? {
