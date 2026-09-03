@@ -56,6 +56,11 @@ struct LocalPanePathBar: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .help("Refresh")
+
+                Button(action: { viewModel.beginGoToPath(.local) }) {
+                    Image(systemName: "line.3.horizontal")
+                }
+                .help("Go to Path")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -109,6 +114,12 @@ struct RemotePanePathBar: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .help("Refresh")
+                .disabled(!viewModel.bridge.isConnected)
+
+                Button(action: { viewModel.beginGoToPath(.remote) }) {
+                    Image(systemName: "line.3.horizontal")
+                }
+                .help("Go to Path")
                 .disabled(!viewModel.bridge.isConnected)
             }
         }
