@@ -165,6 +165,7 @@ final class MainViewModel: ObservableObject {
 
     private let settings: AppSettingsService
     private let bookmarkService: SecurityScopedBookmarkService
+    private let pathBookmarkStore: PathBookmarkStore
     private var defaultLocalAccessURL: URL?
     private var localLoadGeneration = 0
     private var remoteLoadGeneration = 0
@@ -186,12 +187,14 @@ final class MainViewModel: ObservableObject {
     init(
         settings: AppSettingsService = .shared,
         bookmarkService: SecurityScopedBookmarkService = .shared,
+        pathBookmarkStore: PathBookmarkStore = .shared,
         bridge: RustBridgeService,
         connectionList: ConnectionListViewModel,
         transferQueue: TransferQueueViewModel
     ) {
         self.settings = settings
         self.bookmarkService = bookmarkService
+        self.pathBookmarkStore = pathBookmarkStore
         self.bridge = bridge
         self.connectionList = connectionList
         self.transferQueue = transferQueue
@@ -298,6 +301,13 @@ final class MainViewModel: ObservableObject {
 
     func onConnectionChanged(isConnected: Bool) async {
         guard isConnected else {
+            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID {
+                connectionList.saveSessionPaths(
+                    for: profileID,
+                    localPath: localPath.path,
+                    remotePath: remotePath
+                )
+            }
             applyRemotePath("/", recordHistory: false)
             remoteHistory.reset(to: "/")
             remoteItems = []
@@ -310,9 +320,72 @@ final class MainViewModel: ObservableObject {
 
         do {
             try await prepareRemoteWorkingDirectory()
+            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID,
+               let profile = connectionList.profiles.first(where: { $0.id == profileID }),
+               let savedRemotePath = profile.lastRemotePath,
+               !savedRemotePath.isEmpty {
+                applyRemotePath(savedRemotePath, recordHistory: false)
+                remoteHistory.reset(to: savedRemotePath)
+                await reloadRemote()
+            }
+            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID,
+               let profile = connectionList.profiles.first(where: { $0.id == profileID }),
+               let savedLocalPath = profile.lastLocalPath,
+               !savedLocalPath.isEmpty {
+                applyLocalPath(URL(fileURLWithPath: savedLocalPath, isDirectory: true), recordHistory: false)
+                reloadLocal()
+            }
         } catch {
             errorMessage = error.dockBridgeUserMessage
         }
+    }
+
+    var activeProfileID: UUID? {
+        connectionList.connectedProfileID ?? connectionList.selectedProfileID
+    }
+
+    func localBookmarks() -> [PathBookmark] {
+        pathBookmarkStore.bookmarks(for: .local, profileID: activeProfileID)
+    }
+
+    func remoteBookmarks() -> [PathBookmark] {
+        pathBookmarkStore.bookmarks(for: .remote, profileID: activeProfileID)
+    }
+
+    func bookmarkCurrentLocalPath() {
+        let name = localPath.lastPathComponent.isEmpty ? localPath.path : localPath.lastPathComponent
+        pathBookmarkStore.add(PathBookmark(
+            name: name,
+            path: localPath.path,
+            pane: .local,
+            profileID: activeProfileID
+        ))
+    }
+
+    func bookmarkCurrentRemotePath() {
+        let name = (remotePath as NSString).lastPathComponent
+        let displayName = name.isEmpty ? remotePath : name
+        pathBookmarkStore.add(PathBookmark(
+            name: displayName,
+            path: remotePath,
+            pane: .remote,
+            profileID: activeProfileID
+        ))
+    }
+
+    func jumpToBookmark(_ bookmark: PathBookmark) {
+        switch bookmark.pane {
+        case .local:
+            applyLocalPath(URL(fileURLWithPath: bookmark.path, isDirectory: true))
+            reloadLocal()
+        case .remote:
+            applyRemotePath(bookmark.path)
+            Task { await reloadRemote() }
+        }
+    }
+
+    func removeBookmark(_ bookmark: PathBookmark) {
+        pathBookmarkStore.remove(id: bookmark.id)
     }
 
     func prepareRemoteWorkingDirectory() async throws {

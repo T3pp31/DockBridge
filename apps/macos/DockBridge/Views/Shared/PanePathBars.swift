@@ -34,6 +34,13 @@ struct LocalPanePathBar: View {
             showRevealInFinder: true
         ) {
             ControlGroup {
+                PathBookmarkMenu(
+                    bookmarks: viewModel.localBookmarks(),
+                    onBookmarkCurrent: viewModel.bookmarkCurrentLocalPath,
+                    onSelect: viewModel.jumpToBookmark,
+                    onRemove: viewModel.removeBookmark
+                )
+
                 Button(action: viewModel.navigateLocalBack) {
                     Image(systemName: "chevron.left")
                 }
@@ -93,6 +100,14 @@ struct RemotePanePathBar: View {
                 : nil
         ) {
             ControlGroup {
+                PathBookmarkMenu(
+                    bookmarks: viewModel.remoteBookmarks(),
+                    onBookmarkCurrent: viewModel.bookmarkCurrentRemotePath,
+                    onSelect: viewModel.jumpToBookmark,
+                    onRemove: viewModel.removeBookmark
+                )
+                .disabled(!viewModel.bridge.isConnected)
+
                 Button(action: viewModel.navigateRemoteBack) {
                     Image(systemName: "chevron.left")
                 }

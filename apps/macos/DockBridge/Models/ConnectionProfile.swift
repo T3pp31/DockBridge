@@ -10,6 +10,8 @@ struct ConnectionProfile: Identifiable, Codable, Equatable, Sendable {
     var privateKeyPath: String?
     var privateKeyBookmark: Data?
     var lastConnectedAt: Date?
+    var lastLocalPath: String?
+    var lastRemotePath: String?
 
     init(
         id: UUID = UUID(),
@@ -20,7 +22,9 @@ struct ConnectionProfile: Identifiable, Codable, Equatable, Sendable {
         authType: AuthType = .password,
         privateKeyPath: String? = nil,
         privateKeyBookmark: Data? = nil,
-        lastConnectedAt: Date? = nil
+        lastConnectedAt: Date? = nil,
+        lastLocalPath: String? = nil,
+        lastRemotePath: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -31,6 +35,8 @@ struct ConnectionProfile: Identifiable, Codable, Equatable, Sendable {
         self.privateKeyPath = privateKeyPath
         self.privateKeyBookmark = privateKeyBookmark
         self.lastConnectedAt = lastConnectedAt
+        self.lastLocalPath = lastLocalPath
+        self.lastRemotePath = lastRemotePath
     }
 
     var displayName: String {

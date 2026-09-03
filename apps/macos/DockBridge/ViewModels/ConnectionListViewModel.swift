@@ -460,7 +460,7 @@ final class ConnectionListViewModel: ObservableObject {
         }
     }
 
-    /// One-click reconnect to the selected (or last-connected) profile
+/// One-click reconnect to the selected (or last-connected) profile
     /// (Issue #223). Safe to call while connected: it disconnects first.
     func reconnect() {
         guard let profile = profiles.first(where: { $0.id == selectedProfileID })
@@ -472,6 +472,21 @@ final class ConnectionListViewModel: ObservableObject {
                 await disconnect()
             }
             await connect(profile: profile)
+        }
+    }
+
+    func saveSessionPaths(for profileID: UUID, localPath: String?, remotePath: String?) {
+        guard var profile = profiles.first(where: { $0.id == profileID }) else { return }
+        if let localPath {
+            profile.lastLocalPath = localPath
+        }
+        if let remotePath {
+            profile.lastRemotePath = remotePath
+        }
+        do {
+            profiles = try store.upsert(profile)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }
