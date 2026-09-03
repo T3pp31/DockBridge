@@ -94,6 +94,11 @@ struct ConnectionListView: View {
                         Task { await viewModel.disconnect() }
                     }
                     .disabled(!viewModel.connectionStatus.isConnected)
+
+                    Button("Reconnect") {
+                        viewModel.reconnect()
+                    }
+                    .disabled(viewModel.connectionStatus.isConnecting)
                 }
             }
         }

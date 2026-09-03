@@ -351,4 +351,19 @@ final class ConnectionListViewModel: ObservableObject {
             errorMessage = error.localizedDescription
         }
     }
+
+    /// One-click reconnect to the selected (or last-connected) profile
+    /// (Issue #223). Safe to call while connected: it disconnects first.
+    func reconnect() {
+        guard let profile = profiles.first(where: { $0.id == selectedProfileID })
+            ?? profiles.first(where: { $0.id == connectedProfileID })
+            ?? profiles.first
+        else { return }
+        Task {
+            if connectionStatus.isConnected || connectionStatus.isConnecting {
+                await disconnect()
+            }
+            await connect(profile: profile)
+        }
+    }
 }
