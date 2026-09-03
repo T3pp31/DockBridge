@@ -92,7 +92,9 @@ struct TransferQueueView: View {
     private var transferTable: some View {
         Table(viewModel.tasks) {
             TableColumn("Direction") { task in
-                Text(task.direction == .upload ? "Upload" : "Download")
+                Image(systemName: task.direction == .upload ? "arrow.up" : "arrow.down")
+                    .help(task.direction == .upload ? "Upload" : "Download")
+                    .accessibilityLabel(task.direction == .upload ? "Upload" : "Download")
             }
             TableColumn("Local") { task in
                 Text((task.localPath as NSString).lastPathComponent)
@@ -106,20 +108,28 @@ struct TransferQueueView: View {
                 statusView(for: task)
             }
             TableColumn("") { task in
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     if canRetry(task: task) {
-                        Button("Retry") {
+                        Button {
                             Task { await viewModel.retry(task: task) }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
                         }
+                        .buttonStyle(.borderless)
+                        .help("Retry")
                     }
                     if canCancel(task: task) {
-                        Button("Cancel") {
+                        Button {
                             Task { await viewModel.cancel(task: task) }
+                        } label: {
+                            Image(systemName: "xmark")
                         }
+                        .buttonStyle(.borderless)
+                        .help("Cancel")
                     }
                 }
             }
-            .width(120)
+            .width(72)
         }
     }
 
@@ -131,19 +141,18 @@ struct TransferQueueView: View {
                total: task.totalBytes,
                bytesPerSecond: viewModel.bytesPerSecond(for: task)
            ) {
-            VStack(alignment: .leading, spacing: 4) {
-                Label("In Progress", systemImage: "arrow.up.arrow.down.circle")
-                    .font(.caption.weight(.semibold))
-                    .accessibilityHidden(true)
+            HStack(spacing: 8) {
                 ProgressView(
                     value: Double(task.bytesTransferred),
                     total: Double(task.totalBytes)
                 )
-                .monospacedDigit()
+                .controlSize(.small)
+                .frame(minWidth: 80)
                 Text(progressLabel)
-                    .font(.caption)
-                    .monospacedDigit()
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("In progress, \(progressLabel)")
