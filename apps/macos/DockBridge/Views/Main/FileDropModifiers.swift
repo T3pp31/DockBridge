@@ -290,6 +290,20 @@ struct LocalFileTable: View {
             ForEach(sortedItems, id: \.id) { item in
                 TableRow(item)
                     .draggable(LocalFileDragPayload(url: item.url, isDirectory: item.isDirectory))
+                    .dropDestination(for: LocalFileDragPayload.self) { items in
+                        guard item.isDirectory,
+                              let target = FileDropValidation.destinationDirectory(forLocalDropOn: item) else {
+                            return
+                        }
+                        for payload in items {
+                            guard FileDropValidation.canMoveLocalItem(from: payload.url, to: target) else { continue }
+                            do {
+                                try viewModel.moveLocalItem(from: payload.url, toDirectory: target)
+                            } catch {
+                                viewModel.errorMessage = error.dockBridgeUserMessage
+                            }
+                        }
+                    }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -339,6 +353,20 @@ struct RemoteFileTable: View {
             ForEach(sortedItems, id: \.id) { item in
                 TableRow(item)
                     .draggable(RemoteFileDragPayload(path: item.path, isDirectory: item.isDirectory))
+                    .dropDestination(for: LocalFileDragPayload.self) { items in
+                        guard item.isDirectory,
+                              let target = FileDropValidation.destinationDirectory(forRemoteDropOn: item) else {
+                            return
+                        }
+                        Task { await viewModel.uploadPayloads(items, intoRemoteDirectory: target) }
+                    }
+                    .dropDestination(for: RemoteFileDragPayload.self) { items in
+                        guard item.isDirectory,
+                              let target = FileDropValidation.destinationDirectory(forRemoteDropOn: item) else {
+                            return
+                        }
+                        Task { await viewModel.moveRemotePayloads(items, intoRemoteDirectory: target) }
+                    }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
