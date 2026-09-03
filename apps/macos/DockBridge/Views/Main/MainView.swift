@@ -159,6 +159,7 @@ struct MainView: View {
                 UpdateAvailableView(
                     update: update,
                     currentVersion: VersionComparator.currentAppVersion,
+                    inAppUpdateInstallationEnabled: updateCheck.inAppUpdateInstallationEnabled,
                     isDownloading: updateCheck.isDownloadingUpdate,
                     downloadErrorMessage: updateCheck.downloadErrorMessage,
                     onDownload: {

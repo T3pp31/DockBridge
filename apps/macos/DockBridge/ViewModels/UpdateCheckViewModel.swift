@@ -39,11 +39,22 @@ final class UpdateCheckViewModel: ObservableObject {
         presentIfAllowed(isHostKeyBlocking: false)
     }
 
+    var inAppUpdateInstallationEnabled: Bool {
+        AppUpdateConfig.inAppUpdateInstallationEnabled
+    }
+
     func downloadUpdate() async {
         guard let pendingUpdate, !isDownloadingUpdate else { return }
 
-        if pendingUpdate.downloadURL == pendingUpdate.releasePageURL {
+        if !inAppUpdateInstallationEnabled
+            || pendingUpdate.downloadURL == pendingUpdate.releasePageURL {
             NSWorkspace.shared.open(pendingUpdate.releasePageURL)
+            if !inAppUpdateInstallationEnabled {
+                downloadErrorMessage = """
+                In-app installation is disabled until release builds are signed and notarized. \
+                Download the update manually from the release page and verify it before installing.
+                """
+            }
             return
         }
 

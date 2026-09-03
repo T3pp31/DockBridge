@@ -219,6 +219,7 @@ Entitlements not granted include `network.server`, `temporary-exception.files.ab
 - Hardened Runtime enabled for Release builds
 - GitHub Release workflow (`.github/workflows/release.yml`) sets `SIGN_AND_NOTARIZE=false` and publishes unsigned DMGs (`CODE_SIGNING_ALLOWED=NO` during the Xcode build)
 - Developer ID signing, Apple Notarization, and Gatekeeper verification are planned for v1.0; the scripts below are ready when repository secrets are configured
+- **In-app update installation** (`Download update` in the app) is disabled until `require_signed_updates` or `require_notarized_updates` is enabled in `config/release.toml`. Until then, the app opens the GitHub release page only. When verification is disabled, `ReleaseCodeSignatureVerifier` checks only `CFBundleIdentifier`, which is **not** sufficient to prove authenticity — an attacker could ship a DMG with a matching bundle ID.
 
 #### Release signing pipeline (planned for v1.0)
 

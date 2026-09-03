@@ -4,6 +4,7 @@ struct UpdateAvailableView: View {
     let update: AppUpdateInfo
     let currentVersion: String
     var releaseNotes: String? = nil
+    var inAppUpdateInstallationEnabled: Bool = true
     let isDownloading: Bool
     let downloadErrorMessage: String?
     let onDownload: () -> Void
@@ -33,9 +34,18 @@ struct UpdateAvailableView: View {
                 }
             }
 
-            DialogFootnote(
-                text: "Download the latest DMG, verify its signature, then replace the app in Applications."
-            )
+            if inAppUpdateInstallationEnabled {
+                DialogFootnote(
+                    text: "Download the latest DMG, verify its signature, then replace the app in Applications."
+                )
+            } else {
+                DialogFootnote(
+                    text: """
+                    In-app installation is disabled until signed and notarized releases are available. \
+                    Open the release page to download the DMG manually and verify it before installing.
+                    """
+                )
+            }
 
             if let downloadErrorMessage {
                 Text(downloadErrorMessage)
@@ -56,7 +66,7 @@ struct UpdateAvailableView: View {
         } footer: {
             Button("Later", role: .cancel, action: onLater)
                 .disabled(isDownloading)
-            Button("Download", action: onDownload)
+            Button(inAppUpdateInstallationEnabled ? "Download" : "Open Release Page", action: onDownload)
                 .keyboardShortcut(.defaultAction)
                 .disabled(isDownloading)
         }
