@@ -1,5 +1,9 @@
 import SwiftUI
 
+/// Path-bar placement policy (Issue #219): the pane path bars keep navigation
+/// (back/forward/parent/refresh) and the breadcrumb. The primary transfer
+/// actions (Upload / Download / New Folder) live once, in the window toolbar,
+/// so the path bars no longer duplicate them or force a prominent second copy.
 private struct PathBarChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
@@ -29,41 +33,29 @@ struct LocalPanePathBar: View {
             onBreadcrumbSelect: { viewModel.navigateLocal(to: $0) },
             showRevealInFinder: true
         ) {
-            HStack(spacing: 8) {
-                ControlGroup {
-                    Button(action: viewModel.navigateLocalBack) {
-                        Image(systemName: "chevron.left")
-                    }
-                    .help("Back")
-                    .disabled(!viewModel.canNavigateLocalBack)
-
-                    Button(action: viewModel.navigateLocalForward) {
-                        Image(systemName: "chevron.right")
-                    }
-                    .help("Forward")
-                    .disabled(!viewModel.canNavigateLocalForward)
-
-                    Button(action: viewModel.navigateLocalUp) {
-                        Image(systemName: "arrow.up.circle")
-                    }
-                    .help("Parent directory")
-                    .disabled(!viewModel.canNavigateLocalUp)
-
-                    Button(action: viewModel.reloadLocal) {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .help("Refresh")
+            ControlGroup {
+                Button(action: viewModel.navigateLocalBack) {
+                    Image(systemName: "chevron.left")
                 }
+                .help("Back")
+                .disabled(!viewModel.canNavigateLocalBack)
 
-                ControlGroup {
-                    Button {
-                        Task { await viewModel.uploadSelected() }
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                    .help("Upload")
-                    .disabled(viewModel.selectedLocalItem == nil || !viewModel.bridge.isConnected)
+                Button(action: viewModel.navigateLocalForward) {
+                    Image(systemName: "chevron.right")
                 }
+                .help("Forward")
+                .disabled(!viewModel.canNavigateLocalForward)
+
+                Button(action: viewModel.navigateLocalUp) {
+                    Image(systemName: "arrow.up.circle")
+                }
+                .help("Parent directory")
+                .disabled(!viewModel.canNavigateLocalUp)
+
+                Button(action: viewModel.reloadLocal) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .help("Refresh")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -92,52 +84,32 @@ struct RemotePanePathBar: View {
                 ? { viewModel.navigateRemote(to: $0) }
                 : nil
         ) {
-            HStack(spacing: 8) {
-                ControlGroup {
-                    Button(action: viewModel.navigateRemoteBack) {
-                        Image(systemName: "chevron.left")
-                    }
-                    .help("Back")
-                    .disabled(!viewModel.bridge.isConnected || !viewModel.canNavigateRemoteBack)
-
-                    Button(action: viewModel.navigateRemoteForward) {
-                        Image(systemName: "chevron.right")
-                    }
-                    .help("Forward")
-                    .disabled(!viewModel.bridge.isConnected || !viewModel.canNavigateRemoteForward)
-
-                    Button(action: viewModel.navigateRemoteUp) {
-                        Image(systemName: "arrow.up.circle")
-                    }
-                    .help("Parent directory")
-                    .disabled(!viewModel.bridge.isConnected || !viewModel.canNavigateRemoteUp)
-
-                    Button {
-                        Task { await viewModel.reloadRemote() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .help("Refresh")
-                    .disabled(!viewModel.bridge.isConnected)
+            ControlGroup {
+                Button(action: viewModel.navigateRemoteBack) {
+                    Image(systemName: "chevron.left")
                 }
+                .help("Back")
+                .disabled(!viewModel.bridge.isConnected || !viewModel.canNavigateRemoteBack)
 
-                ControlGroup {
-                    Button {
-                        Task { await viewModel.downloadSelected() }
-                    } label: {
-                        Image(systemName: "square.and.arrow.down")
-                    }
-                    .help("Download")
-                    .disabled(viewModel.selectedRemoteItem == nil || !viewModel.bridge.isConnected)
-
-                    Button {
-                        viewModel.showMkdirPrompt = true
-                    } label: {
-                        Image(systemName: "folder.badge.plus")
-                    }
-                    .help("New Folder")
-                    .disabled(!viewModel.bridge.isConnected)
+                Button(action: viewModel.navigateRemoteForward) {
+                    Image(systemName: "chevron.right")
                 }
+                .help("Forward")
+                .disabled(!viewModel.bridge.isConnected || !viewModel.canNavigateRemoteForward)
+
+                Button(action: viewModel.navigateRemoteUp) {
+                    Image(systemName: "arrow.up.circle")
+                }
+                .help("Parent directory")
+                .disabled(!viewModel.bridge.isConnected || !viewModel.canNavigateRemoteUp)
+
+                Button {
+                    Task { await viewModel.reloadRemote() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .help("Refresh")
+                .disabled(!viewModel.bridge.isConnected)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
