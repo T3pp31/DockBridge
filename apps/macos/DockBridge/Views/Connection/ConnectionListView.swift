@@ -34,6 +34,11 @@ struct ConnectionListView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(
+                            isRowActive(profile) ? Color.primary.opacity(0.06) : Color.clear
+                        )
                         .tag(profile.id)
                     }
                 }
@@ -174,16 +179,21 @@ struct ConnectionListView: View {
     @ViewBuilder
     private func connectionIndicator(for profile: ConnectionProfile) -> some View {
         let isActiveProfile = viewModel.connectedProfileID == profile.id
+        let status = viewModel.connectionStatus
 
-        if isActiveProfile,
-           viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting
-        {
-            ConnectionStatusIndicator(status: viewModel.connectionStatus)
-        } else {
-            Image(systemName: "circle")
-                .foregroundStyle(.clear)
-                .accessibilityHidden(true)
+        Group {
+            if isActiveProfile && (status.isConnected || status.isConnecting) {
+                ConnectionStatusIndicator(status: status)
+            } else {
+                // Reserved indicator slot keeps row alignment stable while a
+                // profile is not connected (Issue #226, preserving #146's
+                // non-color shape cue).
+                Image(systemName: "circle")
+                    .foregroundStyle(.clear)
+                    .accessibilityHidden(true)
+            }
         }
+        .frame(width: 18, height: 18)
     }
 
     private func singleSelectedProfile(from ids: Set<UUID>) -> ConnectionProfile? {
@@ -193,5 +203,10 @@ struct ConnectionListView: View {
 
     private func isConnectedProfile(_ profile: ConnectionProfile) -> Bool {
         viewModel.connectedProfileID == profile.id && viewModel.connectionStatus.isConnected
+    }
+
+    private func isRowActive(_ profile: ConnectionProfile) -> Bool {
+        viewModel.connectedProfileID == profile.id
+            && (viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting)
     }
 }
