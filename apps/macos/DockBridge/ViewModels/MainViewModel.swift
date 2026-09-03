@@ -155,6 +155,9 @@ final class MainViewModel: ObservableObject {
     @Published var renameText = ""
     @Published var showMkdirPrompt = false
     @Published var mkdirName = ""
+    @Published var showOverwriteAsk = false
+    @Published var overwriteAskDestination = ""
+    private var pendingTransferAction: (() async -> Void)?
 
     let bridge: RustBridgeService
     let connectionList: ConnectionListViewModel
@@ -546,17 +549,28 @@ final class MainViewModel: ObservableObject {
             return false
         }
 
+        let fileName = localURL.lastPathComponent
+        let destinationPath: String
         do {
-            try await prepareRemoteWorkingDirectory()
             let directory = toRemoteDirectory == "/" ? remotePath : toRemoteDirectory
             let normalizedDirectory = try RemotePath.normalize(directory)
-            try await bridge.upload(localPath: localURL.path, remoteDirectory: normalizedDirectory)
-            await transferQueue.refresh()
-            await reloadRemote()
-            return true
+            destinationPath = RemotePath.join(normalizedDirectory, fileName)
         } catch {
             errorMessage = error.dockBridgeUserMessage
             return false
+        }
+
+        return await runTransferOrAsk(destinationPath: destinationPath) {
+            do {
+                try await self.prepareRemoteWorkingDirectory()
+                let directory = toRemoteDirectory == "/" ? self.remotePath : toRemoteDirectory
+                let normalizedDirectory = try RemotePath.normalize(directory)
+                try await self.bridge.upload(localPath: localURL.path, remoteDirectory: normalizedDirectory)
+                await self.transferQueue.refresh()
+                await self.reloadRemote()
+            } catch {
+                self.errorMessage = error.dockBridgeUserMessage
+            }
         }
     }
 
@@ -567,16 +581,83 @@ final class MainViewModel: ObservableObject {
             return false
         }
 
-        do {
-            let normalizedRemotePath = try RemotePath.normalize(remotePath)
-            try await bridge.download(remotePath: normalizedRemotePath, localDirectory: toLocalDirectory.path)
-            await transferQueue.refresh()
-            reloadLocal()
-            return true
-        } catch {
-            errorMessage = error.dockBridgeUserMessage
-            return false
+        let fileName = (remotePath as NSString).lastPathComponent
+        let destinationPath = toLocalDirectory.appendingPathComponent(fileName).path
+
+        return await runTransferOrAsk(destinationPath: destinationPath) {
+            do {
+                let normalizedRemotePath = try RemotePath.normalize(remotePath)
+                try await self.bridge.download(
+                    remotePath: normalizedRemotePath,
+                    localDirectory: toLocalDirectory.path
+                )
+                await self.transferQueue.refresh()
+                self.reloadLocal()
+            } catch {
+                self.errorMessage = error.dockBridgeUserMessage
+            }
         }
+    }
+
+    func confirmOverwriteAsk() {
+        showOverwriteAsk = false
+        let action = pendingTransferAction
+        pendingTransferAction = nil
+        overwriteAskDestination = ""
+        if let action {
+            Task { await action() }
+        }
+    }
+
+    func cancelOverwriteAsk() {
+        showOverwriteAsk = false
+        pendingTransferAction = nil
+        overwriteAskDestination = ""
+    }
+
+    private func runTransferOrAsk(
+        destinationPath: String,
+        perform: @escaping () async -> Void
+    ) async -> Bool {
+        let policy = settings.loadConfig().transferOverwritePolicy
+
+        switch policy {
+        case .replace:
+            await perform()
+            return errorMessage == nil
+
+        case .failIfExists:
+            if await destinationExists(at: destinationPath) {
+                errorMessage = "A file already exists at the destination."
+                return false
+            }
+            await perform()
+            return errorMessage == nil
+
+        case .ask:
+            if await destinationExists(at: destinationPath) {
+                overwriteAskDestination = destinationPath
+                pendingTransferAction = perform
+                showOverwriteAsk = true
+                return false
+            }
+            await perform()
+            return errorMessage == nil
+        }
+    }
+
+    private func destinationExists(at path: String) async -> Bool {
+        if path.hasPrefix("/") {
+            return await remoteDestinationExists(path: path)
+        }
+        return FileManager.default.fileExists(atPath: path)
+    }
+
+    private func remoteDestinationExists(path: String) async -> Bool {
+        guard let parent = try? RemotePath.parent(of: path) else { return false }
+        let name = (path as NSString).lastPathComponent
+        guard let items = try? await bridge.listDirectory(path: parent) else { return false }
+        return items.contains { $0.name == name && !$0.isParentDirectory }
     }
 
     func moveLocalItem(from source: URL, toDirectory directory: URL) throws {

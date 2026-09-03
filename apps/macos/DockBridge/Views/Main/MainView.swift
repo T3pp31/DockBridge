@@ -135,6 +135,13 @@ struct MainView: View {
                 showSettings = false
             }
         }
+        .sheet(isPresented: $viewModel.showOverwriteAsk) {
+            OverwriteAskSheet(
+                destinationLabel: viewModel.overwriteAskDestination,
+                onKeep: viewModel.cancelOverwriteAsk,
+                onReplace: viewModel.confirmOverwriteAsk
+            )
+        }
         .onReceive(NotificationCenter.default.publisher(for: .appConfigDidChange)) { notification in
             guard let config = notification.object as? AppConfig else { return }
             viewModel.applyDefaultLocalConfig(config)

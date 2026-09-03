@@ -32,6 +32,7 @@ enum AppSettingsKeys {
     static let directoryWalkMaxFiles = "directoryWalkMaxFiles"
     static let directoryWalkMaxDepth = "directoryWalkMaxDepth"
     static let directoryWalkMaxTotalBytes = "directoryWalkMaxTotalBytes"
+    static let transferOverwritePolicy = "transferOverwritePolicy"
     static let skippedUpdateVersion = "skippedUpdateVersion"
 }
 
@@ -70,6 +71,7 @@ final class AppSettingsService: @unchecked Sendable {
             AppSettingsKeys.directoryWalkMaxFiles: Int(AppConfig.default.directoryWalkMaxFiles),
             AppSettingsKeys.directoryWalkMaxDepth: Int(AppConfig.default.directoryWalkMaxDepth),
             AppSettingsKeys.directoryWalkMaxTotalBytes: Int(AppConfig.default.directoryWalkMaxTotalBytes),
+            AppSettingsKeys.transferOverwritePolicy: AppConfig.default.transferOverwritePolicy.rawValue,
         ])
     }
 
@@ -114,7 +116,11 @@ final class AppSettingsService: @unchecked Sendable {
             directoryWalkMaxTotalBytes: UInt64(
                 defaults.object(forKey: AppSettingsKeys.directoryWalkMaxTotalBytes) as? Int
                     ?? Int(AppConfig.default.directoryWalkMaxTotalBytes)
-            )
+            ),
+            transferOverwritePolicy: TransferOverwritePolicy(
+                rawValue: defaults.string(forKey: AppSettingsKeys.transferOverwritePolicy)
+                    ?? AppConfig.default.transferOverwritePolicy.rawValue
+            ) ?? AppConfig.default.transferOverwritePolicy
         )
     }
 
@@ -135,6 +141,7 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(Int(config.directoryWalkMaxFiles), forKey: AppSettingsKeys.directoryWalkMaxFiles)
         defaults.set(Int(config.directoryWalkMaxDepth), forKey: AppSettingsKeys.directoryWalkMaxDepth)
         defaults.set(Int(config.directoryWalkMaxTotalBytes), forKey: AppSettingsKeys.directoryWalkMaxTotalBytes)
+        defaults.set(config.transferOverwritePolicy.rawValue, forKey: AppSettingsKeys.transferOverwritePolicy)
         NotificationCenter.default.post(name: .appConfigDidChange, object: config)
     }
 

@@ -17,6 +17,7 @@ struct AppConfig: Codable, Equatable, Sendable {
     var directoryWalkMaxFiles: UInt64
     var directoryWalkMaxDepth: UInt32
     var directoryWalkMaxTotalBytes: UInt64
+    var transferOverwritePolicy: TransferOverwritePolicy = .replace
 
     static let `default` = AppConfig(
         connectionTimeoutSecs: 30,
@@ -34,7 +35,8 @@ struct AppConfig: Codable, Equatable, Sendable {
         failConnectOnOpensshMergeError: true,
         directoryWalkMaxFiles: 100_000,
         directoryWalkMaxDepth: 64,
-        directoryWalkMaxTotalBytes: 107_374_182_400
+        directoryWalkMaxTotalBytes: 107_374_182_400,
+        transferOverwritePolicy: .replace
     )
 
     func toRecord(knownHostsPath: String, opensshKnownHostsPath: String) -> AppConfigRecord {
