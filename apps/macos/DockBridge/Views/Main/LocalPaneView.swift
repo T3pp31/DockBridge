@@ -19,7 +19,7 @@ struct LocalPaneView: View {
                                 ClipboardHelper.copy(item.url.path)
                             }
                             Button("Upload") {
-                                viewModel.selectedLocalItemID = item.id
+                                viewModel.selectedLocalItemIDs = [item.id]
                                 Task { await viewModel.uploadSelected() }
                             }
                         }

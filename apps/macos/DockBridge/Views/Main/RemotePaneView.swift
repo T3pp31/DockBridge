@@ -20,7 +20,7 @@ struct RemotePaneView: View {
                                     ClipboardHelper.copy(item.path)
                                 }
                                 Button("Download") {
-                                    viewModel.selectedRemoteItemID = item.id
+                                    viewModel.selectedRemoteItemIDs = [item.id]
                                     Task { await viewModel.downloadSelected() }
                                 }
                                 Button("Rename") {

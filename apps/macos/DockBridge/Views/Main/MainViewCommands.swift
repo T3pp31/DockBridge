@@ -18,7 +18,7 @@ struct MainViewCommands: Commands {
                 Label("Upload", systemImage: "square.and.arrow.up")
             }
             .keyboardShortcut("u", modifiers: [.command])
-            .disabled(viewModel.selectedLocalItem == nil || !viewModel.bridge.isConnected)
+            .disabled(viewModel.selectedLocalItems.isEmpty || !viewModel.bridge.isConnected)
 
             Button {
                 Task { await viewModel.downloadSelected() }
@@ -26,7 +26,7 @@ struct MainViewCommands: Commands {
                 Label("Download", systemImage: "square.and.arrow.down")
             }
             .keyboardShortcut("d", modifiers: [.command])
-            .disabled(viewModel.selectedRemoteItem == nil || !viewModel.bridge.isConnected)
+            .disabled(viewModel.selectedRemoteItems.isEmpty || !viewModel.bridge.isConnected)
         }
 
         CommandGroup(after: .saveItem) {
