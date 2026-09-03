@@ -182,7 +182,37 @@ struct MainView: View {
         .onChange(of: bridge.isConnected) { _, isConnected in
             Task { await viewModel.onConnectionChanged(isConnected: isConnected) }
         }
-        .errorAlert(message: $viewModel.errorMessage)
+        .alert(
+            "Error",
+            isPresented: Binding(
+                get: { viewModel.errorMessage != nil },
+                set: { if !$0 { viewModel.errorMessage = nil } }
+            )
+        ) {
+            switch viewModel.errorRecoveryKind {
+            case .editConnection:
+                Button("Edit Connection") {
+                    viewModel.errorMessage = nil
+                    editingProfile = viewModel.selectedConnectionProfile
+                }
+                Button("OK", role: .cancel) {
+                    viewModel.errorMessage = nil
+                }
+            case .reconnect:
+                Button("Reconnect") {
+                    viewModel.reconnect()
+                }
+                Button("OK", role: .cancel) {
+                    viewModel.errorMessage = nil
+                }
+            case .none:
+                Button("OK", role: .cancel) {
+                    viewModel.errorMessage = nil
+                }
+            }
+        } message: {
+            Text(viewModel.errorMessage ?? "")
+        }
         .windowMinSize(
             width: WindowLayout.mainMinWidth,
             height: WindowLayout.mainMinHeight

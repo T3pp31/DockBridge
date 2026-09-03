@@ -36,6 +36,11 @@ final class MainViewModel: ObservableObject {
         return localTableItems.first { $0.id == selectedLocalItemID }
     }
 
+    var selectedConnectionProfile: ConnectionProfile? {
+        guard let id = connectionList.selectedProfileID else { return nil }
+        return connectionList.profiles.first { $0.id == id }
+    }
+
     var selectedRemoteTableItem: RemoteFileRecord? {
         guard let selectedRemoteItemID else { return nil }
         return remoteTableItems.first { $0.id == selectedRemoteItemID }
@@ -503,5 +508,46 @@ final class MainViewModel: ObservableObject {
         } catch {
             errorMessage = error.dockBridgeUserMessage
         }
+    }
+
+    // MARK: - Error recovery actions (Issue #225)
+
+    enum ErrorRecoveryKind {
+        case none
+        case reconnect
+        case editConnection
+    }
+
+    var errorRecoveryKind: ErrorRecoveryKind {
+        guard let message = errorMessage else { return .none }
+        return Self.recoveryKind(for: message, isDisconnected: !bridge.isConnected)
+    }
+
+    static func recoveryKind(for message: String, isDisconnected: Bool) -> ErrorRecoveryKind {
+        let lowered = message.lowercased()
+        if lowered.contains("authentication")
+            || lowered.contains("password")
+            || lowered.contains("passphrase")
+            || lowered.contains("credentials")
+            || lowered.contains("permission denied") {
+            return .editConnection
+        }
+        if isDisconnected {
+            return .reconnect
+        }
+        return .none
+    }
+
+    func reconnect() {
+        guard let profile = selectedConnectionProfile else { return }
+        if bridge.isConnected {
+            Task {
+                await connectionList.disconnect()
+                await connectionList.connect(profile: profile)
+            }
+        } else {
+            connectionList.requestConnect(profile: profile)
+        }
+        errorMessage = nil
     }
 }
