@@ -115,6 +115,8 @@ extension AppUpdateDownloadError: LocalizedError {
             return "The update signing certificate does not match the expected release certificate."
         case .notarizationMissing:
             return "The update is not notarized by Apple."
+        case .misconfiguredSignaturePolicy:
+            return "Update signature policy is misconfigured. Expected team identifier and certificate fingerprint must both be set when signed updates are required."
         }
     }
 }

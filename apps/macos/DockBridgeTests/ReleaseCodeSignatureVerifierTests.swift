@@ -68,6 +68,35 @@ final class ReleaseCodeSignatureVerifierTests: XCTestCase {
         }
     }
 
+    func testVerifyAppBundleRejectsMisconfiguredPolicyWhenSignedUpdatesRequiredWithoutTeamOrFingerprint() throws {
+        let bundleURL = try makeTestBundle(bundleIdentifier: "com.dockbridge.app")
+        let cases: [(team: String, fingerprint: String)] = [
+            ("", ""),
+            ("TEAMID1234", ""),
+            ("", "abc123"),
+        ]
+
+        for policyValues in cases {
+            let verifier = ReleaseCodeSignatureVerifier(
+                policy: ReleaseVerificationPolicy(
+                    expectedBundleIdentifier: "com.dockbridge.app",
+                    expectedTeamIdentifier: policyValues.team,
+                    signingCertificateFingerprintSHA256: policyValues.fingerprint,
+                    requireSignedUpdates: true,
+                    requireNotarizedUpdates: false
+                )
+            )
+
+            XCTAssertThrowsError(try verifier.verifyAppBundle(at: bundleURL)) { error in
+                XCTAssertEqual(
+                    error as? ReleaseCodeSignatureVerifierError,
+                    .misconfiguredSignaturePolicy,
+                    "team=\(policyValues.team.debugDescription) fingerprint=\(policyValues.fingerprint.debugDescription)"
+                )
+            }
+        }
+    }
+
     func testVerifyAppBundleRejectsMissingNotarizationWhenRequired() throws {
         let bundleURL = try makeTestBundle(bundleIdentifier: "com.dockbridge.app")
         let verifier = ReleaseCodeSignatureVerifier(

@@ -80,6 +80,18 @@ final class UpdateCheckViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isDownloadingUpdate)
     }
 
+    func testDownloadUpdateOpensReleasePageWhenInAppInstallDisabled() async {
+        XCTAssertFalse(viewModel.inAppUpdateInstallationEnabled)
+
+        mockSession.responseJSON = newerReleaseJSON
+        await viewModel.checkOnLaunch(isHostKeyBlocking: false)
+        await viewModel.downloadUpdate()
+
+        XCTAssertNotNil(viewModel.downloadErrorMessage)
+        XCTAssertTrue(viewModel.downloadErrorMessage?.contains("In-app installation is disabled") == true)
+        XCTAssertFalse(viewModel.isDownloadingUpdate)
+    }
+
     private var newerReleaseJSON: String {
         """
         {

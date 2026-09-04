@@ -17,6 +17,12 @@ enum AppUpdateConfig {
     static let requireSignedUpdates = false
     static let requireNotarizedUpdates = false
 
+    /// In-app update installation (download → verify → mount DMG) is only allowed when
+    /// Developer ID signature and/or notarization verification is enabled.
+    static var inAppUpdateInstallationEnabled: Bool {
+        requireSignedUpdates || requireNotarizedUpdates
+    }
+
     static func expectedAssetName(for version: String) -> String {
         "\(appName)-\(version)-macOS.dmg"
     }
