@@ -155,9 +155,10 @@ final class MainViewModel: ObservableObject {
     @Published var renameText = ""
     @Published var showMkdirPrompt = false
     @Published var mkdirName = ""
-    @Published var showOverwriteAsk = false
+@Published var showOverwriteAsk = false
     @Published var overwriteAskDestination = ""
     private var pendingTransferAction: (() async -> Bool)?
+    @Published private(set) var pathBookmarks: [PathBookmark] = []
 
     let bridge: RustBridgeService
     let connectionList: ConnectionListViewModel
@@ -165,7 +166,9 @@ final class MainViewModel: ObservableObject {
 
     private let settings: AppSettingsService
     private let bookmarkService: SecurityScopedBookmarkService
+    private let pathBookmarkStore: PathBookmarkStore
     private var defaultLocalAccessURL: URL?
+    private var pathBookmarkAccessURL: URL?
     private var localLoadGeneration = 0
     private var remoteLoadGeneration = 0
     private var localHistory: PathNavigationHistory
@@ -186,12 +189,14 @@ final class MainViewModel: ObservableObject {
     init(
         settings: AppSettingsService = .shared,
         bookmarkService: SecurityScopedBookmarkService = .shared,
+        pathBookmarkStore: PathBookmarkStore = .shared,
         bridge: RustBridgeService,
         connectionList: ConnectionListViewModel,
         transferQueue: TransferQueueViewModel
     ) {
         self.settings = settings
         self.bookmarkService = bookmarkService
+        self.pathBookmarkStore = pathBookmarkStore
         self.bridge = bridge
         self.connectionList = connectionList
         self.transferQueue = transferQueue
@@ -205,6 +210,7 @@ final class MainViewModel: ObservableObject {
         if case .bookmarkFailed(_, let error) = resolution {
             self.errorMessage = DefaultLocalPathResolver.userMessage(for: error)
         }
+        refreshPathBookmarks()
     }
 
     func applyDefaultLocalConfig(_ config: AppConfig) {
@@ -227,10 +233,12 @@ final class MainViewModel: ObservableObject {
     func onAppear() {
         connectionList.load()
         transferQueue.startPolling()
+        refreshPathBookmarks()
     }
 
     func onDisappear() {
         transferQueue.stopPolling()
+        releasePathBookmarkAccess()
         if let scopedURL = defaultLocalAccessURL {
             bookmarkService.stopAccessing(scopedURL)
             defaultLocalAccessURL = nil
@@ -298,6 +306,13 @@ final class MainViewModel: ObservableObject {
 
     func onConnectionChanged(isConnected: Bool) async {
         guard isConnected else {
+            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID {
+                connectionList.saveSessionPaths(
+                    for: profileID,
+                    localPath: localPath.path,
+                    remotePath: remotePath
+                )
+            }
             applyRemotePath("/", recordHistory: false)
             remoteHistory.reset(to: "/")
             remoteItems = []
@@ -305,13 +320,125 @@ final class MainViewModel: ObservableObject {
             if let reason = bridge.lastDisconnectReason {
                 errorMessage = DockBridgeError.friendlyMessage(for: reason)
             }
+            refreshPathBookmarks()
             return
         }
 
         do {
             try await prepareRemoteWorkingDirectory()
+            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID,
+               let profile = connectionList.profiles.first(where: { $0.id == profileID }),
+               let savedRemotePath = profile.lastRemotePath,
+               !savedRemotePath.isEmpty {
+                if await remoteDirectoryExists(savedRemotePath) {
+                    applyRemotePath(savedRemotePath, recordHistory: false)
+                    remoteHistory.reset(to: savedRemotePath)
+                }
+                // Missing lastRemotePath keeps the initial-directory result from prepareRemoteWorkingDirectory().
+            }
+            await reloadRemote()
+            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID,
+               let profile = connectionList.profiles.first(where: { $0.id == profileID }),
+               let savedLocalPath = profile.lastLocalPath,
+               !savedLocalPath.isEmpty {
+                applyLocalPath(URL(fileURLWithPath: savedLocalPath, isDirectory: true), recordHistory: false)
+                reloadLocal()
+            }
+            refreshPathBookmarks()
         } catch {
             errorMessage = error.dockBridgeUserMessage
+        }
+    }
+
+    var activeProfileID: UUID? {
+        connectionList.connectedProfileID ?? connectionList.selectedProfileID
+    }
+
+    var localPathBookmarks: [PathBookmark] {
+        pathBookmarks.filter { $0.pane == .local }
+    }
+
+    var remotePathBookmarks: [PathBookmark] {
+        pathBookmarks.filter { $0.pane == .remote }
+    }
+
+    func refreshPathBookmarks() {
+        pathBookmarks = pathBookmarkStore.bookmarks(for: .local, profileID: activeProfileID)
+            + pathBookmarkStore.bookmarks(for: .remote, profileID: activeProfileID)
+    }
+
+    func bookmarkCurrentLocalPath() {
+        let name = localPath.lastPathComponent.isEmpty ? localPath.path : localPath.lastPathComponent
+        let scopedData = try? bookmarkService.createBookmark(for: localPath)
+        pathBookmarkStore.add(PathBookmark(
+            name: name,
+            path: localPath.path,
+            pane: .local,
+            profileID: activeProfileID,
+            securityScopedBookmark: scopedData
+        ))
+        refreshPathBookmarks()
+    }
+
+    func bookmarkCurrentRemotePath() {
+        let name = (remotePath as NSString).lastPathComponent
+        let displayName = name.isEmpty ? remotePath : name
+        pathBookmarkStore.add(PathBookmark(
+            name: displayName,
+            path: remotePath,
+            pane: .remote,
+            profileID: activeProfileID
+        ))
+        refreshPathBookmarks()
+    }
+
+    func jumpToBookmark(_ bookmark: PathBookmark) {
+        switch bookmark.pane {
+        case .local:
+            jumpToLocalBookmark(bookmark)
+        case .remote:
+            applyRemotePath(bookmark.path)
+            Task { await reloadRemote() }
+        }
+    }
+
+    func removeBookmark(_ bookmark: PathBookmark) {
+        pathBookmarkStore.remove(id: bookmark.id)
+        refreshPathBookmarks()
+    }
+
+    private func jumpToLocalBookmark(_ bookmark: PathBookmark) {
+        if let scopedData = bookmark.securityScopedBookmark {
+            do {
+                releasePathBookmarkAccess()
+                let url = try bookmarkService.resolveBookmark(scopedData)
+                pathBookmarkAccessURL = url
+                applyLocalPath(url)
+                reloadLocal()
+                return
+            } catch {
+                errorMessage = error.dockBridgeUserMessage
+            }
+        }
+
+        applyLocalPath(URL(fileURLWithPath: bookmark.path, isDirectory: true))
+        reloadLocal()
+    }
+
+    private func releasePathBookmarkAccess() {
+        guard let url = pathBookmarkAccessURL else { return }
+        if url != defaultLocalAccessURL {
+            bookmarkService.stopAccessing(url)
+        }
+        pathBookmarkAccessURL = nil
+    }
+
+    private func remoteDirectoryExists(_ path: String) async -> Bool {
+        do {
+            _ = try await bridge.listDirectory(path: path)
+            return true
+        } catch {
+            return false
         }
     }
 

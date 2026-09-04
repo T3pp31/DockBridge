@@ -11,6 +11,8 @@ struct StoredConnectionProfile: Identifiable, Codable, Equatable, Sendable {
     var authType: AuthType
     var privateKeyBookmark: Data?
     var lastConnectedAt: Date?
+    var lastLocalPath: String?
+    var lastRemotePath: String?
 
     init(from profile: ConnectionProfile) {
         id = profile.id
@@ -21,6 +23,8 @@ struct StoredConnectionProfile: Identifiable, Codable, Equatable, Sendable {
         authType = profile.authType
         privateKeyBookmark = profile.privateKeyBookmark
         lastConnectedAt = profile.lastConnectedAt
+        lastLocalPath = profile.lastLocalPath
+        lastRemotePath = profile.lastRemotePath
     }
 
     func toConnectionProfile() -> ConnectionProfile {
@@ -32,7 +36,9 @@ struct StoredConnectionProfile: Identifiable, Codable, Equatable, Sendable {
             username: username,
             authType: authType,
             privateKeyBookmark: privateKeyBookmark,
-            lastConnectedAt: lastConnectedAt
+            lastConnectedAt: lastConnectedAt,
+            lastLocalPath: lastLocalPath,
+            lastRemotePath: lastRemotePath
         )
         profile.hydrateDisplayKeyPathFromBookmark()
         return profile
