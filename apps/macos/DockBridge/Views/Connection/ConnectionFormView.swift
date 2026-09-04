@@ -29,6 +29,12 @@ struct ConnectionFormView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            Text(isEditing ? "Edit Connection" : "New Connection")
+                .font(.title2)
+                .bold()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, DialogCardMetrics.contentSpacing)
+
             Form {
                 Section("General") {
                     TextField("Name", text: $profile.name)
