@@ -155,24 +155,30 @@ struct LocalPaneDropModifier: ViewModifier {
 
     private func acceptLocalMoves(_ items: [LocalFileDragPayload]) -> Bool {
         var accepted = false
-        var hasDisplayedItem = false
+        var hasInvalidMove = false
+        var hasMoveError = false
         for item in items {
             guard FileDropValidation.isDisplayedLocalItem(item, in: viewModel.localTableItems) else {
                 continue
             }
-            hasDisplayedItem = true
             guard FileDropValidation.canMoveLocalItem(from: item.url, to: viewModel.localPath) else {
+                hasInvalidMove = true
                 continue
             }
             do {
                 try viewModel.moveLocalItem(from: item.url, toDirectory: viewModel.localPath)
                 accepted = true
             } catch {
+                hasMoveError = true
                 viewModel.errorMessage = error.dockBridgeUserMessage
             }
         }
-        if !accepted, hasDisplayedItem {
-            viewModel.errorMessage = FileDropError.invalidMove.localizedDescription
+        if !accepted, !hasMoveError {
+            if hasInvalidMove {
+                viewModel.errorMessage = FileDropError.invalidMove.localizedDescription
+            } else {
+                viewModel.errorMessage = FileDropError.emptyPayload.localizedDescription
+            }
         }
         return accepted
     }
@@ -222,7 +228,7 @@ struct RemotePaneDropModifier: ViewModifier {
     private func acceptLocalUploads(_ items: [LocalFileDragPayload]) -> Bool {
         let accepted = FileDropTransferKickoff.acceptLocalPayloadUploads(items: items, viewModel: viewModel)
         if !accepted {
-            viewModel.errorMessage = FileDropError.emptyPayload.localizedDescription
+            viewModel.errorMessage = localUploadRejectMessage(for: items)
         }
         return accepted
     }
@@ -230,7 +236,9 @@ struct RemotePaneDropModifier: ViewModifier {
     private func acceptExternalUploads(_ urls: [URL]) -> Bool {
         let accepted = FileDropTransferKickoff.acceptExternalUploads(urls: urls, viewModel: viewModel)
         if !accepted {
-            viewModel.errorMessage = FileDropError.emptyPayload.localizedDescription
+            viewModel.errorMessage = urls.isEmpty
+                ? FileDropError.emptyPayload.localizedDescription
+                : FileDropError.unreadableSource.localizedDescription
         }
         return accepted
     }
@@ -242,9 +250,26 @@ struct RemotePaneDropModifier: ViewModifier {
             viewModel: viewModel
         )
         if !accepted {
-            viewModel.errorMessage = FileDropError.emptyPayload.localizedDescription
+            viewModel.errorMessage = items.isEmpty
+                ? FileDropError.emptyPayload.localizedDescription
+                : FileDropError.invalidMove.localizedDescription
         }
         return accepted
+    }
+
+    private func localUploadRejectMessage(for items: [LocalFileDragPayload]) -> String {
+        guard !items.isEmpty else {
+            return FileDropError.emptyPayload.localizedDescription
+        }
+
+        let hasUnreadableSource = items.contains { item in
+            FileDropValidation.isDisplayedLocalItem(item, in: viewModel.localTableItems)
+                && !FileDropValidation.canUploadLocalItem(at: item.url)
+        }
+        if hasUnreadableSource {
+            return FileDropError.unreadableSource.localizedDescription
+        }
+        return FileDropError.emptyPayload.localizedDescription
     }
 }
 
