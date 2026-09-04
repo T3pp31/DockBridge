@@ -11,6 +11,7 @@ struct MainView: View {
     @State private var showNewConnection = false
     @State private var editingProfile: ConnectionProfile?
     @State private var showSettings = false
+    @State private var isTransferQueueExpanded = true
     @State private var settingsConfig = AppConfig.default
 
     init() {
@@ -65,12 +66,16 @@ struct MainView: View {
 
                 Divider()
 
-                TransferQueueView(viewModel: transferQueue)
+                TransferQueueView(viewModel: transferQueue, isExpanded: $isTransferQueueExpanded)
                     .frame(
-                        minHeight: WindowLayout.transferQueueMinHeight,
-                        idealHeight: WindowLayout.transferQueueIdealHeight
+                        minHeight: isTransferQueueExpanded
+                            ? WindowLayout.transferQueueMinHeight
+                            : nil,
+                        idealHeight: isTransferQueueExpanded
+                            ? WindowLayout.transferQueueIdealHeight
+                            : nil
                     )
-                    .fixedSize(horizontal: false, vertical: true)
+                    .fixedSize(horizontal: false, vertical: !isTransferQueueExpanded)
                     .layoutPriority(0)
             }
             .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
