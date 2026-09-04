@@ -66,6 +66,46 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         XCTAssertTrue(message.lowercased().contains("username") || message.lowercased().contains("password"))
         XCTAssertFalse(message.lowercased().contains("host key"))
     }
+
+    func testAuthenticationMessageDetectionUsesRawBridgeTokens() {
+        XCTAssertTrue(
+            DockBridgeError.isAuthenticationMessage(
+                "authentication failed for user 'demo'"
+            )
+        )
+        XCTAssertTrue(
+            DockBridgeError.isAuthenticationMessage(
+                "failed to load private key from /tmp/id_ed25519: incorrect passphrase"
+            )
+        )
+        XCTAssertTrue(
+            DockBridgeError.isAuthenticationMessage("Check the username and password.")
+        )
+        XCTAssertFalse(
+            DockBridgeError.isAuthenticationMessage(
+                "password authentication is not supported by the server"
+            )
+        )
+        XCTAssertFalse(
+            DockBridgeError.isAuthenticationMessage("failed to upload: permission denied")
+        )
+        XCTAssertFalse(
+            DockBridgeError.isAuthenticationMessage("host key rejected by user for example.com:22")
+        )
+    }
+
+    func testAuthenticationFailureInspectsGenericMessageBeforeFriendlyMapping() {
+        let error = DockBridgeError.Generic(
+            message: "authentication failed for user 'demo'"
+        )
+        XCTAssertTrue(error.isAuthenticationFailure)
+        XCTAssertEqual(error.dockBridgeUserMessage, "Check the username and password.")
+
+        let keyError = DockBridgeError.Generic(
+            message: "failed to load private key from /tmp/key: decrypt failed"
+        )
+        XCTAssertTrue(keyError.isAuthenticationFailure)
+    }
 }
 
 final class ErrorRecoveryKindTests: XCTestCase {

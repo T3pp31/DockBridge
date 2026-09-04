@@ -29,6 +29,7 @@ struct CredentialPromptSheet: View {
                 onConfirm(text, saveToKeychain)
             }
             .keyboardShortcut(.defaultAction)
+            .disabled(credential.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 

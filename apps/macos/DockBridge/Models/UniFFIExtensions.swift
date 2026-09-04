@@ -43,6 +43,27 @@ extension DockBridgeError {
             || lowercased.contains("eof")
     }
 
+    /// Detects SSH authentication / private-key unlock failures from raw bridge messages.
+    /// Prefer matching the underlying Generic message before friendly mapping.
+    static func isAuthenticationMessage(_ message: String) -> Bool {
+        let lowercased = message.lowercased()
+
+        // Method unavailable is not recoverable via an interactive credential prompt.
+        if lowercased.contains("password authentication is not supported") {
+            return false
+        }
+
+        // Known friendly mapping produced by `friendlyMessage(for:)`.
+        if lowercased.contains("check the username and password") {
+            return true
+        }
+
+        return lowercased.contains("authentication failed")
+            || lowercased.contains("auth failed")
+            || lowercased.contains("failed to load private key")
+            || lowercased.contains("incorrect passphrase")
+    }
+
     static func friendlyMessage(for message: String) -> String {
         let lowercased = message.lowercased()
 
@@ -105,5 +126,17 @@ extension Error {
             return DockBridgeError.isConnectionLostMessage(message)
         }
         return false
+    }
+
+    /// True when the error represents an authentication / key-passphrase failure.
+    /// Inspects the raw `DockBridgeError.Generic` message when available.
+    var isAuthenticationFailure: Bool {
+        if let error = self as? DockBridgeError, case .Generic(let message) = error {
+            return DockBridgeError.isAuthenticationMessage(message)
+        }
+        if DockBridgeError.isAuthenticationMessage(localizedDescription) {
+            return true
+        }
+        return DockBridgeError.isAuthenticationMessage(dockBridgeUserMessage)
     }
 }

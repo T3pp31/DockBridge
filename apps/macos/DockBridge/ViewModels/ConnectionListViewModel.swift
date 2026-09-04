@@ -303,23 +303,37 @@ final class ConnectionListViewModel: ObservableObject {
     func confirmCredentialPrompt(text: String, saveToKeychain: Bool) {
         guard let prompt = pendingCredentialPrompt else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let account = keychain.keychainAccount(for: prompt.profile.id, kind: "profile")
 
-        switch prompt.kind {
-        case .password:
-            promptPasswordOverride = trimmed.isEmpty ? nil : trimmed
-            if saveToKeychain, !trimmed.isEmpty {
-                try? keychain.savePassword(trimmed, account: account)
-            }
-        case .passphrase:
-            promptPassphraseOverride = trimmed.isEmpty ? nil : trimmed
-            if saveToKeychain, !trimmed.isEmpty {
-                try? keychain.savePassphrase(trimmed, account: account)
+        // Empty confirm must not dismiss the sheet or reconnect without credentials.
+        guard !trimmed.isEmpty else { return }
+
+        let account = keychain.keychainAccount(for: prompt.profile.id, kind: "profile")
+        let profile = prompt.profile
+        let kind = prompt.kind
+
+        if saveToKeychain {
+            do {
+                switch kind {
+                case .password:
+                    try keychain.savePassword(trimmed, account: account)
+                case .passphrase:
+                    try keychain.savePassphrase(trimmed, account: account)
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+                return
             }
         }
 
+        switch kind {
+        case .password:
+            promptPasswordOverride = trimmed
+        case .passphrase:
+            promptPassphraseOverride = trimmed
+        }
+
         pendingCredentialPrompt = nil
-        Task { await connect(profile: prompt.profile, allowCredentialPrompt: false) }
+        Task { await connect(profile: profile, allowCredentialPrompt: false) }
     }
 
     func cancelCredentialPrompt() {
@@ -397,7 +411,7 @@ final class ConnectionListViewModel: ObservableObject {
         do {
             try await bridge.connect(profile: connectProfile, password: password, passphrase: passphrase)
         } catch {
-            if allowCredentialPrompt, Self.isAuthenticationError(error) {
+            if allowCredentialPrompt, error.isAuthenticationFailure {
                 if connectProfile.authType == .password {
                     beginPasswordPrompt(for: profile)
                 } else if connectProfile.authType == .privateKey {
@@ -411,13 +425,6 @@ final class ConnectionListViewModel: ObservableObject {
         updated.lastConnectedAt = Date()
         profiles = try store.upsert(updated)
         selectedProfileID = updated.id
-    }
-
-    private static func isAuthenticationError(_ error: Error) -> Bool {
-        let message = error.dockBridgeUserMessage.lowercased()
-        return message.contains("username and password")
-            || message.contains("authentication")
-            || message.contains("auth failed")
     }
 
     private func profileUsesRsaPrivateKey(_ profile: ConnectionProfile) -> Bool? {
