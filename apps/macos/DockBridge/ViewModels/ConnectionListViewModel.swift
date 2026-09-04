@@ -96,17 +96,21 @@ final class ConnectionListViewModel: ObservableObject {
             switch profile.authType {
             case .password:
                 try keychain.deletePassphrase(account: account)
-                if let password, !password.isEmpty {
-                    try keychain.savePassword(password, account: account)
-                } else {
-                    try keychain.deletePassword(account: account)
+                if let password {
+                    if password.isEmpty {
+                        try keychain.deletePassword(account: account)
+                    } else {
+                        try keychain.savePassword(password, account: account)
+                    }
                 }
             case .privateKey:
                 try keychain.deletePassword(account: account)
-                if let passphrase, !passphrase.isEmpty {
-                    try keychain.savePassphrase(passphrase, account: account)
-                } else {
-                    try keychain.deletePassphrase(account: account)
+                if let passphrase {
+                    if passphrase.isEmpty {
+                        try keychain.deletePassphrase(account: account)
+                    } else {
+                        try keychain.savePassphrase(passphrase, account: account)
+                    }
                 }
             }
         } catch {

@@ -339,7 +339,7 @@ final class ConnectionListViewModelTests: XCTestCase {
         let account = keychain.keychainAccount(for: profileID, kind: "profile")
         XCTAssertEqual(try keychain.loadPassword(account: account), "secret-password")
 
-        viewModel.save(profile, password: nil, passphrase: nil)
+        viewModel.save(profile, password: "", passphrase: nil)
 
         XCTAssertNil(try keychain.loadPassword(account: account))
     }
@@ -352,9 +352,45 @@ final class ConnectionListViewModelTests: XCTestCase {
         let account = keychain.keychainAccount(for: profile.id, kind: "profile")
         XCTAssertEqual(try keychain.loadPassphrase(account: account), "key-passphrase")
 
-        viewModel.save(profile, password: nil, passphrase: nil)
+        viewModel.save(profile, password: nil, passphrase: "")
 
         XCTAssertNil(try keychain.loadPassphrase(account: account))
+    }
+
+    func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
+        let profileID = UUID()
+        let profile = ConnectionProfile(
+            id: profileID,
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .password
+        )
+
+        viewModel.save(profile, password: "secret-password", passphrase: nil)
+
+        let account = keychain.keychainAccount(for: profileID, kind: "profile")
+        XCTAssertEqual(try keychain.loadPassword(account: account), "secret-password")
+
+        // Given: editing with an empty password field results in `password: nil`.
+        viewModel.save(profile, password: nil, passphrase: nil)
+
+        // Then: the existing Keychain entry is preserved.
+        XCTAssertEqual(try keychain.loadPassword(account: account), "secret-password")
+    }
+
+    func testSaveKeepsExistingPassphraseWhenPassphraseNil() throws {
+        let profile = try makePrivateKeyProfile()
+
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        viewModel.save(profile, password: nil, passphrase: "key-passphrase")
+        XCTAssertEqual(try keychain.loadPassphrase(account: account), "key-passphrase")
+
+        // Given: editing with an empty passphrase field results in `passphrase: nil`.
+        viewModel.save(profile, password: nil, passphrase: nil)
+
+        // Then: the existing Keychain entry is preserved.
+        XCTAssertEqual(try keychain.loadPassphrase(account: account), "key-passphrase")
     }
 
     func testRequestConnectShowsRsaKeyWarningForRsaPrivateKey() throws {

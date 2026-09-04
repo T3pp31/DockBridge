@@ -100,8 +100,24 @@ struct ConnectionFormView: View {
     }
 
     private func save() {
-        let savedPassword = saveSecrets && profile.authType == .password ? password.text : nil
-        let savedPassphrase = saveSecrets && profile.authType == .privateKey ? passphrase.text : nil
+        let savedPassword: String?
+        if !saveSecrets {
+            savedPassword = ""
+        } else if profile.authType == .password {
+            savedPassword = password.text.isEmpty ? nil : password.text
+        } else {
+            savedPassword = nil
+        }
+
+        let savedPassphrase: String?
+        if !saveSecrets {
+            savedPassphrase = ""
+        } else if profile.authType == .privateKey {
+            savedPassphrase = passphrase.text.isEmpty ? nil : passphrase.text
+        } else {
+            savedPassphrase = nil
+        }
+
         onSave(profile, savedPassword, savedPassphrase)
         closeForm()
     }
