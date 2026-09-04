@@ -179,6 +179,39 @@ struct ConnectionListView: View {
             )
         }
         .errorAlert(message: $viewModel.errorMessage)
+        .sheet(item: Binding(
+            get: {
+                viewModel.pendingCredentialPrompt.map { prompt in
+                    CredentialPromptItem(profile: prompt.profile, kind: prompt.kind)
+                }
+            },
+            set: { newValue in
+                if newValue == nil {
+                    viewModel.cancelCredentialPrompt()
+                }
+            }
+        )) { item in
+            CredentialPromptSheet(
+                profileName: item.profile.displayName,
+                kind: item.kind,
+                onConfirm: { text, save in
+                    viewModel.confirmCredentialPrompt(text: text, saveToKeychain: save)
+                },
+                onCancel: viewModel.cancelCredentialPrompt
+            )
+        }
+    }
+
+    private struct CredentialPromptItem: Identifiable {
+        let profile: ConnectionProfile
+        let kind: ConnectionListViewModel.CredentialPromptKind
+
+        var id: String {
+            switch kind {
+            case .password: return "\(profile.id.uuidString)-password"
+            case .passphrase: return "\(profile.id.uuidString)-passphrase"
+            }
+        }
     }
 
     @ViewBuilder

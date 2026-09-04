@@ -357,7 +357,7 @@ final class ConnectionListViewModelTests: XCTestCase {
         XCTAssertNil(try keychain.loadPassphrase(account: account))
     }
 
-    func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
+func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         let profileID = UUID()
         let profile = ConnectionProfile(
             id: profileID,
@@ -391,6 +391,41 @@ final class ConnectionListViewModelTests: XCTestCase {
 
         // Then: the existing Keychain entry is preserved.
         XCTAssertEqual(try keychain.loadPassphrase(account: account), "key-passphrase")
+    }
+
+    func testConnectPromptsForPasswordWhenKeychainEmpty() async {
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .password
+        )
+        viewModel.save(profile, password: nil, passphrase: nil)
+
+        await viewModel.connect(profile: profile)
+
+        XCTAssertEqual(viewModel.pendingCredentialPrompt?.profile.id, profile.id)
+        XCTAssertEqual(viewModel.pendingCredentialPrompt?.kind, .password)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testConfirmCredentialPromptIgnoresEmptyInput() async {
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .password
+        )
+        viewModel.save(profile, password: nil, passphrase: nil)
+
+        await viewModel.connect(profile: profile)
+        XCTAssertEqual(viewModel.pendingCredentialPrompt?.kind, .password)
+
+        viewModel.confirmCredentialPrompt(text: "   ", saveToKeychain: false)
+
+        XCTAssertEqual(viewModel.pendingCredentialPrompt?.profile.id, profile.id)
+        XCTAssertEqual(viewModel.pendingCredentialPrompt?.kind, .password)
+        XCTAssertNil(viewModel.errorMessage)
     }
 
     func testRequestConnectShowsRsaKeyWarningForRsaPrivateKey() throws {
