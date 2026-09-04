@@ -3,6 +3,7 @@ import SwiftUI
 struct LocalPaneView: View {
     @ObservedObject var viewModel: MainViewModel
     @State private var isDropTargeted = false
+    @State private var isFolderRowDropTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
@@ -11,7 +12,7 @@ struct LocalPaneView: View {
             Divider()
 
             ExpandingFrame { size in
-                LocalFileTable(viewModel: viewModel)
+                LocalFileTable(viewModel: viewModel, isFolderRowDropTargeted: $isFolderRowDropTargeted)
                     .frame(width: size.width, height: size.height)
                     .contextMenu(forSelectionType: String.self) { ids in
                         let items = transferableLocalItems(from: ids)
@@ -40,7 +41,7 @@ struct LocalPaneView: View {
                         return .ignored
                     }
                     .overlay {
-                        if isDropTargeted {
+                        if isDropTargeted && !isFolderRowDropTargeted {
                             DropTargetOverlay(
                                 title: "Drop to move or download",
                                 systemImage: "arrow.down.circle"

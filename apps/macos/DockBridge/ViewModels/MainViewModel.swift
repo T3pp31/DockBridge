@@ -399,6 +399,27 @@ final class MainViewModel: ObservableObject {
         }
     }
 
+    /// Drops local payloads into a specific remote folder (Issue #217).
+    func uploadPayloads(_ items: [LocalFileDragPayload], intoRemoteDirectory directory: String) async {
+        for item in items {
+            _ = await upload(localURL: item.url, toRemoteDirectory: directory)
+        }
+    }
+
+    /// Moves remote payloads into a specific remote folder (Issue #217).
+    func moveRemotePayloads(_ items: [RemoteFileDragPayload], intoRemoteDirectory directory: String) async {
+        for item in items {
+            _ = await moveRemoteItem(from: item.path, toDirectory: directory)
+        }
+    }
+
+    /// Downloads remote payloads into a specific local folder (Issue #217).
+    func downloadPayloads(_ items: [RemoteFileDragPayload], intoLocalDirectory directory: URL) async {
+        for item in items {
+            _ = await download(remotePath: item.path, toLocalDirectory: directory)
+        }
+    }
+
     @discardableResult
     func upload(localURL: URL, toRemoteDirectory: String) async -> Bool {
         guard bridge.isConnected else {

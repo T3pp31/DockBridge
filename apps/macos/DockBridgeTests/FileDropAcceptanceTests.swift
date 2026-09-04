@@ -330,6 +330,42 @@ final class FileDropAcceptanceTests: XCTestCase {
         XCTAssertLessThan(elapsed, .milliseconds(100))
     }
 
+    func testUploadKickoffUsesExplicitRemoteDirectoryDestination() throws {
+        let viewModel = try makeKickoffViewModel()
+        let localFile = viewModel.localPath.appendingPathComponent("dest-upload.txt")
+        try "dest upload".write(to: localFile, atomically: true, encoding: .utf8)
+        let displayedItems = [LocalFileItem(url: localFile)]
+        let payload = LocalFileDragPayload(url: localFile, isDirectory: false)
+
+        let accepted = FileDropTransferKickoff.acceptLocalPayloadUploads(
+            items: [payload],
+            viewModel: viewModel,
+            toRemoteDirectory: "/explicit/target",
+            displayedLocalItems: displayedItems
+        )
+
+        XCTAssertTrue(accepted)
+    }
+
+    func testRemoteDownloadKickoffUsesExplicitLocalDirectoryDestination() throws {
+        let viewModel = try makeKickoffViewModel()
+        let destination = viewModel.localPath.appendingPathComponent("DownloadsTarget", isDirectory: true)
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        let items = [RemoteFileDragPayload(path: "/remote/file.txt", isDirectory: false)]
+        let displayedItems = [
+            RemoteFileRecord(name: "file.txt", path: "/remote/file.txt", isDirectory: false, size: 1, modifiedAtSecs: nil),
+        ]
+
+        let accepted = FileDropTransferKickoff.acceptRemoteDownloads(
+            items: items,
+            viewModel: viewModel,
+            toLocalDirectory: destination,
+            displayedRemoteItems: displayedItems
+        )
+
+        XCTAssertTrue(accepted)
+    }
+
     func testRemoteMoveKickoffRejectsInvalidMoves() throws {
         // Given: a move into the same directory as the source
         let viewModel = try makeKickoffViewModel()
