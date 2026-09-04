@@ -60,6 +60,7 @@
 		C0NN3CT10N5T4TU5B4R1N5RC3 /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */; };
 		C0NN3CT10N5T4TU5M1ND1C4T0R1 /* ConnectionStatusIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T4TU5M1ND1C4T0R2 /* ConnectionStatusIndicator.swift */; };
 		CL1PB04RDH3LP3R1N5RC1 /* ClipboardHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = CL1PB04RDH3LP3R1N5RC2 /* ClipboardHelper.swift */; };
+		QU1CKL00KPR3S3NT3RBF1 /* QuickLookPresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = QU1CKL00KPR3S3NT3RRC1 /* QuickLookPresenter.swift */; };
 		P4TH5UMM4RYR0W1N5RC1 /* PathSummaryRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */; };
 		P4N3P4THB4R5F1L3B3 /* PanePathBars.swift in Sources */ = {isa = PBXBuildFile; fileRef = P4N3P4THB4R5F1L3B4 /* PanePathBars.swift */; };
 		D5R0PT4RG3T0V3RL4Y1D2B3 /* DropTargetOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0PT4RG3T0V3RL4Y1D2B4 /* DropTargetOverlay.swift */; };
@@ -164,6 +165,7 @@
 		C0NN3CT10N5T4TU5B4R1N5RC4 /* ConnectionStatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusBar.swift; sourceTree = "<group>"; };
 		C0NN3CT10N5T4TU5M1ND1C4T0R2 /* ConnectionStatusIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusIndicator.swift; sourceTree = "<group>"; };
 		CL1PB04RDH3LP3R1N5RC2 /* ClipboardHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHelper.swift; sourceTree = "<group>"; };
+		QU1CKL00KPR3S3NT3RRC1 /* QuickLookPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickLookPresenter.swift; sourceTree = "<group>"; };
 		P4TH5UMM4RYR0W1N5RC2 /* PathSummaryRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathSummaryRow.swift; sourceTree = "<group>"; };
 		P4N3P4THB4R5F1L3B4 /* PanePathBars.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanePathBars.swift; sourceTree = "<group>"; };
 		D5R0PT4RG3T0V3RL4Y1D2B4 /* DropTargetOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropTargetOverlay.swift; sourceTree = "<group>"; };
@@ -412,6 +414,7 @@
 			isa = PBXGroup;
 			children = (
 				CL1PB04RDH3LP3R1N5RC2 /* ClipboardHelper.swift */,
+				QU1CKL00KPR3S3NT3RRC1 /* QuickLookPresenter.swift */,
 				D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */,
 				T7R4N5F3R0P4R0G3F0RM4T3RD /* TransferProgressFormatter.swift */,
 				3XP4ND1NGFR4M3F1L3B4 /* ExpandingFrame.swift */,
@@ -637,6 +640,7 @@
 				C0NN3CT10N5T4TU5B4R1N5RC3 /* ConnectionStatusBar.swift in Sources */,
 				C0NN3CT10N5T4TU5M1ND1C4T0R1 /* ConnectionStatusIndicator.swift in Sources */,
 				CL1PB04RDH3LP3R1N5RC1 /* ClipboardHelper.swift in Sources */,
+				QU1CKL00KPR3S3NT3RBF1 /* QuickLookPresenter.swift in Sources */,
 				P4TH5UMM4RYR0W1N5RC1 /* PathSummaryRow.swift in Sources */,
 				P4N3P4THB4R5F1L3B3 /* PanePathBars.swift in Sources */,
 				D5R0PT4RG3T0V3RL4Y1D2B3 /* DropTargetOverlay.swift in Sources */,

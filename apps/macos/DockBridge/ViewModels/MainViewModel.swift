@@ -3,6 +3,7 @@ import Foundation
 
 @MainActor
 final class MainViewModel: ObservableObject {
+    private static let remoteOpenTempFolderName = "DockBridge-open"
     @Published var localPath: URL {
         didSet {
             if !isApplyingNavigationHistory {
@@ -440,20 +441,57 @@ final class MainViewModel: ObservableObject {
             navigateLocalUp()
         } else if item.isDirectory {
             navigateLocal(into: item)
+        } else {
+            openLocalFile(item)
         }
     }
 
     /// Opens a local file in its default app (Issue #228).
     func openLocalFile(_ item: LocalFileItem) {
-        guard !item.isDirectory else { navigateLocal(into: item); return }
+        guard !item.isDirectory else {
+            navigateLocal(into: item)
+            return
+        }
         NSWorkspace.shared.open(item.url)
     }
 
-    /// Downloads a remote file into the local pane directory, then opens it
+    /// Previews a local file with the system Quick Look panel (Issue #228).
+    func quickLookLocalFile(_ item: LocalFileItem) {
+        guard !item.isDirectory else { return }
+        QuickLookPresenter.shared.preview(url: item.url)
+    }
+
+    /// Downloads a remote file into a temp directory, then opens it
     /// in its default app (Issue #228).
     func openRemoteFile(_ item: RemoteFileRecord) async {
-        guard !item.isDirectory else { navigateRemote(into: item); return }
-        _ = await download(remotePath: item.path, toLocalDirectory: localPath)
+        guard !item.isDirectory else {
+            navigateRemote(into: item)
+            return
+        }
+
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(Self.remoteOpenTempFolderName, isDirectory: true)
+        let sessionDirectory = tempRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+        do {
+            try FileManager.default.createDirectory(
+                at: sessionDirectory,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            errorMessage = error.dockBridgeUserMessage
+            return
+        }
+
+        let didDownload = await download(remotePath: item.path, toLocalDirectory: sessionDirectory)
+        guard didDownload else { return }
+
+        let localFile = sessionDirectory.appendingPathComponent(item.name, isDirectory: false)
+        guard FileManager.default.fileExists(atPath: localFile.path) else {
+            errorMessage = "Downloaded file was not found at \(localFile.path)."
+            return
+        }
+        NSWorkspace.shared.open(localFile)
     }
 
     func openRemoteTableItem(_ item: RemoteFileRecord) {
@@ -461,6 +499,8 @@ final class MainViewModel: ObservableObject {
             navigateRemoteUp()
         } else if item.isDirectory {
             navigateRemote(into: item)
+        } else {
+            Task { await openRemoteFile(item) }
         }
     }
 

@@ -27,6 +27,11 @@ struct LocalPaneView: View {
                             Button("Open") {
                                 viewModel.openLocalFile(item)
                             }
+                            if !item.isDirectory {
+                                Button("Quick Look") {
+                                    viewModel.quickLookLocalFile(item)
+                                }
+                            }
                             Button("Reveal in Finder") {
                                 NSWorkspace.shared.activateFileViewerSelecting([item.url])
                             }
