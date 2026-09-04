@@ -57,6 +57,14 @@ struct LocalPaneView: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .padding(WindowLayout.panePadding)
+        .simultaneousGesture(TapGesture().onEnded {
+            viewModel.noteFocusedGoToPathPane(.local)
+        })
+        .onChange(of: viewModel.selectedLocalItemIDs) { _, newValue in
+            if !newValue.isEmpty {
+                viewModel.noteFocusedGoToPathPane(.local)
+            }
+        }
         .task(id: viewModel.localPath) {
             viewModel.reloadLocal()
         }

@@ -66,6 +66,9 @@ struct LocalPanePathBar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
         .pathBarChrome()
+        .simultaneousGesture(TapGesture().onEnded {
+            viewModel.noteFocusedGoToPathPane(.local)
+        })
         .zIndex(1)
         .layoutPriority(2)
     }
@@ -126,6 +129,9 @@ struct RemotePanePathBar: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
         .pathBarChrome()
+        .simultaneousGesture(TapGesture().onEnded {
+            viewModel.noteFocusedGoToPathPane(.remote)
+        })
         .zIndex(1)
         .layoutPriority(2)
     }

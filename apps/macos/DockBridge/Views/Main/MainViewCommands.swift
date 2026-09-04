@@ -41,7 +41,7 @@ struct MainViewCommands: Commands {
 
         CommandGroup(after: .saveItem) {
             Button("Go to Path…") {
-                viewModel.beginGoToPath(.local)
+                viewModel.beginGoToPathForFocusedPane()
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
 

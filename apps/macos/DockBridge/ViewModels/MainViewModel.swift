@@ -82,11 +82,22 @@ final class MainViewModel: ObservableObject {
         case remote
     }
 
+    /// Which pane last received focus/selection; ⌘⇧G targets this (defaults to local).
+    @Published var focusedGoToPathPane: GoToPathPane = .local
     @Published var goToPathPane: GoToPathPane = .local
     @Published var goToPathText = ""
     @Published var showGoToPath = false
 
+    func noteFocusedGoToPathPane(_ pane: GoToPathPane) {
+        focusedGoToPathPane = pane
+    }
+
+    func beginGoToPathForFocusedPane() {
+        beginGoToPath(focusedGoToPathPane)
+    }
+
     func beginGoToPath(_ pane: GoToPathPane) {
+        focusedGoToPathPane = pane
         goToPathPane = pane
         goToPathText = pane == .local ? localPath.path : remotePath
         showGoToPath = true
