@@ -1,29 +1,32 @@
 import SwiftUI
 
 struct MainView: View {
-    @StateObject private var bridge = RustBridgeService()
-    @StateObject private var connectionList: ConnectionListViewModel
-    @StateObject private var transferQueue: TransferQueueViewModel
-    @StateObject private var viewModel: MainViewModel
+    @ObservedObject private var bridge: RustBridgeService
+    @ObservedObject private var connectionList: ConnectionListViewModel
+    @ObservedObject private var transferQueue: TransferQueueViewModel
+    @ObservedObject private var viewModel: MainViewModel
     @StateObject private var updateCheck = UpdateCheckViewModel()
 
+    @Binding private var showSettings: Bool
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showNewConnection = false
     @State private var editingProfile: ConnectionProfile?
-    @State private var showSettings = false
     @State private var isTransferQueueExpanded = true
     @State private var settingsConfig = AppConfig.default
 
-    init() {
-        let bridge = RustBridgeService()
-        let connectionList = ConnectionListViewModel(bridge: bridge)
-        let transferQueue = TransferQueueViewModel(bridge: bridge)
-        let main = MainViewModel(bridge: bridge, connectionList: connectionList, transferQueue: transferQueue)
-
-        _bridge = StateObject(wrappedValue: bridge)
-        _connectionList = StateObject(wrappedValue: connectionList)
-        _transferQueue = StateObject(wrappedValue: transferQueue)
-        _viewModel = StateObject(wrappedValue: main)
+    init(
+        bridge: RustBridgeService,
+        connectionList: ConnectionListViewModel,
+        transferQueue: TransferQueueViewModel,
+        viewModel: MainViewModel,
+        showSettings: Binding<Bool>
+    ) {
+        _bridge = ObservedObject(wrappedValue: bridge)
+        _connectionList = ObservedObject(wrappedValue: connectionList)
+        _transferQueue = ObservedObject(wrappedValue: transferQueue)
+        _viewModel = ObservedObject(wrappedValue: viewModel)
+        _showSettings = showSettings
+        _settingsConfig = State(initialValue: AppSettingsService.shared.loadConfig())
     }
 
     var body: some View {
