@@ -67,3 +67,71 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         XCTAssertFalse(message.lowercased().contains("host key"))
     }
 }
+
+final class ErrorRecoveryKindTests: XCTestCase {
+    func testAuthMessagesMapToEditConnection() {
+        XCTAssertEqual(
+            MainViewModel.recoveryKind(for: "Check the username and password.", isDisconnected: false),
+            .editConnection
+        )
+        XCTAssertEqual(
+            MainViewModel.recoveryKind(for: "authentication failed", isDisconnected: true),
+            .editConnection
+        )
+        XCTAssertEqual(
+            MainViewModel.recoveryKind(
+                for: "Access to the private key was denied. Open the connection settings.",
+                isDisconnected: false
+            ),
+            .editConnection
+        )
+    }
+
+    func testPermissionDeniedDoesNotMapToEditConnection() {
+        let friendly = DockBridgeError.friendlyMessage(for: "failed to upload: permission denied")
+        XCTAssertEqual(
+            MainViewModel.recoveryKind(for: friendly, isDisconnected: false),
+            .showInQueue
+        )
+        XCTAssertNotEqual(
+            MainViewModel.recoveryKind(for: "permission denied", isDisconnected: false),
+            .editConnection
+        )
+    }
+
+    func testTransferFailuresMapToShowInQueue() {
+        XCTAssertEqual(
+            MainViewModel.recoveryKind(for: "failed to upload '/tmp/a' to '/remote/a'", isDisconnected: false),
+            .showInQueue
+        )
+        XCTAssertEqual(
+            MainViewModel.recoveryKind(for: "failed to download remote file", isDisconnected: false),
+            .showInQueue
+        )
+    }
+
+    func testDisconnectedMapsToReconnect() {
+        XCTAssertEqual(
+            MainViewModel.recoveryKind(for: "The connection was closed. Reconnect and try again.", isDisconnected: true),
+            .reconnect
+        )
+    }
+
+    func testProfileMentionedPrefersEndpointLabel() {
+        let alpha = ConnectionProfile(name: "Alpha", host: "alpha.example", username: "alice")
+        let beta = ConnectionProfile(name: "Beta", host: "beta.example", username: "bob")
+        let message = "session closed for \(alpha.endpointLabel)"
+        let matched = MainViewModel.profileMentioned(in: message, profiles: [alpha, beta])
+        XCTAssertEqual(matched?.id, alpha.id)
+    }
+
+    func testProfileMentionedReturnsNilWhenAmbiguous() {
+        let one = ConnectionProfile(name: "", host: "shared.example", username: "a")
+        let two = ConnectionProfile(name: "", host: "shared.example", username: "b")
+        let matched = MainViewModel.profileMentioned(
+            in: "error talking to shared.example",
+            profiles: [one, two]
+        )
+        XCTAssertNil(matched)
+    }
+}

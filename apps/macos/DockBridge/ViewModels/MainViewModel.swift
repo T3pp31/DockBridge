@@ -36,11 +36,34 @@ final class MainViewModel: ObservableObject {
         return localTableItems.first { $0.id == selectedLocalItemID }
     }
 
+    var selectedConnectionProfile: ConnectionProfile? {
+        guard let id = connectionList.selectedProfileID else { return nil }
+        return connectionList.profiles.first { $0.id == id }
+    }
+
+    /// Profile used by error-recovery actions (Reconnect / Edit Connection).
+    /// Prefers the active connection, then selection, then a unique mention in the error text.
+    var recoveryConnectionProfile: ConnectionProfile? {
+        if let id = connectionList.connectedProfileID,
+           let profile = connectionList.profiles.first(where: { $0.id == id }) {
+            return profile
+        }
+        if let selected = selectedConnectionProfile {
+            return selected
+        }
+        return Self.profileMentioned(
+            in: errorMessage,
+            profiles: connectionList.profiles
+        )
+    }
+
     var selectedRemoteTableItem: RemoteFileRecord? {
         guard let selectedRemoteItemID else { return nil }
         return remoteTableItems.first { $0.id == selectedRemoteItemID }
     }
     @Published var errorMessage: String?
+    /// When set, MainView expands the transfer queue and clears the flag.
+    @Published var shouldRevealTransferQueue = false
     @Published var showDeleteConfirmation = false
     @Published var pendingDeleteRemotePath: String?
     @Published var renameTarget: RemoteFileRecord?
@@ -503,5 +526,103 @@ final class MainViewModel: ObservableObject {
         } catch {
             errorMessage = error.dockBridgeUserMessage
         }
+    }
+
+    // MARK: - Error recovery actions (Issue #225)
+
+    enum ErrorRecoveryKind {
+        case none
+        case reconnect
+        case editConnection
+        case showInQueue
+    }
+
+    var errorRecoveryKind: ErrorRecoveryKind {
+        guard let message = errorMessage else { return .none }
+        return Self.recoveryKind(for: message, isDisconnected: !bridge.isConnected)
+    }
+
+    /// True when the primary recovery button can run (profile required for reconnect/edit).
+    var canPerformErrorRecoveryAction: Bool {
+        switch errorRecoveryKind {
+        case .editConnection, .reconnect:
+            return recoveryConnectionProfile != nil
+        case .showInQueue, .none:
+            return true
+        }
+    }
+
+    static func recoveryKind(for message: String, isDisconnected: Bool) -> ErrorRecoveryKind {
+        let lowered = message.lowercased()
+        // Auth / credential failures only — not filesystem "permission denied".
+        if lowered.contains("authentication")
+            || lowered.contains("auth failed")
+            || lowered.contains("username and password")
+            || lowered.contains("passphrase")
+            || lowered.contains("credentials")
+            || lowered.contains("private key")
+            || (lowered.contains("password") && !lowered.contains("write permission")) {
+            return .editConnection
+        }
+        // Transfer-oriented failures → reveal the queue (Retry lives there).
+        if lowered.contains("upload")
+            || lowered.contains("download")
+            || lowered.contains("transfer")
+            || lowered.contains("write permission")
+            || lowered.contains("destination directory") {
+            return .showInQueue
+        }
+        if isDisconnected {
+            return .reconnect
+        }
+        return .none
+    }
+
+    static func profileMentioned(
+        in message: String?,
+        profiles: [ConnectionProfile]
+    ) -> ConnectionProfile? {
+        guard let message, !message.isEmpty else { return nil }
+        let lowered = message.lowercased()
+
+        let endpointMatches = profiles.filter {
+            lowered.contains($0.endpointLabel.lowercased())
+        }
+        if endpointMatches.count == 1 { return endpointMatches[0] }
+
+        let userHostMatches = profiles.filter {
+            lowered.contains("\($0.username)@\($0.host)".lowercased())
+        }
+        if userHostMatches.count == 1 { return userHostMatches[0] }
+
+        let namedMatches = profiles.filter {
+            !$0.name.isEmpty && lowered.contains($0.name.lowercased())
+        }
+        if namedMatches.count == 1 { return namedMatches[0] }
+
+        let hostMatches = profiles.filter {
+            lowered.contains($0.host.lowercased())
+        }
+        if hostMatches.count == 1 { return hostMatches[0] }
+
+        return nil
+    }
+
+    func reconnect() {
+        guard let profile = recoveryConnectionProfile else { return }
+        if bridge.isConnected {
+            Task {
+                await connectionList.disconnect()
+                await connectionList.connect(profile: profile)
+            }
+        } else {
+            connectionList.requestConnect(profile: profile)
+        }
+        errorMessage = nil
+    }
+
+    func revealTransferQueue() {
+        shouldRevealTransferQueue = true
+        errorMessage = nil
     }
 }
