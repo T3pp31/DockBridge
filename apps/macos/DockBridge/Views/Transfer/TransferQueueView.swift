@@ -114,7 +114,7 @@ struct TransferQueueView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Label("Failed", systemImage: "xmark.circle.fill")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color(nsColor: .systemRed))
+                    .foregroundStyle(DesignTokens.Status.error)
                     .accessibilityHidden(true)
                 Text(summary)
                     .font(.caption)
@@ -141,13 +141,13 @@ struct TransferQueueView: View {
                 .accessibilityLabel("In progress")
         case .completed:
             Label("Completed", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(Color(nsColor: .systemGreen))
+                .foregroundStyle(DesignTokens.Status.success)
                 .accessibilityLabel("Completed")
         case .failed:
             EmptyView()
         case .cancelled:
             Label("Cancelled", systemImage: "minus.circle")
-                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                .foregroundStyle(DesignTokens.Status.disconnected)
                 .accessibilityLabel("Cancelled")
         }
     }

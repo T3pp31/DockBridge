@@ -6,7 +6,7 @@ struct DropTargetOverlay: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
-    private let cornerRadius: CGFloat = 12
+    private let cornerRadius: CGFloat = DesignTokens.CornerRadius.medium
 
     var body: some View {
         ZStack {

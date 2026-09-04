@@ -38,11 +38,11 @@ private extension ConnectionStatus {
     var indicatorColor: Color {
         switch self {
         case .disconnected:
-            return Color(nsColor: .secondaryLabelColor)
+            return DesignTokens.Status.disconnected
         case .connecting:
-            return Color(nsColor: .systemOrange)
+            return DesignTokens.Status.connecting
         case .connected:
-            return Color(nsColor: .systemGreen)
+            return DesignTokens.Status.connected
         }
     }
 
