@@ -23,6 +23,9 @@ struct RemotePaneView: View {
                                 Button("Copy Path") {
                                     ClipboardHelper.copy(item.path)
                                 }
+                                Button("Open") {
+                                    Task { await viewModel.openRemoteFile(item) }
+                                }
                             }
 
                             Button(items.count == 1 ? "Download" : "Download \(items.count) Items") {
