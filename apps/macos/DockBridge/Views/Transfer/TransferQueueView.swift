@@ -117,6 +117,7 @@ struct TransferQueueView: View {
                         }
                         .buttonStyle(.borderless)
                         .help("Retry")
+                        .accessibilityLabel("Retry")
                     }
                     if canCancel(task: task) {
                         Button {
@@ -126,6 +127,7 @@ struct TransferQueueView: View {
                         }
                         .buttonStyle(.borderless)
                         .help("Cancel")
+                        .accessibilityLabel("Cancel")
                     }
                 }
             }
