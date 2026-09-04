@@ -43,6 +43,8 @@
 		4D3B078A85CF43E4F57F1AD1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9AED1666CA758F242828EB4F /* Assets.xcassets */; };
 		A1B2C3D4E5F60718293A4B5C /* RemotePath.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */; };
 		7B93DBDFA0EAC7D859065E1B /* SensitiveString.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A40063842C3BF02492D35D4 /* SensitiveString.swift */; };
+		0v3rwr1t3P0l1cy1N5rc3s1 /* TransferOverwritePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0v3rwr1t3P0l1cyF1l3R3F /* TransferOverwritePolicy.swift */; };
+		0v3rwr1t3AskSh33t1N5rc1 /* OverwriteAskSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0v3rwr1t3AskSh33tF1l3R3F /* OverwriteAskSheet.swift */; };
 		C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */; };
 		E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */; };
 		C0NN3CT10N5T0R3T3ST5RC3 /* ConnectionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0NN3CT10N5T0R3T3ST5RC4 /* ConnectionStoreTests.swift */; };
@@ -143,6 +145,8 @@
 		4D3B24470D299F0C0DA4E563 /* DockBridge.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DockBridge.entitlements; sourceTree = "<group>"; };
 		B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePath.swift; sourceTree = "<group>"; };
 		0A40063842C3BF02492D35D4 /* SensitiveString.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensitiveString.swift; sourceTree = "<group>"; };
+		0v3rwr1t3P0l1cyF1l3R3F /* TransferOverwritePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferOverwritePolicy.swift; sourceTree = "<group>"; };
+		0v3rwr1t3AskSh33tF1l3R3F /* OverwriteAskSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverwriteAskSheet.swift; sourceTree = "<group>"; };
 		D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePathTests.swift; sourceTree = "<group>"; };
 		F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyStoreTests.swift; sourceTree = "<group>"; };
 		C0NN3CT10N5T0R3T3ST5RC4 /* ConnectionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStoreTests.swift; sourceTree = "<group>"; };
@@ -256,8 +260,9 @@
 				F1I2L3E4D5R6O7P8M9O0D1I2F4 /* FileDropModifiers.swift */,
 				B82BEACF7A445BC9ED50F71A /* LocalPaneView.swift */,
 				116D1D17B76FB470390330BC /* MainView.swift */,
-				MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
+MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				G0T0P4T3SH33TW1FT3RC1 /* GoToPathSheet.swift */,
+				0v3rwr1t3AskSh33tF1l3R3F /* OverwriteAskSheet.swift */,
 				E1A2E6F8AA6C510156A8DABD /* RemotePaneView.swift */,
 				R3M0T3P4N3SH33T5RC1 /* RemotePaneSheets.swift */,
 			);
@@ -352,6 +357,7 @@
 				1E7FDBA4ECAABE2550A535FE /* UniFFIExtensions.swift */,
 				B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */,
 				0A40063842C3BF02492D35D4 /* SensitiveString.swift */,
+				0v3rwr1t3P0l1cyF1l3R3F /* TransferOverwritePolicy.swift */,
 				P4THN4V1G4T10NH15T0RC1 /* PathNavigationHistory.swift */,
 			);
 			path = Models;
@@ -654,6 +660,8 @@
 				B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* RemotePath.swift in Sources */,
 				7B93DBDFA0EAC7D859065E1B /* SensitiveString.swift in Sources */,
+				0v3rwr1t3P0l1cy1N5rc3s1 /* TransferOverwritePolicy.swift in Sources */,
+				0v3rwr1t3AskSh33t1N5rc1 /* OverwriteAskSheet.swift in Sources */,
 				F1D2R3O4P5E6R7R8O9R0A1B2C3 /* FileDropError.swift in Sources */,
 				F1D2R3O4P5V6A7L8I9D0A1T2I3 /* FileDropValidation.swift in Sources */,
 				F1D2R3A4G5P6A7Y8L9O0A1D2 /* FileDragPayload.swift in Sources */,

@@ -88,6 +88,14 @@ struct SettingsView: View {
             Section("Safety") {
                 Toggle("Confirm before delete", isOn: $config.confirmBeforeDelete)
             }
+
+            Section("Transfer") {
+                Picker("Overwrite policy", selection: $config.transferOverwritePolicy) {
+                    ForEach(TransferOverwritePolicy.allCases, id: \.self) { policy in
+                        Text(policy.label).tag(policy)
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
 
