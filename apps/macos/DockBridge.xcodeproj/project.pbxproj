@@ -31,6 +31,7 @@
 		AEEC8329F755346C8087472D /* LocalPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B82BEACF7A445BC9ED50F71A /* LocalPaneView.swift */; };
 		1855FA75811F909D6558F748 /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116D1D17B76FB470390330BC /* MainView.swift */; };
 		MA1NV13W1CMD5W1FT3BF1 /* MainViewCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */; };
+		G0T0P4T3SH33TW1FT3BF1 /* GoToPathSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = G0T0P4T3SH33TW1FT3RC1 /* GoToPathSheet.swift */; };
 		59E97F8DE7D811CC4EA1A6B0 /* RemotePaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A2E6F8AA6C510156A8DABD /* RemotePaneView.swift */; };
 		R3M0T3P4N3SH33T5BF1 /* RemotePaneSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3M0T3P4N3SH33T5RC1 /* RemotePaneSheets.swift */; };
 		4F485BCC460E809CBC369F6D /* HostKeyConfirmView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFCE9B37ED92AB8C2C21CC1E /* HostKeyConfirmView.swift */; };
@@ -126,6 +127,7 @@
 		B82BEACF7A445BC9ED50F71A /* LocalPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalPaneView.swift; sourceTree = "<group>"; };
 		116D1D17B76FB470390330BC /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
 		MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewCommands.swift; sourceTree = "<group>"; };
+		G0T0P4T3SH33TW1FT3RC1 /* GoToPathSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoToPathSheet.swift; sourceTree = "<group>"; };
 		E1A2E6F8AA6C510156A8DABD /* RemotePaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePaneView.swift; sourceTree = "<group>"; };
 		R3M0T3P4N3SH33T5RC1 /* RemotePaneSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePaneSheets.swift; sourceTree = "<group>"; };
 		FFCE9B37ED92AB8C2C21CC1E /* HostKeyConfirmView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyConfirmView.swift; sourceTree = "<group>"; };
@@ -250,6 +252,7 @@
 				B82BEACF7A445BC9ED50F71A /* LocalPaneView.swift */,
 				116D1D17B76FB470390330BC /* MainView.swift */,
 				MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
+				G0T0P4T3SH33TW1FT3RC1 /* GoToPathSheet.swift */,
 				E1A2E6F8AA6C510156A8DABD /* RemotePaneView.swift */,
 				R3M0T3P4N3SH33T5RC1 /* RemotePaneSheets.swift */,
 			);
@@ -626,6 +629,7 @@
 				AEEC8329F755346C8087472D /* LocalPaneView.swift in Sources */,
 				1855FA75811F909D6558F748 /* MainView.swift in Sources */,
 				MA1NV13W1CMD5W1FT3BF1 /* MainViewCommands.swift in Sources */,
+				G0T0P4T3SH33TW1FT3BF1 /* GoToPathSheet.swift in Sources */,
 				59E97F8DE7D811CC4EA1A6B0 /* RemotePaneView.swift in Sources */,
 				R3M0T3P4N3SH33T5BF1 /* RemotePaneSheets.swift in Sources */,
 				4F485BCC460E809CBC369F6D /* HostKeyConfirmView.swift in Sources */,

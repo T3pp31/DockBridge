@@ -75,6 +75,14 @@ struct RemotePaneView: View {
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .padding(WindowLayout.panePadding)
         .modifier(RemotePaneDropModifier(viewModel: viewModel, isTargeted: $isDropTargeted))
+        .simultaneousGesture(TapGesture().onEnded {
+            viewModel.noteFocusedGoToPathPane(.remote)
+        })
+        .onChange(of: viewModel.selectedRemoteItemIDs) { _, newValue in
+            if !newValue.isEmpty {
+                viewModel.noteFocusedGoToPathPane(.remote)
+            }
+        }
         .task(id: viewModel.remotePath) {
             await viewModel.reloadRemote()
         }

@@ -151,6 +151,9 @@ struct MainView: View {
                 )
             }
         }
+        .sheet(isPresented: $viewModel.showGoToPath) {
+            GoToPathSheet(viewModel: viewModel)
+        }
         .sheet(isPresented: $updateCheck.showUpdateSheet) {
             if let update = updateCheck.pendingUpdate {
                 UpdateAvailableView(

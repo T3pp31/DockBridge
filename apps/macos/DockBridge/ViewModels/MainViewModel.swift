@@ -75,6 +75,71 @@ final class MainViewModel: ObservableObject {
         )
     }
 
+    // MARK: - Go to path (Issue #224)
+
+    enum GoToPathPane {
+        case local
+        case remote
+    }
+
+    /// Which pane last received focus/selection; ⌘⇧G targets this (defaults to local).
+    @Published var focusedGoToPathPane: GoToPathPane = .local
+    @Published var goToPathPane: GoToPathPane = .local
+    @Published var goToPathText = ""
+    @Published var showGoToPath = false
+
+    func noteFocusedGoToPathPane(_ pane: GoToPathPane) {
+        focusedGoToPathPane = pane
+    }
+
+    func beginGoToPathForFocusedPane() {
+        beginGoToPath(focusedGoToPathPane)
+    }
+
+    func beginGoToPath(_ pane: GoToPathPane) {
+        focusedGoToPathPane = pane
+        goToPathPane = pane
+        goToPathText = pane == .local ? localPath.path : remotePath
+        showGoToPath = true
+    }
+
+    func commitGoToPath() {
+        let raw = goToPathText.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch goToPathPane {
+        case .local:
+            goToLocalPath(raw)
+        case .remote:
+            goToRemotePath(raw)
+        }
+    }
+
+    private func goToLocalPath(_ path: String) {
+        guard !path.isEmpty else { return }
+        var expanded = path
+        if expanded == "~" {
+            expanded = NSHomeDirectory()
+        } else if expanded.hasPrefix("~/") {
+            expanded = NSHomeDirectory() + String(expanded.dropFirst())
+        }
+        let url = URL(fileURLWithPath: expanded, isDirectory: true)
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+            navigateLocal(to: url.path)
+        } else {
+            errorMessage = "No such local folder: \(url.path)"
+        }
+    }
+
+    private func goToRemotePath(_ path: String) {
+        guard !path.isEmpty else { return }
+        let normalized = path.hasPrefix("/") ? path : "/" + path
+        if let directory = try? RemotePath.directoryPath(normalized) {
+            navigateRemote(to: directory)
+        } else {
+            errorMessage = "Invalid remote path: \(normalized)"
+        }
+    }
+
     var selectedRemoteTableItem: RemoteFileRecord? {
         guard selectedRemoteItemIDs.count == 1, let id = selectedRemoteItemIDs.first else { return nil }
         return remoteTableItems.first { $0.id == id }

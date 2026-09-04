@@ -40,6 +40,11 @@ struct MainViewCommands: Commands {
         }
 
         CommandGroup(after: .saveItem) {
+            Button("Go to Path…") {
+                viewModel.beginGoToPathForFocusedPane()
+            }
+            .keyboardShortcut("g", modifiers: [.command, .shift])
+
             Button("Refresh") {
                 viewModel.reloadLocal()
                 Task { await viewModel.reloadRemote() }

@@ -56,11 +56,19 @@ struct LocalPanePathBar: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .help("Refresh")
+
+                Button(action: { viewModel.beginGoToPath(.local) }) {
+                    Image(systemName: "line.3.horizontal")
+                }
+                .help("Go to Path")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
         .pathBarChrome()
+        .simultaneousGesture(TapGesture().onEnded {
+            viewModel.noteFocusedGoToPathPane(.local)
+        })
         .zIndex(1)
         .layoutPriority(2)
     }
@@ -110,11 +118,20 @@ struct RemotePanePathBar: View {
                 }
                 .help("Refresh")
                 .disabled(!viewModel.bridge.isConnected)
+
+                Button(action: { viewModel.beginGoToPath(.remote) }) {
+                    Image(systemName: "line.3.horizontal")
+                }
+                .help("Go to Path")
+                .disabled(!viewModel.bridge.isConnected)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
         .pathBarChrome()
+        .simultaneousGesture(TapGesture().onEnded {
+            viewModel.noteFocusedGoToPathPane(.remote)
+        })
         .zIndex(1)
         .layoutPriority(2)
     }
