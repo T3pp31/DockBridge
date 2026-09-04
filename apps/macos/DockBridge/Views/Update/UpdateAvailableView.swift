@@ -4,7 +4,7 @@ struct UpdateAvailableView: View {
     let update: AppUpdateInfo
     let currentVersion: String
     var releaseNotes: String? = nil
-    var inAppUpdateInstallationEnabled: Bool = true
+    var inAppUpdateInstallationEnabled: Bool = false
     let isDownloading: Bool
     let downloadErrorMessage: String?
     let onDownload: () -> Void

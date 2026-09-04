@@ -27,6 +27,8 @@ enum ReleaseCodeSignatureVerifierError: Error, Equatable {
     case teamIdentifierMismatch(expected: String, actual: String)
     case certificateFingerprintMismatch(expected: String, actual: String)
     case notarizationMissing
+    /// `requireSignedUpdates` is enabled but team ID or certificate fingerprint is empty.
+    case misconfiguredSignaturePolicy
 }
 
 protocol AppBundleSignatureVerifying: Sendable {
@@ -56,6 +58,10 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
 
         guard policy.requireSignedUpdates || policy.requireNotarizedUpdates else {
             return
+        }
+
+        if policy.requireSignedUpdates {
+            try validateSignedUpdatePolicy()
         }
 
         var staticCode: SecStaticCode?
@@ -109,6 +115,13 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
         return bundleIdentifier
     }
 
+    private func validateSignedUpdatePolicy() throws {
+        guard !policy.expectedTeamIdentifier.isEmpty,
+              !policy.signingCertificateFingerprintSHA256.isEmpty else {
+            throw ReleaseCodeSignatureVerifierError.misconfiguredSignaturePolicy
+        }
+    }
+
     private func verifyDeveloperIDSignature(signingInfo: NSDictionary) throws {
         guard let certificates = signingInfo[kSecCodeInfoCertificates as String] as? [SecCertificate],
               let leafCertificate = certificates.first else {
@@ -122,8 +135,6 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
     }
 
     private func verifyTeamIdentifier(signingInfo: NSDictionary) throws {
-        guard !policy.expectedTeamIdentifier.isEmpty else { return }
-
         let teamIdentifier = signingInfo[kSecCodeInfoTeamIdentifier as String] as? String ?? ""
         guard teamIdentifier == policy.expectedTeamIdentifier else {
             throw ReleaseCodeSignatureVerifierError.teamIdentifierMismatch(
@@ -134,8 +145,6 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
     }
 
     private func verifyCertificateFingerprint(signingInfo: NSDictionary) throws {
-        guard !policy.signingCertificateFingerprintSHA256.isEmpty else { return }
-
         guard let certificates = signingInfo[kSecCodeInfoCertificates as String] as? [SecCertificate],
               let leafCertificate = certificates.first,
               let certificateData = SecCertificateCopyData(leafCertificate) as Data? else {
