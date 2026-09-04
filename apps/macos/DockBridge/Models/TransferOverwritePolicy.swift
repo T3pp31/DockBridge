@@ -2,8 +2,9 @@ import Foundation
 
 /// How transfers should treat an existing destination file.
 ///
-/// `ask` is handled in the Swift UI layer before starting a transfer (Issue #214).
-/// `replace` and `failIfExists` mirror the Rust engine's `TransferOverwritePolicy`.
+/// `ask` and `failIfExists` are enforced in the Swift UI layer before starting a transfer
+/// (Issue #214). The Rust engine still defaults to Replace until `AppConfigRecord` /
+/// UniFFI expose `TransferOverwritePolicy` and `TransferManager` consumes it.
 enum TransferOverwritePolicy: String, Codable, CaseIterable, Sendable {
     case replace
     case failIfExists

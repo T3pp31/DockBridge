@@ -39,6 +39,8 @@ struct AppConfig: Codable, Equatable, Sendable {
         transferOverwritePolicy: .replace
     )
 
+    /// Builds the UniFFI config record. `transferOverwritePolicy` is omitted because
+    /// `AppConfigRecord` does not yet include that field (Swift pre-check only for now).
     func toRecord(knownHostsPath: String, opensshKnownHostsPath: String) -> AppConfigRecord {
         AppConfigRecord(
             connectionTimeoutSecs: connectionTimeoutSecs,

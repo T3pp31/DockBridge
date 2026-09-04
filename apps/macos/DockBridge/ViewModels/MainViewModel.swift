@@ -157,7 +157,7 @@ final class MainViewModel: ObservableObject {
     @Published var mkdirName = ""
     @Published var showOverwriteAsk = false
     @Published var overwriteAskDestination = ""
-    private var pendingTransferAction: (() async -> Void)?
+    private var pendingTransferAction: (() async -> Bool)?
 
     let bridge: RustBridgeService
     let connectionList: ConnectionListViewModel
@@ -560,7 +560,10 @@ final class MainViewModel: ObservableObject {
             return false
         }
 
-        return await runTransferOrAsk(destinationPath: destinationPath) {
+        return await runTransferOrAsk(
+            destinationPath: destinationPath,
+            destinationSide: .remote
+        ) {
             do {
                 try await self.prepareRemoteWorkingDirectory()
                 let directory = toRemoteDirectory == "/" ? self.remotePath : toRemoteDirectory
@@ -568,8 +571,10 @@ final class MainViewModel: ObservableObject {
                 try await self.bridge.upload(localPath: localURL.path, remoteDirectory: normalizedDirectory)
                 await self.transferQueue.refresh()
                 await self.reloadRemote()
+                return true
             } catch {
                 self.errorMessage = error.dockBridgeUserMessage
+                return false
             }
         }
     }
@@ -584,7 +589,10 @@ final class MainViewModel: ObservableObject {
         let fileName = (remotePath as NSString).lastPathComponent
         let destinationPath = toLocalDirectory.appendingPathComponent(fileName).path
 
-        return await runTransferOrAsk(destinationPath: destinationPath) {
+        return await runTransferOrAsk(
+            destinationPath: destinationPath,
+            destinationSide: .local
+        ) {
             do {
                 let normalizedRemotePath = try RemotePath.normalize(remotePath)
                 try await self.bridge.download(
@@ -593,8 +601,10 @@ final class MainViewModel: ObservableObject {
                 )
                 await self.transferQueue.refresh()
                 self.reloadLocal()
+                return true
             } catch {
                 self.errorMessage = error.dockBridgeUserMessage
+                return false
             }
         }
     }
@@ -605,7 +615,7 @@ final class MainViewModel: ObservableObject {
         pendingTransferAction = nil
         overwriteAskDestination = ""
         if let action {
-            Task { await action() }
+            Task { _ = await action() }
         }
     }
 
@@ -615,42 +625,53 @@ final class MainViewModel: ObservableObject {
         overwriteAskDestination = ""
     }
 
+    /// Whether the transfer destination lives on the remote host or the local filesystem.
+    private enum TransferDestinationSide {
+        case remote
+        case local
+    }
+
     private func runTransferOrAsk(
         destinationPath: String,
-        perform: @escaping () async -> Void
+        destinationSide: TransferDestinationSide,
+        perform: @escaping () async -> Bool
     ) async -> Bool {
         let policy = settings.loadConfig().transferOverwritePolicy
 
         switch policy {
         case .replace:
-            await perform()
-            return errorMessage == nil
+            errorMessage = nil
+            return await perform()
 
         case .failIfExists:
-            if await destinationExists(at: destinationPath) {
+            // Pre-check only: UniFFI AppConfigRecord does not yet carry overwrite policy,
+            // so the Rust engine still uses Replace after the transfer starts.
+            if await destinationExists(at: destinationPath, side: destinationSide) {
                 errorMessage = "A file already exists at the destination."
                 return false
             }
-            await perform()
-            return errorMessage == nil
+            errorMessage = nil
+            return await perform()
 
         case .ask:
-            if await destinationExists(at: destinationPath) {
+            if await destinationExists(at: destinationPath, side: destinationSide) {
                 overwriteAskDestination = destinationPath
                 pendingTransferAction = perform
                 showOverwriteAsk = true
                 return false
             }
-            await perform()
-            return errorMessage == nil
+            errorMessage = nil
+            return await perform()
         }
     }
 
-    private func destinationExists(at path: String) async -> Bool {
-        if path.hasPrefix("/") {
+    private func destinationExists(at path: String, side: TransferDestinationSide) async -> Bool {
+        switch side {
+        case .remote:
             return await remoteDestinationExists(path: path)
+        case .local:
+            return FileManager.default.fileExists(atPath: path)
         }
-        return FileManager.default.fileExists(atPath: path)
     }
 
     private func remoteDestinationExists(path: String) async -> Bool {
