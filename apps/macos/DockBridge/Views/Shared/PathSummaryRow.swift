@@ -10,47 +10,48 @@ struct PathSummaryRow<Actions: View>: View {
     @ViewBuilder var actions: () -> Actions
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text(label)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .fixedSize()
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .fixedSize()
 
-                Spacer(minLength: 0)
+            pathDisplay
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                actions()
+            actions()
 
-                ControlGroup {
+            ControlGroup {
+                Button {
+                    ClipboardHelper.copy(path)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .help("Copy path")
+
+                if showRevealInFinder {
                     Button {
-                        ClipboardHelper.copy(path)
+                        revealInFinder()
                     } label: {
-                        Image(systemName: "doc.on.doc")
+                        Image(systemName: "folder")
                     }
-                    .help("Copy path")
-
-                    if showRevealInFinder {
-                        Button {
-                            revealInFinder()
-                        } label: {
-                            Image(systemName: "folder")
-                        }
-                        .help("Reveal in Finder")
-                    }
+                    .help("Reveal in Finder")
                 }
             }
+        }
+    }
 
-            if let onBreadcrumbSelect, !breadcrumbSegments.isEmpty {
-                PathBreadcrumbView(segments: breadcrumbSegments, onSelect: onBreadcrumbSelect)
-                    .help(path)
-            } else {
-                Text(path)
-                    .font(.caption.monospaced())
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(path)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+    @ViewBuilder
+    private var pathDisplay: some View {
+        if let onBreadcrumbSelect, !breadcrumbSegments.isEmpty {
+            PathBreadcrumbView(segments: breadcrumbSegments, onSelect: onBreadcrumbSelect)
+                .help(path)
+        } else {
+            Text(path)
+                .font(.caption.monospaced())
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(path)
         }
     }
 
