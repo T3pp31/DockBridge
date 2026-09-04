@@ -14,9 +14,11 @@ enum FileDropTransferKickoff {
     static func acceptRemoteDownloads(
         items: [RemoteFileDragPayload],
         viewModel: MainViewModel,
+        toLocalDirectory: URL? = nil,
         displayedRemoteItems: [RemoteFileRecord]? = nil
     ) -> Bool {
         let displayedItems = displayedRemoteItems ?? viewModel.remoteTableItems
+        let destination = toLocalDirectory ?? viewModel.localPath
         let validItems = items.filter {
             FileDropValidation.isDisplayedRemoteItem($0, in: displayedItems)
         }
@@ -26,7 +28,7 @@ enum FileDropTransferKickoff {
             for item in validItems {
                 _ = await viewModel.download(
                     remotePath: item.path,
-                    toLocalDirectory: viewModel.localPath
+                    toLocalDirectory: destination
                 )
             }
         }
@@ -37,9 +39,11 @@ enum FileDropTransferKickoff {
     static func acceptLocalPayloadUploads(
         items: [LocalFileDragPayload],
         viewModel: MainViewModel,
+        toRemoteDirectory: String? = nil,
         displayedLocalItems: [LocalFileItem]? = nil
     ) -> Bool {
         let displayedItems = displayedLocalItems ?? viewModel.localTableItems
+        let destination = toRemoteDirectory ?? viewModel.remotePath
         let validItems = items.filter {
             FileDropValidation.isDisplayedLocalItem($0, in: displayedItems)
                 && FileDropValidation.canUploadLocalItem(at: $0.url)
@@ -50,7 +54,7 @@ enum FileDropTransferKickoff {
             for item in validItems {
                 _ = await viewModel.upload(
                     localURL: item.url,
-                    toRemoteDirectory: viewModel.remotePath
+                    toRemoteDirectory: destination
                 )
             }
         }
@@ -61,8 +65,10 @@ enum FileDropTransferKickoff {
     static func acceptExternalUploads(
         urls: [URL],
         viewModel: MainViewModel,
+        toRemoteDirectory: String? = nil,
         bookmarkService: some FileDropSecurityScopeService = SecurityScopedBookmarkService.shared
     ) -> Bool {
+        let destination = toRemoteDirectory ?? viewModel.remotePath
         let validURLs = urls.filter { FileDropValidation.canUploadExternalItem(at: $0) }
         guard !validURLs.isEmpty else { return false }
 
@@ -86,7 +92,7 @@ enum FileDropTransferKickoff {
             for url in urlsToUpload {
                 _ = await viewModel.upload(
                     localURL: url,
-                    toRemoteDirectory: viewModel.remotePath
+                    toRemoteDirectory: destination
                 )
             }
         }
@@ -250,7 +256,9 @@ struct RemotePaneDropModifier: ViewModifier {
 
 struct LocalFileTable: View {
     @ObservedObject var viewModel: MainViewModel
+    @Binding var isFolderRowDropTargeted: Bool
     @State private var sortOrder = [KeyPathComparator(\LocalFileItem.name, order: .forward)]
+    @State private var dropTargetCounts: [String: Int] = [:]
 
     private var sortedItems: [LocalFileItem] {
         viewModel.localItems.sorted(using: sortOrder)
@@ -259,10 +267,7 @@ struct LocalFileTable: View {
     var body: some View {
         Table(of: LocalFileItem.self, selection: $viewModel.selectedLocalItemIDs, sortOrder: $sortOrder) {
             TableColumn("Name", value: \.name) { item in
-                HStack(spacing: 6) {
-                    FileTypeIcon.fileIcon(for: item.name, isDirectory: item.isDirectory)
-                    Text(item.name)
-                }
+                folderDropHighlightLabel(name: item.name, isDirectory: item.isDirectory, rowID: item.id)
             }
             .width(
                 min: FileTableColumnLayout.nameMinWidth,
@@ -286,33 +291,102 @@ struct LocalFileTable: View {
         } rows: {
             if viewModel.canNavigateLocalUp {
                 TableRow(LocalFileItem(parentOf: viewModel.localPath))
+                    .dropDestination(for: LocalFileDragPayload.self) { items in
+                        acceptLocalMoves(items, onto: LocalFileItem(parentOf: viewModel.localPath))
+                    } isTargeted: { targeted in
+                        setRowDropTarget(LocalFileItem(parentOf: viewModel.localPath).id, targeted: targeted)
+                    }
+                    .dropDestination(for: RemoteFileDragPayload.self) { items in
+                        acceptRemoteDownloads(items, onto: LocalFileItem(parentOf: viewModel.localPath))
+                    } isTargeted: { targeted in
+                        setRowDropTarget(LocalFileItem(parentOf: viewModel.localPath).id, targeted: targeted)
+                    }
             }
             ForEach(sortedItems, id: \.id) { item in
                 TableRow(item)
                     .draggable(LocalFileDragPayload(url: item.url, isDirectory: item.isDirectory))
                     .dropDestination(for: LocalFileDragPayload.self) { items in
-                        guard item.isDirectory,
-                              let target = FileDropValidation.destinationDirectory(forLocalDropOn: item) else {
-                            return
-                        }
-                        for payload in items {
-                            guard FileDropValidation.canMoveLocalItem(from: payload.url, to: target) else { continue }
-                            do {
-                                try viewModel.moveLocalItem(from: payload.url, toDirectory: target)
-                            } catch {
-                                viewModel.errorMessage = error.dockBridgeUserMessage
-                            }
-                        }
+                        acceptLocalMoves(items, onto: item)
+                    } isTargeted: { targeted in
+                        setRowDropTarget(item.id, targeted: targeted)
+                    }
+                    .dropDestination(for: RemoteFileDragPayload.self) { items in
+                        acceptRemoteDownloads(items, onto: item)
+                    } isTargeted: { targeted in
+                        setRowDropTarget(item.id, targeted: targeted)
                     }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+
+    @ViewBuilder
+    private func folderDropHighlightLabel(name: String, isDirectory: Bool, rowID: String) -> some View {
+        HStack(spacing: 6) {
+            FileTypeIcon.fileIcon(for: name, isDirectory: isDirectory)
+            Text(name)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .background {
+            if isRowDropTargeted(rowID) {
+                RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.18))
+            }
+        }
+    }
+
+    private func acceptLocalMoves(_ items: [LocalFileDragPayload], onto item: LocalFileItem) {
+        guard item.isDirectory,
+              let target = FileDropValidation.destinationDirectory(forLocalDropOn: item) else {
+            return
+        }
+        for payload in items {
+            guard FileDropValidation.isDisplayedLocalItem(payload, in: viewModel.localTableItems),
+                  FileDropValidation.canMoveLocalItem(from: payload.url, to: target) else {
+                continue
+            }
+            do {
+                try viewModel.moveLocalItem(from: payload.url, toDirectory: target)
+            } catch {
+                viewModel.errorMessage = error.dockBridgeUserMessage
+            }
+        }
+    }
+
+    private func acceptRemoteDownloads(_ items: [RemoteFileDragPayload], onto item: LocalFileItem) {
+        guard viewModel.bridge.isConnected,
+              item.isDirectory,
+              let target = FileDropValidation.destinationDirectory(forLocalDropOn: item) else {
+            return
+        }
+        _ = FileDropTransferKickoff.acceptRemoteDownloads(
+            items: items,
+            viewModel: viewModel,
+            toLocalDirectory: target
+        )
+    }
+
+    private func isRowDropTargeted(_ id: String) -> Bool {
+        (dropTargetCounts[id] ?? 0) > 0
+    }
+
+    private func setRowDropTarget(_ id: String, targeted: Bool) {
+        let next = max(0, (dropTargetCounts[id] ?? 0) + (targeted ? 1 : -1))
+        if next == 0 {
+            dropTargetCounts.removeValue(forKey: id)
+        } else {
+            dropTargetCounts[id] = next
+        }
+        isFolderRowDropTargeted = !dropTargetCounts.isEmpty
+    }
 }
 
 struct RemoteFileTable: View {
     @ObservedObject var viewModel: MainViewModel
+    @Binding var isFolderRowDropTargeted: Bool
     @State private var sortOrder = [KeyPathComparator(\RemoteFileRecord.name, order: .forward)]
+    @State private var dropTargetCounts: [String: Int] = [:]
 
     private var sortedItems: [RemoteFileRecord] {
         viewModel.remoteItems.sorted(using: sortOrder)
@@ -321,10 +395,7 @@ struct RemoteFileTable: View {
     var body: some View {
         Table(of: RemoteFileRecord.self, selection: $viewModel.selectedRemoteItemIDs, sortOrder: $sortOrder) {
             TableColumn("Name", value: \.name) { item in
-                HStack(spacing: 6) {
-                    FileTypeIcon.fileIcon(for: item.name, isDirectory: item.isDirectory)
-                    Text(item.name)
-                }
+                folderDropHighlightLabel(name: item.name, isDirectory: item.isDirectory, rowID: item.id)
             }
             .width(
                 min: FileTableColumnLayout.nameMinWidth,
@@ -349,27 +420,97 @@ struct RemoteFileTable: View {
             if viewModel.canNavigateRemoteUp,
                let parent = RemoteFileRecord.parentEntry(for: viewModel.remotePath) {
                 TableRow(parent)
+                    .dropDestination(for: LocalFileDragPayload.self) { items in
+                        acceptLocalUploads(items, onto: parent)
+                    } isTargeted: { targeted in
+                        setRowDropTarget(parent.id, targeted: targeted)
+                    }
+                    .dropDestination(for: URL.self) { urls in
+                        acceptExternalUploads(urls, onto: parent)
+                    } isTargeted: { targeted in
+                        setRowDropTarget(parent.id, targeted: targeted)
+                    }
+                    .dropDestination(for: RemoteFileDragPayload.self) { items in
+                        acceptRemoteMoves(items, onto: parent)
+                    } isTargeted: { targeted in
+                        setRowDropTarget(parent.id, targeted: targeted)
+                    }
             }
             ForEach(sortedItems, id: \.id) { item in
                 TableRow(item)
                     .draggable(RemoteFileDragPayload(path: item.path, isDirectory: item.isDirectory))
                     .dropDestination(for: LocalFileDragPayload.self) { items in
-                        guard item.isDirectory,
-                              let target = FileDropValidation.destinationDirectory(forRemoteDropOn: item) else {
-                            return
-                        }
-                        Task { await viewModel.uploadPayloads(items, intoRemoteDirectory: target) }
+                        acceptLocalUploads(items, onto: item)
+                    } isTargeted: { targeted in
+                        setRowDropTarget(item.id, targeted: targeted)
+                    }
+                    .dropDestination(for: URL.self) { urls in
+                        acceptExternalUploads(urls, onto: item)
+                    } isTargeted: { targeted in
+                        setRowDropTarget(item.id, targeted: targeted)
                     }
                     .dropDestination(for: RemoteFileDragPayload.self) { items in
-                        guard item.isDirectory,
-                              let target = FileDropValidation.destinationDirectory(forRemoteDropOn: item) else {
-                            return
-                        }
-                        Task { await viewModel.moveRemotePayloads(items, intoRemoteDirectory: target) }
+                        acceptRemoteMoves(items, onto: item)
+                    } isTargeted: { targeted in
+                        setRowDropTarget(item.id, targeted: targeted)
                     }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func folderDropHighlightLabel(name: String, isDirectory: Bool, rowID: String) -> some View {
+        HStack(spacing: 6) {
+            FileTypeIcon.fileIcon(for: name, isDirectory: isDirectory)
+            Text(name)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .background {
+            if isRowDropTargeted(rowID) {
+                RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.18))
+            }
+        }
+    }
+
+    private func acceptLocalUploads(_ items: [LocalFileDragPayload], onto item: RemoteFileRecord) {
+        guard viewModel.bridge.isConnected,
+              item.isDirectory,
+              let target = FileDropValidation.destinationDirectory(forRemoteDropOn: item) else {
+            return
+        }
+        _ = FileDropTransferKickoff.acceptLocalPayloadUploads(
+            items: items,
+            viewModel: viewModel,
+            toRemoteDirectory: target
+        )
+    }
+
+    private func acceptExternalUploads(_ urls: [URL], onto item: RemoteFileRecord) {
+        guard viewModel.bridge.isConnected,
+              item.isDirectory,
+              let target = FileDropValidation.destinationDirectory(forRemoteDropOn: item) else {
+            return
+        }
+        _ = FileDropTransferKickoff.acceptExternalUploads(
+            urls: urls,
+            viewModel: viewModel,
+            toRemoteDirectory: target
+        )
+    }
+
+    private func acceptRemoteMoves(_ items: [RemoteFileDragPayload], onto item: RemoteFileRecord) {
+        guard item.isDirectory,
+              let target = FileDropValidation.destinationDirectory(forRemoteDropOn: item) else {
+            return
+        }
+        _ = FileDropTransferKickoff.acceptRemoteMoves(
+            items: items,
+            toDirectory: target,
+            viewModel: viewModel
+        )
     }
 
     private func remoteSizeLabel(for item: RemoteFileRecord) -> String {
@@ -377,6 +518,20 @@ struct RemoteFileTable: View {
             return "—"
         }
         return ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file)
+    }
+
+    private func isRowDropTargeted(_ id: String) -> Bool {
+        (dropTargetCounts[id] ?? 0) > 0
+    }
+
+    private func setRowDropTarget(_ id: String, targeted: Bool) {
+        let next = max(0, (dropTargetCounts[id] ?? 0) + (targeted ? 1 : -1))
+        if next == 0 {
+            dropTargetCounts.removeValue(forKey: id)
+        } else {
+            dropTargetCounts[id] = next
+        }
+        isFolderRowDropTargeted = !dropTargetCounts.isEmpty
     }
 }
 

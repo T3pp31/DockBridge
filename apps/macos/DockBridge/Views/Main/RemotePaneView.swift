@@ -3,6 +3,7 @@ import SwiftUI
 struct RemotePaneView: View {
     @ObservedObject var viewModel: MainViewModel
     @State private var isDropTargeted = false
+    @State private var isFolderRowDropTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
@@ -12,7 +13,7 @@ struct RemotePaneView: View {
 
             if viewModel.bridge.isConnected {
                 ExpandingFrame { size in
-                    RemoteFileTable(viewModel: viewModel)
+                    RemoteFileTable(viewModel: viewModel, isFolderRowDropTargeted: $isFolderRowDropTargeted)
                         .frame(width: size.width, height: size.height)
                         .contextMenu(forSelectionType: String.self) { ids in
                             if let item = singleSelectedRemoteItem(from: ids), !item.isParentDirectory {
@@ -43,7 +44,7 @@ struct RemotePaneView: View {
                             return .ignored
                         }
                         .overlay {
-                            if isDropTargeted {
+                            if isDropTargeted && !isFolderRowDropTargeted {
                                 DropTargetOverlay(
                                     title: "Drop to upload",
                                     systemImage: "arrow.up.doc"
