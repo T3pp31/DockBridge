@@ -29,18 +29,22 @@ struct MainViewCommands: Commands {
             .disabled(viewModel.selectedRemoteItem == nil || !viewModel.bridge.isConnected)
         }
 
+        // Replace the system New Item group so ⌘N binds to New Folder instead of
+        // colliding with New Window / New Document.
+        CommandGroup(replacing: .newItem) {
+            Button("New Folder") {
+                viewModel.showMkdirPrompt = true
+            }
+            .keyboardShortcut("n", modifiers: [.command])
+            .disabled(!viewModel.bridge.isConnected)
+        }
+
         CommandGroup(after: .saveItem) {
             Button("Refresh") {
                 viewModel.reloadLocal()
                 Task { await viewModel.reloadRemote() }
             }
             .keyboardShortcut("r", modifiers: [.command])
-
-            Button("New Folder") {
-                viewModel.showMkdirPrompt = true
-            }
-            .keyboardShortcut("n", modifiers: [.command])
-            .disabled(!viewModel.bridge.isConnected)
 
             Button("Delete") {
                 guard let item = viewModel.selectedRemoteTableItem else { return }

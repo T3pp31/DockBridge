@@ -5,7 +5,7 @@ struct MainView: View {
     @ObservedObject private var connectionList: ConnectionListViewModel
     @ObservedObject private var transferQueue: TransferQueueViewModel
     @ObservedObject private var viewModel: MainViewModel
-    @ObservedObject private var updateCheck = UpdateCheckViewModel()
+    @StateObject private var updateCheck = UpdateCheckViewModel()
 
     @Binding private var showSettings: Bool
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
