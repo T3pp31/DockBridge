@@ -4,6 +4,7 @@ struct LocalPaneView: View {
     @ObservedObject var viewModel: MainViewModel
     @State private var isDropTargeted = false
     @State private var isFolderRowDropTargeted = false
+    @State private var dropKind: DropKind = .none
 
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
@@ -43,15 +44,15 @@ struct LocalPaneView: View {
                     .overlay {
                         if isDropTargeted && !isFolderRowDropTargeted {
                             DropTargetOverlay(
-                                title: "Drop to move or download",
-                                systemImage: "arrow.down.circle"
+                                title: dropKind.overlayTitle,
+                                systemImage: dropKind == .localMove ? "arrow.right.circle" : "arrow.down.circle"
                             )
                             .padding(4)
                             .transition(.opacity.combined(with: .scale(scale: 0.98)))
                         }
                     }
                     .animation(.easeInOut(duration: 0.2), value: isDropTargeted)
-                    .modifier(LocalPaneDropModifier(viewModel: viewModel, isTargeted: $isDropTargeted))
+                    .modifier(LocalPaneDropModifier(viewModel: viewModel, isTargeted: $isDropTargeted, dropKind: $dropKind))
             }
             .layoutPriority(0)
         }

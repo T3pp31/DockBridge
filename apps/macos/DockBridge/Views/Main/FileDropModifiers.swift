@@ -9,6 +9,22 @@ protocol FileDropSecurityScopeService {
 
 extension SecurityScopedBookmarkService: FileDropSecurityScopeService {}
 
+/// Distinguishes the active drag kind so the overlay can state exactly what a
+/// drop will do (Issue #232).
+enum DropKind {
+    case none
+    case remoteDownload
+    case localMove
+
+    var overlayTitle: String {
+        switch self {
+        case .none: return ""
+        case .remoteDownload: return "Drop to download"
+        case .localMove: return "Drop to move"
+        }
+    }
+}
+
 enum FileDropTransferKickoff {
     @MainActor
     static func acceptRemoteDownloads(
@@ -128,6 +144,7 @@ enum FileDropTransferKickoff {
 struct LocalPaneDropModifier: ViewModifier {
     @ObservedObject var viewModel: MainViewModel
     @Binding var isTargeted: Bool
+    @Binding var dropKind: DropKind
     @State private var isRemoteDragTargeted = false
     @State private var isLocalDragTargeted = false
 
@@ -142,12 +159,14 @@ struct LocalPaneDropModifier: ViewModifier {
             } isTargeted: { targeted in
                 isRemoteDragTargeted = targeted
                 isTargeted = isRemoteDragTargeted || isLocalDragTargeted
+                dropKind = targeted && !isLocalDragTargeted ? .remoteDownload : (isLocalDragTargeted ? .localMove : .none)
             }
             .dropDestination(for: LocalFileDragPayload.self) { items, _ in
                 acceptLocalMoves(items)
             } isTargeted: { targeted in
                 isLocalDragTargeted = targeted
                 isTargeted = isRemoteDragTargeted || isLocalDragTargeted
+                dropKind = targeted && !isRemoteDragTargeted ? .localMove : (isRemoteDragTargeted ? .remoteDownload : .none)
             }
     }
 
