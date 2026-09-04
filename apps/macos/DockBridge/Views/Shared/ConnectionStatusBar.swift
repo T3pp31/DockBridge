@@ -6,6 +6,8 @@ struct ConnectionStatusBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
+            // The indicator is the single accessibility owner for connection
+            // status (Issue #231); the visible title below is decorative.
             ConnectionStatusIndicator(status: status)
 
             Text(status.statusTitle)
@@ -15,16 +17,16 @@ struct ConnectionStatusBar: View {
 
             if let transferSummary {
                 Text(transferSummary)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .font(DesignTokens.Fonts.monospacedDigit)
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                     .accessibilityLabel("Transfer activity: \(transferSummary)")
             }
 
             Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, DesignTokens.Spacing.statusBarHorizontal)
+        .padding(.vertical, DesignTokens.Spacing.statusBarVertical)
         .background(.bar)
     }
 }

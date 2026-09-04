@@ -33,6 +33,8 @@ enum DesignTokens {
         static let panePadding: CGFloat = 12
         static let itemSpacing: CGFloat = 8
         static let tightSpacing: CGFloat = 4
+        static let statusBarHorizontal: CGFloat = 12
+        static let statusBarVertical: CGFloat = 6
     }
 
     // MARK: Fonts
