@@ -43,6 +43,19 @@ struct HostKeyConfirmView: View {
                     .textSelection(.enabled)
             }
 
+            DialogDetailSection("How to verify") {
+                Text(
+                    """
+                    Compare the fingerprint above with a value the server \
+                    administrator or hosting provider publishes out-of-band \
+                    (their website, setup email, or console). Match the \
+                    characters exactly before accepting.
+                    """
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            }
+
             DialogFootnote(text: "Accept only if you trust this fingerprint.")
         }
     }
@@ -70,6 +83,18 @@ struct HostKeyConfirmView: View {
                         .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
                 }
+            }
+
+            DialogDetailSection("How to verify") {
+                Text(
+                    """
+                    Compare both fingerprints with a value the server \
+                    administrator confirms out-of-band. If you did not \
+                    change the server key, Reject to be safe.
+                    """
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
             }
 
             DialogFootnote(text: "Reject unless you intentionally changed the server key.")
