@@ -68,8 +68,12 @@ struct MainView: View {
 
                 TransferQueueView(viewModel: transferQueue, isExpanded: $isTransferQueueExpanded)
                     .frame(
-                        minHeight: WindowLayout.transferQueueMinHeight,
-                        idealHeight: WindowLayout.transferQueueIdealHeight
+                        minHeight: isTransferQueueExpanded
+                            ? WindowLayout.transferQueueMinHeight
+                            : nil,
+                        idealHeight: isTransferQueueExpanded
+                            ? WindowLayout.transferQueueIdealHeight
+                            : nil
                     )
                     .fixedSize(horizontal: false, vertical: !isTransferQueueExpanded)
                     .layoutPriority(0)
