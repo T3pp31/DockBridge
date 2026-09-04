@@ -43,11 +43,19 @@ struct MainViewCommands: Commands {
             .disabled(!viewModel.bridge.isConnected)
 
             Button("Delete") {
-                guard let item = viewModel.selectedRemoteTableItem else { return }
+                // Destructive: require exactly one selection (never Set.first under multi-select).
+                guard viewModel.selectedRemoteItemIDs.count == 1,
+                      let item = viewModel.selectedRemoteTableItem,
+                      !item.isParentDirectory else { return }
                 viewModel.requestDeleteRemote(item: item)
             }
             .keyboardShortcut(.delete, modifiers: [])
-            .disabled(viewModel.selectedRemoteItem == nil || !viewModel.bridge.isConnected)
+            .disabled(
+                viewModel.selectedRemoteItemIDs.count != 1
+                    || viewModel.selectedRemoteTableItem == nil
+                    || viewModel.selectedRemoteTableItem?.isParentDirectory == true
+                    || !viewModel.bridge.isConnected
+            )
         }
 
         CommandGroup(after: .toolbar) {

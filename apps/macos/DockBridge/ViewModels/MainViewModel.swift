@@ -21,14 +21,16 @@ final class MainViewModel: ObservableObject {
     @Published var selectedLocalItemIDs: Set<String> = []
     @Published var selectedRemoteItemIDs: Set<String> = []
 
+    /// Singular selection only. Multi-select must not use `Set.first` (non-deterministic).
     var selectedLocalItem: LocalFileItem? {
-        guard let firstID = selectedLocalItemIDs.first else { return nil }
-        return localItems.first { $0.id == firstID }
+        guard selectedLocalItemIDs.count == 1, let id = selectedLocalItemIDs.first else { return nil }
+        return localItems.first { $0.id == id }
     }
 
+    /// Singular selection only. Multi-select must not use `Set.first` (non-deterministic).
     var selectedRemoteItem: RemoteFileRecord? {
-        guard let firstID = selectedRemoteItemIDs.first else { return nil }
-        return remoteItems.first { $0.id == firstID }
+        guard selectedRemoteItemIDs.count == 1, let id = selectedRemoteItemIDs.first else { return nil }
+        return remoteItems.first { $0.id == id }
     }
 
     /// Every selected local item that is not the `..` entry, preserving a
@@ -48,8 +50,8 @@ final class MainViewModel: ObservableObject {
     }
 
     var selectedLocalTableItem: LocalFileItem? {
-        guard let firstID = selectedLocalItemIDs.first else { return nil }
-        return localTableItems.first { $0.id == firstID }
+        guard selectedLocalItemIDs.count == 1, let id = selectedLocalItemIDs.first else { return nil }
+        return localTableItems.first { $0.id == id }
     }
 
     var selectedConnectionProfile: ConnectionProfile? {
@@ -58,8 +60,8 @@ final class MainViewModel: ObservableObject {
     }
 
     var selectedRemoteTableItem: RemoteFileRecord? {
-        guard let firstID = selectedRemoteItemIDs.first else { return nil }
-        return remoteTableItems.first { $0.id == firstID }
+        guard selectedRemoteItemIDs.count == 1, let id = selectedRemoteItemIDs.first else { return nil }
+        return remoteTableItems.first { $0.id == id }
     }
     @Published var errorMessage: String?
     @Published var showDeleteConfirmation = false
