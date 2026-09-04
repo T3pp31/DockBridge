@@ -15,14 +15,21 @@ struct RemotePaneView: View {
                     RemoteFileTable(viewModel: viewModel)
                         .frame(width: size.width, height: size.height)
                         .contextMenu(forSelectionType: String.self) { ids in
-                            if let item = singleSelectedRemoteItem(from: ids), !item.isParentDirectory {
+                            let items = transferableRemoteItems(from: ids)
+                            if items.isEmpty { return }
+
+                            if items.count == 1, let item = items.first {
                                 Button("Copy Path") {
                                     ClipboardHelper.copy(item.path)
                                 }
-                                Button("Download") {
-                                    viewModel.selectedRemoteItemID = item.id
-                                    Task { await viewModel.downloadSelected() }
-                                }
+                            }
+
+                            Button(items.count == 1 ? "Download" : "Download \(items.count) Items") {
+                                viewModel.selectedRemoteItemIDs = Set(items.map(\.id))
+                                Task { await viewModel.downloadSelected() }
+                            }
+
+                            if items.count == 1, let item = items.first {
                                 Button("Rename") {
                                     viewModel.beginRename(item: item)
                                 }
@@ -98,5 +105,9 @@ struct RemotePaneView: View {
     private func singleSelectedRemoteItem(from ids: Set<String>) -> RemoteFileRecord? {
         guard ids.count == 1, let id = ids.first else { return nil }
         return viewModel.remoteTableItems.first { $0.id == id }
+    }
+
+    private func transferableRemoteItems(from ids: Set<String>) -> [RemoteFileRecord] {
+        viewModel.remoteTableItems.filter { ids.contains($0.id) && !$0.isParentDirectory }
     }
 }

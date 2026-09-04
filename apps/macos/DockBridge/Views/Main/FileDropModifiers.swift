@@ -224,7 +224,7 @@ struct LocalFileTable: View {
     }
 
     var body: some View {
-        Table(of: LocalFileItem.self, selection: $viewModel.selectedLocalItemID, sortOrder: $sortOrder) {
+        Table(of: LocalFileItem.self, selection: $viewModel.selectedLocalItemIDs, sortOrder: $sortOrder) {
             TableColumn("Name", value: \.name) { item in
                 HStack(spacing: 6) {
                     FileTypeIcon.fileIcon(for: item.name, isDirectory: item.isDirectory)
@@ -272,7 +272,7 @@ struct RemoteFileTable: View {
     }
 
     var body: some View {
-        Table(of: RemoteFileRecord.self, selection: $viewModel.selectedRemoteItemID, sortOrder: $sortOrder) {
+        Table(of: RemoteFileRecord.self, selection: $viewModel.selectedRemoteItemIDs, sortOrder: $sortOrder) {
             TableColumn("Name", value: \.name) { item in
                 HStack(spacing: 6) {
                     FileTypeIcon.fileIcon(for: item.name, isDirectory: item.isDirectory)

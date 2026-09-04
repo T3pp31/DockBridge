@@ -18,22 +18,40 @@ final class MainViewModel: ObservableObject {
         }
     }
     @Published private(set) var remoteItems: [RemoteFileRecord] = []
-    @Published var selectedLocalItemID: String?
-    @Published var selectedRemoteItemID: String?
+    @Published var selectedLocalItemIDs: Set<String> = []
+    @Published var selectedRemoteItemIDs: Set<String> = []
 
+    /// Singular selection only. Multi-select must not use `Set.first` (non-deterministic).
     var selectedLocalItem: LocalFileItem? {
-        guard let selectedLocalItemID else { return nil }
-        return localItems.first { $0.id == selectedLocalItemID }
+        guard selectedLocalItemIDs.count == 1, let id = selectedLocalItemIDs.first else { return nil }
+        return localItems.first { $0.id == id }
     }
 
+    /// Singular selection only. Multi-select must not use `Set.first` (non-deterministic).
     var selectedRemoteItem: RemoteFileRecord? {
-        guard let selectedRemoteItemID else { return nil }
-        return remoteItems.first { $0.id == selectedRemoteItemID }
+        guard selectedRemoteItemIDs.count == 1, let id = selectedRemoteItemIDs.first else { return nil }
+        return remoteItems.first { $0.id == id }
+    }
+
+    /// Every selected local item that is not the `..` entry, preserving a
+    /// stable order for batch transfers (Issue #215).
+    var selectedLocalItems: [LocalFileItem] {
+        guard !selectedLocalItemIDs.isEmpty else { return [] }
+        return localItems.filter { item in
+            selectedLocalItemIDs.contains(item.id) && !item.isParentDirectory
+        }
+    }
+
+    var selectedRemoteItems: [RemoteFileRecord] {
+        guard !selectedRemoteItemIDs.isEmpty else { return [] }
+        return remoteItems.filter { item in
+            selectedRemoteItemIDs.contains(item.id) && !item.isParentDirectory
+        }
     }
 
     var selectedLocalTableItem: LocalFileItem? {
-        guard let selectedLocalItemID else { return nil }
-        return localTableItems.first { $0.id == selectedLocalItemID }
+        guard selectedLocalItemIDs.count == 1, let id = selectedLocalItemIDs.first else { return nil }
+        return localTableItems.first { $0.id == id }
     }
 
     var selectedConnectionProfile: ConnectionProfile? {
@@ -58,8 +76,8 @@ final class MainViewModel: ObservableObject {
     }
 
     var selectedRemoteTableItem: RemoteFileRecord? {
-        guard let selectedRemoteItemID else { return nil }
-        return remoteTableItems.first { $0.id == selectedRemoteItemID }
+        guard selectedRemoteItemIDs.count == 1, let id = selectedRemoteItemIDs.first else { return nil }
+        return remoteTableItems.first { $0.id == id }
     }
     @Published var errorMessage: String?
     /// When set, MainView expands the transfer queue and clears the flag.
@@ -132,7 +150,7 @@ final class MainViewModel: ObservableObject {
         if case .bookmarkFailed(_, let error) = resolution {
             errorMessage = DefaultLocalPathResolver.userMessage(for: error)
         }
-        selectedLocalItemID = nil
+            selectedLocalItemIDs = []
         reloadLocal()
     }
 
@@ -175,31 +193,31 @@ final class MainViewModel: ObservableObject {
     func navigateLocal(into item: LocalFileItem) {
         guard item.isDirectory else { return }
         applyLocalPath(item.url)
-        selectedLocalItemID = nil
+            selectedLocalItemIDs = []
     }
 
     func navigateLocal(to path: String) {
         applyLocalPath(URL(fileURLWithPath: path, isDirectory: true))
-        selectedLocalItemID = nil
+            selectedLocalItemIDs = []
     }
 
     func navigateLocalUp() {
         let parent = localPath.deletingLastPathComponent()
         guard parent.path != localPath.path else { return }
         applyLocalPath(parent)
-        selectedLocalItemID = nil
+            selectedLocalItemIDs = []
     }
 
     func navigateLocalBack() {
         guard let path = localHistory.goBack() else { return }
         applyLocalPath(URL(fileURLWithPath: path, isDirectory: true), recordHistory: false)
-        selectedLocalItemID = nil
+            selectedLocalItemIDs = []
     }
 
     func navigateLocalForward() {
         guard let path = localHistory.goForward() else { return }
         applyLocalPath(URL(fileURLWithPath: path, isDirectory: true), recordHistory: false)
-        selectedLocalItemID = nil
+            selectedLocalItemIDs = []
     }
 
     private func applyLocalPath(_ url: URL, recordHistory: Bool = true) {
@@ -300,13 +318,13 @@ final class MainViewModel: ObservableObject {
     func navigateRemote(into item: RemoteFileRecord) {
         guard item.isDirectory, let path = try? RemotePath.directoryPath(item.path) else { return }
         applyRemotePath(path)
-        selectedRemoteItemID = nil
+            selectedRemoteItemIDs = []
     }
 
     func navigateRemote(to path: String) {
         guard let normalized = try? RemotePath.directoryPath(path) else { return }
         applyRemotePath(normalized)
-        selectedRemoteItemID = nil
+            selectedRemoteItemIDs = []
     }
 
     func navigateRemoteUp() {
@@ -314,19 +332,19 @@ final class MainViewModel: ObservableObject {
         guard let parent = try? RemotePath.parent(of: remotePath),
               let path = try? RemotePath.directoryPath(parent) else { return }
         applyRemotePath(path)
-        selectedRemoteItemID = nil
+            selectedRemoteItemIDs = []
     }
 
     func navigateRemoteBack() {
         guard let path = remoteHistory.goBack() else { return }
         applyRemotePath(path, recordHistory: false)
-        selectedRemoteItemID = nil
+            selectedRemoteItemIDs = []
     }
 
     func navigateRemoteForward() {
         guard let path = remoteHistory.goForward() else { return }
         applyRemotePath(path, recordHistory: false)
-        selectedRemoteItemID = nil
+            selectedRemoteItemIDs = []
     }
 
     private func applyRemotePath(_ path: String, recordHistory: Bool = true) {
@@ -368,13 +386,17 @@ final class MainViewModel: ObservableObject {
     }
 
     func uploadSelected() async {
-        guard let item = selectedLocalItem else { return }
-        await upload(localURL: item.url, toRemoteDirectory: remotePath)
+        guard !selectedLocalItems.isEmpty else { return }
+        for item in selectedLocalItems {
+            await upload(localURL: item.url, toRemoteDirectory: remotePath)
+        }
     }
 
     func downloadSelected() async {
-        guard let item = selectedRemoteItem else { return }
-        await download(remotePath: item.path, toLocalDirectory: localPath)
+        guard !selectedRemoteItems.isEmpty else { return }
+        for item in selectedRemoteItems {
+            await download(remotePath: item.path, toLocalDirectory: localPath)
+        }
     }
 
     @discardableResult

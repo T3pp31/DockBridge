@@ -18,7 +18,7 @@ struct MainViewCommands: Commands {
                 Label("Upload", systemImage: "square.and.arrow.up")
             }
             .keyboardShortcut("u", modifiers: [.command])
-            .disabled(viewModel.selectedLocalItem == nil || !viewModel.bridge.isConnected)
+            .disabled(viewModel.selectedLocalItems.isEmpty || !viewModel.bridge.isConnected)
 
             Button {
                 Task { await viewModel.downloadSelected() }
@@ -26,7 +26,7 @@ struct MainViewCommands: Commands {
                 Label("Download", systemImage: "square.and.arrow.down")
             }
             .keyboardShortcut("d", modifiers: [.command])
-            .disabled(viewModel.selectedRemoteItem == nil || !viewModel.bridge.isConnected)
+            .disabled(viewModel.selectedRemoteItems.isEmpty || !viewModel.bridge.isConnected)
         }
 
         // Replace the system New Item group so ⌘N binds to New Folder instead of
@@ -47,11 +47,19 @@ struct MainViewCommands: Commands {
             .keyboardShortcut("r", modifiers: [.command])
 
             Button("Delete") {
-                guard let item = viewModel.selectedRemoteTableItem else { return }
+                // Destructive: require exactly one selection (never Set.first under multi-select).
+                guard viewModel.selectedRemoteItemIDs.count == 1,
+                      let item = viewModel.selectedRemoteTableItem,
+                      !item.isParentDirectory else { return }
                 viewModel.requestDeleteRemote(item: item)
             }
             .keyboardShortcut(.delete, modifiers: [])
-            .disabled(viewModel.selectedRemoteItem == nil || !viewModel.bridge.isConnected)
+            .disabled(
+                viewModel.selectedRemoteItemIDs.count != 1
+                    || viewModel.selectedRemoteTableItem == nil
+                    || viewModel.selectedRemoteTableItem?.isParentDirectory == true
+                    || !viewModel.bridge.isConnected
+            )
         }
 
         CommandGroup(after: .toolbar) {
