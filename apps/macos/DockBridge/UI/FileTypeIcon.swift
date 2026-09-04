@@ -1,4 +1,9 @@
 import Foundation
+import SwiftUI
+#if canImport(AppKit)
+import AppKit
+import UniformTypeIdentifiers
+#endif
 
 enum FileTypeIcon {
     static func systemImage(for filename: String, isDirectory: Bool) -> String {
@@ -26,5 +31,27 @@ enum FileTypeIcon {
         default:
             return "doc"
         }
+    }
+
+    /// A 16pt file-type icon for table rows (Issue #229).
+    ///
+    /// Uses the system UTType icon (Finder-style) when one is available and
+    /// falls back to a single-color SF Symbol otherwise, so type is visually
+    /// distinguishable in both cases.
+    @ViewBuilder
+    static func fileIcon(for filename: String, isDirectory: Bool) -> some View {
+        #if canImport(AppKit)
+        let ext = (filename as NSString).pathExtension
+        let utType: UTType = isDirectory
+            ? .folder
+            : (ext.isEmpty ? UTType.data : (UTType(filenameExtension: ext) ?? .data))
+        Image(nsImage: NSWorkspace.shared.icon(for: utType))
+            .resizable()
+            .interpolation(.high)
+            .frame(width: 16, height: 16)
+            .accessibilityHidden(true)
+        #else
+        Image(systemName: systemImage(for: filename, isDirectory: isDirectory))
+        #endif
     }
 }

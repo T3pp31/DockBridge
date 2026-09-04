@@ -226,10 +226,10 @@ struct LocalFileTable: View {
     var body: some View {
         Table(of: LocalFileItem.self, selection: $viewModel.selectedLocalItemID, sortOrder: $sortOrder) {
             TableColumn("Name", value: \.name) { item in
-                Label(
-                    item.name,
-                    systemImage: FileTypeIcon.systemImage(for: item.name, isDirectory: item.isDirectory)
-                )
+                HStack(spacing: 6) {
+                    FileTypeIcon.fileIcon(for: item.name, isDirectory: item.isDirectory)
+                    Text(item.name)
+                }
             }
             .width(
                 min: FileTableColumnLayout.nameMinWidth,
@@ -237,14 +237,19 @@ struct LocalFileTable: View {
             )
             TableColumn("Size", value: \.size) { item in
                 Text(item.isDirectory ? "—" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
+                    .monospacedDigit()
             }
+            .width(
+                min: FileTableColumnLayout.sizeMinWidth,
+                ideal: FileTableColumnLayout.sizeIdealWidth
+            )
             TableColumn("Modified", value: \.modificationSortKey) { item in
-                if let date = item.modificationDate {
-                    Text(date, style: .date)
-                } else {
-                    Text("—")
-                }
+                modifiedCell(item.modificationDate)
             }
+            .width(
+                min: FileTableColumnLayout.modifiedMinWidth,
+                ideal: FileTableColumnLayout.modifiedIdealWidth
+            )
         } rows: {
             if viewModel.canNavigateLocalUp {
                 TableRow(LocalFileItem(parentOf: viewModel.localPath))
@@ -269,10 +274,10 @@ struct RemoteFileTable: View {
     var body: some View {
         Table(of: RemoteFileRecord.self, selection: $viewModel.selectedRemoteItemID, sortOrder: $sortOrder) {
             TableColumn("Name", value: \.name) { item in
-                Label(
-                    item.name,
-                    systemImage: FileTypeIcon.systemImage(for: item.name, isDirectory: item.isDirectory)
-                )
+                HStack(spacing: 6) {
+                    FileTypeIcon.fileIcon(for: item.name, isDirectory: item.isDirectory)
+                    Text(item.name)
+                }
             }
             .width(
                 min: FileTableColumnLayout.nameMinWidth,
@@ -280,14 +285,19 @@ struct RemoteFileTable: View {
             )
             TableColumn("Size", value: \.size) { item in
                 Text(remoteSizeLabel(for: item))
+                    .monospacedDigit()
             }
+            .width(
+                min: FileTableColumnLayout.sizeMinWidth,
+                ideal: FileTableColumnLayout.sizeIdealWidth
+            )
             TableColumn("Modified", value: \.modificationSortKey) { item in
-                if let date = item.modificationDate {
-                    Text(date, style: .date)
-                } else {
-                    Text("—")
-                }
+                modifiedCell(item.modificationDate)
             }
+            .width(
+                min: FileTableColumnLayout.modifiedMinWidth,
+                ideal: FileTableColumnLayout.modifiedIdealWidth
+            )
         } rows: {
             if viewModel.canNavigateRemoteUp,
                let parent = RemoteFileRecord.parentEntry(for: viewModel.remotePath) {
@@ -306,5 +316,20 @@ struct RemoteFileTable: View {
             return "—"
         }
         return ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file)
+    }
+}
+
+/// Short relative date for the Modified column with the absolute time in the
+/// tooltip, keeping the column narrow and readable (Issue #229).
+@ViewBuilder
+private func modifiedCell(_ date: Date?) -> some View {
+    if let date {
+        Text(date, format: .relative(presentation: .named))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .help(date.formatted(date: .abbreviated, time: .shortened))
+    } else {
+        Text("—")
+            .foregroundStyle(.secondary)
     }
 }
