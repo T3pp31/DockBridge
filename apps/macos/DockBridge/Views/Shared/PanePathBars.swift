@@ -35,7 +35,7 @@ struct LocalPanePathBar: View {
         ) {
             ControlGroup {
                 PathBookmarkMenu(
-                    bookmarks: viewModel.localBookmarks(),
+                    bookmarks: viewModel.localPathBookmarks,
                     onBookmarkCurrent: viewModel.bookmarkCurrentLocalPath,
                     onSelect: viewModel.jumpToBookmark,
                     onRemove: viewModel.removeBookmark
@@ -101,7 +101,7 @@ struct RemotePanePathBar: View {
         ) {
             ControlGroup {
                 PathBookmarkMenu(
-                    bookmarks: viewModel.remoteBookmarks(),
+                    bookmarks: viewModel.remotePathBookmarks,
                     onBookmarkCurrent: viewModel.bookmarkCurrentRemotePath,
                     onSelect: viewModel.jumpToBookmark,
                     onRemove: viewModel.removeBookmark

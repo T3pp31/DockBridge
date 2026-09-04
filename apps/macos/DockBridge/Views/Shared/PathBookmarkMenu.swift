@@ -16,8 +16,12 @@ struct PathBookmarkMenu: View {
                     Button(bookmark.name) {
                         onSelect(bookmark)
                     }
-                    .contextMenu {
-                        Button("Remove Bookmark", role: .destructive) {
+                }
+
+                Divider()
+                Menu("Remove Bookmark") {
+                    ForEach(bookmarks) { bookmark in
+                        Button(bookmark.name, role: .destructive) {
                             onRemove(bookmark)
                         }
                     }
