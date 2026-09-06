@@ -16,28 +16,28 @@ struct RemotePaneView: View {
                         .frame(width: size.width, height: size.height)
                         .contextMenu(forSelectionType: String.self) { ids in
                             let items = transferableRemoteItems(from: ids)
-                            if items.isEmpty { return }
-
-                            if items.count == 1, let item = items.first {
-                                Button("Copy Path") {
-                                    ClipboardHelper.copy(item.path)
+                            if !items.isEmpty {
+                                if items.count == 1, let item = items.first {
+                                    Button("Copy Path") {
+                                        ClipboardHelper.copy(item.path)
+                                    }
+                                    Button("Open") {
+                                        Task { await viewModel.openRemoteFile(item) }
+                                    }
                                 }
-                                Button("Open") {
-                                    Task { await viewModel.openRemoteFile(item) }
-                                }
-                            }
 
-                            Button(items.count == 1 ? "Download" : "Download \(items.count) Items") {
-                                viewModel.selectedRemoteItemIDs = Set(items.map(\.id))
-                                Task { await viewModel.downloadSelected() }
-                            }
-
-                            if items.count == 1, let item = items.first {
-                                Button("Rename") {
-                                    viewModel.beginRename(item: item)
+                                Button(items.count == 1 ? "Download" : "Download \(items.count) Items") {
+                                    viewModel.selectedRemoteItemIDs = Set(items.map(\.id))
+                                    Task { await viewModel.downloadSelected() }
                                 }
-                                Button("Delete", role: .destructive) {
-                                    viewModel.requestDeleteRemote(item: item)
+
+                                if items.count == 1, let item = items.first {
+                                    Button("Rename") {
+                                        viewModel.beginRename(item: item)
+                                    }
+                                    Button("Delete", role: .destructive) {
+                                        viewModel.requestDeleteRemote(item: item)
+                                    }
                                 }
                             }
                         } primaryAction: { ids in
