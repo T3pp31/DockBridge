@@ -110,6 +110,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-macos
+          # Keep ~/.cargo/bin out of rust-cache; macOS does not build cargo-cyclonedx,
+          # but this prevents any unintended bin-cache interaction across jobs.
+          cache-bin: false
 
       - name: Build Rust static library
         run: ./scripts/build-rust.sh
