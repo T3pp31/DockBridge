@@ -41,6 +41,14 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-rust
+          # Keep ~/.cargo/bin out of rust-cache so the dedicated cargo-cyclonedx
+          # cache key (version-pinned) remains authoritative.
+          cache-bin: false
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -56,10 +64,22 @@ jobs:
       - name: Build hardened CLI (release configuration)
         run: cargo build -p dockbridge-cli --release --features disable-cli-password
 
-      - name: Install cargo-cyclonedx
+      - name: Resolve cargo-cyclonedx version
+        id: cyclonedx
         run: |
           VERSION="$(awk -F'"' '/^cargo_cyclonedx_version / { print $2; exit }' config/release.toml)"
-          cargo install cargo-cyclonedx --version "${VERSION}" --locked
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache cargo-cyclonedx
+        id: cache-cyclonedx
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-cyclonedx
+          key: cargo-cyclonedx-${{ runner.os }}-${{ steps.cyclonedx.outputs.version }}
+
+      - name: Install cargo-cyclonedx
+        if: steps.cache-cyclonedx.outputs.cache-hit != 'true'
+        run: cargo install cargo-cyclonedx --version "${{ steps.cyclonedx.outputs.version }}" --locked
 
       - name: Generate and verify SBOM
         run: ./scripts/generate-sbom.sh --out dist
@@ -85,6 +105,14 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-macos
+          # Keep ~/.cargo/bin out of rust-cache; macOS does not build cargo-cyclonedx,
+          # but this prevents any unintended bin-cache interaction across jobs.
+          cache-bin: false
 
       - name: Build Rust static library
         run: ./scripts/build-rust.sh
