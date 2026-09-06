@@ -300,9 +300,7 @@ struct RemotePaneDropModifier: ViewModifier {
 
 struct LocalFileTable: View {
     @ObservedObject var viewModel: MainViewModel
-    @Binding var isFolderRowDropTargeted: Bool
     @State private var sortOrder = [KeyPathComparator(\LocalFileItem.name, order: .forward)]
-    @State private var dropTargetCounts: [String: Int] = [:]
 
     private var sortedItems: [LocalFileItem] {
         viewModel.localItems.sorted(using: sortOrder)
@@ -311,7 +309,7 @@ struct LocalFileTable: View {
     var body: some View {
         Table(of: LocalFileItem.self, selection: $viewModel.selectedLocalItemIDs, sortOrder: $sortOrder) {
             TableColumn("Name", value: \.name) { item in
-                folderDropHighlightLabel(name: item.name, isDirectory: item.isDirectory, rowID: item.id)
+                folderDropHighlightLabel(name: item.name, isDirectory: item.isDirectory)
             }
             .width(
                 min: FileTableColumnLayout.nameMinWidth,
@@ -337,13 +335,9 @@ struct LocalFileTable: View {
                 TableRow(LocalFileItem(parentOf: viewModel.localPath))
                     .dropDestination(for: LocalFileDragPayload.self) { items in
                         acceptLocalMoves(items, onto: LocalFileItem(parentOf: viewModel.localPath))
-                    } isTargeted: { targeted in
-                        setRowDropTarget(LocalFileItem(parentOf: viewModel.localPath).id, targeted: targeted)
                     }
                     .dropDestination(for: RemoteFileDragPayload.self) { items in
                         acceptRemoteDownloads(items, onto: LocalFileItem(parentOf: viewModel.localPath))
-                    } isTargeted: { targeted in
-                        setRowDropTarget(LocalFileItem(parentOf: viewModel.localPath).id, targeted: targeted)
                     }
             }
             ForEach(sortedItems, id: \.id) { item in
@@ -351,13 +345,9 @@ struct LocalFileTable: View {
                     .draggable(LocalFileDragPayload(url: item.url, isDirectory: item.isDirectory))
                     .dropDestination(for: LocalFileDragPayload.self) { items in
                         acceptLocalMoves(items, onto: item)
-                    } isTargeted: { targeted in
-                        setRowDropTarget(item.id, targeted: targeted)
                     }
                     .dropDestination(for: RemoteFileDragPayload.self) { items in
                         acceptRemoteDownloads(items, onto: item)
-                    } isTargeted: { targeted in
-                        setRowDropTarget(item.id, targeted: targeted)
                     }
             }
         }
@@ -365,19 +355,13 @@ struct LocalFileTable: View {
     }
 
     @ViewBuilder
-    private func folderDropHighlightLabel(name: String, isDirectory: Bool, rowID: String) -> some View {
+    private func folderDropHighlightLabel(name: String, isDirectory: Bool) -> some View {
         HStack(spacing: 6) {
             FileTypeIcon.fileIcon(for: name, isDirectory: isDirectory)
             Text(name)
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 1)
-        .background {
-            if isRowDropTargeted(rowID) {
-                RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.18))
-            }
-        }
     }
 
     private func acceptLocalMoves(_ items: [LocalFileDragPayload], onto item: LocalFileItem) {
@@ -410,27 +394,11 @@ struct LocalFileTable: View {
             toLocalDirectory: target
         )
     }
-
-    private func isRowDropTargeted(_ id: String) -> Bool {
-        (dropTargetCounts[id] ?? 0) > 0
-    }
-
-    private func setRowDropTarget(_ id: String, targeted: Bool) {
-        let next = max(0, (dropTargetCounts[id] ?? 0) + (targeted ? 1 : -1))
-        if next == 0 {
-            dropTargetCounts.removeValue(forKey: id)
-        } else {
-            dropTargetCounts[id] = next
-        }
-        isFolderRowDropTargeted = !dropTargetCounts.isEmpty
-    }
 }
 
 struct RemoteFileTable: View {
     @ObservedObject var viewModel: MainViewModel
-    @Binding var isFolderRowDropTargeted: Bool
     @State private var sortOrder = [KeyPathComparator(\RemoteFileRecord.name, order: .forward)]
-    @State private var dropTargetCounts: [String: Int] = [:]
 
     private var sortedItems: [RemoteFileRecord] {
         viewModel.remoteItems.sorted(using: sortOrder)
@@ -439,7 +407,7 @@ struct RemoteFileTable: View {
     var body: some View {
         Table(of: RemoteFileRecord.self, selection: $viewModel.selectedRemoteItemIDs, sortOrder: $sortOrder) {
             TableColumn("Name", value: \.name) { item in
-                folderDropHighlightLabel(name: item.name, isDirectory: item.isDirectory, rowID: item.id)
+                folderDropHighlightLabel(name: item.name, isDirectory: item.isDirectory)
             }
             .width(
                 min: FileTableColumnLayout.nameMinWidth,
@@ -466,18 +434,12 @@ struct RemoteFileTable: View {
                 TableRow(parent)
                     .dropDestination(for: LocalFileDragPayload.self) { items in
                         acceptLocalUploads(items, onto: parent)
-                    } isTargeted: { targeted in
-                        setRowDropTarget(parent.id, targeted: targeted)
                     }
                     .dropDestination(for: URL.self) { urls in
                         acceptExternalUploads(urls, onto: parent)
-                    } isTargeted: { targeted in
-                        setRowDropTarget(parent.id, targeted: targeted)
                     }
                     .dropDestination(for: RemoteFileDragPayload.self) { items in
                         acceptRemoteMoves(items, onto: parent)
-                    } isTargeted: { targeted in
-                        setRowDropTarget(parent.id, targeted: targeted)
                     }
             }
             ForEach(sortedItems, id: \.id) { item in
@@ -485,18 +447,12 @@ struct RemoteFileTable: View {
                     .draggable(RemoteFileDragPayload(path: item.path, isDirectory: item.isDirectory))
                     .dropDestination(for: LocalFileDragPayload.self) { items in
                         acceptLocalUploads(items, onto: item)
-                    } isTargeted: { targeted in
-                        setRowDropTarget(item.id, targeted: targeted)
                     }
                     .dropDestination(for: URL.self) { urls in
                         acceptExternalUploads(urls, onto: item)
-                    } isTargeted: { targeted in
-                        setRowDropTarget(item.id, targeted: targeted)
                     }
                     .dropDestination(for: RemoteFileDragPayload.self) { items in
                         acceptRemoteMoves(items, onto: item)
-                    } isTargeted: { targeted in
-                        setRowDropTarget(item.id, targeted: targeted)
                     }
             }
         }
@@ -504,19 +460,13 @@ struct RemoteFileTable: View {
     }
 
     @ViewBuilder
-    private func folderDropHighlightLabel(name: String, isDirectory: Bool, rowID: String) -> some View {
+    private func folderDropHighlightLabel(name: String, isDirectory: Bool) -> some View {
         HStack(spacing: 6) {
             FileTypeIcon.fileIcon(for: name, isDirectory: isDirectory)
             Text(name)
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 1)
-        .background {
-            if isRowDropTargeted(rowID) {
-                RoundedRectangle(cornerRadius: DesignTokens.CornerRadius.medium, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.18))
-            }
-        }
     }
 
     private func acceptLocalUploads(_ items: [LocalFileDragPayload], onto item: RemoteFileRecord) {
@@ -562,20 +512,6 @@ struct RemoteFileTable: View {
             return "—"
         }
         return ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file)
-    }
-
-    private func isRowDropTargeted(_ id: String) -> Bool {
-        (dropTargetCounts[id] ?? 0) > 0
-    }
-
-    private func setRowDropTarget(_ id: String, targeted: Bool) {
-        let next = max(0, (dropTargetCounts[id] ?? 0) + (targeted ? 1 : -1))
-        if next == 0 {
-            dropTargetCounts.removeValue(forKey: id)
-        } else {
-            dropTargetCounts[id] = next
-        }
-        isFolderRowDropTargeted = !dropTargetCounts.isEmpty
     }
 }
 

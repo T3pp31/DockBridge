@@ -4,7 +4,6 @@ import SwiftUI
 struct LocalPaneView: View {
     @ObservedObject var viewModel: MainViewModel
     @State private var isDropTargeted = false
-    @State private var isFolderRowDropTargeted = false
     @State private var dropKind: DropKind = .none
 
     var body: some View {
@@ -14,32 +13,32 @@ struct LocalPaneView: View {
             Divider()
 
             ExpandingFrame { size in
-                LocalFileTable(viewModel: viewModel, isFolderRowDropTargeted: $isFolderRowDropTargeted)
+                LocalFileTable(viewModel: viewModel)
                     .frame(width: size.width, height: size.height)
                     .contextMenu(forSelectionType: String.self) { ids in
                         let items = transferableLocalItems(from: ids)
-                        if items.isEmpty { return }
-
-                        if items.count == 1, let item = items.first {
-                            Button("Copy Path") {
-                                ClipboardHelper.copy(item.url.path)
-                            }
-                            Button("Open") {
-                                viewModel.openLocalFile(item)
-                            }
-                            if !item.isDirectory {
-                                Button("Quick Look") {
-                                    viewModel.quickLookLocalFile(item)
+                        if !items.isEmpty {
+                            if items.count == 1, let item = items.first {
+                                Button("Copy Path") {
+                                    ClipboardHelper.copy(item.url.path)
+                                }
+                                Button("Open") {
+                                    viewModel.openLocalFile(item)
+                                }
+                                if !item.isDirectory {
+                                    Button("Quick Look") {
+                                        viewModel.quickLookLocalFile(item)
+                                    }
+                                }
+                                Button("Reveal in Finder") {
+                                    NSWorkspace.shared.activateFileViewerSelecting([item.url])
                                 }
                             }
-                            Button("Reveal in Finder") {
-                                NSWorkspace.shared.activateFileViewerSelecting([item.url])
-                            }
-                        }
 
-                        Button(items.count == 1 ? "Upload" : "Upload \(items.count) Items") {
-                            viewModel.selectedLocalItemIDs = Set(items.map(\.id))
-                            Task { await viewModel.uploadSelected() }
+                            Button(items.count == 1 ? "Upload" : "Upload \(items.count) Items") {
+                                viewModel.selectedLocalItemIDs = Set(items.map(\.id))
+                                Task { await viewModel.uploadSelected() }
+                            }
                         }
                     } primaryAction: { ids in
                         if let item = singleSelectedLocalItem(from: ids) ?? viewModel.selectedLocalTableItem {
@@ -54,7 +53,7 @@ struct LocalPaneView: View {
                         return .ignored
                     }
                     .overlay {
-                        if isDropTargeted && !isFolderRowDropTargeted {
+                        if isDropTargeted {
                             DropTargetOverlay(
                                 title: dropKind.overlayTitle,
                                 systemImage: dropKind == .localMove ? "arrow.right.circle" : "arrow.down.circle"

@@ -108,6 +108,7 @@ final class KnownHostsErrorMessageTests: XCTestCase {
     }
 }
 
+@MainActor
 final class ErrorRecoveryKindTests: XCTestCase {
     func testAuthMessagesMapToEditConnection() {
         XCTAssertEqual(

@@ -3,7 +3,6 @@ import SwiftUI
 struct RemotePaneView: View {
     @ObservedObject var viewModel: MainViewModel
     @State private var isDropTargeted = false
-    @State private var isFolderRowDropTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
@@ -13,32 +12,32 @@ struct RemotePaneView: View {
 
             if viewModel.bridge.isConnected {
                 ExpandingFrame { size in
-                    RemoteFileTable(viewModel: viewModel, isFolderRowDropTargeted: $isFolderRowDropTargeted)
+                    RemoteFileTable(viewModel: viewModel)
                         .frame(width: size.width, height: size.height)
                         .contextMenu(forSelectionType: String.self) { ids in
                             let items = transferableRemoteItems(from: ids)
-                            if items.isEmpty { return }
-
-                            if items.count == 1, let item = items.first {
-                                Button("Copy Path") {
-                                    ClipboardHelper.copy(item.path)
+                            if !items.isEmpty {
+                                if items.count == 1, let item = items.first {
+                                    Button("Copy Path") {
+                                        ClipboardHelper.copy(item.path)
+                                    }
+                                    Button("Open") {
+                                        Task { await viewModel.openRemoteFile(item) }
+                                    }
                                 }
-                                Button("Open") {
-                                    Task { await viewModel.openRemoteFile(item) }
-                                }
-                            }
 
-                            Button(items.count == 1 ? "Download" : "Download \(items.count) Items") {
-                                viewModel.selectedRemoteItemIDs = Set(items.map(\.id))
-                                Task { await viewModel.downloadSelected() }
-                            }
-
-                            if items.count == 1, let item = items.first {
-                                Button("Rename") {
-                                    viewModel.beginRename(item: item)
+                                Button(items.count == 1 ? "Download" : "Download \(items.count) Items") {
+                                    viewModel.selectedRemoteItemIDs = Set(items.map(\.id))
+                                    Task { await viewModel.downloadSelected() }
                                 }
-                                Button("Delete", role: .destructive) {
-                                    viewModel.requestDeleteRemote(item: item)
+
+                                if items.count == 1, let item = items.first {
+                                    Button("Rename") {
+                                        viewModel.beginRename(item: item)
+                                    }
+                                    Button("Delete", role: .destructive) {
+                                        viewModel.requestDeleteRemote(item: item)
+                                    }
                                 }
                             }
                         } primaryAction: { ids in
@@ -54,7 +53,7 @@ struct RemotePaneView: View {
                             return .ignored
                         }
                         .overlay {
-                            if isDropTargeted && !isFolderRowDropTargeted {
+                            if isDropTargeted {
                                 DropTargetOverlay(
                                     title: "Drop to upload",
                                     systemImage: "arrow.up.doc"
