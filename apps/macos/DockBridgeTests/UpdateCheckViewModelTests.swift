@@ -66,7 +66,15 @@ final class UpdateCheckViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.showUpdateSheet)
     }
 
-    func testDownloadUpdateSurfacesVerificationFailure() async {
+    func testDownloadUpdateSurfacesVerificationFailure() async throws {
+        // This test requires signed/notarized builds (inAppUpdateInstallationEnabled).
+        // With signing/notarization disabled, downloadUpdate() returns early with
+        // "In-app installation is disabled" and never reaches signature verification.
+        try XCTSkipUnless(
+            viewModel.inAppUpdateInstallationEnabled,
+            "Requires in-app update installation (signed/notarized builds) to be enabled."
+        )
+
         mockSession.responseJSON = newerReleaseJSON
         mockDownloadService.error = .signatureVerificationFailed(.unsignedBundle)
 
