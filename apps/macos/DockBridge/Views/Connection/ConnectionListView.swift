@@ -22,48 +22,10 @@ struct ConnectionListView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(selection: $viewModel.selectedProfileID) {
-                    ForEach(viewModel.filteredProfiles) { profile in
-                        HStack(spacing: 8) {
-                            connectionIndicator(for: profile)
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(profile.displayName)
-                                    .font(.headline)
-                                Text(profile.endpointLabel)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .background(
-                            isRowActive(profile) ? Color.primary.opacity(0.06) : Color.clear
-                        )
-                        .tag(profile.id)
-                    }
+                    profileRows
                 }
                 .contextMenu(forSelectionType: UUID.self) { ids in
-                    if let profile = singleSelectedProfile(from: ids) {
-                        if isConnectedProfile(profile) {
-                            Button("Disconnect") {
-                                Task { await viewModel.disconnect() }
-                            }
-                        } else {
-                            Button("Connect") {
-                                viewModel.requestConnect(profile: profile)
-                            }
-                            .disabled(viewModel.connectionStatus.isConnecting)
-                        }
-
-                        Button("Edit") {
-                            editingProfile = profile
-                        }
-
-                        Button("Delete", role: .destructive) {
-                            viewModel.delete(profile: profile)
-                        }
-                        .disabled(isConnectedProfile(profile))
-                    }
+                    profileContextMenu(for: ids)
                 } primaryAction: { ids in
                     guard let profile = singleSelectedProfile(from: ids) else { return }
                     guard !viewModel.connectionStatus.isConnected,
@@ -211,6 +173,54 @@ struct ConnectionListView: View {
             case .password: return "\(profile.id.uuidString)-password"
             case .passphrase: return "\(profile.id.uuidString)-passphrase"
             }
+        }
+    }
+
+    @ViewBuilder
+    private var profileRows: some View {
+        ForEach(viewModel.filteredProfiles) { profile in
+            HStack(spacing: 8) {
+                connectionIndicator(for: profile)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(profile.displayName)
+                        .font(.headline)
+                    Text(profile.endpointLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                isRowActive(profile) ? Color.primary.opacity(0.06) : Color.clear
+            )
+            .tag(profile.id)
+        }
+    }
+
+    @ViewBuilder
+    private func profileContextMenu(for ids: Set<UUID>) -> some View {
+        if let profile = singleSelectedProfile(from: ids) {
+            if isConnectedProfile(profile) {
+                Button("Disconnect") {
+                    Task { await viewModel.disconnect() }
+                }
+            } else {
+                Button("Connect") {
+                    viewModel.requestConnect(profile: profile)
+                }
+                .disabled(viewModel.connectionStatus.isConnecting)
+            }
+
+            Button("Edit") {
+                editingProfile = profile
+            }
+
+            Button("Delete", role: .destructive) {
+                viewModel.delete(profile: profile)
+            }
+            .disabled(isConnectedProfile(profile))
         }
     }
 
