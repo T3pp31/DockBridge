@@ -131,6 +131,7 @@ jobs:
           fi
 
       - name: Build macOS app (for testing)
+        timeout-minutes: 15
         working-directory: apps/macos
         env:
           # The CI steps above already built the static library and UniFFI
@@ -152,16 +153,54 @@ jobs:
             DEVELOPMENT_TEAM=""
 
       - name: Test macOS app
+        # Kill hung test runs early instead of burning the job timeout:
+        # run 34220128583 froze mid-test for 38 minutes on macos-latest
+        # (runner-side testmanagerd stall, actions/runner-images#13096).
+        # Normal duration is under 2 minutes; two 7-minute guarded attempts
+        # plus overhead stay under the 18-minute step timeout.
+        timeout-minutes: 18
         working-directory: apps/macos
         env:
           DOCKBRIDGE_SKIP_HOST_BUILD: "1"
+        # Runner-side stalls are flaky, not deterministic. A wall-clock guard
+        # (perl alarm survives exec and SIGALRM-kills xcodebuild; gtimeout is
+        # not preinstalled on macOS runners) distinguishes a hang (retry once
+        # on a fresh testmanagerd) from a genuine test failure (fail fast,
+        # never retried), preserving CI pass/fail semantics.
         run: |
-          xcodebuild \
-            -scheme DockBridge \
-            -destination 'platform=macOS' \
-            -configuration Debug \
-            test-without-building \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            DEVELOPMENT_TEAM=""
+          set -u
+          MAX_ATTEMPTS=2
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            echo "::group::xcodebuild test (attempt ${attempt}/${MAX_ATTEMPTS})"
+            rc=0
+            perl -e 'alarm 420; exec @ARGV or exit 127' -- \
+              xcodebuild \
+              -scheme DockBridge \
+              -destination 'platform=macOS' \
+              -configuration Debug \
+              test-without-building \
+              -test-timeouts-enabled YES \
+              -default-test-execution-time-allowance 120 \
+              CODE_SIGN_IDENTITY="-" \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGNING_ALLOWED=NO \
+              DEVELOPMENT_TEAM="" > /tmp/xcodebuild-test.log 2>&1 || rc=$?
+            cat /tmp/xcodebuild-test.log
+            echo "::endgroup::"
+            if [ "$rc" -eq 0 ]; then
+              exit 0
+            fi
+            # Genuine test failures report TEST EXECUTE FAILED and must never be
+            # retried or hidden.
+            if grep -q "TEST EXECUTE FAILED" /tmp/xcodebuild-test.log; then
+              exit "$rc"
+            fi
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "::warning::xcodebuild test stalled (exit ${rc}); retrying once"
+              pkill -f 'xcodebuild.*test-without-building' 2>/dev/null || true
+              pkill -x DockBridge 2>/dev/null || true
+              sleep 5
+            fi
+          done
+          echo "::error::xcodebuild test stalled after ${MAX_ATTEMPTS} attempts"
+          exit 1
