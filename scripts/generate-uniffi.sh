@@ -23,9 +23,17 @@ fi
 
 mkdir -p "$OUT_DIR"
 
+BINDGEN_BIN="$CARGO_TARGET_DIR/${PROFILE}/uniffi-bindgen"
+
 echo "Generating Swift bindings from $LIB_PATH ..."
-cargo run -p dockbridge-uniffi --bin uniffi-bindgen -- \
-  generate --library "$LIB_PATH" --language swift --out-dir "$OUT_DIR"
+if [[ -x "$BINDGEN_BIN" ]]; then
+  echo "Using existing bindgen: $BINDGEN_BIN"
+  "$BINDGEN_BIN" generate --library "$LIB_PATH" --language swift --out-dir "$OUT_DIR"
+else
+  echo "bindgen not found; building via cargo run --$PROFILE"
+  cargo run -p dockbridge-uniffi --bin uniffi-bindgen --"$PROFILE" -- \
+    generate --library "$LIB_PATH" --language swift --out-dir "$OUT_DIR"
+fi
 
 HEADER_DIR="$OUT_DIR/Headers"
 mkdir -p "$HEADER_DIR"
