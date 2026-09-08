@@ -169,8 +169,15 @@ jobs:
         # never retried), preserving CI pass/fail semantics.
         run: |
           set -u
+          if ! command -v perl >/dev/null 2>&1; then
+            # Without perl the watchdog cannot run; fail fast instead of
+            # letting exit 127 be misread as a hang and retried.
+            echo "::error::perl not found; the test watchdog requires perl"
+            exit 1
+          fi
           MAX_ATTEMPTS=2
           for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            log="/tmp/xcodebuild-test-attempt-${attempt}.log"
             echo "::group::xcodebuild test (attempt ${attempt}/${MAX_ATTEMPTS})"
             rc=0
             perl -e 'alarm 420; exec @ARGV or exit 127' -- \
@@ -184,15 +191,15 @@ jobs:
               CODE_SIGN_IDENTITY="-" \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGNING_ALLOWED=NO \
-              DEVELOPMENT_TEAM="" > /tmp/xcodebuild-test.log 2>&1 || rc=$?
-            cat /tmp/xcodebuild-test.log
+              DEVELOPMENT_TEAM="" > "$log" 2>&1 || rc=$?
+            cat "$log"
             echo "::endgroup::"
             if [ "$rc" -eq 0 ]; then
               exit 0
             fi
             # Genuine test failures report TEST EXECUTE FAILED and must never be
             # retried or hidden.
-            if grep -q "TEST EXECUTE FAILED" /tmp/xcodebuild-test.log; then
+            if grep -q "TEST EXECUTE FAILED" "$log"; then
               exit "$rc"
             fi
             if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
