@@ -197,17 +197,24 @@ jobs:
             if [ "$rc" -eq 0 ]; then
               exit 0
             fi
-            # Genuine test failures report TEST EXECUTE FAILED and must never be
-            # retried or hidden.
-            if grep -q "TEST EXECUTE FAILED" "$log"; then
+            # Genuine test failures are never retried: the TEST EXECUTE FAILED
+            # footer (normal completion) or per-case failure lines (assertion
+            # failed before a later stall killed xcodebuild) both fail the job.
+            if grep -q "TEST EXECUTE FAILED" "$log" || grep -q "failed on '" "$log"; then
               exit "$rc"
             fi
-            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+            # Retry only an explicit watchdog kill (perl alarm => SIGALRM =>
+            # exit 142). Any other nonzero exit (xcodebuild usage/destination
+            # errors, crash) is deterministic and must fail fast.
+            if [ "$rc" -eq 142 ] && [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
               echo "::warning::xcodebuild test stalled (exit ${rc}); retrying once"
               pkill -f 'xcodebuild.*test-without-building' 2>/dev/null || true
               pkill -x DockBridge 2>/dev/null || true
               sleep 5
+              continue
             fi
+            echo "::error::xcodebuild test failed (exit ${rc}, not a retryable stall)"
+            exit "$rc"
           done
           echo "::error::xcodebuild test stalled after ${MAX_ATTEMPTS} attempts"
           exit 1
