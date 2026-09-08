@@ -130,14 +130,37 @@ jobs:
             exit 1
           fi
 
-      - name: Build and test macOS app
+      - name: Build macOS app (for testing)
         working-directory: apps/macos
+        env:
+          # The CI steps above already built the static library and UniFFI
+          # bindings, so the always-out-of-date preBuild phase skips its host
+          # cargo build. Regenerating bindings from the same .a is idempotent.
+          DOCKBRIDGE_SKIP_HOST_BUILD: "1"
+        # build/test are split deliberately: combined `build test` hit the
+        # Xcode 26 testmanagerd readiness hang on macos-latest (runs
+        # 34044968127 / 34207249969 froze before "Testing started").
         run: |
           xcodebuild \
             -scheme DockBridge \
             -destination 'platform=macOS' \
             -configuration Debug \
-            build test \
+            build-for-testing \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM=""
+
+      - name: Test macOS app
+        working-directory: apps/macos
+        env:
+          DOCKBRIDGE_SKIP_HOST_BUILD: "1"
+        run: |
+          xcodebuild \
+            -scheme DockBridge \
+            -destination 'platform=macOS' \
+            -configuration Debug \
+            test-without-building \
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
