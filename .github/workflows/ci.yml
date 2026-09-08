@@ -99,6 +99,9 @@ jobs:
   macos:
     name: macOS
     runs-on: macos-latest
+    # Guard against xcodebuild test hangs (observed: no test output for 6h until
+    # the default job timeout in run 34044968127). Normal duration is ~13 min.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v7
