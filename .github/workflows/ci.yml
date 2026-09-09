@@ -208,8 +208,16 @@ jobs:
             # errors, crash) is deterministic and must fail fast.
             if [ "$rc" -eq 142 ] && [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
               echo "::warning::xcodebuild test stalled (exit ${rc}); retrying once"
-              pkill -f 'xcodebuild.*test-without-building' 2>/dev/null || true
-              pkill -x DockBridge 2>/dev/null || true
+              # Kill only this step's own process group (the run shell, perl ->
+              # exec xcodebuild, and its test subprocesses share one PGID).
+              # Other jobs/workflows on a shared runner are in other process
+              # groups, so a bare `pkill -f`/`pkill -x` could kill foreign
+              # xcodebuild/DockBridge processes; `-g <pgid>` cannot (issue
+              # #267). `pkill -x DockBridge` is dropped: the app under test is
+              # launched through testmanagerd outside this PGID, so the
+              # machine-wide match added cross-job risk for little gain.
+              our_pgid=$(ps -o pgid= -p $$ | tr -d ' ')
+              pkill -g "$our_pgid" -f 'xcodebuild.*test-without-building' 2>/dev/null || true
               sleep 5
               continue
             fi
