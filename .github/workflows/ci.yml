@@ -167,6 +167,12 @@ jobs:
         # not preinstalled on macOS runners) distinguishes a hang (retry once
         # on a fresh testmanagerd) from a genuine test failure (fail fast,
         # never retried), preserving CI pass/fail semantics.
+        # Per-test allowance: -default-test-execution-time-allowance 300 gives
+        # loaded runners a wide margin over the ~2 min normal suite (run
+        # 34231056581 failed a unit test at exactly 120 s under load). The
+        # Docker/SSH E2E tests are skipped on CI via XCTSkip, so this limit
+        # only guards genuinely hung unit tests; the 300 s value stays well
+        # under the 420 s watchdog so the watchdog still distinguishes a stall.
         run: |
           set -u
           if ! command -v perl >/dev/null 2>&1; then
@@ -187,7 +193,7 @@ jobs:
               -configuration Debug \
               test-without-building \
               -test-timeouts-enabled YES \
-              -default-test-execution-time-allowance 120 \
+              -default-test-execution-time-allowance 300 \
               CODE_SIGN_IDENTITY="-" \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGNING_ALLOWED=NO \
