@@ -168,7 +168,7 @@ jobs:
         # on a fresh testmanagerd) from a genuine test failure (fail fast,
         # never retried), preserving CI pass/fail semantics.
         run: |
-          set -u
+          set -u -o pipefail
           if ! command -v perl >/dev/null 2>&1; then
             # Without perl the watchdog cannot run; fail fast instead of
             # letting exit 127 be misread as a hang and retried.
@@ -178,6 +178,8 @@ jobs:
           MAX_ATTEMPTS=2
           for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
             log="/tmp/xcodebuild-test-attempt-${attempt}.log"
+            xcresult="/tmp/xcodebuild-test-attempt-${attempt}.xcresult"
+            rm -rf "$xcresult"
             echo "::group::xcodebuild test (attempt ${attempt}/${MAX_ATTEMPTS})"
             rc=0
             perl -e 'alarm 420; exec @ARGV or exit 127' -- \
@@ -188,10 +190,11 @@ jobs:
               test-without-building \
               -test-timeouts-enabled YES \
               -default-test-execution-time-allowance 120 \
+              -resultBundlePath "$xcresult" \
               CODE_SIGN_IDENTITY="-" \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGNING_ALLOWED=NO \
-              DEVELOPMENT_TEAM="" > "$log" 2>&1 || rc=$?
+              DEVELOPMENT_TEAM="" 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
             cat "$log"
             echo "::endgroup::"
             if [ "$rc" -eq 0 ]; then
@@ -218,3 +221,37 @@ jobs:
           done
           echo "::error::xcodebuild test stalled after ${MAX_ATTEMPTS} attempts"
           exit 1
+
+      # On failure or timeout the raw log and .xcresult are otherwise destroyed
+      # with the runner, leaving no record of where the tests got to (issue
+      # #266). Only run on failure/timeout (failure() is true both for a hard
+      # test failure and for a step timeout that kills the test step), so
+      # successful runs don't pay the artifact storage cost. Files that don't
+      # exist (e.g. no retry happened) are simply not uploaded.
+      - name: List failed tests from xcresult
+        if: failure()
+        run: |
+          set -u
+          for xcresult in /tmp/xcodebuild-test-attempt-*.xcresult; do
+            [ -d "$xcresult" ] || continue
+            echo "::group::Failed tests in ${xcresult}"
+            xcrun xcresulttool get test-results summary --path "$xcresult" --format json 2>/dev/null \
+              | jq -r '.testFailures[]? | "- \(.testName) [\(.targetName)]: \(.failureText)"' 2>/dev/null \
+              || echo "(no xcresult summary available for ${xcresult})"
+            echo "::endgroup::"
+          done
+
+      - name: Upload macOS test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-test-artifacts
+          path: |
+            /tmp/xcodebuild-test-attempt-*.log
+            /tmp/xcodebuild-test-attempt-*.xcresult
+          if-no-files-found: ignore
+          retention-days: 14
+          # .xcresult bundles are already compressed internally; re-compressing
+          # them is wasted CPU. The plain-text logs are small, so leaving them
+          # uncompressed keeps the artifact instantly grep-able.
+          compression-level: 0
