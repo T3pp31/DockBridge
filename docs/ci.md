@@ -68,7 +68,7 @@ Docker / SSH を使用する E2E テスト（`ManualTestPlanVerificationTests` �
 
 ## リトライ時のクリーンアップ
 
-リトライ前に `pkill -f 'xcodebuild.*test-without-building'` と `pkill -x DockBridge` で残プロセスを掃除します。これはマシン全体のプロセス名照合なので、セルフホスト／共有ランナーでは他ジョブを巻き込む余地があります（#267）。GitHub-hosted の `macos-latest` はジョブ専有が基本のため、現状の発生頻度は低い想定です。
+リトライ前に、自ステップのプロセスグループに属する xcodebuild だけを `pkill -g` で終了します。`TEST_HOST`（`DockBridge`）は testmanagerd がプロセスグループの外で起動するため、ステップ開始前の PID をスナップショットし、それ以外のホストだけを `kill` します。他ジョブの既存プロセスは巻き込みません（#267）。
 
 ## 失敗時の解析資料
 
@@ -84,5 +84,5 @@ Docker / SSH を使用する E2E テスト（`ManualTestPlanVerificationTests` �
 - #264: リトライ判定の盲点（`.xcresult` の失敗数を一次情報源にして対処）
 - #265: テストタイムアウト 120 秒による環境要因の強制失敗（300 秒へ引き上げ）
 - #266: 失敗・ハング時のログ / .xcresult 保存
-- #267: リトライ時の pkill による他ジョブ誤 kill
+- #267: リトライ時の pkill による他ジョブ誤 kill（プロセスグループと TEST_HOST の差分 PID で対処）
 - #268: 本ドキュメント（時間予算の明文化）
