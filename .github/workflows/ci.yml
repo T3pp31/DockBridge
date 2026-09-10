@@ -156,8 +156,9 @@ jobs:
         # Kill hung test runs early instead of burning the job timeout:
         # run 34220128583 froze mid-test for 38 minutes on macos-latest
         # (runner-side testmanagerd stall, actions/runner-images#13096).
-        # Normal duration is under 2 minutes; two 7-minute guarded attempts
-        # plus overhead stay under the 18-minute step timeout.
+        # Time budget (watchdog, worst-case, per-test timeout, and how
+        # timeout-minutes covers them): see docs/ci.md. Worst case here is
+        # 420s + 5s + 420s = 845s (~14.1 min), covered by timeout-minutes: 18.
         timeout-minutes: 18
         working-directory: apps/macos
         env:
