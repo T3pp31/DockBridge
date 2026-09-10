@@ -193,6 +193,11 @@ jobs:
             exit 1
           fi
           MAX_ATTEMPTS=2
+          # TEST_HOST (DockBridge) is launched by testmanagerd outside this
+          # step's process group. Snapshot PIDs that already existed so retry
+          # cleanup can terminate only hosts we started, not other jobs on a
+          # shared runner (issue #267).
+          foreign_hosts=$(pgrep -x DockBridge 2>/dev/null | tr '\n' ',' || true)
           for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
             log="/tmp/xcodebuild-test-attempt-${attempt}.log"
             xcresult="/tmp/xcodebuild-test-attempt-${attempt}.xcresult"
@@ -242,8 +247,22 @@ jobs:
             # errors, crash) is deterministic and must fail fast.
             if [ "$rc" -eq 142 ] && [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
               echo "::warning::xcodebuild test stalled (exit ${rc}); retrying once"
-              pkill -f 'xcodebuild.*test-without-building' 2>/dev/null || true
-              pkill -x DockBridge 2>/dev/null || true
+              # Kill leftover xcodebuild in this step's process group (the run
+              # shell, perl -> exec xcodebuild, and its test subprocesses share
+              # one PGID). Other jobs/workflows on a shared runner are in other
+              # process groups, so `-g <pgid>` cannot reach them (issue #267).
+              our_pgid=$(ps -o pgid= -p $$ | tr -d ' ')
+              if [ -n "$our_pgid" ]; then
+                pkill -g "$our_pgid" -f 'xcodebuild.*test-without-building' 2>/dev/null || true
+              fi
+              # TEST_HOST lives outside our_pgid. Kill only DockBridge PIDs that
+              # appeared after this step started so the retry is a fresh host.
+              for pid in $(pgrep -x DockBridge 2>/dev/null || true); do
+                case ",${foreign_hosts}," in
+                  *",${pid},"*) continue ;;
+                esac
+                kill "$pid" 2>/dev/null || true
+              done
               sleep 5
               continue
             fi
