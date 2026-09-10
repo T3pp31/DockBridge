@@ -168,6 +168,16 @@ jobs:
         # not preinstalled on macOS runners) distinguishes a hang (retry once
         # on a fresh testmanagerd) from a genuine test failure (fail fast,
         # never retried), preserving CI pass/fail semantics.
+        #
+        # Retry decision sources, in order of trust:
+        #   1. .xcresult (written to disk by xcodebuild, immune to stdio
+        #      buffering): if it contains any failed test, the failure is real
+        #      and must never be retried. This is the authoritative check.
+        #   2. Log grep (TEST EXECUTE FAILED / 'failed on ') as a fallback for
+        #      the case where the watchdog SIGALRM-killed xcodebuild before the
+        #      .xcresult was finalized (missing/corrupt bundle).
+        # E2E/verify tests that are skipped (XCTSkip) never appear as failures,
+        # so a zero-failure .xcresult is safe to treat as "no real failure".
         # Per-test allowance: -default-test-execution-time-allowance 300 gives
         # loaded runners a wide margin over the ~2 min normal suite (run
         # 34231056581 failed a unit test at exactly 120 s under load). The
@@ -175,7 +185,7 @@ jobs:
         # only guards genuinely hung unit tests; the 300 s value stays well
         # under the 420 s watchdog so the watchdog still distinguishes a stall.
         run: |
-          set -u
+          set -u -o pipefail
           if ! command -v perl >/dev/null 2>&1; then
             # Without perl the watchdog cannot run; fail fast instead of
             # letting exit 127 be misread as a hang and retried.
@@ -185,8 +195,13 @@ jobs:
           MAX_ATTEMPTS=2
           for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
             log="/tmp/xcodebuild-test-attempt-${attempt}.log"
+            xcresult="/tmp/xcodebuild-test-attempt-${attempt}.xcresult"
+            rm -rf "$xcresult"
             echo "::group::xcodebuild test (attempt ${attempt}/${MAX_ATTEMPTS})"
             rc=0
+            # tee keeps the run visible in real time and also on disk; without
+            # it a SIGALRM kill could lose the buffered failure lines before
+            # grep sees them (see issue #264).
             perl -e 'alarm 420; exec @ARGV or exit 127' -- \
               xcodebuild \
               -scheme DockBridge \
@@ -195,18 +210,30 @@ jobs:
               test-without-building \
               -test-timeouts-enabled YES \
               -default-test-execution-time-allowance 300 \
+              -resultBundlePath "$xcresult" \
               CODE_SIGN_IDENTITY="-" \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGNING_ALLOWED=NO \
-              DEVELOPMENT_TEAM="" > "$log" 2>&1 || rc=$?
-            cat "$log"
+              DEVELOPMENT_TEAM="" 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
             echo "::endgroup::"
             if [ "$rc" -eq 0 ]; then
               exit 0
             fi
-            # Genuine test failures are never retried: the TEST EXECUTE FAILED
-            # footer (normal completion) or per-case failure lines (assertion
-            # failed before a later stall killed xcodebuild) both fail the job.
+            # Authoritative check: count failed tests in the .xcresult. If the
+            # bundle is missing/corrupt (watchdog killed xcodebuild mid-write)
+            # treat it as inconclusive and fall through to the log grep.
+            xcresult_failed=""
+            if [ -d "$xcresult" ]; then
+              if xcresult_failed=$(
+                xcrun xcresulttool get test-results summary --path "$xcresult" --format json 2>/dev/null \
+                  | jq -r '.failedTests // empty' 2>/dev/null
+              ) && [ -n "$xcresult_failed" ] && [ "$xcresult_failed" -gt 0 ]; then
+                echo "::error::xcodebuild reported ${xcresult_failed} failed test(s) in the result bundle; failing without retry"
+                exit "$rc"
+              fi
+            fi
+            # Fallback: the log footer/assertion lines. Any match means a real
+            # failure that must not be hidden by a retry.
             if grep -q "TEST EXECUTE FAILED" "$log" || grep -q "failed on '" "$log"; then
               exit "$rc"
             fi
