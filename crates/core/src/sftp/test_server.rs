@@ -28,6 +28,9 @@ pub struct FailureConfig {
     pub fail_remote_rename: AtomicBool,
     pub fail_mkdir: AtomicBool,
     pub opendir_count: AtomicU64,
+    /// Artificial delay applied to every SSH_FXP_READ reply, used by benchmarks
+    /// to emulate a high-latency link (milliseconds).
+    pub read_delay_ms: AtomicU64,
 }
 
 pub struct TestSftpServer {
@@ -318,6 +321,14 @@ impl russh_sftp::server::Handler for SftpHandler {
     ) -> Result<Data, Self::Error> {
         if self.failures.fail_remote_read.swap(false, Ordering::SeqCst) {
             return Err(StatusCode::Failure);
+        }
+
+        #[cfg(test)]
+        {
+            let delay = self.failures.read_delay_ms.load(Ordering::Relaxed);
+            if delay > 0 {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
         }
 
         let open = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;

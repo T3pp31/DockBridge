@@ -47,6 +47,7 @@ pub struct TransferManager {
     next_id: AtomicU64,
     retry_count: u32,
     chunk_size: usize,
+    download_pipeline_depth: usize,
     directory_walk_limits: DirectoryWalkLimits,
     tasks: Mutex<Vec<TransferTask>>,
     cancellation_flags: Mutex<HashMap<u64, Arc<AtomicBool>>>,
@@ -59,6 +60,7 @@ impl TransferManager {
             next_id: AtomicU64::new(1),
             retry_count: config.transfer_retry_count,
             chunk_size: config.transfer_chunk_size_bytes,
+            download_pipeline_depth: config.transfer_download_pipeline_depth,
             directory_walk_limits: config.directory_walk_limits(),
             tasks: Mutex::new(Vec::new()),
             cancellation_flags: Mutex::new(HashMap::new()),
@@ -618,6 +620,7 @@ impl TransferManager {
                     remote_path,
                     local_path,
                     self.chunk_size,
+                    self.download_pipeline_depth,
                     TransferOverwritePolicy::default(),
                     || self.is_cancelled(task_id),
                     |transferred| self.update_task_progress(task_id, transferred),
@@ -706,6 +709,8 @@ fn transfer_error_from_message(message: String) -> TransferError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::sftp::test_server::TestSftpServer;
 
     #[test]
     fn creates_monotonic_task_ids() {
@@ -1117,5 +1122,37 @@ mod tests {
 
         assert!(manager.get_transfer_queue().is_empty());
         assert!(manager.is_cancelled(1));
+    }
+
+    #[tokio::test]
+    async fn enqueue_download_transfers_remote_file_end_to_end() {
+        // Given: a remote file, a session, and a manager fed by default config
+        let server = TestSftpServer::start().await;
+        let payload: Vec<u8> = (0..5 * 1024 * 1024).map(|i| (i * 13) as u8).collect();
+        server
+            .write_remote_file("/download/e2e.bin", &payload)
+            .await;
+        let session = server.connect_session().await;
+        let manager = TransferManager::new(&AppConfig::default());
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("e2e.bin");
+
+        // When: a download task is enqueued (goes through the retry loop and the
+        // pipelined download path)
+        let task = manager
+            .enqueue_download(&session, "/download/e2e.bin", &local_path)
+            .await
+            .expect("download should succeed");
+
+        // Then: the task is completed and the local bytes match the source
+        assert!(matches!(task.status, TransferStatus::Completed));
+        assert_eq!(task.total_bytes, payload.len() as u64);
+        assert_eq!(task.bytes_transferred, payload.len() as u64);
+        let downloaded = tokio::fs::read(&local_path).await.unwrap();
+        assert_eq!(downloaded, payload);
+        assert!(
+            crate::sftp::test_server::list_partial_paths(local_dir.path()).is_empty(),
+            "no partial files may remain"
+        );
     }
 }

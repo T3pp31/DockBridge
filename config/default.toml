@@ -6,6 +6,9 @@ session_health_check_interval_secs = 10
 transfer_retry_count = 3
 # Allowed range: 4096 bytes (4 KiB) to 8388608 bytes (8 MiB).
 transfer_chunk_size_bytes = 262144
+# Concurrent in-flight READ requests per download (pipelined reads hide
+# round-trip latency). OpenSSH sftp uses ~64; range 1..=256.
+transfer_download_pipeline_depth = 64
 known_hosts_path = "~/.dockbridge/known_hosts.json"
 openssh_known_hosts_path = "~/.ssh/known_hosts"
 merge_openssh_known_hosts_on_connect = true

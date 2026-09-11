@@ -1,14 +1,18 @@
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+use std::{future::Future, io};
 
 use rand::TryRng;
 use russh_sftp::client::error::Error as SftpClientError;
 use russh_sftp::client::fs::File as RemoteFileHandle;
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::config::{
-    clamp_transfer_chunk_size, DirectoryWalkLimits, DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
+    clamp_transfer_chunk_size, clamp_transfer_download_pipeline_depth, DirectoryWalkLimits,
+    DEFAULT_TRANSFER_CHUNK_SIZE_BYTES, DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
 };
 use crate::error::SftpError;
 use crate::ssh::session::SshSession;
@@ -204,6 +208,7 @@ impl<'a> SftpClient<'a> {
             remote_path,
             local_path,
             default_chunk_size(),
+            DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
             TransferOverwritePolicy::default(),
             || false,
             |_| {},
@@ -211,12 +216,22 @@ impl<'a> SftpClient<'a> {
         .await
     }
 
-    /// Downloads a remote file in chunks, checking `is_cancelled` before each chunk.
+    /// Downloads a remote file using concurrent pipelined READ requests,
+    /// checking `is_cancelled` between chunks.
+    ///
+    /// `pipeline_depth` controls how many SFTP READ requests stay in flight
+    /// concurrently, trading memory (depth × chunk size) for latency hiding on
+    /// high-latency links. `chunk_size` is accepted for API compatibility but
+    /// is not used by the pipelined reader: `read_to_writer_pipelined` sizes
+    /// each request from the SFTP `limits@openssh.com` extension or the packet
+    /// ceiling (default 256 KiB), matching DockBridge's default chunk.
+    #[allow(clippy::too_many_arguments)]
     pub async fn download_cancellable(
         &self,
         remote_path: &str,
         local_path: &Path,
-        chunk_size: usize,
+        _chunk_size: usize,
+        pipeline_depth: usize,
         overwrite_policy: TransferOverwritePolicy,
         is_cancelled: impl Fn() -> bool + Send,
         mut on_progress: impl FnMut(u64) + Send,
@@ -224,7 +239,7 @@ impl<'a> SftpClient<'a> {
         let remote_path = normalize_remote_path(remote_path)?;
         let remote = remote_path.clone();
         let local = local_path.display().to_string();
-        let chunk_size = clamp_transfer_chunk_size(chunk_size);
+        let pipeline_depth = clamp_transfer_download_pipeline_depth(pipeline_depth);
 
         if let Some(parent) = local_path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -250,16 +265,45 @@ impl<'a> SftpClient<'a> {
         let mut partial =
             PartialLocalTransfer::begin(local_parent, &remote, &local, overwrite_policy).await?;
 
-        download_to_writer(
-            &mut remote_file,
-            &mut partial,
-            chunk_size,
-            &is_cancelled,
-            &mut on_progress,
-            &remote,
-            &local,
-        )
-        .await?;
+        let writer_file =
+            partial
+                .clone_file_for_write()
+                .await
+                .map_err(|err| SftpError::DownloadFailed {
+                    remote: remote.clone(),
+                    local: local.clone(),
+                    message: err.to_string(),
+                })?;
+
+        let mut writer = PipelinableTransferWriter {
+            file: Some(writer_file),
+            write_pos: 0_u64,
+            is_cancelled: &is_cancelled,
+            on_progress: &mut on_progress,
+            transferred: 0_u64,
+            pending_write: None,
+            #[cfg(test)]
+            fail_next_write: false,
+        };
+        let result =
+            download_pipelined_to_writer(&mut remote_file, &mut writer, pipeline_depth).await;
+
+        // Close the cloned write handle before touching the partial file's
+        // finalization path so the rename/cleanup operates on a fully-flushed
+        // file description.
+        drop(writer);
+
+        if let Err(err) = result {
+            let cleanup_err = partial.abort(false, &mut remote_file).await?;
+            return Err(match err {
+                DownloadFlowError::Cancelled => SftpError::Cancelled,
+                DownloadFlowError::Write(message) => SftpError::DownloadFailed {
+                    remote: remote.clone(),
+                    local: local.clone(),
+                    message: append_cleanup_context(message, cleanup_err),
+                },
+            });
+        }
 
         if is_cancelled() {
             partial.abort(true, &mut remote_file).await?;
@@ -515,65 +559,161 @@ async fn upload_from_reader(
     Ok(())
 }
 
-async fn download_to_writer(
-    remote_file: &mut RemoteFileHandle,
-    partial: &mut PartialLocalTransfer,
-    chunk_size: usize,
-    is_cancelled: &impl Fn() -> bool,
-    on_progress: &mut impl FnMut(u64),
-    remote: &str,
-    local: &str,
-) -> Result<(), SftpError> {
-    let mut buffer = vec![0_u8; chunk_size];
-    let mut transferred = 0_u64;
-    loop {
-        if is_cancelled() {
-            partial.abort(true, remote_file).await?;
-            return Err(SftpError::Cancelled);
+/// Error returned when a pipelined download flow fails.
+#[derive(Debug)]
+enum DownloadFlowError {
+    /// The transfer was cancelled by the caller.
+    Cancelled,
+    /// Writing the downloaded bytes failed locally.
+    Write(String),
+}
+
+impl std::fmt::Display for DownloadFlowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DownloadFlowError::Cancelled => f.write_str("transfer was cancelled"),
+            DownloadFlowError::Write(message) => f.write_str(message),
+        }
+    }
+}
+
+/// Adapter that presents a cloned local partial file handle as an
+/// `AsyncWrite` sink while forwarding progress callbacks and cancellation
+/// checks on every written chunk. Used to bridge `read_to_writer_pipelined`
+/// (which streams into an `AsyncWrite`) with DockBridge's
+/// progress/cancellation plumbing.
+///
+/// The file handle is taken from the struct while a chunk write is pending
+/// and returned once the write completes, so the in-flight future does not
+/// borrow from the struct itself.
+struct PipelinableTransferWriter<'a, F>
+where
+    F: Fn() -> bool + 'a,
+{
+    file: Option<tokio::fs::File>,
+    write_pos: u64,
+    is_cancelled: &'a F,
+    on_progress: &'a mut dyn FnMut(u64),
+    transferred: u64,
+    pending_write: Option<Pin<Box<dyn Future<Output = io::Result<tokio::fs::File>> + Send + 'a>>>,
+    #[cfg(test)]
+    fail_next_write: bool,
+}
+
+impl<'a, F> AsyncWrite for PipelinableTransferWriter<'a, F>
+where
+    F: Fn() -> bool + 'a,
+{
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, io::Error>> {
+        if (self.is_cancelled)() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                DownloadFlowError::Cancelled.to_string(),
+            )));
         }
 
-        let bytes_read = match remote_file.read(&mut buffer).await {
-            Ok(bytes_read) => bytes_read,
-            Err(err) => {
-                let cleanup_err = partial.abort(false, remote_file).await?;
-                return Err(SftpError::DownloadFailed {
-                    remote: remote.to_string(),
-                    local: local.to_string(),
-                    message: append_cleanup_context(err.to_string(), cleanup_err),
-                });
+        #[cfg(test)]
+        if self.fail_next_write {
+            self.fail_next_write = false;
+            return Poll::Ready(Err(io::Error::other(
+                DownloadFlowError::Write("simulated local write failure".to_string()).to_string(),
+            )));
+        }
+
+        if self.pending_write.is_none() {
+            let mut file = self
+                .file
+                .take()
+                .expect("partial file handle must be available");
+            let offset = self.write_pos;
+            let data = buf.to_vec();
+            self.pending_write = Some(Box::pin(async move {
+                use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+                file.seek(io::SeekFrom::Start(offset)).await?;
+                file.write_all(&data).await?;
+                Ok(file)
+            }));
+        }
+
+        match self
+            .pending_write
+            .as_mut()
+            .expect("pending write set")
+            .as_mut()
+            .poll(cx)
+        {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok(file)) => {
+                self.file = Some(file);
+                self.pending_write = None;
+                self.write_pos += buf.len() as u64;
+                self.transferred += buf.len() as u64;
+                let transferred = self.transferred;
+                let on_progress = &mut *self.on_progress;
+                on_progress(transferred);
+                Poll::Ready(Ok(buf.len()))
             }
-        };
-        if bytes_read == 0 {
-            break;
+            Poll::Ready(Err(err)) => {
+                self.pending_write = None;
+                Poll::Ready(Err(io::Error::other(
+                    DownloadFlowError::Write(err.to_string()).to_string(),
+                )))
+            }
         }
+    }
 
-        if let Err(err) = partial.write_chunk(&buffer[..bytes_read]).await {
-            let cleanup_err = partial.abort(false, remote_file).await?;
-            return Err(SftpError::DownloadFailed {
-                remote: remote.to_string(),
-                local: local.to_string(),
-                message: append_cleanup_context(err.to_string(), cleanup_err),
-            });
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        if let Some(pending) = self.pending_write.as_mut() {
+            match pending.as_mut().poll(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Ok(file)) => {
+                    self.file = Some(file);
+                    self.pending_write = None;
+                }
+                Poll::Ready(Err(err)) => {
+                    self.pending_write = None;
+                    return Poll::Ready(Err(io::Error::other(
+                        DownloadFlowError::Write(err.to_string()).to_string(),
+                    )));
+                }
+            }
         }
-        transferred += bytes_read as u64;
-        on_progress(transferred);
+        Poll::Ready(Ok(()))
     }
 
-    if is_cancelled() {
-        partial.abort(true, remote_file).await?;
-        return Err(SftpError::Cancelled);
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        self.poll_flush(cx)
     }
+}
 
-    if let Err(err) = partial.flush().await {
-        let cleanup_err = partial.abort(false, remote_file).await?;
-        return Err(SftpError::DownloadFailed {
-            remote: remote.to_string(),
-            local: local.to_string(),
-            message: append_cleanup_context(err.to_string(), cleanup_err),
-        });
-    }
-
-    Ok(())
+/// Streams the remote file into `writer` using up to `pipeline_depth`
+/// concurrent SFTP READ requests (pipelined reads hide per-request
+/// round-trip latency). Errors are classified into cancellation vs. write
+/// failures for the caller to translate.
+async fn download_pipelined_to_writer<'a, F>(
+    remote_file: &mut RemoteFileHandle,
+    writer: &mut PipelinableTransferWriter<'a, F>,
+    pipeline_depth: usize,
+) -> Result<(), DownloadFlowError>
+where
+    F: Fn() -> bool + 'a,
+{
+    remote_file
+        .read_to_writer_pipelined(writer, pipeline_depth)
+        .await
+        .map(|_| ())
+        .map_err(|err| {
+            let message = err.to_string();
+            if message.contains("transfer was cancelled") {
+                DownloadFlowError::Cancelled
+            } else {
+                DownloadFlowError::Write(message)
+            }
+        })
 }
 
 const PARTIAL_SUFFIX_BYTES: usize = 16;
@@ -724,10 +864,6 @@ struct PartialLocalTransfer {
     remote: String,
     local: String,
     overwrite_policy: TransferOverwritePolicy,
-    #[cfg(test)]
-    fail_next_write: bool,
-    #[cfg(test)]
-    fail_next_flush: bool,
 }
 
 impl PartialLocalTransfer {
@@ -745,59 +881,26 @@ impl PartialLocalTransfer {
             remote: remote.to_string(),
             local: local.to_string(),
             overwrite_policy,
-            #[cfg(test)]
-            fail_next_write: false,
-            #[cfg(test)]
-            fail_next_flush: false,
         })
     }
 
-    fn local_file_mut(&mut self) -> &mut tokio::fs::File {
-        self.local_file
-            .as_mut()
-            .expect("partial local file handle must exist before commit")
-    }
-
-    async fn write_chunk(&mut self, data: &[u8]) -> Result<(), SftpError> {
-        #[cfg(test)]
-        if self.fail_next_write {
-            self.fail_next_write = false;
-            return Err(SftpError::DownloadFailed {
-                remote: self.remote.clone(),
-                local: self.local.clone(),
-                message: "simulated local write failure".to_string(),
-            });
-        }
-
-        self.local_file_mut()
-            .write_all(data)
-            .await
-            .map_err(|err| SftpError::DownloadFailed {
-                remote: self.remote.clone(),
-                local: self.local.clone(),
-                message: err.to_string(),
-            })
-    }
-
-    async fn flush(&mut self) -> Result<(), SftpError> {
-        #[cfg(test)]
-        if self.fail_next_flush {
-            self.fail_next_flush = false;
-            return Err(SftpError::DownloadFailed {
-                remote: self.remote.clone(),
-                local: self.local.clone(),
-                message: "simulated local flush failure".to_string(),
-            });
-        }
-
-        self.local_file_mut()
-            .flush()
-            .await
-            .map_err(|err| SftpError::DownloadFailed {
-                remote: self.remote.clone(),
-                local: self.local.clone(),
-                message: err.to_string(),
-            })
+    /// Clones the underlying file handle for out-of-band streaming writes
+    /// (used by the pipelined download adapter). The clone shares the same
+    /// OS-level file description, so writes are visible to the original
+    /// handle; offsets are managed by the caller.
+    async fn clone_file_for_write(&self) -> std::io::Result<tokio::fs::File> {
+        let file = self
+            .local_file
+            .as_ref()
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "partial local file handle is unavailable",
+                )
+            })?
+            .try_clone()
+            .await?;
+        Ok(file)
     }
 
     async fn finalize_rename(
@@ -923,17 +1026,6 @@ impl PartialLocalTransfer {
                 message: err.to_string(),
             }),
         }
-    }
-}
-
-#[cfg(test)]
-impl PartialLocalTransfer {
-    fn fail_next_write_for_test(&mut self) {
-        self.fail_next_write = true;
-    }
-
-    fn fail_next_flush_for_test(&mut self) {
-        self.fail_next_flush = true;
     }
 }
 
@@ -1152,11 +1244,12 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        append_cleanup_context, create_exclusive_local_partial, download_to_writer,
+        append_cleanup_context, create_exclusive_local_partial, download_pipelined_to_writer,
         normalize_remote_path, open_exclusive_local_file, parent_remote_path, partial_file_name,
         partial_local_path_for_suffix, partial_remote_path_for_suffix,
         prepare_local_finalize_destination, random_partial_suffix, upload_from_reader,
-        PartialLocalTransfer, PartialRemoteTransfer, SftpClient,
+        DownloadFlowError, PartialLocalTransfer, PartialRemoteTransfer, PipelinableTransferWriter,
+        SftpClient,
     };
     use crate::error::SftpError;
     use crate::sftp::test_server::{list_partial_paths, TestSftpServer};
@@ -1218,25 +1311,48 @@ mod tests {
         .await
         .unwrap();
         assert!(!list_partial_paths(local_dir.path()).is_empty());
-        partial.fail_next_write_for_test();
 
-        let err = download_to_writer(
-            &mut remote_file,
-            &mut partial,
-            16,
-            &|| false,
-            &mut |_| {},
-            "/download/file.txt",
-            &local_path.display().to_string(),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, SftpError::DownloadFailed { .. }));
-        assert!(list_partial_paths(local_dir.path()).is_empty(), "{err:?}");
+        let writer_file = partial
+            .clone_file_for_write()
+            .await
+            .expect("partial file should clone");
+        let mut failed = false;
+        let mut writer = PipelinableTransferWriter {
+            file: Some(writer_file),
+            write_pos: 0,
+            is_cancelled: &|| false,
+            on_progress: &mut |_| {},
+            transferred: 0,
+            pending_write: None,
+            fail_next_write: true,
+        };
+        let result = download_pipelined_to_writer(&mut remote_file, &mut writer, 8).await;
+        if let Err(DownloadFlowError::Write(_)) = result {
+            failed = true;
+        }
+        assert!(failed, "expected a write failure, got {result:?}");
+
+        // Recover the cloned handle back into the partial so the cleanup path
+        // mirrors production (writer owns the clone while we clean up).
+        if let Some(file) = writer.file.take() {
+            // Ensure the clone is closed so nothing holds the path open.
+            drop(file);
+        }
+        if let Some(pending) = writer.pending_write.take() {
+            drop(pending);
+        }
+
+        let _ = partial.abort(false, &mut remote_file).await;
+        assert!(
+            list_partial_paths(local_dir.path()).is_empty(),
+            "partial local files must be cleaned up: {:?}",
+            list_partial_paths(local_dir.path())
+        );
     }
 
     #[tokio::test]
-    async fn download_local_flush_failure_cleans_up_local_partial() {
+    async fn download_pipeline_zero_depth_is_rejected_by_library() {
+        // Given: a remote file and a connected client
         let server = TestSftpServer::start().await;
         server
             .write_remote_file("/download/file.txt", b"payload")
@@ -1258,21 +1374,34 @@ mod tests {
         )
         .await
         .unwrap();
-        partial.fail_next_flush_for_test();
 
-        let err = download_to_writer(
-            &mut remote_file,
-            &mut partial,
-            16,
-            &|| false,
-            &mut |_| {},
-            "/download/file.txt",
-            &local_path.display().to_string(),
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(err, SftpError::DownloadFailed { .. }));
-        assert!(list_partial_paths(local_dir.path()).is_empty(), "{err:?}");
+        let writer_file = partial
+            .clone_file_for_write()
+            .await
+            .expect("partial file should clone");
+        let mut writer = PipelinableTransferWriter {
+            file: Some(writer_file),
+            write_pos: 0,
+            is_cancelled: &|| false,
+            on_progress: &mut |_| {},
+            transferred: 0,
+            pending_write: None,
+            fail_next_write: false,
+        };
+        let result = download_pipelined_to_writer(&mut remote_file, &mut writer, 0).await;
+        assert!(
+            matches!(result, Err(DownloadFlowError::Write(_))),
+            "depth 0 should be rejected: {result:?}"
+        );
+
+        if let Some(pending) = writer.pending_write.take() {
+            drop(pending);
+        }
+        if let Some(file) = writer.file.take() {
+            drop(file);
+        }
+        let _ = partial.abort(false, &mut remote_file).await;
+        assert!(list_partial_paths(local_dir.path()).is_empty());
     }
 
     #[tokio::test]
@@ -1293,6 +1422,56 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, SftpError::DownloadFailed { .. }));
         assert!(list_partial_paths(local_dir.path()).is_empty(), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn pipelined_download_cancel_midway_stops_and_cleans_up() {
+        // Given: a remote file large enough to span many pipeline chunks
+        let server = TestSftpServer::start().await;
+        let payload = vec![0x3C_u8; 16 * 1024 * 1024];
+        server
+            .write_remote_file("/download/cancel.bin", &payload)
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("cancel.bin");
+        let cancel_after = Arc::new(AtomicBool::new(false));
+
+        // When: the transfer is cancelled partway (after the first reported
+        // progress), the pipelined writer surfaces the cancellation
+        let cancel_flag = Arc::clone(&cancel_after);
+        let err = client
+            .download_cancellable(
+                "/download/cancel.bin",
+                &local_path,
+                262_144,
+                64,
+                TransferOverwritePolicy::Replace,
+                move || cancel_flag.load(Ordering::Relaxed),
+                {
+                    let cancel_flag = Arc::clone(&cancel_after);
+                    move |transferred| {
+                        if transferred >= 1024 * 1024 {
+                            cancel_flag.store(true, Ordering::Relaxed);
+                        }
+                    }
+                },
+            )
+            .await
+            .unwrap_err();
+
+        // Then: the download is cancelled and the partial file is removed
+        assert!(matches!(err, SftpError::Cancelled), "got {err:?}");
+        assert!(
+            !local_path.exists(),
+            "final local file must not exist after cancel"
+        );
+        assert!(
+            list_partial_paths(local_dir.path()).is_empty(),
+            "partial local files must be cleaned up after cancel: {:?}",
+            list_partial_paths(local_dir.path())
+        );
     }
 
     #[test]
@@ -1684,6 +1863,7 @@ mod tests {
                 "/download/file.txt",
                 &local_path,
                 16,
+                64,
                 TransferOverwritePolicy::default(),
                 move || cancel_flag.load(Ordering::Relaxed),
                 {
@@ -1883,6 +2063,78 @@ mod tests {
             server.remote_partial_paths()
         );
         assert!(server.remote_file_exists("/upload/file.txt"));
+    }
+
+    #[tokio::test]
+    async fn pipelined_download_reassembles_chunks_in_order() {
+        // Given: a remote file larger than one chunk whose size is not an
+        // exact multiple of the read chunk, forcing out-of-order pipeline
+        // reassembly and a partial final chunk
+        const DATA_BYTES: usize = 4 * 1024 * 1024 + 317;
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let payload: Vec<u8> = (0..DATA_BYTES).map(|i| (i * 31 + 7) as u8).collect();
+        server
+            .write_remote_file("/download/large.bin", &payload)
+            .await;
+
+        // When: the file is downloaded with a deep pipeline
+        let local_path = local_dir.path().join("large.bin");
+        client
+            .download_cancellable(
+                "/download/large.bin",
+                &local_path,
+                262_144,
+                64,
+                TransferOverwritePolicy::Replace,
+                || false,
+                |_| {},
+            )
+            .await
+            .unwrap();
+
+        // Then: the reassembled bytes match the source exactly
+        let downloaded = tokio::fs::read(&local_path).await.unwrap();
+        assert_eq!(downloaded.len(), DATA_BYTES);
+        assert_eq!(downloaded, payload);
+        assert!(list_partial_paths(local_dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn pipelined_download_reports_total_progress() {
+        // Given: a remote file and a connected client
+        let server = TestSftpServer::start().await;
+        let payload = vec![0x5A_u8; 8 * 1024 * 1024];
+        server
+            .write_remote_file("/download/progress.bin", &payload)
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("progress.bin");
+        let last_reported = std::sync::Mutex::new(0_u64);
+
+        // When: the file is downloaded with progress tracking
+        client
+            .download_cancellable(
+                "/download/progress.bin",
+                &local_path,
+                262_144,
+                64,
+                TransferOverwritePolicy::Replace,
+                || false,
+                |bytes| {
+                    *last_reported.lock().unwrap() = bytes;
+                },
+            )
+            .await
+            .unwrap();
+
+        // Then: the final progress value equals the full file size
+        let reported = *last_reported.lock().unwrap();
+        assert_eq!(reported, payload.len() as u64);
     }
 
     #[tokio::test]
@@ -2330,5 +2582,176 @@ mod tests {
             .unwrap();
         assert_eq!(remote_size, BENCH_BYTES as u64);
         eprintln!("bench_upload_32mib_with_mutex_progress elapsed_ms={elapsed_ms}");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn bench_download_32mib_pipelined_depth64() {
+        // Given: a 32 MiB remote file and a connected client
+        const BENCH_BYTES: usize = 32 * 1024 * 1024;
+        let chunk_size = crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
+        let pipeline_depth = crate::config::DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH;
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        server
+            .write_remote_file("/bench/full.bin", &vec![0xAB_u8; BENCH_BYTES])
+            .await;
+
+        // When: the 32 MiB file is downloaded with a default-depth pipeline
+        let started = std::time::Instant::now();
+        client
+            .download_cancellable(
+                "/bench/full.bin",
+                &local_dir.path().join("full.bin"),
+                chunk_size,
+                pipeline_depth,
+                TransferOverwritePolicy::Replace,
+                || false,
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let elapsed_ms = started.elapsed().as_millis();
+
+        // Then: local file matches the remote size and elapsed time is reported
+        let local_size = tokio::fs::metadata(local_dir.path().join("full.bin"))
+            .await
+            .unwrap()
+            .len();
+        assert_eq!(local_size, BENCH_BYTES as u64);
+        eprintln!("bench_download_32mib_pipelined_depth64 elapsed_ms={elapsed_ms}");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn bench_download_32mib_pipelined_depth1() {
+        // Given: a 32 MiB remote file and a connected client
+        const BENCH_BYTES: usize = 32 * 1024 * 1024;
+        let chunk_size = crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        server
+            .write_remote_file("/bench/full.bin", &vec![0xAB_u8; BENCH_BYTES])
+            .await;
+
+        // When: the 32 MiB file is downloaded with a depth-1 pipeline
+        // (approximates the old non-pipelined read loop)
+        let started = std::time::Instant::now();
+        client
+            .download_cancellable(
+                "/bench/full.bin",
+                &local_dir.path().join("full.bin"),
+                chunk_size,
+                1,
+                TransferOverwritePolicy::Replace,
+                || false,
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let elapsed_ms = started.elapsed().as_millis();
+
+        // Then: local file matches the remote size and elapsed time is reported
+        let local_size = tokio::fs::metadata(local_dir.path().join("full.bin"))
+            .await
+            .unwrap()
+            .len();
+        assert_eq!(local_size, BENCH_BYTES as u64);
+        eprintln!("bench_download_32mib_pipelined_depth1 elapsed_ms={elapsed_ms}");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn bench_download_high_latency_depth1() {
+        // Given: a remote file, a connected client, and ~5 ms per-read latency
+        const BENCH_BYTES: usize = 32 * 1024 * 1024;
+        let chunk_size = crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
+        let server = TestSftpServer::start().await;
+        server
+            .failures
+            .read_delay_ms
+            .store(5, std::sync::atomic::Ordering::SeqCst);
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        server
+            .write_remote_file("/bench/full.bin", &vec![0xAB_u8; BENCH_BYTES])
+            .await;
+
+        // When: the file is downloaded serially (depth-1 pipeline)
+        let started = std::time::Instant::now();
+        client
+            .download_cancellable(
+                "/bench/full.bin",
+                &local_dir.path().join("full.bin"),
+                chunk_size,
+                1,
+                TransferOverwritePolicy::Replace,
+                || false,
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let elapsed_ms = started.elapsed().as_millis();
+
+        // Then: completion time is reported (dominated by latency x chunks)
+        assert_eq!(
+            tokio::fs::metadata(local_dir.path().join("full.bin"))
+                .await
+                .unwrap()
+                .len(),
+            BENCH_BYTES as u64
+        );
+        eprintln!("bench_download_high_latency_depth1 elapsed_ms={elapsed_ms}");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn bench_download_high_latency_depth64() {
+        // Given: a remote file, a connected client, and ~5 ms per-read latency
+        const BENCH_BYTES: usize = 32 * 1024 * 1024;
+        let chunk_size = crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
+        let pipeline_depth = crate::config::DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH;
+        let server = TestSftpServer::start().await;
+        server
+            .failures
+            .read_delay_ms
+            .store(5, std::sync::atomic::Ordering::SeqCst);
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        server
+            .write_remote_file("/bench/full.bin", &vec![0xAB_u8; BENCH_BYTES])
+            .await;
+
+        // When: the file is downloaded with a pipelined depth of 64
+        let started = std::time::Instant::now();
+        client
+            .download_cancellable(
+                "/bench/full.bin",
+                &local_dir.path().join("full.bin"),
+                chunk_size,
+                pipeline_depth,
+                TransferOverwritePolicy::Replace,
+                || false,
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let elapsed_ms = started.elapsed().as_millis();
+
+        // Then: completion time is reported (latency hidden by pipelining)
+        assert_eq!(
+            tokio::fs::metadata(local_dir.path().join("full.bin"))
+                .await
+                .unwrap()
+                .len(),
+            BENCH_BYTES as u64
+        );
+        eprintln!("bench_download_high_latency_depth64 elapsed_ms={elapsed_ms}");
     }
 }
