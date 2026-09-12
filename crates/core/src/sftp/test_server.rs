@@ -524,6 +524,10 @@ impl TestSftpServer {
     }
 
     pub async fn connect_session(&self) -> SshSession {
+        self.connect_session_to(self.addr.port()).await
+    }
+
+    pub async fn connect_session_to(&self, port: u16) -> SshSession {
         struct AcceptAllPrompt;
         impl HostKeyPrompt for AcceptAllPrompt {
             fn prompt_unknown_host(&self, _: &str, _: u16, _: &str) -> bool {
@@ -539,8 +543,7 @@ impl TestSftpServer {
         let known_hosts = Arc::new(AsyncMutex::new(
             KnownHostsManager::load(&config.known_hosts_path).unwrap(),
         ));
-        let profile =
-            ConnectionProfile::with_password("127.0.0.1", self.addr.port(), "test", "test");
+        let profile = ConnectionProfile::with_password("127.0.0.1", port, "test", "test");
 
         SshSession::connect(profile, &config, known_hosts, Arc::new(AcceptAllPrompt))
             .await

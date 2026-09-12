@@ -1236,12 +1236,18 @@ fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::io::{self, ErrorKind};
+    use std::net::SocketAddr;
     use std::pin::Pin;
     use std::task::{Context, Poll};
+    use std::time::{Duration, Instant};
 
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
 
     use super::{
         append_cleanup_context, create_exclusive_local_partial, download_pipelined_to_writer,
@@ -2753,5 +2759,153 @@ mod tests {
             BENCH_BYTES as u64
         );
         eprintln!("bench_download_high_latency_depth64 elapsed_ms={elapsed_ms}");
+    }
+
+    /// One-way delay line: bytes leave `delay` after they arrive, preserving
+    /// inter-arrival gaps so multiple in-flight SFTP packets experience RTT
+    /// rather than serialized server-side sleeps.
+    async fn delay_copy<R, W>(mut reader: R, mut writer: W, delay: Duration)
+    where
+        R: tokio::io::AsyncRead + Unpin,
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        let mut pending: VecDeque<(Instant, Vec<u8>)> = VecDeque::new();
+        let mut buf = vec![0_u8; 64 * 1024];
+        let mut eof = false;
+        loop {
+            while let Some((when, _)) = pending.front() {
+                if Instant::now() < *when {
+                    break;
+                }
+                let data = pending.pop_front().unwrap().1;
+                if writer.write_all(&data).await.is_err() {
+                    return;
+                }
+            }
+            if eof && pending.is_empty() {
+                let _ = writer.shutdown().await;
+                return;
+            }
+            if eof {
+                let wait = pending
+                    .front()
+                    .map(|(when, _)| when.saturating_duration_since(Instant::now()))
+                    .unwrap_or(Duration::ZERO);
+                tokio::time::sleep(wait).await;
+                continue;
+            }
+            if let Some((when, _)) = pending.front() {
+                let wait = when.saturating_duration_since(Instant::now());
+                tokio::select! {
+                    n = reader.read(&mut buf) => {
+                        match n {
+                            Ok(0) | Err(_) => eof = true,
+                            Ok(n) => pending.push_back((Instant::now() + delay, buf[..n].to_vec())),
+                        }
+                    }
+                    _ = tokio::time::sleep(wait) => {}
+                }
+            } else {
+                match reader.read(&mut buf).await {
+                    Ok(0) | Err(_) => eof = true,
+                    Ok(n) => pending.push_back((Instant::now() + delay, buf[..n].to_vec())),
+                }
+            }
+        }
+    }
+
+    async fn spawn_tcp_delay_proxy(upstream: SocketAddr, one_way: Duration) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((client, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let Ok(server) = TcpStream::connect(upstream).await else {
+                        return;
+                    };
+                    let _ = client.set_nodelay(true);
+                    let _ = server.set_nodelay(true);
+                    let (client_reader, client_writer) = client.into_split();
+                    let (server_reader, server_writer) = server.into_split();
+                    let to_server = tokio::spawn(delay_copy(client_reader, server_writer, one_way));
+                    let to_client = tokio::spawn(delay_copy(server_reader, client_writer, one_way));
+                    let _ = tokio::join!(to_server, to_client);
+                });
+            }
+        });
+        addr
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore]
+    async fn bench_download_rtt_proxy_depth1_vs_64() {
+        // Given: 16 MiB remote file, ~40 ms RTT (20 ms each way) on the TCP path
+        const BENCH_BYTES: usize = 16 * 1024 * 1024;
+        const WARMUP_BYTES: usize = 256 * 1024;
+        let chunk_size = crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
+        let one_way = Duration::from_millis(20);
+        let server = TestSftpServer::start().await;
+        let proxy_addr = spawn_tcp_delay_proxy(server.addr, one_way).await;
+        let session = server.connect_session_to(proxy_addr.port()).await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        server
+            .write_remote_file("/bench/warmup.bin", &vec![0xCD_u8; WARMUP_BYTES])
+            .await;
+        server
+            .write_remote_file("/bench/full.bin", &vec![0xAB_u8; BENCH_BYTES])
+            .await;
+        client
+            .download_cancellable(
+                "/bench/warmup.bin",
+                &local_dir.path().join("warmup.bin"),
+                chunk_size,
+                64,
+                TransferOverwritePolicy::Replace,
+                || false,
+                |_| {},
+            )
+            .await
+            .unwrap();
+
+        let mut depth1_ms = Vec::new();
+        let mut depth64_ms = Vec::new();
+        for round in 0..3 {
+            for depth in [1_usize, 64_usize] {
+                let local_path = local_dir.path().join(format!("full-d{depth}-r{round}.bin"));
+                let started = Instant::now();
+                client
+                    .download_cancellable(
+                        "/bench/full.bin",
+                        &local_path,
+                        chunk_size,
+                        depth,
+                        TransferOverwritePolicy::Replace,
+                        || false,
+                        |_| {},
+                    )
+                    .await
+                    .unwrap();
+                let elapsed_ms = started.elapsed().as_millis();
+                let local_size = tokio::fs::metadata(&local_path).await.unwrap().len();
+                assert_eq!(local_size, BENCH_BYTES as u64);
+                eprintln!(
+                    "bench_download_rtt_proxy round={round} depth={depth} elapsed_ms={elapsed_ms}"
+                );
+                if depth == 1 {
+                    depth1_ms.push(elapsed_ms);
+                } else {
+                    depth64_ms.push(elapsed_ms);
+                }
+            }
+        }
+        let mean1 = depth1_ms.iter().sum::<u128>() / depth1_ms.len() as u128;
+        let mean64 = depth64_ms.iter().sum::<u128>() / depth64_ms.len() as u128;
+        eprintln!(
+            "bench_download_rtt_proxy summary one_way_ms=20 bytes={BENCH_BYTES} mean_depth1_ms={mean1} mean_depth64_ms={mean64}"
+        );
     }
 }
