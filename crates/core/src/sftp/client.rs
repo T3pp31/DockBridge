@@ -568,14 +568,50 @@ enum DownloadFlowError {
     Write(String),
 }
 
+impl DownloadFlowError {
+    /// Wraps a local write `io::Error`, preserving its kind so downstream
+    /// cancellation detection never mistakes it for a cancellation.
+    fn err_from_io(err: io::Error) -> io::Error {
+        let kind = err.kind();
+        io::Error::new(kind, DownloadFlowError::Write(err.to_string()).to_string())
+    }
+
+    /// From an `SftpClientError` surfaced by `read_to_writer_pipelined`.
+    ///
+    /// The crate collapses the writer's `io::Error` into `Error::IO` with
+    /// its display text, so the error kind is not preserved across the
+    /// boundary. Cancellation is therefore classified by an *exact* match on
+    /// the sentinel message `poll_write` emits; no OS or local write error
+    /// can reproduce the full sentinel string by coincidence (a path
+    /// containing the phrase would not be an exact match).
+    fn from_io_error(err: &SftpClientError) -> Self {
+        match err {
+            SftpClientError::IO(message) if message == DOWNLOAD_CANCELLED_MESSAGE => {
+                DownloadFlowError::Cancelled
+            }
+            _ => DownloadFlowError::Write(err.to_string()),
+        }
+    }
+}
+
+/// Sentinel display text shared by the writer's cancellation error and the
+/// downstream classifier (exact match, not substring).
+const DOWNLOAD_CANCELLED_MESSAGE: &str = "transfer was cancelled";
+
 impl std::fmt::Display for DownloadFlowError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DownloadFlowError::Cancelled => f.write_str("transfer was cancelled"),
+            DownloadFlowError::Cancelled => f.write_str(DOWNLOAD_CANCELLED_MESSAGE),
             DownloadFlowError::Write(message) => f.write_str(message),
         }
     }
 }
+
+/// Bounds a single `write_all` call. macOS caps a single file write below
+/// 2 GiB (EINVAL) and other platforms behave differently, so oversized
+/// buffers (the pipeline can hand us 256 KiB × 64) are split into
+/// sub-buffer pieces.
+const MAX_WRITE_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
 
 /// Adapter that presents a cloned local partial file handle as an
 /// `AsyncWrite` sink while forwarding progress callbacks and cancellation
@@ -600,22 +636,18 @@ where
     fail_next_write: bool,
 }
 
-impl<'a, F> AsyncWrite for PipelinableTransferWriter<'a, F>
+impl<'a, F> PipelinableTransferWriter<'a, F>
 where
     F: Fn() -> bool + 'a,
 {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
+    /// Prepares and polls a single pending chunk write. Used by both
+    /// `poll_write` and the oversized-buffer branch.
+    #[allow(clippy::too_many_arguments)]
+    fn poll_chunk(
+        self: &mut Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
-        if (self.is_cancelled)() {
-            return Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                DownloadFlowError::Cancelled.to_string(),
-            )));
-        }
-
         #[cfg(test)]
         if self.fail_next_write {
             self.fail_next_write = false;
@@ -659,10 +691,84 @@ where
             }
             Poll::Ready(Err(err)) => {
                 self.pending_write = None;
-                Poll::Ready(Err(io::Error::other(
-                    DownloadFlowError::Write(err.to_string()).to_string(),
-                )))
+                Poll::Ready(Err(DownloadFlowError::err_from_io(err)))
             }
+        }
+    }
+}
+
+impl<'a, F> AsyncWrite for PipelinableTransferWriter<'a, F>
+where
+    F: Fn() -> bool + 'a,
+{
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, io::Error>> {
+        // `buf.len() > MAX_WRITE_SIZE` is unreachable for pipelined reads
+        // (chunk ≤ max_packet_len ≈ 256 KiB), but a single `write_all` above
+        // ~2 GiB fails on macOS (EINVAL), so split oversized buffers.
+        if buf.len() > MAX_WRITE_SIZE {
+            if self.pending_write.is_none() {
+                let mut file = self
+                    .file
+                    .take()
+                    .expect("partial file handle must be available");
+                let offset = self.write_pos;
+                let mut data = buf.to_vec();
+                self.pending_write = Some(Box::pin(async move {
+                    use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+                    file.seek(io::SeekFrom::Start(offset)).await?;
+                    loop {
+                        let (head, tail) = if data.len() > MAX_WRITE_SIZE {
+                            data.split_at(MAX_WRITE_SIZE)
+                        } else {
+                            (data.as_slice(), &[][..])
+                        };
+                        file.write_all(head).await?;
+                        if tail.is_empty() {
+                            break;
+                        }
+                        data = tail.to_vec();
+                    }
+                    Ok(file)
+                }));
+            }
+            match self
+                .pending_write
+                .as_mut()
+                .expect("pending write set")
+                .as_mut()
+                .poll(cx)
+            {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(Ok(file)) => {
+                    self.file = Some(file);
+                    self.pending_write = None;
+                    self.write_pos += buf.len() as u64;
+                    self.transferred += buf.len() as u64;
+                    let transferred = self.transferred;
+                    let on_progress = &mut *self.on_progress;
+                    on_progress(transferred);
+                    Poll::Ready(Ok(buf.len()))
+                }
+                Poll::Ready(Err(err)) => {
+                    self.pending_write = None;
+                    Poll::Ready(Err(DownloadFlowError::err_from_io(err)))
+                }
+            }
+        } else if (self.is_cancelled)() {
+            // Classified downstream by an exact match on
+            // `DOWNLOAD_CANCELLED_MESSAGE` (see
+            // `DownloadFlowError::from_io_error`). The message is only for
+            // display and never matched on.
+            Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                DOWNLOAD_CANCELLED_MESSAGE,
+            )))
+        } else {
+            self.poll_chunk(cx, buf)
         }
     }
 
@@ -676,9 +782,7 @@ where
                 }
                 Poll::Ready(Err(err)) => {
                     self.pending_write = None;
-                    return Poll::Ready(Err(io::Error::other(
-                        DownloadFlowError::Write(err.to_string()).to_string(),
-                    )));
+                    return Poll::Ready(Err(DownloadFlowError::err_from_io(err)));
                 }
             }
         }
@@ -706,14 +810,7 @@ where
         .read_to_writer_pipelined(writer, pipeline_depth)
         .await
         .map(|_| ())
-        .map_err(|err| {
-            let message = err.to_string();
-            if message.contains("transfer was cancelled") {
-                DownloadFlowError::Cancelled
-            } else {
-                DownloadFlowError::Write(message)
-            }
-        })
+        .map_err(|err| DownloadFlowError::from_io_error(&err))
 }
 
 const PARTIAL_SUFFIX_BYTES: usize = 16;
