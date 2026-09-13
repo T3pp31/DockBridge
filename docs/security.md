@@ -329,3 +329,17 @@ Run `cargo audit` locally to match CI (`.cargo/audit.toml` applies tracked excep
 cargo install cargo-audit --locked
 cargo audit
 ```
+
+### Rust toolchain and dependency pinning policy
+
+- **MSRV** — the workspace declares `rust-version = "1.91"` in `[workspace.package]`
+  (`Cargo.toml`). CI runs an `msrv` job (`cargo +1.91.0 check --workspace`) so an
+  unintentional MSRV bump fails the build. `rust-toolchain.toml` keeps `stable` for
+  local/CI primary builds; the MSRV job pins the floor.
+- **`ssh-key` is pinned to the 0.7.0 release candidate** (`=0.7.0-rc.10`). The stable
+  0.6.x line lacks features DockBridge relies on; rc releases are reviewed before the
+  pin is advanced. When 0.7.0 stable ships, upgrade to it and drop `rsa`
+  (0.10.0-rc.18, currently transitive via `ssh-key`/`russh`) if its patch also lands.
+  Any rc adoption is re-evaluated on each Dependabot update.
+- **`russh-sftp` fork** (`bssh-russh-sftp`, see the "Supply chain: SFTP implementation"
+  section) is pinned exactly and updated only via explicit PRs.
