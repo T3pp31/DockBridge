@@ -219,14 +219,11 @@ impl<'a> SftpClient<'a> {
     /// Downloads a remote file using concurrent pipelined READ requests,
     /// checking `is_cancelled` between chunks.
     ///
-    /// `pipeline_depth` controls how many SFTP READ requests stay in flight
-    /// concurrently, trading memory (depth × ~256 KiB packet ceiling) for
-    /// latency hiding on high-latency links.
+    /// `pipeline_depth` is the caller's preferred concurrency. Actual in-flight
+    /// READs are scaled with [`pipeline_depth_for_chunk_budget`] so peak memory
+    /// stays near `pipeline_depth × chunk_size` (the library sizes each READ
+    /// from the SFTP packet ceiling, typically ~256 KiB).
     ///
-    /// `chunk_size` is accepted for API compatibility with uploads and older
-    /// callers but is **ignored** by the pipelined reader:
-    /// `read_to_writer_pipelined` sizes each request from the SFTP
-    /// `limits@openssh.com` extension or the packet ceiling (default 256 KiB).
     /// Progress callbacks report bytes successfully written to the local
     /// partial file (not speculative in-flight READ payloads).
     #[allow(clippy::too_many_arguments)]
@@ -234,7 +231,7 @@ impl<'a> SftpClient<'a> {
         &self,
         remote_path: &str,
         local_path: &Path,
-        _chunk_size: usize,
+        chunk_size: usize,
         pipeline_depth: usize,
         overwrite_policy: TransferOverwritePolicy,
         is_cancelled: impl Fn() -> bool + Send,
@@ -243,7 +240,7 @@ impl<'a> SftpClient<'a> {
         let remote_path = normalize_remote_path(remote_path)?;
         let remote = remote_path.clone();
         let local = local_path.display().to_string();
-        let pipeline_depth = clamp_transfer_download_pipeline_depth(pipeline_depth);
+        let pipeline_depth = pipeline_depth_for_chunk_budget(pipeline_depth, chunk_size);
 
         if let Some(parent) = local_path.parent() {
             tokio::fs::create_dir_all(parent)
@@ -588,6 +585,26 @@ impl std::fmt::Display for DownloadFlowError {
 /// buffers are split into sub-buffer pieces.
 const MAX_WRITE_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
 
+/// Result of an in-flight local write: always returns the file handle so the
+/// writer can restore it even when the write fails (avoids FD leaks).
+type PendingWriteOutput = (tokio::fs::File, io::Result<()>);
+
+/// Scales `pipeline_depth` so peak buffered memory stays near
+/// `pipeline_depth × chunk_size`.
+///
+/// `read_to_writer_pipelined` sizes each READ from the SFTP packet ceiling
+/// (~[`DEFAULT_TRANSFER_CHUNK_SIZE_BYTES`]), not from `chunk_size`. Reducing
+/// depth when the caller asks for smaller chunks preserves the intended
+/// memory budget.
+fn pipeline_depth_for_chunk_budget(pipeline_depth: usize, chunk_size: usize) -> usize {
+    let depth = clamp_transfer_download_pipeline_depth(pipeline_depth);
+    let chunk = clamp_transfer_chunk_size(chunk_size).max(1);
+    let budget = depth.saturating_mul(chunk);
+    let assumed_read = DEFAULT_TRANSFER_CHUNK_SIZE_BYTES.max(1);
+    let adjusted = (budget / assumed_read).max(1);
+    clamp_transfer_download_pipeline_depth(adjusted.min(depth))
+}
+
 /// Adapter that presents a cloned local partial file handle as an
 /// `AsyncWrite` sink while forwarding progress callbacks and cancellation
 /// checks on every written chunk. Used to bridge `read_to_writer_pipelined`
@@ -595,11 +612,12 @@ const MAX_WRITE_SIZE: usize = 8 * 1024 * 1024; // 8 MiB
 /// progress/cancellation plumbing.
 ///
 /// The file handle is taken from the struct while a chunk write is pending
-/// and returned once the write completes, so the in-flight future does not
-/// borrow from the struct itself. `cancelled` is set when this writer
-/// rejects a write due to cancellation; the download helper classifies the
-/// resulting error from that flag (the SFTP crate collapses `io::Error` into
-/// a string-only `Error::IO`, so kinds are not preserved across the boundary).
+/// and returned once the write completes (success or failure), so the
+/// in-flight future does not borrow from the struct itself. `cancelled` is
+/// set when this writer rejects a write due to cancellation; the download
+/// helper classifies the resulting error from that flag (the SFTP crate
+/// collapses `io::Error` into a string-only `Error::IO`, so kinds are not
+/// preserved across the boundary).
 struct PipelinableTransferWriter<'a, F>
 where
     F: Fn() -> bool + 'a,
@@ -609,7 +627,7 @@ where
     is_cancelled: &'a F,
     on_progress: &'a mut dyn FnMut(u64),
     transferred: u64,
-    pending_write: Option<Pin<Box<dyn Future<Output = io::Result<tokio::fs::File>> + Send + 'a>>>,
+    pending_write: Option<Pin<Box<dyn Future<Output = PendingWriteOutput> + Send + 'a>>>,
     /// Byte length of the in-flight `pending_write`, so `poll_flush` can
     /// advance `write_pos` / progress if it completes the write.
     pending_len: Option<usize>,
@@ -665,16 +683,21 @@ where
         self.pending_len = Some(buf.len());
         self.pending_write = Some(Box::pin(async move {
             use tokio::io::{AsyncSeekExt, AsyncWriteExt};
-            file.seek(io::SeekFrom::Start(offset)).await?;
-            // Split oversized buffers: a single write above ~2 GiB fails on
-            // macOS (EINVAL). Pipelined reads stay ≤ ~256 KiB in practice.
-            let mut remaining = data.as_slice();
-            while !remaining.is_empty() {
-                let n = remaining.len().min(MAX_WRITE_SIZE);
-                file.write_all(&remaining[..n]).await?;
-                remaining = &remaining[n..];
+            let result = async {
+                file.seek(io::SeekFrom::Start(offset)).await?;
+                // Split oversized buffers: a single write above ~2 GiB fails on
+                // macOS (EINVAL). Pipelined reads stay ≤ ~256 KiB in practice.
+                let mut remaining = data.as_slice();
+                while !remaining.is_empty() {
+                    let n = remaining.len().min(MAX_WRITE_SIZE);
+                    file.write_all(&remaining[..n]).await?;
+                    remaining = &remaining[n..];
+                }
+                Ok(())
             }
-            Ok(file)
+            .await;
+            // Always return the handle so the writer can restore it on error.
+            (file, result)
         }));
     }
 
@@ -690,14 +713,15 @@ where
             .poll(cx)
         {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Ok(file)) => {
+            Poll::Ready((file, Ok(()))) => {
                 let len = self.pending_len.take().unwrap_or(0);
                 self.file = Some(file);
                 self.pending_write = None;
                 self.record_successful_write(len);
                 Poll::Ready(Ok(len))
             }
-            Poll::Ready(Err(err)) => {
+            Poll::Ready((file, Err(err))) => {
+                self.file = Some(file);
                 self.pending_write = None;
                 self.pending_len = None;
                 Poll::Ready(Err(DownloadFlowError::err_from_io(err)))
@@ -705,14 +729,15 @@ where
         }
     }
 
-    /// Rejects further writes after recording cancellation. Progress reports
-    /// only bytes already committed to disk (`transferred`).
+    /// Rejects a *new* write after cancellation. Must only be called when no
+    /// write is in flight (`pending_write` is `None`); callers finish any
+    /// pending write first so progress matches bytes on disk.
     fn reject_cancelled(&mut self) -> Poll<Result<usize, io::Error>> {
+        debug_assert!(
+            self.pending_write.is_none(),
+            "cancel must not abandon an in-flight write"
+        );
         self.cancelled = true;
-        // Drop any abandoned in-flight future; the file handle inside is
-        // closed on Drop. PartialLocalTransfer keeps its own handle for abort.
-        self.pending_write = None;
-        self.pending_len = None;
         Poll::Ready(Err(io::Error::other(
             DownloadFlowError::Cancelled.to_string(),
         )))
@@ -1342,10 +1367,11 @@ mod tests {
         append_cleanup_context, create_exclusive_local_partial, download_pipelined_to_writer,
         normalize_remote_path, open_exclusive_local_file, parent_remote_path, partial_file_name,
         partial_local_path_for_suffix, partial_remote_path_for_suffix,
-        prepare_local_finalize_destination, random_partial_suffix, upload_from_reader,
-        DownloadFlowError, PartialLocalTransfer, PartialRemoteTransfer, PipelinableTransferWriter,
-        SftpClient,
+        pipeline_depth_for_chunk_budget, prepare_local_finalize_destination,
+        random_partial_suffix, upload_from_reader, DownloadFlowError, PartialLocalTransfer,
+        PartialRemoteTransfer, PipelinableTransferWriter, SftpClient,
     };
+    use crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
     use crate::error::SftpError;
     use crate::sftp::test_server::{list_partial_paths, TestSftpServer};
     use crate::sftp::tree::walk_remote_directory;
@@ -1506,6 +1532,27 @@ mod tests {
         assert!(list_partial_paths(local_dir.path()).is_empty(), "{err:?}");
     }
 
+    #[test]
+    fn pipeline_depth_for_chunk_budget_scales_with_smaller_chunks() {
+        // Given/When/Then: default chunk keeps full depth
+        assert_eq!(
+            pipeline_depth_for_chunk_budget(64, DEFAULT_TRANSFER_CHUNK_SIZE_BYTES),
+            64
+        );
+        // Smaller chunk reduces depth so depth×packet ≈ depth×chunk budget
+        assert_eq!(
+            pipeline_depth_for_chunk_budget(64, DEFAULT_TRANSFER_CHUNK_SIZE_BYTES / 4),
+            16
+        );
+        // Never drops below 1
+        assert_eq!(pipeline_depth_for_chunk_budget(64, 1), 1);
+        // Larger chunk does not raise depth above the requested value
+        assert_eq!(
+            pipeline_depth_for_chunk_budget(8, DEFAULT_TRANSFER_CHUNK_SIZE_BYTES * 4),
+            8
+        );
+    }
+
     #[tokio::test]
     async fn pipelined_download_cancel_midway_stops_and_cleans_up() {
         // Given: a remote file large enough to span many pipeline chunks
@@ -1519,6 +1566,7 @@ mod tests {
         let local_dir = tempfile::tempdir().unwrap();
         let local_path = local_dir.path().join("cancel.bin");
         let cancel_after = Arc::new(AtomicBool::new(false));
+        let last_progress = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
         // When: the transfer is cancelled partway (after the first reported
         // progress), the pipelined writer surfaces the cancellation
@@ -1533,7 +1581,9 @@ mod tests {
                 move || cancel_flag.load(Ordering::Relaxed),
                 {
                     let cancel_flag = Arc::clone(&cancel_after);
+                    let last_progress = Arc::clone(&last_progress);
                     move |transferred| {
+                        last_progress.store(transferred, Ordering::Relaxed);
                         if transferred >= 1024 * 1024 {
                             cancel_flag.store(true, Ordering::Relaxed);
                         }
@@ -1553,6 +1603,11 @@ mod tests {
             list_partial_paths(local_dir.path()).is_empty(),
             "partial local files must be cleaned up after cancel: {:?}",
             list_partial_paths(local_dir.path())
+        );
+        // Progress reported only committed local bytes (>= cancel threshold).
+        assert!(
+            last_progress.load(Ordering::Relaxed) >= 1024 * 1024,
+            "cancel path must finish in-flight writes before rejecting"
         );
     }
 
