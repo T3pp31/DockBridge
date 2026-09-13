@@ -220,11 +220,15 @@ impl<'a> SftpClient<'a> {
     /// checking `is_cancelled` between chunks.
     ///
     /// `pipeline_depth` controls how many SFTP READ requests stay in flight
-    /// concurrently, trading memory (depth × chunk size) for latency hiding on
-    /// high-latency links. `chunk_size` is accepted for API compatibility but
-    /// is not used by the pipelined reader: `read_to_writer_pipelined` sizes
-    /// each request from the SFTP `limits@openssh.com` extension or the packet
-    /// ceiling (default 256 KiB), matching DockBridge's default chunk.
+    /// concurrently, trading memory (depth × ~256 KiB packet ceiling) for
+    /// latency hiding on high-latency links.
+    ///
+    /// `chunk_size` is accepted for API compatibility with uploads and older
+    /// callers but is **ignored** by the pipelined reader:
+    /// `read_to_writer_pipelined` sizes each request from the SFTP
+    /// `limits@openssh.com` extension or the packet ceiling (default 256 KiB).
+    /// Progress callbacks report bytes successfully written to the local
+    /// partial file (not speculative in-flight READ payloads).
     #[allow(clippy::too_many_arguments)]
     pub async fn download_cancellable(
         &self,
@@ -275,18 +279,8 @@ impl<'a> SftpClient<'a> {
                     message: err.to_string(),
                 })?;
 
-        let mut writer = PipelinableTransferWriter {
-            file: Some(writer_file),
-            write_pos: 0_u64,
-            is_cancelled: &is_cancelled,
-            on_progress: &mut on_progress,
-            transferred: 0_u64,
-            pending_write: None,
-            pending_len: None,
-            cancelled: false,
-            #[cfg(test)]
-            fail_next_write: false,
-        };
+        let mut writer =
+            PipelinableTransferWriter::new(writer_file, &is_cancelled, &mut on_progress);
         let result =
             download_pipelined_to_writer(&mut remote_file, &mut writer, pipeline_depth).await;
 
@@ -295,6 +289,9 @@ impl<'a> SftpClient<'a> {
         drop(writer);
 
         if let Err(err) = result {
+            // Best-effort remote close + local partial delete. `abort(false)`
+            // never fails hard on remote shutdown (already closed handles are
+            // logged and ignored) so cleanup of the local partial can proceed.
             let cleanup_err = partial.abort(false, &mut remote_file).await?;
             return Err(match err {
                 DownloadFlowError::Cancelled => SftpError::Cancelled,
@@ -626,6 +623,31 @@ impl<'a, F> PipelinableTransferWriter<'a, F>
 where
     F: Fn() -> bool + 'a,
 {
+    fn new(
+        file: tokio::fs::File,
+        is_cancelled: &'a F,
+        on_progress: &'a mut dyn FnMut(u64),
+    ) -> Self {
+        Self {
+            file: Some(file),
+            write_pos: 0,
+            is_cancelled,
+            on_progress,
+            transferred: 0,
+            pending_write: None,
+            pending_len: None,
+            cancelled: false,
+            #[cfg(test)]
+            fail_next_write: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_fail_next_write(mut self) -> Self {
+        self.fail_next_write = true;
+        self
+    }
+
     fn record_successful_write(&mut self, len: usize) {
         self.write_pos += len as u64;
         self.transferred += len as u64;
@@ -682,6 +704,19 @@ where
             }
         }
     }
+
+    /// Rejects further writes after recording cancellation. Progress reports
+    /// only bytes already committed to disk (`transferred`).
+    fn reject_cancelled(&mut self) -> Poll<Result<usize, io::Error>> {
+        self.cancelled = true;
+        // Drop any abandoned in-flight future; the file handle inside is
+        // closed on Drop. PartialLocalTransfer keeps its own handle for abort.
+        self.pending_write = None;
+        self.pending_len = None;
+        Poll::Ready(Err(io::Error::other(
+            DownloadFlowError::Cancelled.to_string(),
+        )))
+    }
 }
 
 impl<'a, F> AsyncWrite for PipelinableTransferWriter<'a, F>
@@ -693,12 +728,18 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
-        // Cancel before any write path, including oversized buffers.
+        // Finish an in-flight write before honouring cancel so progress
+        // matches bytes already on disk, then reject new buffers.
+        if self.pending_write.is_some() {
+            match self.poll_pending(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Ok(len)) => return Poll::Ready(Ok(len)),
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+            }
+        }
+
         if (self.is_cancelled)() {
-            self.cancelled = true;
-            return Poll::Ready(Err(io::Error::other(
-                DownloadFlowError::Cancelled.to_string(),
-            )));
+            return self.reject_cancelled();
         }
 
         #[cfg(test)]
@@ -709,9 +750,7 @@ where
             )));
         }
 
-        if self.pending_write.is_none() {
-            self.start_pending_write(buf);
-        }
+        self.start_pending_write(buf);
         self.poll_pending(cx)
     }
 
@@ -752,6 +791,7 @@ where
         // into Error::IO(display string), so classification by kind/message
         // across that boundary is unreliable.
         Err(_) if writer.cancelled => Err(DownloadFlowError::Cancelled),
+        // Preserve Display text from the SFTP crate (Status / IO / etc.).
         Err(err) => Err(DownloadFlowError::Write(err.to_string())),
     }
 }
@@ -1028,6 +1068,13 @@ impl PartialLocalTransfer {
         }
     }
 
+    /// Aborts an in-progress local download: closes the local partial handle,
+    /// best-effort closes `remote_file`, then deletes the partial path.
+    ///
+    /// Remote shutdown failures (including an already-closed handle after a
+    /// failed pipelined read) are logged and ignored so local cleanup still
+    /// runs. With `strict == false`, local delete failures become
+    /// `Ok(Some(CleanupFailed))` instead of hard errors.
     async fn abort(
         &mut self,
         strict: bool,
@@ -1039,11 +1086,13 @@ impl PartialLocalTransfer {
 
         self.local_file.take();
 
+        // Best-effort only: the SFTP session may already have torn down the
+        // remote handle when `read_to_writer_pipelined` returned an error.
         if let Err(err) = remote_file.shutdown().await {
             tracing::warn!(
                 local = %self.partial_path.display(),
                 error = %err,
-                "failed to close remote file during download cleanup"
+                "failed to close remote file during download cleanup (continuing local cleanup)"
             );
         }
 
@@ -1363,17 +1412,9 @@ mod tests {
             .await
             .expect("partial file should clone");
         let mut failed = false;
-        let mut writer = PipelinableTransferWriter {
-            file: Some(writer_file),
-            write_pos: 0,
-            is_cancelled: &|| false,
-            on_progress: &mut |_| {},
-            transferred: 0,
-            pending_write: None,
-            pending_len: None,
-            cancelled: false,
-            fail_next_write: true,
-        };
+        let mut noop_progress = |_| {};
+        let mut writer = PipelinableTransferWriter::new(writer_file, &|| false, &mut noop_progress)
+            .with_fail_next_write();
         let result = download_pipelined_to_writer(&mut remote_file, &mut writer, 8).await;
         if let Err(DownloadFlowError::Write(_)) = result {
             failed = true;
@@ -1427,17 +1468,8 @@ mod tests {
             .clone_file_for_write()
             .await
             .expect("partial file should clone");
-        let mut writer = PipelinableTransferWriter {
-            file: Some(writer_file),
-            write_pos: 0,
-            is_cancelled: &|| false,
-            on_progress: &mut |_| {},
-            transferred: 0,
-            pending_write: None,
-            pending_len: None,
-            cancelled: false,
-            fail_next_write: false,
-        };
+        let mut noop_progress = |_| {};
+        let mut writer = PipelinableTransferWriter::new(writer_file, &|| false, &mut noop_progress);
         let result = download_pipelined_to_writer(&mut remote_file, &mut writer, 0).await;
         assert!(
             matches!(result, Err(DownloadFlowError::Write(_))),
@@ -1522,6 +1554,39 @@ mod tests {
             "partial local files must be cleaned up after cancel: {:?}",
             list_partial_paths(local_dir.path())
         );
+    }
+
+    #[tokio::test]
+    async fn pipelined_download_depth1_completes_without_deadlock() {
+        // Given: a multi-chunk remote file and pipeline depth 1 (serial READs)
+        let server = TestSftpServer::start().await;
+        let payload = vec![0x5A_u8; 768 * 1024];
+        server
+            .write_remote_file("/download/depth1.bin", &payload)
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("depth1.bin");
+
+        // When: the file is downloaded with depth 1
+        client
+            .download_cancellable(
+                "/download/depth1.bin",
+                &local_path,
+                262_144,
+                1,
+                TransferOverwritePolicy::Replace,
+                || false,
+                |_| {},
+            )
+            .await
+            .unwrap();
+
+        // Then: the transfer completes (no hang) and bytes match
+        let local_bytes = tokio::fs::read(&local_path).await.unwrap();
+        assert_eq!(local_bytes, payload);
+        assert!(list_partial_paths(local_dir.path()).is_empty());
     }
 
     #[test]
