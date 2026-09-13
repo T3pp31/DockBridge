@@ -28,6 +28,9 @@ pub struct FailureConfig {
     pub fail_remote_rename: AtomicBool,
     pub fail_mkdir: AtomicBool,
     pub opendir_count: AtomicU64,
+    /// Artificial delay applied to every SSH_FXP_READ reply, used by benchmarks
+    /// to emulate a high-latency link (milliseconds).
+    pub read_delay_ms: AtomicU64,
 }
 
 pub struct TestSftpServer {
@@ -320,6 +323,14 @@ impl russh_sftp::server::Handler for SftpHandler {
             return Err(StatusCode::Failure);
         }
 
+        #[cfg(test)]
+        {
+            let delay = self.failures.read_delay_ms.load(Ordering::Relaxed);
+            if delay > 0 {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+        }
+
         let open = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;
         open.file
             .seek(std::io::SeekFrom::Start(offset))
@@ -513,6 +524,10 @@ impl TestSftpServer {
     }
 
     pub async fn connect_session(&self) -> SshSession {
+        self.connect_session_to(self.addr.port()).await
+    }
+
+    pub async fn connect_session_to(&self, port: u16) -> SshSession {
         struct AcceptAllPrompt;
         impl HostKeyPrompt for AcceptAllPrompt {
             fn prompt_unknown_host(&self, _: &str, _: u16, _: &str) -> bool {
@@ -528,8 +543,7 @@ impl TestSftpServer {
         let known_hosts = Arc::new(AsyncMutex::new(
             KnownHostsManager::load(&config.known_hosts_path).unwrap(),
         ));
-        let profile =
-            ConnectionProfile::with_password("127.0.0.1", self.addr.port(), "test", "test");
+        let profile = ConnectionProfile::with_password("127.0.0.1", port, "test", "test");
 
         SshSession::connect(profile, &config, known_hosts, Arc::new(AcceptAllPrompt))
             .await
