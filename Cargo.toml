@@ -29,7 +29,7 @@ toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zeroize = { version = "1", features = ["derive"] }
-russh = { version = "0.61", features = ["async-trait", "des"] }
+russh = { version = "0.61", features = ["async-trait"] }
 # bssh-russh-sftp is a temporary fork of russh-sftp that adds pipelined
 # SFTP file I/O (read_to_writer_pipelined / write_all_pipelined), used for
 # high-throughput downloads. The crate alias `russh-sftp` keeps source
