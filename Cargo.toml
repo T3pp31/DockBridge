@@ -33,6 +33,7 @@ russh = { version = "0.61", features = ["async-trait", "des"] }
 # bssh-russh-sftp is a temporary fork of russh-sftp that adds pipelined
 # SFTP file I/O (read_to_writer_pipelined / write_all_pipelined), used for
 # high-throughput downloads. The crate alias `russh-sftp` keeps source
-# imports unchanged.
-russh-sftp = { package = "bssh-russh-sftp", version = "2.4" }
+# imports unchanged. Pinned exactly: updates land only via explicit,
+# reviewed PRs (see docs/security.md "Supply chain: SFTP implementation").
+russh-sftp = { package = "bssh-russh-sftp", version = "=2.4.0" }
 uniffi = { version = "0.32", features = ["cli"] }
