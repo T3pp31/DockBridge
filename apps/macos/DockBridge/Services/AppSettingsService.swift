@@ -20,6 +20,8 @@ enum AppSettingsKeys {
     static let sessionHealthCheckIntervalSecs = "sessionHealthCheckIntervalSecs"
     static let transferRetryCount = "transferRetryCount"
     static let transferChunkSizeBytes = "transferChunkSizeBytes"
+    static let sshInactivityTimeoutSecs = "sshInactivityTimeoutSecs"
+    static let sshKeepaliveIntervalSecs = "sshKeepaliveIntervalSecs"
     static let defaultLocalPath = "defaultLocalPath"
     static let defaultLocalBookmark = "defaultLocalBookmark"
     static let confirmBeforeDelete = "confirmBeforeDelete"
@@ -61,6 +63,8 @@ final class AppSettingsService: @unchecked Sendable {
             AppSettingsKeys.sessionHealthCheckIntervalSecs: Int(AppConfig.default.sessionHealthCheckIntervalSecs),
             AppSettingsKeys.transferRetryCount: Int(AppConfig.default.transferRetryCount),
             AppSettingsKeys.transferChunkSizeBytes: Int(AppConfig.default.transferChunkSizeBytes),
+            AppSettingsKeys.sshInactivityTimeoutSecs: AppConfig.default.sshInactivityTimeoutSecs,
+            AppSettingsKeys.sshKeepaliveIntervalSecs: Int(AppConfig.default.sshKeepaliveIntervalSecs),
             AppSettingsKeys.defaultLocalPath: AppConfig.default.defaultLocalPath,
             AppSettingsKeys.confirmBeforeDelete: AppConfig.default.confirmBeforeDelete,
             AppSettingsKeys.showHiddenFiles: AppConfig.default.showHiddenFiles,
@@ -89,6 +93,13 @@ final class AppSettingsService: @unchecked Sendable {
             transferChunkSizeBytes: UInt64(
                 defaults.object(forKey: AppSettingsKeys.transferChunkSizeBytes) as? Int
                     ?? Int(AppConfig.default.transferChunkSizeBytes)
+            ),
+            sshInactivityTimeoutSecs: (defaults.object(
+                forKey: AppSettingsKeys.sshInactivityTimeoutSecs
+            ) as? Int).map(UInt64.init) ?? AppConfig.default.sshInactivityTimeoutSecs,
+            sshKeepaliveIntervalSecs: UInt64(
+                defaults.object(forKey: AppSettingsKeys.sshKeepaliveIntervalSecs) as? Int
+                    ?? Int(AppConfig.default.sshKeepaliveIntervalSecs)
             ),
             defaultLocalPath: defaults.string(forKey: AppSettingsKeys.defaultLocalPath)
                 ?? AppConfig.default.defaultLocalPath,
@@ -129,6 +140,13 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(Int(config.sessionHealthCheckIntervalSecs), forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs)
         defaults.set(Int(config.transferRetryCount), forKey: AppSettingsKeys.transferRetryCount)
         defaults.set(Int(config.transferChunkSizeBytes), forKey: AppSettingsKeys.transferChunkSizeBytes)
+        if let inactivity = config.sshInactivityTimeoutSecs {
+            defaults.set(Int(inactivity), forKey: AppSettingsKeys.sshInactivityTimeoutSecs)
+        }
+        defaults.set(
+            Int(config.sshKeepaliveIntervalSecs),
+            forKey: AppSettingsKeys.sshKeepaliveIntervalSecs
+        )
         defaults.set(config.defaultLocalPath, forKey: AppSettingsKeys.defaultLocalPath)
         defaults.set(config.defaultLocalBookmark, forKey: AppSettingsKeys.defaultLocalBookmark)
         defaults.set(config.confirmBeforeDelete, forKey: AppSettingsKeys.confirmBeforeDelete)
