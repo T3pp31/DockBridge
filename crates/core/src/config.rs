@@ -62,6 +62,7 @@ pub struct AppConfig {
     pub transfer_chunk_size_bytes: usize,
     /// Maximum number of concurrent in-flight READ requests during a
     /// download (pipelined SFTP reads hide per-request round-trip latency).
+    /// Peak buffered memory is roughly `depth × ~256 KiB` (SFTP packet ceiling).
     #[serde(default = "default_transfer_download_pipeline_depth")]
     pub transfer_download_pipeline_depth: usize,
     /// Path to the DockBridge known hosts JSON store.
@@ -178,16 +179,15 @@ pub fn clamp_transfer_chunk_size(bytes: usize) -> usize {
 
 /// Validates a transfer download pipeline depth from configuration.
 ///
-/// Values are clamped to [`MIN_TRANSFER_DOWNLOAD_PIPELINE_DEPTH`] ..
-/// [`MAX_TRANSFER_DOWNLOAD_PIPELINE_DEPTH`].
+/// Alias of [`clamp_transfer_download_pipeline_depth`]; kept for callers that
+/// load config from TOML.
 pub fn validate_transfer_download_pipeline_depth(depth: usize) -> usize {
-    depth.clamp(
-        MIN_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
-        MAX_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
-    )
+    clamp_transfer_download_pipeline_depth(depth)
 }
 
-/// Clamps a transfer download pipeline depth to the allowed range.
+/// Clamps a transfer download pipeline depth to the allowed range
+/// ([`MIN_TRANSFER_DOWNLOAD_PIPELINE_DEPTH`] ..=
+/// [`MAX_TRANSFER_DOWNLOAD_PIPELINE_DEPTH`]).
 pub fn clamp_transfer_download_pipeline_depth(depth: usize) -> usize {
     depth.clamp(
         MIN_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,

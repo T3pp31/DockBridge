@@ -8,6 +8,7 @@ transfer_retry_count = 3
 transfer_chunk_size_bytes = 262144
 # Concurrent in-flight READ requests per download (pipelined reads hide
 # round-trip latency). OpenSSH sftp uses ~64; range 1..=256.
+# Peak buffered memory ≈ depth × ~256 KiB (SFTP packet ceiling), e.g. 64 → ~16 MiB.
 transfer_download_pipeline_depth = 64
 known_hosts_path = "~/.dockbridge/known_hosts.json"
 openssh_known_hosts_path = "~/.ssh/known_hosts"
