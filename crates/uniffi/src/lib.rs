@@ -12,10 +12,9 @@ use std::time::Duration;
 use dockbridge_core::{
     ensure_known_hosts_parent, expand_tilde,
     inspect_private_key_algorithm as core_inspect_private_key_algorithm,
-    is_connection_lost_message, validate_transfer_chunk_size, AppConfig, AuthType,
-    ConnectionProfile, HostKeyPrompt, KnownHostsManager, PrivateKeyAlgorithm, RemoteFile,
-    SecretPassword, SftpClient, SshSession, TransferDirection, TransferManager, TransferStatus,
-    TransferTask, DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
+    is_connection_lost_message, AppConfig, AuthType, ConnectionProfile, HostKeyPrompt,
+    KnownHostsManager, PrivateKeyAlgorithm, RemoteFile, SecretPassword, SftpClient, SshSession,
+    TransferDirection, TransferManager, TransferStatus, TransferTask,
 };
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
@@ -66,6 +65,7 @@ pub struct AppConfigRecord {
     pub session_health_check_interval_secs: u64,
     pub transfer_retry_count: u32,
     pub transfer_chunk_size_bytes: u64,
+    pub transfer_download_pipeline_depth: u64,
     pub known_hosts_path: String,
     pub openssh_known_hosts_path: String,
     pub merge_openssh_known_hosts_on_connect: bool,
@@ -234,16 +234,13 @@ impl DockBridgeClient {
     ) -> Result<Arc<Self>, DockBridgeError> {
         let known_hosts_path = expand_tilde(PathBuf::from(app_config.known_hosts_path).as_path());
         ensure_known_hosts_parent(&known_hosts_path).map_err(map_error)?;
-        let transfer_chunk_size_bytes =
-            validate_transfer_chunk_size(app_config.transfer_chunk_size_bytes as usize)
-                .map_err(map_error)?;
         let openssh_known_hosts_path =
             expand_tilde(PathBuf::from(app_config.openssh_known_hosts_path).as_path());
         let config = AppConfig {
             connection_timeout_secs: app_config.connection_timeout_secs,
             session_health_check_interval_secs: app_config.session_health_check_interval_secs,
             transfer_retry_count: app_config.transfer_retry_count,
-            transfer_chunk_size_bytes,
+            transfer_chunk_size_bytes: app_config.transfer_chunk_size_bytes as usize,
             known_hosts_path,
             openssh_known_hosts_path,
             merge_openssh_known_hosts_on_connect: app_config.merge_openssh_known_hosts_on_connect,
@@ -252,8 +249,10 @@ impl DockBridgeClient {
             directory_walk_max_files: app_config.directory_walk_max_files,
             directory_walk_max_depth: app_config.directory_walk_max_depth,
             directory_walk_max_total_bytes: app_config.directory_walk_max_total_bytes,
-            transfer_download_pipeline_depth: DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
-        };
+            transfer_download_pipeline_depth: app_config.transfer_download_pipeline_depth as usize,
+        }
+        .validate()
+        .map_err(map_error)?;
         let known_hosts_manager =
             KnownHostsManager::load(config.known_hosts_path()).map_err(map_error)?;
 
@@ -546,7 +545,7 @@ impl DockBridgeClient {
     }
 
     fn spawn_health_monitor(&self, session_id: u64) {
-        let interval_secs = self.config.session_health_check_interval_secs.max(1);
+        let interval_secs = self.config.session_health_check_interval_secs;
         let sessions = Arc::clone(&self.sessions);
         let monitors = Arc::clone(&self.monitors);
         let monitors_in_task = Arc::clone(&monitors);

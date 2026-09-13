@@ -139,7 +139,49 @@ impl AppConfig {
             validate_transfer_chunk_size(config.transfer_chunk_size_bytes)?;
         config.transfer_download_pipeline_depth =
             validate_transfer_download_pipeline_depth(config.transfer_download_pipeline_depth);
+        config = config.validate()?;
         Ok(config)
+    }
+
+    /// Validates all fields have sane ranges, normalizing values that can be
+    /// safely clamped. Single source of truth shared by TOML, CLI, and UniFFI
+    /// entry points.
+    pub fn validate(mut self) -> Result<Self, ConfigError> {
+        ensure_range(
+            "connection_timeout_secs",
+            self.connection_timeout_secs,
+            1..=3600,
+            "must be between 1 and 3600 seconds",
+        )?;
+        ensure_range(
+            "session_health_check_interval_secs",
+            self.session_health_check_interval_secs,
+            1..=3600,
+            "must be between 1 and 3600 seconds",
+        )?;
+        self.transfer_chunk_size_bytes =
+            validate_transfer_chunk_size(self.transfer_chunk_size_bytes)?;
+        self.transfer_download_pipeline_depth =
+            validate_transfer_download_pipeline_depth(self.transfer_download_pipeline_depth);
+        ensure_range(
+            "directory_walk_max_files",
+            self.directory_walk_max_files,
+            1..=u64::MAX,
+            "must be at least 1",
+        )?;
+        ensure_range(
+            "directory_walk_max_depth",
+            u64::from(self.directory_walk_max_depth),
+            1..=1024,
+            "must be between 1 and 1024",
+        )?;
+        ensure_range(
+            "directory_walk_max_total_bytes",
+            self.directory_walk_max_total_bytes,
+            1..=u64::MAX,
+            "must be at least 1",
+        )?;
+        Ok(self)
     }
 
     /// Returns the resolved known hosts path.
@@ -154,6 +196,25 @@ impl AppConfig {
             max_depth: self.directory_walk_max_depth,
             max_total_bytes: self.directory_walk_max_total_bytes,
         }
+    }
+}
+
+/// Validates that `value` falls within `range`, returning an
+/// [`ConfigError::InvalidValue`] otherwise.
+fn ensure_range(
+    field: &'static str,
+    value: u64,
+    range: std::ops::RangeInclusive<u64>,
+    reason: &'static str,
+) -> Result<(), ConfigError> {
+    if range.contains(&value) {
+        Ok(())
+    } else {
+        Err(ConfigError::InvalidValue {
+            field,
+            value,
+            reason,
+        })
     }
 }
 
@@ -530,5 +591,119 @@ mod tests {
         assert_eq!(mode, 0o700);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_rejects_zero_timeout() {
+        // Given: a config with connection_timeout_secs = 0
+        let config = AppConfig {
+            connection_timeout_secs: 0,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: an InvalidValue error is returned
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue {
+                field: "connection_timeout_secs",
+                value: 0,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_zero_health_check_interval() {
+        // Given: a config with session_health_check_interval_secs = 0
+        let config = AppConfig {
+            session_health_check_interval_secs: 0,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: an InvalidValue error is returned
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue {
+                field: "session_health_check_interval_secs",
+                value: 0,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_zero_directory_walk_limits() {
+        // Given: configs with zero directory walk limits
+        let config = AppConfig {
+            directory_walk_max_files: 0,
+            ..AppConfig::default()
+        };
+        assert!(config.validate().is_err());
+
+        let config = AppConfig {
+            directory_walk_max_depth: 0,
+            ..AppConfig::default()
+        };
+        assert!(config.validate().is_err());
+
+        let config = AppConfig {
+            directory_walk_max_total_bytes: 0,
+            ..AppConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_clamps_pipeline_depth() {
+        // Given: out-of-range pipeline depth
+        let config = AppConfig {
+            transfer_download_pipeline_depth: 0,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: the pipeline depth is clamped to the allowed range
+        let config = config.validate().unwrap();
+        assert_eq!(
+            config.transfer_download_pipeline_depth,
+            MIN_TRANSFER_DOWNLOAD_PIPELINE_DEPTH
+        );
+    }
+
+    #[test]
+    fn validate_rejects_oversized_chunk_size() {
+        // Given: a chunk size above the allowed maximum
+        let config = AppConfig {
+            transfer_chunk_size_bytes: 1_000_000_000,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: an InvalidTransferChunkSize error is returned
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidTransferChunkSize {
+                value: 1_000_000_000,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_default_config() {
+        // Given: the default config
+        // When: validating
+        // Then: it succeeds and is unchanged
+        let config = AppConfig::default().validate().unwrap();
+        assert_eq!(config.connection_timeout_secs, 30);
+        assert_eq!(
+            config.directory_walk_max_files,
+            DEFAULT_DIRECTORY_WALK_MAX_FILES
+        );
     }
 }
