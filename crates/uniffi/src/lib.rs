@@ -66,6 +66,8 @@ pub struct AppConfigRecord {
     pub session_health_check_interval_secs: u64,
     pub transfer_retry_count: u32,
     pub transfer_chunk_size_bytes: u64,
+    pub ssh_inactivity_timeout_secs: Option<u64>,
+    pub ssh_keepalive_interval_secs: u64,
     pub known_hosts_path: String,
     pub openssh_known_hosts_path: String,
     pub merge_openssh_known_hosts_on_connect: bool,
@@ -253,6 +255,8 @@ impl DockBridgeClient {
             directory_walk_max_depth: app_config.directory_walk_max_depth,
             directory_walk_max_total_bytes: app_config.directory_walk_max_total_bytes,
             transfer_download_pipeline_depth: DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
+            ssh_inactivity_timeout_secs: app_config.ssh_inactivity_timeout_secs,
+            ssh_keepalive_interval_secs: app_config.ssh_keepalive_interval_secs,
         };
         let known_hosts_manager =
             KnownHostsManager::load(config.known_hosts_path()).map_err(map_error)?;
