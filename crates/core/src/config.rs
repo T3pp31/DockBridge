@@ -483,6 +483,35 @@ mod tests {
         assert!(matches!(err, ConfigError::InvalidTransferChunkSize { .. }));
     }
 
+    #[test]
+    fn all_repo_config_toml_files_parse() {
+        // Given: the repository's AppConfig-format config files
+        // (release.toml uses a separate `[release]` schema and is excluded)
+        // When: every one is loaded as an AppConfig
+        // Then: every file parses successfully (regression for duplicate-key
+        // files like the old config/test.toml)
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let config_dir = manifest_dir.join("../../config");
+        let mut found_any = false;
+        for entry in std::fs::read_dir(&config_dir).unwrap() {
+            let path = entry.unwrap().path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if name.ends_with(".toml") && name != "release.toml" {
+                found_any = true;
+                AppConfig::from_toml_file(&path).unwrap_or_else(|err| {
+                    panic!("config file {} failed to parse: {err}", path.display())
+                });
+            }
+        }
+        assert!(
+            found_any,
+            "no .toml files found under {}",
+            config_dir.display()
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn ensure_known_hosts_parent_creates_parent_with_0700_permissions() {
