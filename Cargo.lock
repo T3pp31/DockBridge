@@ -310,6 +310,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "bssh-russh-sftp"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab6c6b80708b71d5ad6d2b348fc964870f01b6d5a64f3ea90e233da747518cd4"
+dependencies = [
+ "bitflags",
+ "bytes",
+ "chrono",
+ "dashmap",
+ "futures",
+ "gloo-timers",
+ "log",
+ "serde",
+ "serde_bytes",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -703,11 +724,11 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64",
+ "bssh-russh-sftp",
  "libc",
  "rand",
  "rand_core 0.6.4",
  "russh",
- "russh-sftp",
  "serde",
  "serde_json",
  "sha1",
@@ -1883,26 +1904,6 @@ dependencies = [
  "nix",
  "ssh-encoding",
  "windows-sys",
-]
-
-[[package]]
-name = "russh-sftp"
-version = "2.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9de67aace74530a29086db0671fa200c470a58eb380081f28ad512ffb0c5356b"
-dependencies = [
- "bitflags",
- "bytes",
- "chrono",
- "dashmap",
- "gloo-timers",
- "log",
- "serde",
- "serde_bytes",
- "thiserror",
- "tokio",
- "tokio-util",
- "wasm-bindgen-futures",
 ]
 
 [[package]]
