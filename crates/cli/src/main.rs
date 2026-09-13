@@ -1,7 +1,7 @@
 mod password;
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
@@ -33,9 +33,11 @@ command line may appear in argv, shell history, and process listings (CWE-214)."
     after_help = PASSWORD_AFTER_HELP
 )]
 struct Cli {
-    /// Path to TOML config file.
-    #[arg(long, default_value = "config/default.toml")]
-    config: PathBuf,
+    /// Path to TOML config file. When omitted, DockBridge searches
+    /// `$DOCKBRIDGE_CONFIG`, `$XDG_CONFIG_HOME/dockbridge/config.toml`, and
+    /// `~/.dockbridge/config.toml` before falling back to the built-in defaults.
+    #[arg(long)]
+    config: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -174,7 +176,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let config = load_config(&cli.config)?;
+    let config = load_config(cli.config.as_deref())?;
     let known_hosts = Arc::new(Mutex::new(KnownHostsManager::load(
         config.known_hosts_path(),
     )?));
@@ -240,12 +242,43 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn load_config(path: &PathBuf) -> anyhow::Result<AppConfig> {
-    if path.exists() {
-        AppConfig::from_toml_file(path).map_err(Into::into)
-    } else {
-        Ok(AppConfig::default())
+/// Loads CLI configuration from an explicitly provided path, a well-known
+/// config location, or the built-in defaults.
+///
+/// When `--config` is given explicitly, a missing file is an error
+/// (`ConfigError::NotFound`). When omitted, `$DOCKBRIDGE_CONFIG`,
+/// `$XDG_CONFIG_HOME/dockbridge/config.toml`, and `~/.dockbridge/config.toml`
+/// are searched in that order; the chosen source (or the built-in default) is
+/// logged.
+fn load_config(explicit: Option<&Path>) -> anyhow::Result<AppConfig> {
+    if let Some(path) = explicit {
+        return AppConfig::from_toml_file(path).map_err(Into::into);
     }
+
+    let candidates = [
+        std::env::var_os("DOCKBRIDGE_CONFIG").map(PathBuf::from),
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(|dir| PathBuf::from(dir).join("dockbridge/config.toml")),
+        home_dir_path().map(|home| home.join(".dockbridge/config.toml")),
+    ]
+    .into_iter()
+    .flatten();
+
+    for candidate in candidates {
+        if candidate.exists() {
+            tracing::info!(path = %candidate.display(), "using configuration file");
+            return AppConfig::from_toml_file(&candidate).map_err(Into::into);
+        }
+    }
+
+    tracing::info!("no configuration file found; using built-in default configuration");
+    Ok(AppConfig::default())
+}
+
+fn home_dir_path() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
 }
 
 async fn connect(
