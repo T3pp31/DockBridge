@@ -456,7 +456,10 @@ impl KnownHostsManager {
 
     fn find_canonical_key_by_fingerprint(&self, port: u16, fingerprint: &str) -> Option<String> {
         self.entries.iter().find_map(|(key, entry)| {
-            if entry.port == port && fingerprints_match(&entry.fingerprint_sha256, fingerprint) {
+            if entry.port == port
+                && fingerprints_match(&entry.fingerprint_sha256, fingerprint)
+                && !entry_is_non_trusting_marker(entry.marker)
+            {
                 Some(key.clone())
             } else {
                 None
@@ -1387,6 +1390,118 @@ mod tests {
         assert_eq!(
             manager.check_host_key("server.example.com", 22, &key, false),
             HostKeyCheckResult::Unknown
+        );
+    }
+
+    #[test]
+    fn accept_host_key_with_revoked_same_key_creates_new_trusted_entry() {
+        // Given: a revoked entry for hostA with key K
+        // When: hostB (same key, same port) is accepted
+        // Then: a new trusted entry for hostB is created, and hostB is Trusted
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(&openssh_path, format!("@revoked hostA {openssh_key}\n"));
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        // Revoked for hostA, but hostB is Unknown (host names do not match)
+        assert_eq!(
+            manager.check_host_key("hostB", 22, &key, false),
+            HostKeyCheckResult::Unknown
+        );
+
+        manager.accept_host_key("hostB", 22, &key).unwrap();
+
+        // The revoked entry must be untouched and hostB must be trusted,
+        // NOT attached as an alias of the revoked entry.
+        let revoked = manager.find_entry("hostA", 22).unwrap();
+        assert_eq!(revoked.marker, Some(KnownHostMarker::Revoked));
+        assert!(revoked.aliases.is_empty());
+
+        assert_eq!(
+            manager.check_host_key("hostB", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("hostB", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn import_openssh_plain_host_after_revoked_same_key_is_trusted() {
+        // Given: OpenSSH file with `@revoked hostA KEY` followed by `hostB KEY` (same key)
+        // When: the file is imported
+        // Then: hostA rejects the key but hostB remains trusted (order-independent)
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("@revoked hostA {openssh_key}\nhostB {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        let merged = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(merged, 2);
+
+        assert_eq!(
+            manager.check_host_key("hostA", 22, &key, false),
+            HostKeyCheckResult::Reject
+        );
+        assert_eq!(
+            manager.check_host_key("hostB", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn accept_host_key_with_cert_authority_same_key_does_not_merge_into_ca_entry() {
+        // Given: a cert-authority entry for *.example.com with key K
+        // When: a plain host with the same key is accepted
+        // Then: a new trusted entry is created and the CA entry stays unchanged
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("@cert-authority *.example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        manager
+            .accept_host_key("server.example.com", 22, &key)
+            .unwrap();
+
+        let ca_entry = manager
+            .entries
+            .get(&entry_key("*.example.com", 22))
+            .unwrap();
+        assert_eq!(ca_entry.marker, Some(KnownHostMarker::CertAuthority));
+        assert!(ca_entry.aliases.is_empty());
+
+        // Trust is persisted for the accepted host, not lost to the CA entry.
+        assert_eq!(
+            manager.check_host_key("server.example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("server.example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
         );
     }
 
