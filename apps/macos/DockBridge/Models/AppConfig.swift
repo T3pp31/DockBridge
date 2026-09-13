@@ -5,6 +5,7 @@ struct AppConfig: Codable, Equatable, Sendable {
     var sessionHealthCheckIntervalSecs: UInt64
     var transferRetryCount: UInt32
     var transferChunkSizeBytes: UInt64
+    var transferDownloadPipelineDepth: UInt64
     var defaultLocalPath: String
     var defaultLocalBookmark: Data?
     var confirmBeforeDelete: Bool
@@ -24,6 +25,7 @@ struct AppConfig: Codable, Equatable, Sendable {
         sessionHealthCheckIntervalSecs: 10,
         transferRetryCount: 3,
         transferChunkSizeBytes: 262_144,
+        transferDownloadPipelineDepth: 64,
         defaultLocalPath: DefaultLocalPathResolver.containerHomeURL().path,
         defaultLocalBookmark: nil,
         confirmBeforeDelete: true,
@@ -47,6 +49,7 @@ struct AppConfig: Codable, Equatable, Sendable {
             sessionHealthCheckIntervalSecs: sessionHealthCheckIntervalSecs,
             transferRetryCount: transferRetryCount,
             transferChunkSizeBytes: transferChunkSizeBytes,
+            transferDownloadPipelineDepth: transferDownloadPipelineDepth,
             knownHostsPath: knownHostsPath,
             opensshKnownHostsPath: opensshKnownHostsPath,
             mergeOpensshKnownHostsOnConnect: mergeOpensshKnownHostsOnConnect,
