@@ -1,9 +1,16 @@
+# Test configuration used by dockbridge-core's config validation tests.
+# Kept in sync with config/default.toml (all AppConfig fields present).
+
 connection_timeout_secs = 30
 session_health_check_interval_secs = 10
 transfer_retry_count = 3
 transfer_chunk_size_bytes = 262144
+transfer_download_pipeline_depth = 64
 known_hosts_path = "target/test-known_hosts.json"
 openssh_known_hosts_path = "target/test-openssh-known_hosts"
 merge_openssh_known_hosts_on_connect = true
-openssh_known_hosts_path = "target/test-openssh-known_hosts"
-merge_openssh_known_hosts_on_connect = false
+known_hosts_strict_mode = true
+fail_connect_on_openssh_merge_error = false
+directory_walk_max_files = 1000
+directory_walk_max_depth = 32
+directory_walk_max_total_bytes = 104857600
