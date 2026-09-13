@@ -329,3 +329,21 @@ Run `cargo audit` locally to match CI (`.cargo/audit.toml` applies tracked excep
 cargo install cargo-audit --locked
 cargo audit
 ```
+
+### Supply chain: SFTP implementation
+
+DockBridge uses `bssh-russh-sftp`, a temporary fork of `russh-sftp` that adds
+pipelined SFTP file I/O (`read_to_writer_pipelined` / `write_all_pipelined`) used
+for high-throughput downloads.
+
+- **Pin** — the crate is pinned exactly (`=2.4.0`). Version bumps must be explicit,
+  reviewed PRs; `cargo update` never moves it silently.
+- **Origin** — the fork is published by Lablup (upstream of their `bssh` product) and
+  re-applies a `patches/pipelined-file-io.patch` on top of upstream `russh-sftp`.
+- **Risk** — upstream security fixes reach us only when the fork re-syncs, and
+  `cargo audit`/SBOM report the fork crate name (`bssh-russh-sftp`) rather than
+  `russh-sftp`. Upstream advisory tracking is therefore on the checklist when a
+  `russh`/`russh-sftp` advisory is published.
+- **Exit plan** — when upstream `russh-sftp` merges pipelined I/O (or a maintained
+  fork is abandoned), DockBridge should re-vendor or switch back to upstream and drop
+  the alias. The difference from upstream is limited to the two pipelined-IO methods.
