@@ -729,14 +729,12 @@ where
         }
     }
 
-    /// Rejects a *new* write after cancellation. Must only be called when no
-    /// write is in flight (`pending_write` is `None`); callers finish any
-    /// pending write first so progress matches bytes on disk.
+    /// Marks this writer as cancelled and rejects a *new* write buffer.
+    ///
+    /// Call only when idle (`pending_write` is `None`). `poll_write` always
+    /// drains an in-flight write before calling this, so progress already
+    /// reflects bytes on disk. This method never touches `pending_write`.
     fn reject_cancelled(&mut self) -> Poll<Result<usize, io::Error>> {
-        debug_assert!(
-            self.pending_write.is_none(),
-            "cancel must not abandon an in-flight write"
-        );
         self.cancelled = true;
         Poll::Ready(Err(io::Error::other(
             DownloadFlowError::Cancelled.to_string(),
@@ -753,16 +751,13 @@ where
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
-        // Finish an in-flight write before honouring cancel so progress
-        // matches bytes already on disk, then reject new buffers.
+        // Drain any in-flight write first. While Pending, we never reach the
+        // cancel branch below, so cancel cannot race with a live pending_write.
         if self.pending_write.is_some() {
-            match self.poll_pending(cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Ok(len)) => return Poll::Ready(Ok(len)),
-                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-            }
+            return self.poll_pending(cx);
         }
 
+        // Idle: reject new buffers when cancelled (progress already up to date).
         if (self.is_cancelled)() {
             return self.reject_cancelled();
         }
@@ -1367,9 +1362,9 @@ mod tests {
         append_cleanup_context, create_exclusive_local_partial, download_pipelined_to_writer,
         normalize_remote_path, open_exclusive_local_file, parent_remote_path, partial_file_name,
         partial_local_path_for_suffix, partial_remote_path_for_suffix,
-        pipeline_depth_for_chunk_budget, prepare_local_finalize_destination,
-        random_partial_suffix, upload_from_reader, DownloadFlowError, PartialLocalTransfer,
-        PartialRemoteTransfer, PipelinableTransferWriter, SftpClient,
+        pipeline_depth_for_chunk_budget, prepare_local_finalize_destination, random_partial_suffix,
+        upload_from_reader, DownloadFlowError, PartialLocalTransfer, PartialRemoteTransfer,
+        PipelinableTransferWriter, SftpClient,
     };
     use crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
     use crate::error::SftpError;
