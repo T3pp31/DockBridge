@@ -450,6 +450,87 @@ pub async fn walk_local_directory_with_options(
     Ok(entries)
 }
 
+/// All directories under `root`, as relative paths, ordered parent-first
+/// (e.g. `a`, `a/b`, `a/b/c`). Used to mirror empty directories exactly once
+/// per batch instead of issuing `create_directory_all` per file (issue #312).
+pub async fn local_directories(
+    root: &Path,
+    options: WalkLocalDirectoryOptions,
+) -> Result<Vec<PathBuf>, SftpError> {
+    walk_local_directories(root, options).await
+}
+
+/// Recursively walks a local directory and returns relative directory paths
+/// (excluding `root` itself) ordered parent-first. Symlink handling mirrors
+/// [`walk_local_directory_with_options`].
+pub(crate) async fn walk_local_directories(
+    root: &Path,
+    options: WalkLocalDirectoryOptions,
+) -> Result<Vec<PathBuf>, SftpError> {
+    if is_local_directory(root).await? {
+        let mut directories = Vec::new();
+        let mut pending = vec![(root.to_path_buf(), PathBuf::new(), 0_u32)];
+        let mut visited = HashSet::<PathBuf>::new();
+        let accumulator = DirectoryWalkAccumulator::new(options.limits);
+
+        while let Some((current, relative, depth)) = pending.pop() {
+            accumulator.check_depth(depth, &current.display().to_string())?;
+            let canonical = match tokio::fs::canonicalize(&current).await {
+                Ok(canonical) => canonical,
+                Err(_) => continue,
+            };
+            if !visited.insert(canonical) {
+                continue;
+            }
+
+            let Ok(mut read_dir) = tokio::fs::read_dir(&current).await else {
+                continue;
+            };
+
+            loop {
+                let Ok(Some(entry)) = read_dir.next_entry().await else {
+                    break;
+                };
+                let path = entry.path();
+                let file_type = match entry.file_type().await {
+                    Ok(file_type) => file_type,
+                    Err(_) => continue,
+                };
+
+                if file_type.is_dir() {
+                    let child_relative = relative.join(path.file_name().unwrap_or_default());
+                    directories.push(child_relative.clone());
+                    let child_depth = depth.saturating_add(1);
+                    accumulator.check_depth(child_depth, &path.display().to_string())?;
+                    pending.push((path, child_relative, child_depth));
+                } else if file_type.is_symlink() && options.follow_symlinks {
+                    if let Ok(metadata) = tokio::fs::metadata(&path).await {
+                        if metadata.is_dir() {
+                            let child_relative =
+                                relative.join(path.file_name().unwrap_or_default());
+                            directories.push(child_relative.clone());
+                            let child_depth = depth.saturating_add(1);
+                            accumulator.check_depth(child_depth, &path.display().to_string())?;
+                            pending.push((path, child_relative, child_depth));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort parent-first (shorter paths first, lexicographic for ties).
+        directories.sort_by(|left, right| {
+            left.components()
+                .count()
+                .cmp(&right.components().count())
+                .then_with(|| left.cmp(right))
+        });
+        Ok(directories)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
 /// Recursively walks a remote directory and returns all files with relative paths.
 ///
 /// Symlinks are not followed, matching [`walk_local_directory`] and OpenSSH `ls -l` behaviour:
@@ -459,6 +540,62 @@ pub async fn walk_remote_directory<'a>(
     root: &str,
 ) -> Result<Vec<RemoteFileEntry>, SftpError> {
     walk_remote_directory_with_limits(client, root, DirectoryWalkLimits::default()).await
+}
+
+/// All remote directories under `root`, as relative paths, ordered
+/// parent-first. Used to mirror directory structure exactly once per batch
+/// instead of issuing `create_directory_all` per file (issue #312).
+pub async fn remote_directories<'a>(
+    client: &SftpClient<'a>,
+    root: &str,
+    limits: DirectoryWalkLimits,
+) -> Result<Vec<PathBuf>, SftpError> {
+    let normalized_root = normalize_remote_path(root)?;
+    let mut directories = Vec::new();
+    let mut pending = vec![(normalized_root.clone(), PathBuf::new(), 0_u32)];
+    let mut visited = HashSet::new();
+    visited.insert(normalized_root.clone());
+    let accumulator = DirectoryWalkAccumulator::new(limits);
+
+    while let Some((current_remote, relative_prefix, depth)) = pending.pop() {
+        accumulator.check_depth(depth, &current_remote)?;
+        let Ok(entries) = client.list_directory(&current_remote).await else {
+            continue;
+        };
+        for entry in entries {
+            if !entry.is_directory {
+                continue;
+            }
+            let Ok(child_remote) =
+                validated_remote_entry(&current_remote, &entry.name, &entry.path)
+            else {
+                continue;
+            };
+            if ensure_remote_path_within_root(&normalized_root, &child_remote).is_err() {
+                continue;
+            }
+            let relative_path = if relative_prefix.as_os_str().is_empty() {
+                PathBuf::from(&entry.name)
+            } else {
+                relative_prefix.join(&entry.name)
+            };
+            directories.push(relative_path.clone());
+            let child_depth = depth.saturating_add(1);
+            accumulator.check_depth(child_depth, &child_remote)?;
+            if visited.insert(child_remote.clone()) {
+                pending.push((child_remote, relative_path, child_depth));
+            }
+        }
+    }
+
+    // Parent-first ordering (parents have fewer components).
+    directories.sort_by(|left, right| {
+        left.components()
+            .count()
+            .cmp(&right.components().count())
+            .then_with(|| left.cmp(right))
+    });
+    Ok(directories)
 }
 
 /// Recursively walks a remote directory with configurable resource limits.
@@ -788,6 +925,35 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert!(relatives.contains(&"top.txt".to_string()));
         assert!(relatives.contains(&"nested/inner.txt".to_string()));
+    }
+
+    #[tokio::test]
+    async fn local_directories_returns_parent_first_and_includes_empty_dir() {
+        // Given: a tree with a nested directory and an EMPTY directory
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("a/b")).unwrap();
+        fs::create_dir_all(root.join("empty")).unwrap();
+        fs::write(root.join("a/b/file.txt"), b"x").unwrap();
+
+        // When: local_directories collects the directory set
+        let directories = local_directories(root, WalkLocalDirectoryOptions::default())
+            .await
+            .unwrap();
+
+        // Then: parents come before their children, and empty dirs are included
+        let strings: Vec<_> = directories
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(strings.len(), 3);
+        assert!(strings.contains(&"empty".to_string()), "{strings:?}");
+        let pos_a = strings.iter().position(|p| p == "a").unwrap();
+        let pos_ab = strings.iter().position(|p| p == "a/b").unwrap();
+        assert!(
+            pos_a < pos_ab,
+            "parent 'a' must be created before child 'a/b': {strings:?}"
+        );
     }
 
     #[tokio::test]

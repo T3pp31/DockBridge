@@ -28,6 +28,9 @@ pub struct FailureConfig {
     pub fail_remote_rename: AtomicBool,
     pub fail_mkdir: AtomicBool,
     pub opendir_count: AtomicU64,
+    /// Number of SSH_FXP_MKDIR requests handled, used to assert that
+    /// directory mirrors issue at most one mkdir per directory (issue #312).
+    pub mkdir_count: AtomicU64,
     /// Artificial delay applied to every SSH_FXP_READ reply, used by benchmarks
     /// to emulate a high-latency link (milliseconds).
     pub read_delay_ms: AtomicU64,
@@ -426,6 +429,7 @@ impl russh_sftp::server::Handler for SftpHandler {
         if self.failures.fail_mkdir.swap(false, Ordering::SeqCst) {
             return Ok(Self::err_status(id, StatusCode::Failure, "Failure"));
         }
+        self.failures.mkdir_count.fetch_add(1, Ordering::Relaxed);
 
         let local = self.resolve(&path);
         if local.exists() {
@@ -569,6 +573,16 @@ impl TestSftpServer {
     /// Returns how many OPENDIR requests this server has handled.
     pub fn opendir_count(&self) -> u64 {
         self.failures.opendir_count.load(Ordering::Relaxed)
+    }
+
+    /// Returns how many MKDIR requests this server has handled.
+    pub fn mkdir_count(&self) -> u64 {
+        self.failures.mkdir_count.load(Ordering::Relaxed)
+    }
+
+    /// Returns true when the remote path exists as a directory.
+    pub fn remote_dir_exists(&self, remote_path: &str) -> bool {
+        self.resolve(remote_path).is_dir()
     }
 
     fn resolve(&self, path: &str) -> PathBuf {
