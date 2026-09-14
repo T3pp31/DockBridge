@@ -710,6 +710,7 @@ dependencies = [
  "clap",
  "dockbridge-core",
  "serde",
+ "serde_json",
  "tokio",
  "toml",
  "tracing",
