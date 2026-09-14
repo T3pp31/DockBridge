@@ -31,6 +31,13 @@ pub struct FailureConfig {
     /// Artificial delay applied to every SSH_FXP_READ reply, used by benchmarks
     /// to emulate a high-latency link (milliseconds).
     pub read_delay_ms: AtomicU64,
+    /// When `true`, the server receives WRITEs but does not acknowledge them
+    /// until [`write_unhang`](Self::write_unhang) is notified, simulating a
+    /// stalled link (issue #306). Clients must break out via timeout or
+    /// cancellation.
+    pub hang_write: AtomicBool,
+    /// Notifies a single blocked WRITE handler to stop hanging and reply.
+    pub write_unhang: tokio::sync::Notify,
 }
 
 pub struct TestSftpServer {
@@ -359,6 +366,13 @@ impl russh_sftp::server::Handler for SftpHandler {
             .swap(false, Ordering::SeqCst)
         {
             return Ok(Self::err_status(id, StatusCode::Failure, "write failed"));
+        }
+
+        // Simulate a server that stalls on a WRITE ack (issue #306): block
+        // this handler until `write_unhang` is notified. The client must time
+        // out or cancel out of the write rather than hang forever.
+        if self.failures.hang_write.load(Ordering::Relaxed) {
+            self.failures.write_unhang.notified().await;
         }
 
         let open = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;
