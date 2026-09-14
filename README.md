@@ -50,6 +50,61 @@ cargo build -p dockbridge-cli --release --features disable-cli-password
 
 See [docs/security.md](docs/security.md#cli-password-authentication) for the full distribution policy.
 
+### Host key verification
+
+`--host-key-policy` controls how unknown or changed host keys are handled (default `ask`):
+
+- `ask` — prompt on `/dev/tty` (never stdin); falls back to `strict` when no controlling terminal is available
+- `accept-new` — trust unknown host keys automatically; still rejects changed keys (use for first connection in scripts/CI)
+- `strict` — only trust keys already present in the known-hosts store
+
+Because prompts are read from `/dev/tty`, `--password-stdin` / `--passphrase-stdin` exclusively own stdin:
+
+```bash
+# First-time connection, non-interactive: trust the new host key automatically
+printf '%s\n' "$PASSWORD" | cargo run -q -p dockbridge-cli -- list \
+  --host 127.0.0.1 --user demo --password-stdin --host-key-policy accept-new
+```
+
+### Exit codes
+
+The CLI exits with distinct codes so scripts can branch on the failure category (documented in `dockbridge --help`):
+
+| Exit | Meaning                |
+|------|------------------------|
+| 0    | success                |
+| 1    | other error            |
+| 2    | usage or configuration |
+| 3    | host key verification  |
+| 4    | authentication        |
+| 5    | transfer failed       |
+| 6    | transfer cancelled    |
+
+### Machine-readable output
+
+`list --output json` emits an array of `{"kind":"file|dir","size":...,"path":"...","modified_at":...}` objects (tab-separated text is the default). This is safe for file names containing tabs or newlines:
+
+```bash
+cargo run -q -p dockbridge-cli -- list \
+  --host 127.0.0.1 --user demo --password-stdin --output json
+```
+
+### Subcommands
+
+`list`, `upload`, `download`, `delete`, `rename`, `mkdir`, and `pwd` are available. `upload`/`download` accept `--recursive` to transfer a whole directory tree (`enqueue_upload_entry` / `enqueue_download_entry`):
+
+```bash
+cargo run -q -p dockbridge-cli -- upload \
+  --host 127.0.0.1 --user demo --password-stdin \
+  --local ./dist --remote /upload/dist --recursive
+
+cargo run -q -p dockbridge-cli -- mkdir \
+  --host 127.0.0.1 --user demo --password-stdin --remote /upload/new
+
+cargo run -q -p dockbridge-cli -- pwd \
+  --host 127.0.0.1 --user demo --password-stdin
+```
+
 ### macOS app (Rust + UniFFI)
 
 ```bash
