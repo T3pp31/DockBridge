@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use rand::RngExt as _;
 
 use crate::config::{AppConfig, DirectoryWalkLimits};
 use crate::error::{SftpError, TransferError};
@@ -51,6 +54,10 @@ pub struct TransferManager {
     directory_walk_limits: DirectoryWalkLimits,
     tasks: Mutex<Vec<TransferTask>>,
     cancellation_flags: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+    /// Fixed backoff delay in seconds between retries, used by tests to
+    /// avoid real sleeping. `None` uses the exponential jittered backoff.
+    #[cfg(test)]
+    backoff_override_secs: Option<u64>,
 }
 
 impl TransferManager {
@@ -64,6 +71,8 @@ impl TransferManager {
             directory_walk_limits: config.directory_walk_limits(),
             tasks: Mutex::new(Vec::new()),
             cancellation_flags: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            backoff_override_secs: None,
         }
     }
 
@@ -538,10 +547,14 @@ impl TransferManager {
             .unwrap_or(0);
         self.set_task_total_bytes(task_id, total_bytes);
 
-        let attempts = self.retry_count.max(1);
+        // `retry_count` config means the number of RETRIES after the first
+        // attempt (issue #310): `transfer_retry_count = 3` performs 3
+        // retries, i.e. up to 4 attempts total.
+        let attempts = self.retry_count.saturating_add(1).max(1);
         let mut last_error = String::from("unknown transfer error");
         let mut attempt = 0;
 
+        let mut retry_index = 0_u32;
         for current in 1..=attempts {
             if self.is_cancelled(task_id) {
                 return Err(TransferError::Cancelled);
@@ -565,9 +578,7 @@ impl TransferManager {
                 Err(SftpError::CleanupFailed { message, .. }) if self.is_cancelled(task_id) => {
                     return Err(TransferError::RetriesExhausted {
                         attempts: 1,
-                        message: format!(
-                            "転送はキャンセルされましたが、部分ファイルの削除に失敗しました: {message}"
-                        ),
+                        message,
                     });
                 }
                 Err(err) => {
@@ -576,6 +587,12 @@ impl TransferManager {
                         break;
                     }
                     if current < attempts {
+                        // Exponential backoff with jitter between retries;
+                        // still abortable while waiting.
+                        retry_index = retry_index.saturating_add(1);
+                        if self.sleep_backoff(task_id, retry_index).await {
+                            return Err(TransferError::Cancelled);
+                        }
                         tracing::warn!(
                             task_id,
                             attempt = current,
@@ -593,6 +610,35 @@ impl TransferManager {
         })
     }
 
+    /// Sleeps with exponential backoff + jitter (1s, 2s, 4s, ... capped at 30s)
+    /// between retry attempts. Returns `true` when the transfer was cancelled
+    /// during the wait (so the caller aborts immediately).
+    async fn sleep_backoff(&self, task_id: u64, retry_index: u32) -> bool {
+        #[cfg(test)]
+        let delay_secs = self
+            .backoff_override_secs
+            .unwrap_or_else(|| backoff_delay_secs(retry_index));
+        #[cfg(not(test))]
+        let delay_secs = backoff_delay_secs(retry_index);
+
+        tracing::info!(
+            task_id,
+            retry_backoff_secs = delay_secs,
+            "waiting before retrying transfer"
+        );
+
+        tokio::time::timeout(Duration::from_secs(delay_secs), async {
+            loop {
+                if self.is_cancelled(task_id) {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .is_ok_and(|cancelled| cancelled)
+    }
+
     async fn run_download_with_retries(
         &self,
         session: &SshSession,
@@ -604,10 +650,13 @@ impl TransferManager {
         let total_bytes = client.remote_file_size(remote_path).await.unwrap_or(0);
         self.set_task_total_bytes(task_id, total_bytes);
 
-        let attempts = self.retry_count.max(1);
+        // `retry_count` config means the number of RETRIES after the first
+        // attempt (issue #310).
+        let attempts = self.retry_count.saturating_add(1).max(1);
         let mut last_error = String::from("unknown transfer error");
         let mut attempt = 0;
 
+        let mut retry_index = 0_u32;
         for current in 1..=attempts {
             if self.is_cancelled(task_id) {
                 return Err(TransferError::Cancelled);
@@ -632,9 +681,7 @@ impl TransferManager {
                 Err(SftpError::CleanupFailed { message, .. }) if self.is_cancelled(task_id) => {
                     return Err(TransferError::RetriesExhausted {
                         attempts: 1,
-                        message: format!(
-                            "転送はキャンセルされましたが、部分ファイルの削除に失敗しました: {message}"
-                        ),
+                        message,
                     });
                 }
                 Err(err) => {
@@ -643,6 +690,12 @@ impl TransferManager {
                         break;
                     }
                     if current < attempts {
+                        // Exponential backoff with jitter between retries;
+                        // still abortable while waiting.
+                        retry_index = retry_index.saturating_add(1);
+                        if self.sleep_backoff(task_id, retry_index).await {
+                            return Err(TransferError::Cancelled);
+                        }
                         tracing::warn!(
                             task_id,
                             attempt = current,
@@ -676,6 +729,20 @@ fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
     } else {
         parent.to_string()
     }))
+}
+
+/// Returns the exponential-backoff delay in seconds for retry `retry_index`
+/// (1-based), with 50%..100% jitter. Sequence: ~1s, ~2s, ~4s, ... capped at
+/// 30s.
+fn backoff_delay_secs(retry_index: u32) -> u64 {
+    const BACKOFF_BASE_SECS: u64 = 1;
+    const BACKOFF_MAX_SECS: u64 = 30;
+
+    let exponent = (retry_index.saturating_sub(1)).min(6);
+    let base = BACKOFF_BASE_SECS.saturating_mul(1_u64 << exponent);
+    let capped = base.min(BACKOFF_MAX_SECS);
+    // Jitter: 50%..100% of the computed delay to avoid thundering herds.
+    capped - rand::rng().random_range(0..=(capped / 2))
 }
 
 /// Returns `true` when retrying the same transfer is unlikely to succeed.
@@ -778,6 +845,53 @@ mod tests {
 
         let queue = manager.get_transfer_queue();
         assert_eq!(queue[0].status, TransferStatus::Cancelled);
+    }
+
+    #[test]
+    fn backoff_delay_is_exponential_and_capped() {
+        // Jitter range is 50%..100% of the base delay:
+        // first retry ~1s (1), second ~2s (1-2), third ~4s (2-4).
+        let d1 = backoff_delay_secs(1);
+        assert_eq!(d1, 1, "first retry delay should be 1s: {d1}");
+
+        let d2 = backoff_delay_secs(2);
+        assert!(
+            (1..=2).contains(&d2),
+            "second retry delay should be ~2s: {d2}"
+        );
+
+        let d3 = backoff_delay_secs(3);
+        assert!(
+            (2..=4).contains(&d3),
+            "third retry delay should be ~4s: {d3}"
+        );
+
+        for index in [8, 20, 100] {
+            let delay = backoff_delay_secs(index);
+            assert!(
+                (15..=30).contains(&delay),
+                "large retry indexes must be capped at 30s, got {delay} (index {index})"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_count_means_number_of_retries_not_attempts() {
+        // transfer_retry_count is stored verbatim for the retry loop to turn
+        // into `retry_count + 1` attempts.
+        let config_with_retries = AppConfig {
+            transfer_retry_count: 3,
+            ..AppConfig::default()
+        };
+        let manager = TransferManager::new(&config_with_retries);
+        assert_eq!(manager.retry_count, 3);
+
+        let config_zero = AppConfig {
+            transfer_retry_count: 0,
+            ..AppConfig::default()
+        };
+        let manager_zero = TransferManager::new(&config_zero);
+        assert_eq!(manager_zero.retry_count, 0);
     }
 
     #[test]
@@ -1154,5 +1268,77 @@ mod tests {
             crate::sftp::test_server::list_partial_paths(local_dir.path()).is_empty(),
             "no partial files may remain"
         );
+    }
+
+    #[tokio::test]
+    async fn upload_retries_and_succeeds_after_one_write_failure() {
+        // Given: a manager configured for exactly one retry, no backoff delay,
+        // and a server whose first WRITE fails (one-shot).
+        let config = AppConfig {
+            transfer_retry_count: 1,
+            ..AppConfig::default()
+        };
+        let mut manager = TransferManager::new(&config);
+        manager.backoff_override_secs = Some(0);
+
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("retry.bin");
+        let payload = vec![0x5Au8; 512 * 1024];
+        tokio::fs::write(&local_path, &payload).await.unwrap();
+
+        server
+            .failures
+            .fail_remote_write
+            .store(true, Ordering::SeqCst);
+
+        // When: an upload task is enqueued; the first attempt fails mid-write,
+        // and the retry (with backoff) succeeds.
+        let task = manager
+            .enqueue_upload(&session, &local_path, "/upload/retry.bin")
+            .await
+            .expect("upload should succeed after one retry");
+
+        // Then: the task completes and the remote bytes match.
+        assert!(matches!(task.status, TransferStatus::Completed));
+        let remote_bytes = tokio::fs::read(server.root.join("upload/retry.bin"))
+            .await
+            .unwrap();
+        assert_eq!(remote_bytes, payload);
+    }
+
+    #[tokio::test]
+    async fn upload_retry_count_zero_does_not_retry() {
+        // Given: a manager with retries disabled and a server whose first
+        // WRITE fails.
+        let config = AppConfig {
+            transfer_retry_count: 0,
+            ..AppConfig::default()
+        };
+        let manager = TransferManager::new(&config);
+
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("no-retry.bin");
+        tokio::fs::write(&local_path, b"payload").await.unwrap();
+
+        server
+            .failures
+            .fail_remote_write
+            .store(true, Ordering::SeqCst);
+
+        // When: an upload task is enqueued with retries disabled
+        let task = manager
+            .enqueue_upload(&session, &local_path, "/upload/no-retry.bin")
+            .await
+            .expect_err("upload should fail without retries");
+
+        // Then: it fails with RetriesExhausted and exactly 1 attempt reported.
+        assert!(matches!(
+            task,
+            TransferError::RetriesExhausted { attempts: 1, .. }
+        ));
     }
 }
