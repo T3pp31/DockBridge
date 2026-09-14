@@ -136,6 +136,9 @@ pub enum TransferError {
 
     #[error("transfer was cancelled")]
     Cancelled,
+
+    #[error("failed to clean up the partial file after a transfer error: {message}")]
+    CleanupFailed { message: String },
 }
 
 /// Security-related errors.
