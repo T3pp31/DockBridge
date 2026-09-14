@@ -18,6 +18,7 @@ use crate::error::SftpError;
 use crate::ssh::session::SshSession;
 use crate::transfer::TransferOverwritePolicy;
 
+use super::path::parent_remote_path;
 use super::tree::{
     ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
     normalize_remote_path, validated_remote_entry, walk_local_directory_with_options,
@@ -134,9 +135,8 @@ impl<'a> SftpClient<'a> {
             self.sftp()
                 .metadata(&remote_path)
                 .await
-                .map_err(|err| SftpError::DownloadFailed {
-                    remote: remote_path.clone(),
-                    local: String::new(),
+                .map_err(|err| SftpError::StatFailed {
+                    path: remote_path.clone(),
                     message: err.to_string(),
                 })?;
         Ok(metadata.size.unwrap_or(0))
@@ -452,7 +452,7 @@ impl<'a> SftpClient<'a> {
                     .await?;
             for entry in files {
                 let local_path = local_root.join(&entry.relative_path);
-                ensure_local_path_within_root(&local_root, &local_path)?;
+                ensure_local_path_within_root(&local_root, &local_path).await?;
                 if let Some(parent) = local_path.parent() {
                     tokio::fs::create_dir_all(parent).await.map_err(|err| {
                         SftpError::DownloadFailed {
@@ -754,6 +754,19 @@ where
         // Drain any in-flight write first. While Pending, we never reach the
         // cancel branch below, so cancel cannot race with a live pending_write.
         if self.pending_write.is_some() {
+            // Contract guard: `poll_pending` reports the *pending* buffer's
+            // length. A future caller that abandons a `write_all` mid-buffer
+            // would get a mismatched count (silent byte loss), so refuse it
+            // explicitly instead (issue #321).
+            if let Some(expected) = self.pending_len {
+                if buf.len() != expected {
+                    return Poll::Ready(Err(io::Error::other(format!(
+                        "writer returned {} bytes for a {} byte buffer; a pending write was not fully consumed",
+                        expected,
+                        buf.len()
+                    ))));
+                }
+            }
             return self.poll_pending(cx);
         }
 
@@ -1326,23 +1339,6 @@ fn is_remote_no_such_file_error(err: &SftpClientError) -> bool {
     }
 }
 
-fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
-    let normalized = normalize_remote_path(remote_path)?;
-    if normalized == "/" {
-        return Ok(None);
-    }
-
-    let trimmed = normalized.trim_end_matches('/');
-    let Some((parent, _)) = trimmed.rsplit_once('/') else {
-        return Ok(None);
-    };
-    Ok(Some(if parent.is_empty() {
-        "/".to_string()
-    } else {
-        parent.to_string()
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -1360,7 +1356,7 @@ mod tests {
 
     use super::{
         append_cleanup_context, create_exclusive_local_partial, download_pipelined_to_writer,
-        normalize_remote_path, open_exclusive_local_file, parent_remote_path, partial_file_name,
+        normalize_remote_path, open_exclusive_local_file, partial_file_name,
         partial_local_path_for_suffix, partial_remote_path_for_suffix,
         pipeline_depth_for_chunk_budget, prepare_local_finalize_destination, random_partial_suffix,
         upload_from_reader, DownloadFlowError, PartialLocalTransfer, PartialRemoteTransfer,
@@ -1763,21 +1759,6 @@ mod tests {
         assert!(matches!(err, SftpError::DownloadFailed { .. }));
         assert!(list_partial_paths(local_dir.path()).is_empty(), "{err:?}");
         assert!(!local_path.exists());
-    }
-
-    #[test]
-    fn parent_remote_path_returns_parent_directory() {
-        assert_eq!(
-            parent_remote_path("/remote/dir/file.txt")
-                .unwrap()
-                .as_deref(),
-            Some("/remote/dir")
-        );
-        assert_eq!(
-            parent_remote_path("/file.txt").unwrap().as_deref(),
-            Some("/")
-        );
-        assert_eq!(parent_remote_path("/").unwrap(), None);
     }
 
     #[tokio::test]

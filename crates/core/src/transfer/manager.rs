@@ -7,8 +7,8 @@ use crate::config::{AppConfig, DirectoryWalkLimits};
 use crate::error::{SftpError, TransferError};
 use crate::sftp::{
     ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
-    normalize_remote_path, walk_local_directory_with_options, walk_remote_directory_with_limits,
-    SftpClient, WalkLocalDirectoryOptions,
+    normalize_remote_path, parent_remote_path, walk_local_directory_with_options,
+    walk_remote_directory_with_limits, SftpClient, WalkLocalDirectoryOptions,
 };
 use crate::ssh::SshSession;
 use crate::transfer::TransferOverwritePolicy;
@@ -498,6 +498,7 @@ impl TransferManager {
             for entry in files {
                 let local_path = local_root.join(&entry.relative_path);
                 ensure_local_path_within_root(&local_root, &local_path)
+                    .await
                     .map_err(transfer_error_from_sftp)?;
                 if let Some(parent) = local_path.parent() {
                     tokio::fs::create_dir_all(parent)
@@ -659,23 +660,6 @@ impl TransferManager {
             message: last_error,
         })
     }
-}
-
-fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
-    let normalized = normalize_remote_path(remote_path)?;
-    if normalized == "/" {
-        return Ok(None);
-    }
-
-    let trimmed = normalized.trim_end_matches('/');
-    let Some((parent, _)) = trimmed.rsplit_once('/') else {
-        return Ok(None);
-    };
-    Ok(Some(if parent.is_empty() {
-        "/".to_string()
-    } else {
-        parent.to_string()
-    }))
 }
 
 /// Returns `true` when retrying the same transfer is unlikely to succeed.

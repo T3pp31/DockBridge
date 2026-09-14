@@ -115,9 +115,14 @@ pub enum SftpError {
         path: String,
     },
 
+    #[error("failed to stat '{path}': {message}")]
+    StatFailed { path: String, message: String },
+
+    #[error("failed to walk directory '{path}': {message}")]
+    WalkFailed { path: String, message: String },
+
     #[error("transfer was cancelled")]
     Cancelled,
-
     #[error("failed to clean up partial file at '{path}': {message}")]
     CleanupFailed { path: String, message: String },
 
