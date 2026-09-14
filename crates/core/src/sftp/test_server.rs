@@ -28,6 +28,10 @@ pub struct FailureConfig {
     pub fail_remote_rename: AtomicBool,
     pub fail_mkdir: AtomicBool,
     pub opendir_count: AtomicU64,
+    /// When set, a single OPENDIR for exactly this path fails (one-shot),
+    /// letting tests simulate an unreadable remote subdirectory during a walk
+    /// (issue #316).
+    pub fail_opendir_path: Mutex<Option<String>>,
     /// Artificial delay applied to every SSH_FXP_READ reply, used by benchmarks
     /// to emulate a high-latency link (milliseconds).
     pub read_delay_ms: AtomicU64,
@@ -390,6 +394,19 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn opendir(&mut self, id: u32, path: String) -> Result<Handle, Self::Error> {
         self.failures.opendir_count.fetch_add(1, Ordering::Relaxed);
+        let should_fail = {
+            let mut target = self.failures.fail_opendir_path.lock().unwrap();
+            match target.as_ref() {
+                Some(candidate) if *candidate == path => {
+                    *target = None;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if should_fail {
+            return Err(StatusCode::Failure);
+        }
         let entries = self.read_directory_entries(&path).await?;
         let handle_id = self.next_handle;
         self.next_handle += 1;
