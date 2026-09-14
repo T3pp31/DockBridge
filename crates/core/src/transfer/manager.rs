@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -51,6 +51,11 @@ pub struct TransferManager {
     directory_walk_limits: DirectoryWalkLimits,
     tasks: Mutex<Vec<TransferTask>>,
     cancellation_flags: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+    /// Task ids whose transfer future has not finished yet. `retry_transfer`
+    /// refuses to retry a task while it is in this set, so a cancelled task
+    /// cannot be re-enqueued while its original future is still unwinding
+    /// (which used to revive the cancelled transfer: issue #307).
+    in_flight: Mutex<HashSet<u64>>,
 }
 
 impl TransferManager {
@@ -64,6 +69,7 @@ impl TransferManager {
             directory_walk_limits: config.directory_walk_limits(),
             tasks: Mutex::new(Vec::new()),
             cancellation_flags: Mutex::new(HashMap::new()),
+            in_flight: Mutex::new(HashSet::new()),
         }
     }
 
@@ -127,10 +133,22 @@ impl TransferManager {
             _ => return Err(TransferError::TaskNotFound { task_id }),
         }
 
+        // Reject the retry while the original transfer future is still
+        // unwinding. `cancel_transfer` flips the task status synchronously but
+        // the future itself keeps running until it observes the cancellation;
+        // re-enqueueing here would start a second transfer against the same
+        // destination while the first one is still active (issue #307).
+        if self.is_in_flight(task_id) {
+            return Err(TransferError::TaskStillRunning { task_id });
+        }
+
         if let Ok(mut tasks) = self.tasks.lock() {
             tasks.retain(|existing| existing.id != task_id);
         }
-        self.remove_cancellation_flag(task_id);
+        // The cancellation flag is *not* removed here: it is removed by
+        // `finalize_task_result` when the original future completes. Removing
+        // it early would let the still-running closure (which checks the
+        // captured Arc) be revived by a re-issued id lookup.
 
         match task.direction {
             TransferDirection::Upload => {
@@ -235,6 +253,19 @@ impl TransferManager {
         }
     }
 
+    /// Returns the cancellation flag Arc for a task, or a fresh uncancelled
+    /// flag when the task has not registered one. Callers should capture this
+    /// Arc once and check it directly (via [`AtomicBool::load`]) rather than
+    /// re-looking-up by id: a removed map entry would otherwise silently
+    /// revive the cancellation state (issue #307).
+    fn cancellation_flag(&self, task_id: u64) -> Arc<AtomicBool> {
+        self.cancellation_flags
+            .lock()
+            .ok()
+            .and_then(|flags| flags.get(&task_id).cloned())
+            .unwrap_or_else(|| Arc::new(AtomicBool::new(false)))
+    }
+
     fn request_cancellation(&self, task_id: u64) {
         if let Ok(mut flags) = self.cancellation_flags.lock() {
             let flag = flags
@@ -245,11 +276,26 @@ impl TransferManager {
     }
 
     fn is_cancelled(&self, task_id: u64) -> bool {
-        self.cancellation_flags
+        self.cancellation_flag(task_id).load(Ordering::Relaxed)
+    }
+
+    fn mark_in_flight(&self, task_id: u64) {
+        if let Ok(mut in_flight) = self.in_flight.lock() {
+            in_flight.insert(task_id);
+        }
+    }
+
+    fn clear_in_flight(&self, task_id: u64) {
+        if let Ok(mut in_flight) = self.in_flight.lock() {
+            in_flight.remove(&task_id);
+        }
+    }
+
+    fn is_in_flight(&self, task_id: u64) -> bool {
+        self.in_flight
             .lock()
             .ok()
-            .and_then(|flags| flags.get(&task_id).map(|flag| flag.load(Ordering::Relaxed)))
-            .unwrap_or(false)
+            .is_some_and(|in_flight| in_flight.contains(&task_id))
     }
 
     fn finalize_task_result(
@@ -259,6 +305,7 @@ impl TransferManager {
     ) -> Result<(), TransferError> {
         let was_cancelled = self.is_cancelled(task_id);
         self.remove_cancellation_flag(task_id);
+        self.clear_in_flight(task_id);
 
         if was_cancelled {
             return match result {
@@ -332,6 +379,7 @@ impl TransferManager {
 
         self.insert_task(task.clone());
         self.register_cancellation_flag(task.id);
+        self.mark_in_flight(task.id);
         self.update_task_status(task.id, TransferStatus::InProgress);
 
         if self.is_cancelled(task.id) {
@@ -369,6 +417,7 @@ impl TransferManager {
 
         self.insert_task(task.clone());
         self.register_cancellation_flag(task.id);
+        self.mark_in_flight(task.id);
         self.update_task_status(task.id, TransferStatus::InProgress);
 
         if self.is_cancelled(task.id) {
@@ -538,12 +587,18 @@ impl TransferManager {
             .unwrap_or(0);
         self.set_task_total_bytes(task_id, total_bytes);
 
+        // Capture the cancellation flag once. The closure must NOT re-lookup
+        // by task id: `retry_transfer` removes the map entry for terminal
+        // tasks, and an id-based check would revive a cancelled transfer
+        // (issue #307).
+        let cancel_flag = self.cancellation_flag(task_id);
+
         let attempts = self.retry_count.max(1);
         let mut last_error = String::from("unknown transfer error");
         let mut attempt = 0;
 
         for current in 1..=attempts {
-            if self.is_cancelled(task_id) {
+            if cancel_flag.load(Ordering::Relaxed) {
                 return Err(TransferError::Cancelled);
             }
 
@@ -555,14 +610,19 @@ impl TransferManager {
                     remote_path,
                     self.chunk_size,
                     TransferOverwritePolicy::default(),
-                    || self.is_cancelled(task_id),
+                    {
+                        let cancel_flag = Arc::clone(&cancel_flag);
+                        move || cancel_flag.load(Ordering::Relaxed)
+                    },
                     |transferred| self.update_task_progress(task_id, transferred),
                 )
                 .await
             {
                 Ok(()) => return Ok(()),
                 Err(SftpError::Cancelled) => return Err(TransferError::Cancelled),
-                Err(SftpError::CleanupFailed { message, .. }) if self.is_cancelled(task_id) => {
+                Err(SftpError::CleanupFailed { message, .. })
+                    if cancel_flag.load(Ordering::Relaxed) =>
+                {
                     return Err(TransferError::RetriesExhausted {
                         attempts: 1,
                         message: format!(
@@ -604,12 +664,15 @@ impl TransferManager {
         let total_bytes = client.remote_file_size(remote_path).await.unwrap_or(0);
         self.set_task_total_bytes(task_id, total_bytes);
 
+        // Capture the cancellation flag once; see run_upload_with_retries.
+        let cancel_flag = self.cancellation_flag(task_id);
+
         let attempts = self.retry_count.max(1);
         let mut last_error = String::from("unknown transfer error");
         let mut attempt = 0;
 
         for current in 1..=attempts {
-            if self.is_cancelled(task_id) {
+            if cancel_flag.load(Ordering::Relaxed) {
                 return Err(TransferError::Cancelled);
             }
 
@@ -622,14 +685,19 @@ impl TransferManager {
                     self.chunk_size,
                     self.download_pipeline_depth,
                     TransferOverwritePolicy::default(),
-                    || self.is_cancelled(task_id),
+                    {
+                        let cancel_flag = Arc::clone(&cancel_flag);
+                        move || cancel_flag.load(Ordering::Relaxed)
+                    },
                     |transferred| self.update_task_progress(task_id, transferred),
                 )
                 .await
             {
                 Ok(()) => return Ok(()),
                 Err(SftpError::Cancelled) => return Err(TransferError::Cancelled),
-                Err(SftpError::CleanupFailed { message, .. }) if self.is_cancelled(task_id) => {
+                Err(SftpError::CleanupFailed { message, .. })
+                    if cancel_flag.load(Ordering::Relaxed) =>
+                {
                     return Err(TransferError::RetriesExhausted {
                         attempts: 1,
                         message: format!(
@@ -867,6 +935,56 @@ mod tests {
         manager.request_cancellation(10);
 
         assert!(manager.is_cancelled(10));
+    }
+
+    #[test]
+    fn cancellation_flag_is_captured_and_survives_map_removal() {
+        // Given: a task with a registered cancellation flag
+        let manager = TransferManager::new(&AppConfig::default());
+        manager.register_cancellation_flag(21);
+        manager.request_cancellation(21);
+
+        // A running transfer captures the Arc once (issue #307).
+        let captured = manager.cancellation_flag(21);
+        assert!(captured.load(Ordering::Relaxed));
+
+        // When: the task becomes terminal and the map entry is removed
+        manager.remove_cancellation_flag(21);
+        assert!(
+            !manager.is_cancelled(21),
+            "id-based lookup now returns false"
+        );
+
+        // Then: the captured Arc still reflects the original cancellation, so
+        // a cancelled future cannot be revived by the flag's removal.
+        assert!(
+            captured.load(Ordering::Relaxed),
+            "the captured flag must stay cancelled after map removal"
+        );
+    }
+
+    #[test]
+    fn finalize_clears_in_flight_marking() {
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 23,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 0,
+        };
+        manager.insert_task(task);
+        manager.mark_in_flight(23);
+        assert!(manager.is_in_flight(23));
+
+        manager
+            .finalize_task_result(23, Ok(()))
+            .expect("finalize should succeed");
+        assert!(!manager.is_in_flight(23), "finalize must clear in-flight");
+        let queue = manager.get_transfer_queue();
+        assert!(matches!(queue[0].status, TransferStatus::Completed));
     }
 
     #[test]
@@ -1154,5 +1272,98 @@ mod tests {
             crate::sftp::test_server::list_partial_paths(local_dir.path()).is_empty(),
             "no partial files may remain"
         );
+    }
+
+    #[tokio::test]
+    async fn retry_transfer_is_rejected_while_original_future_is_in_flight() {
+        // Given: a task that was cancelled; the transfer future is still
+        // unwinding (in_flight) and the cancellation flag is still set.
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let manager = TransferManager::new(&AppConfig::default());
+
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("retry-race.txt");
+        tokio::fs::write(&local_path, b"payload").await.unwrap();
+
+        let task = TransferTask {
+            id: 42,
+            direction: TransferDirection::Upload,
+            local_path: local_path.clone(),
+            remote_path: "/upload/retry-race.txt".to_string(),
+            status: TransferStatus::Cancelled,
+            bytes_transferred: 0,
+            total_bytes: 0,
+        };
+        manager.insert_task(task);
+        manager.register_cancellation_flag(42);
+        manager.mark_in_flight(42);
+        manager.request_cancellation(42);
+
+        // When: a retry is requested immediately after the cancel (mirroring
+        // cancel_transfer returning synchronously while the future runs)
+        let err = manager
+            .retry_transfer(&session, 42)
+            .await
+            .expect_err("retry while the original future is in flight must be rejected");
+
+        // Then: retry is refused with TaskStillRunning, and the cancelled task
+        // is NOT removed from the queue (no second transfer is spawned).
+        assert!(
+            matches!(err, TransferError::TaskStillRunning { task_id: 42 }),
+            "unexpected error: {err:?}"
+        );
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue.len(), 1, "the cancelled task must remain queued");
+        assert_eq!(queue[0].id, 42);
+        assert!(!server.remote_file_exists("/upload/retry-race.txt"));
+    }
+
+    #[tokio::test]
+    async fn retry_transfer_succeeds_after_future_settles() {
+        // Given: a fully finalized (cancelled, no longer in-flight) task
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let manager = TransferManager::new(&AppConfig::default());
+
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("retry-ok.txt");
+        tokio::fs::write(&local_path, b"retry payload")
+            .await
+            .unwrap();
+
+        let task = TransferTask {
+            id: 43,
+            direction: TransferDirection::Upload,
+            local_path: local_path.clone(),
+            remote_path: "/upload/retry-ok.txt".to_string(),
+            status: TransferStatus::Cancelled,
+            bytes_transferred: 0,
+            total_bytes: 0,
+        };
+        manager.insert_task(task.clone());
+        manager.register_cancellation_flag(43);
+        // The original future has fully settled: not in-flight anymore, and
+        // finalize_task_result removed the flag.
+        manager
+            .finalize_task_result(43, Err(TransferError::Cancelled))
+            .unwrap_err();
+        assert!(!manager.is_in_flight(43));
+
+        // When: retry is requested after the future has settled
+        let retried = manager
+            .retry_transfer(&session, 43)
+            .await
+            .expect("retry after settle should succeed");
+
+        // Then: a NEW task id is enqueued and the transfer completes; only one
+        // final file exists remotely (no duplicate).
+        assert_ne!(retried.id, 43, "retry must create a fresh task");
+        assert!(matches!(retried.status, TransferStatus::Completed));
+        assert!(server.remote_file_exists("/upload/retry-ok.txt"));
+        let remote_bytes = tokio::fs::read(server.root.join("upload/retry-ok.txt"))
+            .await
+            .unwrap();
+        assert_eq!(remote_bytes, b"retry payload");
     }
 }
