@@ -54,20 +54,37 @@ fn trim_trailing_line_endings(value: &mut String) {
     }
 }
 
+/// Reads a single secret line (password or passphrase) from a buffered reader
+/// into a zeroized buffer, trimming trailing line endings.
+///
+/// Shared by `--password-stdin` and `--passphrase-stdin` so both credentials
+/// are handled with the same zeroize discipline.
+fn read_secret_line<R: io::BufRead>(
+    mut reader: R,
+    label: &str,
+) -> anyhow::Result<Zeroizing<String>> {
+    let mut buffer = Zeroizing::new(String::new());
+    reader
+        .read_line(&mut buffer)
+        .map_err(|err| anyhow::anyhow!("failed to read {label} from stdin: {err}"))?;
+    trim_trailing_line_endings(&mut buffer);
+    if buffer.is_empty() {
+        anyhow::bail!("{label} read from stdin was empty");
+    }
+    Ok(buffer)
+}
+
+/// Reads a secret from standard input into a zeroized buffer.
+pub fn read_secret_from_stdin(label: &str) -> anyhow::Result<Zeroizing<String>> {
+    read_secret_line(io::stdin().lock(), label)
+}
+
 pub fn resolve_password(
     #[cfg(not(feature = "disable-cli-password"))] password: Option<String>,
     password_stdin: bool,
 ) -> anyhow::Result<Zeroizing<String>> {
     if password_stdin {
-        let mut buffer = Zeroizing::new(String::new());
-        io::stdin()
-            .read_line(&mut buffer)
-            .map_err(|err| anyhow::anyhow!("failed to read password from stdin: {err}"))?;
-        trim_trailing_line_endings(&mut buffer);
-        if buffer.is_empty() {
-            anyhow::bail!("password read from stdin was empty");
-        }
-        return Ok(buffer);
+        return read_secret_from_stdin("password");
     }
 
     #[cfg(feature = "disable-cli-password")]
@@ -87,9 +104,13 @@ pub fn resolve_password(
     }
 }
 
+pub fn resolve_passphrase(passphrase_stdin: bool) -> Option<anyhow::Result<Zeroizing<String>>> {
+    passphrase_stdin.then(|| read_secret_from_stdin("passphrase"))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::trim_trailing_line_endings;
+    use super::{io, read_secret_line, trim_trailing_line_endings};
 
     #[test]
     fn trim_trailing_line_endings_removes_unix_newline() {
@@ -139,6 +160,38 @@ mod tests {
         trim_trailing_line_endings(&mut value);
         // Then: the value remains empty
         assert!(value.is_empty());
+    }
+
+    #[test]
+    fn read_secret_line_trims_newline() {
+        // Given: a secret line with a trailing LF
+        let mut cursor = io::Cursor::new(String::from("secret\n"));
+        // When: the line is read
+        let secret = read_secret_line(&mut cursor, "password").expect("read secret");
+        // Then: only the secret remains
+        assert_eq!(secret.as_str(), "secret");
+    }
+
+    #[test]
+    fn read_secret_line_trims_crlf() {
+        // Given: a secret line with a trailing CRLF
+        let mut cursor = io::Cursor::new(String::from("secret\r\n"));
+        // When: the line is read
+        let secret = read_secret_line(&mut cursor, "passphrase").expect("read secret");
+        // Then: only the secret remains
+        assert_eq!(secret.as_str(), "secret");
+    }
+
+    #[test]
+    fn read_secret_line_rejects_empty_input() {
+        // Given: only a line ending on stdin
+        let mut cursor = io::Cursor::new(String::from("\n"));
+        // When: the line is read
+        let err = read_secret_line(&mut cursor, "password").expect_err("expected error");
+        // Then: an explanatory error is returned
+        assert!(err
+            .to_string()
+            .contains("password read from stdin was empty"));
     }
 }
 
