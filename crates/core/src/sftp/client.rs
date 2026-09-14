@@ -2007,6 +2007,181 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_cancel_midway_removes_partial() {
+        // Given: a file large enough to span many chunks
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("mid.txt");
+        let payload = vec![0xAB_u8; 4 * 1024 * 1024];
+        tokio::fs::write(&local_path, &payload).await.unwrap();
+
+        // When: the upload is cancelled mid-way (after ~1 MiB of progress)
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_flag = Arc::clone(&cancel);
+        let err = client
+            .upload_cancellable(
+                &local_path,
+                "/upload/mid.bin",
+                262_144,
+                TransferOverwritePolicy::default(),
+                move || cancel_flag.load(Ordering::Relaxed),
+                {
+                    let cancel_flag = Arc::clone(&cancel);
+                    move |transferred| {
+                        if transferred >= 1024 * 1024 {
+                            cancel_flag.store(true, Ordering::Relaxed);
+                        }
+                    }
+                },
+            )
+            .await
+            .unwrap_err();
+
+        // Then: the transfer is cancelled and the remote partial is removed
+        assert!(matches!(err, SftpError::Cancelled), "got {err:?}");
+        assert!(
+            !server.remote_file_exists("/upload/mid.bin"),
+            "final file must not exist after midway cancel"
+        );
+        assert!(
+            server.remote_partial_paths().is_empty(),
+            "partial remote files must be cleaned up after midway cancel: {:?}",
+            server.remote_partial_paths()
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_renames_remote_file() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/rename/from.txt", b"payload")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        client
+            .rename("/rename/from.txt", "/rename/to.txt")
+            .await
+            .unwrap();
+
+        assert!(!server.remote_file_exists("/rename/from.txt"));
+        assert!(server.remote_file_exists("/rename/to.txt"));
+        let contents = tokio::fs::read(server.root.join("rename/to.txt"))
+            .await
+            .unwrap();
+        assert_eq!(contents, b"payload");
+    }
+
+    #[tokio::test]
+    async fn rename_over_existing_destination_replaces() {
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/rename/src.txt", b"new").await;
+        server.write_remote_file("/rename/dst.txt", b"old").await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        client
+            .rename("/rename/src.txt", "/rename/dst.txt")
+            .await
+            .unwrap();
+
+        // OpenSSH-style rename replaces the destination (the test server
+        // mirrors POSIX rename semantics).
+        assert!(!server.remote_file_exists("/rename/src.txt"));
+        let contents = tokio::fs::read(server.root.join("rename/dst.txt"))
+            .await
+            .unwrap();
+        assert_eq!(contents, b"new");
+    }
+
+    #[tokio::test]
+    async fn rename_onto_directory_fails() {
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/rename/file.txt", b"x").await;
+        std::fs::create_dir_all(server.root.join("rename/dir")).unwrap();
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let err = client
+            .rename("/rename/file.txt", "/rename/dir")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, SftpError::RenameFailed { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn delete_removes_remote_file() {
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/delete/file.txt", b"x").await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        client.delete("/delete/file.txt").await.unwrap();
+
+        assert!(!server.remote_file_exists("/delete/file.txt"));
+    }
+
+    #[tokio::test]
+    async fn delete_missing_file_returns_error() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let err = client.delete("/delete/missing.txt").await.unwrap_err();
+
+        assert!(matches!(err, SftpError::DeleteFailed { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn delete_directory_fails_or_is_rejected() {
+        let server = TestSftpServer::start().await;
+        std::fs::create_dir_all(server.root.join("delete/dir")).unwrap();
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // remove_file on a directory is an error on the SFTP side.
+        let err = client.delete("/delete/dir").await.unwrap_err();
+        assert!(matches!(err, SftpError::DeleteFailed { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn upload_with_failed_rename_signals_upload_failure() {
+        // Exercises the `fail_remote_rename` hook (previously unused): a
+        // rename failure at finalize must surface as an upload error, not
+        // leave a silent pass.
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.txt");
+        tokio::fs::write(&local_path, b"payload").await.unwrap();
+
+        server
+            .failures
+            .fail_remote_rename
+            .store(true, Ordering::SeqCst);
+        let err = client
+            .upload(&local_path, "/upload/renfail.txt")
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                SftpError::UploadFailed { .. } | SftpError::RenameFailed { .. }
+            ),
+            "{err:?}"
+        );
+        assert!(
+            !server.remote_file_exists("/upload/renfail.txt"),
+            "the final file must not appear after a failed rename"
+        );
+    }
+
+    #[tokio::test]
     async fn download_cancel_before_rename_leaves_no_local_final_file() {
         // Given: a remote file on the test SFTP server
         let server = TestSftpServer::start().await;
