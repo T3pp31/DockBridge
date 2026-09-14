@@ -136,6 +136,9 @@ pub enum TransferError {
 
     #[error("transfer was cancelled")]
     Cancelled,
+
+    #[error("transfer task {task_id} is still running and cannot be retried yet")]
+    TaskStillRunning { task_id: u64 },
 }
 
 /// Security-related errors.
