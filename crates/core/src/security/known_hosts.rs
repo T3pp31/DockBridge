@@ -14,6 +14,22 @@ use subtle::ConstantTimeEq;
 use crate::config::{ensure_known_hosts_parent, AppConfig};
 use crate::error::SecurityError;
 
+/// Result of importing an OpenSSH `known_hosts` file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ImportSummary {
+    /// Number of entries newly merged into the store.
+    pub merged: usize,
+    /// Number of lines skipped because they could not be parsed.
+    pub skipped: usize,
+}
+
+impl ImportSummary {
+    /// Returns `true` when nothing was imported (no new entries, no skipped lines).
+    pub fn is_empty(self) -> bool {
+        self.merged == 0 && self.skipped == 0
+    }
+}
+
 /// Result of checking a host key against the known hosts store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostKeyCheckResult {
@@ -250,22 +266,25 @@ impl KnownHostsManager {
 
     /// Merges the configured OpenSSH `known_hosts` file into this store before connecting.
     ///
-    /// When merging is disabled, returns `0` without reading the file.
-    /// When the file does not exist, returns `0` without error.
+    /// When merging is disabled, returns an empty summary without reading the file.
+    /// When the file does not exist, returns an empty summary without error.
     /// Read failures are logged and return `0` so connection is not blocked unless
     /// [`AppConfig::fail_connect_on_openssh_merge_error`] is enabled.
-    pub fn merge_openssh_on_connect(&mut self, config: &AppConfig) -> Result<usize, SecurityError> {
+    pub fn merge_openssh_on_connect(
+        &mut self,
+        config: &AppConfig,
+    ) -> Result<ImportSummary, SecurityError> {
         if !config.merge_openssh_known_hosts_on_connect {
-            return Ok(0);
+            return Ok(ImportSummary::default());
         }
 
         let path = &config.openssh_known_hosts_path;
         if !path.exists() {
-            return Ok(0);
+            return Ok(ImportSummary::default());
         }
 
         match self.import_openssh(path) {
-            Ok(count) => Ok(count),
+            Ok(summary) => Ok(summary),
             Err(err) => {
                 tracing::warn!(
                     path = %path.display(),
@@ -275,7 +294,7 @@ impl KnownHostsManager {
                 if config.fail_connect_on_openssh_merge_error {
                     Err(err)
                 } else {
-                    Ok(0)
+                    Ok(ImportSummary::default())
                 }
             }
         }
@@ -284,16 +303,30 @@ impl KnownHostsManager {
     /// Merges trusted keys from an OpenSSH `known_hosts` file into this store.
     ///
     /// Imports plain and hashed entries, including `@revoked` and `@cert-authority` markers.
-    /// Returns the number of newly merged entries.
-    pub fn import_openssh(&mut self, path: &Path) -> Result<usize, SecurityError> {
+    /// Returns an [`ImportSummary`] with the number of newly merged entries and the number of
+    /// lines skipped because they could not be parsed.
+    ///
+    /// Line-level parse errors are tolerated: the offending line is logged and skipped while
+    /// the remaining lines are still imported. Errors returned are file-level failures only
+    /// (unreadable file, insecure permissions, or persistence failure).
+    pub fn import_openssh(&mut self, path: &Path) -> Result<ImportSummary, SecurityError> {
         let contents = read_secure_known_hosts_file(path, KnownHostsReadPolicy::OpenSshImport)?;
 
         let mut merged = 0;
+        let mut skipped = 0;
         for line_result in OpenSshKnownHosts::new(&contents) {
-            let entry = line_result.map_err(|err| SecurityError::KnownHostsReadFailed {
-                path: path.display().to_string(),
-                message: err.to_string(),
-            })?;
+            let entry = match line_result {
+                Ok(entry) => entry,
+                Err(err) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %err,
+                        "skipping unparseable known_hosts line"
+                    );
+                    skipped += 1;
+                    continue;
+                }
+            };
 
             let marker = entry.marker().map(openssh_marker_to_known_host_marker);
             let fingerprint = entry.public_key().fingerprint(HashAlg::Sha256).to_string();
@@ -344,11 +377,12 @@ impl KnownHostsManager {
             }
         }
 
+        let summary = ImportSummary { merged, skipped };
         if merged > 0 {
             self.persist()?;
         }
 
-        Ok(merged)
+        Ok(summary)
     }
 
     /// Writes trusted keys to an OpenSSH `known_hosts` file with mode `0600`.
@@ -1171,8 +1205,9 @@ mod tests {
         );
 
         let mut manager = KnownHostsManager::load(&json_path).unwrap();
-        let merged = manager.import_openssh(&openssh_path).unwrap();
-        assert_eq!(merged, 1);
+        let summary = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(summary.merged, 1);
+        assert_eq!(summary.skipped, 0);
 
         assert_eq!(
             manager.check_host_key("example.com", 22, &key, false),
@@ -1405,7 +1440,8 @@ mod tests {
         };
 
         let merged = manager.merge_openssh_on_connect(&config).unwrap();
-        assert_eq!(merged, 0);
+        assert_eq!(merged.merged, 0);
+        assert_eq!(merged.skipped, 0);
     }
 
     #[test]
@@ -1429,7 +1465,7 @@ mod tests {
         };
 
         let merged = manager.merge_openssh_on_connect(&config).unwrap();
-        assert_eq!(merged, 0);
+        assert_eq!(merged.merged, 0);
         assert_eq!(
             manager.check_host_key("example.com", 22, &key, false),
             HostKeyCheckResult::Unknown
@@ -1486,7 +1522,7 @@ mod tests {
         };
 
         let merged = manager.merge_openssh_on_connect(&config).unwrap();
-        assert_eq!(merged, 1);
+        assert_eq!(merged.merged, 1);
         assert_eq!(
             manager.check_host_key("example.com", 22, &key, false),
             HostKeyCheckResult::Trust
@@ -1540,10 +1576,46 @@ mod tests {
     }
 
     #[test]
-    fn merge_openssh_on_connect_failure_aborts_when_configured() {
-        // Given: merge enabled, invalid OpenSSH file, and abort-on-failure config
+    fn merge_openssh_on_connect_skips_unparseable_lines_and_continues() {
+        // Given: merge enabled, an OpenSSH file with one unparseable line
+        //        (tab-separated, which ssh-key rejects) plus one valid line
         // When: merge_openssh_on_connect is called
-        // Then: the merge error is returned
+        // Then: the valid line is imported, the bad line is counted as skipped,
+        //       and no error is returned
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("bad.line\t{openssh_key}\nexample.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        let config = AppConfig {
+            openssh_known_hosts_path: openssh_path.clone(),
+            merge_openssh_known_hosts_on_connect: true,
+            fail_connect_on_openssh_merge_error: true,
+            ..AppConfig::default()
+        };
+
+        let summary = manager.merge_openssh_on_connect(&config).unwrap();
+        assert_eq!(summary.merged, 1);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        // The skipped line must not have created an entry for the unparseable host.
+        assert!(manager.find_entry("bad.line", 22).is_none());
+    }
+
+    #[test]
+    fn merge_openssh_on_connect_unparseable_only_file_skips_all_but_succeeds() {
+        // Given: merge enabled and a file whose only line is unparseable
+        // When: merge_openssh_on_connect is called with abort-on-failure enabled
+        // Then: the line is skipped and no error is returned (line-level tolerance)
         let dir = tempdir().unwrap();
         let path = dir.path().join("known_hosts.json");
         let openssh_path = dir.path().join("known_hosts");
@@ -1557,8 +1629,62 @@ mod tests {
             ..AppConfig::default()
         };
 
+        let summary = manager.merge_openssh_on_connect(&config).unwrap();
+        assert_eq!(summary.merged, 0);
+        assert_eq!(summary.skipped, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn merge_openssh_on_connect_file_level_failure_aborts_when_configured() {
+        // Given: merge enabled, a file with insecure (world-writable) permissions,
+        //        and abort-on-failure config
+        // When: merge_openssh_on_connect is called
+        // Then: the file-level read error is returned (fail_connect applies at file level)
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        fs::write(&openssh_path, format!("example.com {openssh_key}\n")).unwrap();
+        set_test_file_mode(&openssh_path, 0o666);
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        let config = AppConfig {
+            openssh_known_hosts_path: openssh_path,
+            merge_openssh_known_hosts_on_connect: true,
+            fail_connect_on_openssh_merge_error: true,
+            ..AppConfig::default()
+        };
+
         let err = manager.merge_openssh_on_connect(&config).unwrap_err();
         assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn merge_openssh_on_connect_file_level_failure_skips_when_not_configured() {
+        // Given: merge enabled, a file with insecure permissions, and abort disabled
+        // When: merge_openssh_on_connect is called
+        // Then: no error is returned (the empty summary) so connection can continue
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        fs::write(&openssh_path, format!("example.com {openssh_key}\n")).unwrap();
+        set_test_file_mode(&openssh_path, 0o666);
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        let config = AppConfig {
+            openssh_known_hosts_path: openssh_path,
+            merge_openssh_known_hosts_on_connect: true,
+            fail_connect_on_openssh_merge_error: false,
+            ..AppConfig::default()
+        };
+
+        let summary = manager.merge_openssh_on_connect(&config).unwrap();
+        assert_eq!(summary.merged, 0);
     }
 
     #[cfg(unix)]
@@ -1684,8 +1810,8 @@ mod tests {
         set_test_file_mode(&openssh_path, 0o644);
 
         let mut manager = KnownHostsManager::load(&json_path).unwrap();
-        let merged = manager.import_openssh(&openssh_path).unwrap();
-        assert_eq!(merged, 1);
+        let summary = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(summary.merged, 1);
         assert_eq!(
             manager.check_host_key("example.com", 22, &key, false),
             HostKeyCheckResult::Trust
