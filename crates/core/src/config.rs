@@ -56,7 +56,9 @@ pub struct AppConfig {
     pub connection_timeout_secs: u64,
     /// Interval between background SFTP health checks for active sessions.
     pub session_health_check_interval_secs: u64,
-    /// Number of retries for failed transfers.
+    /// Number of retries for failed transfers (additional attempts after the
+    /// first one). Each retry waits an exponential backoff (1s, 2s, 4s,
+    /// capped at 30s) with jitter before re-attempting. `0` disables retries.
     pub transfer_retry_count: u32,
     /// Read/write chunk size for cancellable SFTP transfers.
     pub transfer_chunk_size_bytes: usize,
