@@ -6,23 +6,30 @@ use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
 use dockbridge_core::{
-    AppConfig, AuthType, ConnectionProfile, HostKeyPrompt, KnownHostsManager, SecretPassword,
-    SftpClient, SshSession, TransferManager,
+    expand_tilde, inspect_private_key_algorithm, AppConfig, AuthType, ConnectionProfile,
+    HostKeyPrompt, KnownHostsManager, PrivateKeyAlgorithm, SecretPassword, SftpClient, SshSession,
+    TransferManager,
 };
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
 
 #[cfg(feature = "disable-cli-password")]
 const PASSWORD_AFTER_HELP: &str = "\
-Password authentication:\n  \
-Use --password-stdin for scripts, CI, and production. Example:\n  \
-  printf '%s\\n' \"$PASSWORD\" | dockbridge list --host HOST --user USER --password-stdin";
+Authentication:\n  \
+Use --password-stdin for scripts, CI, and production, or authenticate with a\n  \
+private key via --identity (repeatable with --passphrase-stdin for an\n  \
+encrypted key). Examples:\n  \
+  printf '%s\\n' \"$PASSWORD\" | dockbridge list --host HOST --user USER --password-stdin\n  \
+  dockbridge list --host HOST --user USER --identity ~/.ssh/id_ed25519";
 
 #[cfg(not(feature = "disable-cli-password"))]
 const PASSWORD_AFTER_HELP: &str = "\
-Password authentication:\n  \
-Prefer --password-stdin for scripts, CI, and production. Example:\n  \
-  printf '%s\\n' \"$PASSWORD\" | dockbridge list --host HOST --user USER --password-stdin\n\n  \
+Authentication:\n  \
+Prefer --password-stdin for scripts, CI, and production, or authenticate with\n  \
+a private key via --identity (add --passphrase-stdin for an encrypted key).\n  \
+Examples:\n  \
+  printf '%s\\n' \"$PASSWORD\" | dockbridge list --host HOST --user USER --password-stdin\n  \
+  dockbridge list --host HOST --user USER --identity ~/.ssh/id_ed25519\n\n  \
 --password is for local development and testing only. Passwords passed on the \
 command line may appear in argv, shell history, and process listings (CWE-214).";
 
@@ -106,12 +113,49 @@ struct ConnectionArgs {
     #[arg(long, conflicts_with = "password_stdin")]
     password: Option<String>,
     /// Read password from standard input (recommended for scripts, CI, and production).
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["identity", "passphrase_stdin"])]
     password_stdin: bool,
+    /// Authenticate with a private key file. `~` is expanded to the home directory.
+    #[arg(short = 'i', long)]
+    identity: Option<PathBuf>,
+    /// Read the private key passphrase from standard input instead of prompting.
+    #[arg(long, requires = "identity")]
+    passphrase_stdin: bool,
 }
 
 impl ConnectionArgs {
     fn into_profile(self) -> anyhow::Result<ConnectionProfile> {
+        if let Some(key_path) = self.identity {
+            if self.password_stdin {
+                anyhow::bail!("--identity and --password-stdin are mutually exclusive");
+            }
+            // Read the passphrase first so encrypted keys can be inspected and,
+            // later, unlocked by the core authenticator.
+            let passphrase = password::resolve_passphrase(self.passphrase_stdin)
+                .transpose()?
+                .map(|value| SecretPassword::new(value.as_str()));
+            let key_path = expand_tilde(&key_path);
+            let algorithm =
+                inspect_private_key_algorithm(&key_path, passphrase.as_ref().map(|p| p.expose()))?;
+            if !is_supported_key_algorithm(&algorithm) {
+                anyhow::bail!(
+                    "private key at '{}' uses unsupported algorithm {:?}; \
+                     supported algorithms are ed25519, ec (ecdsa), and rsa",
+                    key_path.display(),
+                    algorithm
+                );
+            }
+            return Ok(ConnectionProfile {
+                host: self.host,
+                port: self.port,
+                username: self.user,
+                auth: AuthType::PrivateKey {
+                    key_path,
+                    passphrase,
+                },
+            });
+        }
+
         let password = password::resolve_password(
             #[cfg(not(feature = "disable-cli-password"))]
             self.password,
@@ -126,6 +170,13 @@ impl ConnectionArgs {
             },
         })
     }
+}
+
+/// Whether the CLI supports authenticating with a key algorithm. Keys outside
+/// this allow-list are rejected with a clear error before any network I/O.
+fn is_supported_key_algorithm(algorithm: &PrivateKeyAlgorithm) -> bool {
+    use PrivateKeyAlgorithm::{Ecdsa, Ed25519, Rsa};
+    matches!(algorithm, Ed25519 | Ecdsa | Rsa)
 }
 
 struct CliHostKeyPrompt;
@@ -257,4 +308,25 @@ async fn connect(
     SshSession::connect(profile, config, known_hosts, prompt)
         .await
         .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use dockbridge_core::PrivateKeyAlgorithm;
+
+    use super::is_supported_key_algorithm;
+
+    #[test]
+    fn supported_key_algorithms_are_accepted() {
+        assert!(is_supported_key_algorithm(&PrivateKeyAlgorithm::Ed25519));
+        assert!(is_supported_key_algorithm(&PrivateKeyAlgorithm::Ecdsa));
+        assert!(is_supported_key_algorithm(&PrivateKeyAlgorithm::Rsa));
+    }
+
+    #[test]
+    fn unknown_key_algorithms_are_rejected() {
+        assert!(!is_supported_key_algorithm(&PrivateKeyAlgorithm::Other(
+            "dss".to_string()
+        )));
+    }
 }
