@@ -23,6 +23,7 @@
 		EBE6C0D78C1B9D2DFB9E66B6 /* HostKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */; };
 		6B644EEA7799402A90D59AAA /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */; };
 		14A839F4D61A1075B5ACF82D /* RustBridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */; };
+		R3M0T3S5S10N1N5RC1 /* RemoteSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3M0T3S5S10N1N5RC2 /* RemoteSession.swift */; };
 		9207DDB127B46575474EC6F5 /* ConnectionListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00EBFBF60D5CB33F46A53DF /* ConnectionListViewModel.swift */; };
 		67E6AD45895AF44CA96D83BB /* MainViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C973CCD1AFF29E5BC535CC /* MainViewModel.swift */; };
 		5061A717EBE8AB1160ED99D1 /* TransferQueueViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD683D1BCC635FB229692D63 /* TransferQueueViewModel.swift */; };
@@ -79,6 +80,7 @@
 		D5R0P0P3R4T10N5Y5N0C1N5RC /* DropOperationSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */; };
 		T7R4N5F3R0P4R0G3F0RM4T3RC /* TransferProgressFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = T7R4N5F3R0P4R0G3F0RM4T3RD /* TransferProgressFormatter.swift */; };
 		T7R4N5F3R0P4R0G3F0RM4T3TS /* TransferProgressFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T7R4N5F3R0P4R0G3F0RM4T3TS5 /* TransferProgressFormatterTests.swift */; };
+		QEUE5ESS10NF1LT3RB1 /* TransferQueueSessionFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = QEUE5ESS10NF1LT3RR1 /* TransferQueueSessionFilterTests.swift */; };
 		D5R0P0P3R4T10N5Y5N0C1T5ST /* DropOperationSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */; };
 		F1L3D3R0P4C3C3P7T4N5C3T5ST /* FileDropAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */; };
 		S3C8K0P3B00KM4RKS3RV1C3SW1 /* SecurityScopedBookmarkService.swift in Sources */ = {isa = PBXBuildFile; fileRef = S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */; };
@@ -127,6 +129,7 @@
 		FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyStore.swift; sourceTree = "<group>"; };
 		6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridgeService.swift; sourceTree = "<group>"; };
+		R3M0T3S5S10N1N5RC2 /* RemoteSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSession.swift; sourceTree = "<group>"; };
 		D00EBFBF60D5CB33F46A53DF /* ConnectionListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionListViewModel.swift; sourceTree = "<group>"; };
 		29C973CCD1AFF29E5BC535CC /* MainViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewModel.swift; sourceTree = "<group>"; };
 		CD683D1BCC635FB229692D63 /* TransferQueueViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferQueueViewModel.swift; sourceTree = "<group>"; };
@@ -195,6 +198,7 @@
 		D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropOperationSync.swift; sourceTree = "<group>"; };
 		T7R4N5F3R0P4R0G3F0RM4T3RD /* TransferProgressFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferProgressFormatter.swift; sourceTree = "<group>"; };
 		T7R4N5F3R0P4R0G3F0RM4T3TS5 /* TransferProgressFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferProgressFormatterTests.swift; sourceTree = "<group>"; };
+		QEUE5ESS10NF1LT3RR1 /* TransferQueueSessionFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferQueueSessionFilterTests.swift; sourceTree = "<group>"; };
 		D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropOperationSyncTests.swift; sourceTree = "<group>"; };
 		F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropAcceptanceTests.swift; sourceTree = "<group>"; };
 		S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityScopedBookmarkService.swift; sourceTree = "<group>"; };
@@ -398,6 +402,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */,
 				6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */,
 				5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */,
+				R3M0T3S5S10N1N5RC2 /* RemoteSession.swift */,
 				S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */,
 				SECUREL0CALF1LERE4D3R1N5RC2 /* SecureLocalFileReader.swift */,
 				V3R5C0MP4R4T0R5W1FT3RC1 /* VersionComparator.swift */,
@@ -472,6 +477,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				D5R0P0P3R4T10N5Y5N0C1T5ST5 /* DropOperationSyncTests.swift */,
 				F1L3D3R0P4C3C3P7T4N5C3T5ST5 /* FileDropAcceptanceTests.swift */,
 				T7R4N5F3R0P4R0G3F0RM4T3TS5 /* TransferProgressFormatterTests.swift */,
+				QEUE5ESS10NF1LT3RR1 /* TransferQueueSessionFilterTests.swift */,
 				F1D2R3O4P5V6A7L8I9D0T1E2S3T5 /* FileDropValidationTests.swift */,
 				D4E5F60718293A4B5C6D7E8F /* RemotePathTests.swift */,
 				F60718293A4B5C6D7E8F9012 /* HostKeyStoreTests.swift */,
@@ -643,6 +649,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				EBE6C0D78C1B9D2DFB9E66B6 /* HostKeyStore.swift in Sources */,
 				6B644EEA7799402A90D59AAA /* KeychainService.swift in Sources */,
 				14A839F4D61A1075B5ACF82D /* RustBridgeService.swift in Sources */,
+				R3M0T3S5S10N1N5RC1 /* RemoteSession.swift in Sources */,
 				S3C8K0P3B00KM4RKS3RV1C3SW1 /* SecurityScopedBookmarkService.swift in Sources */,
 				SECUREL0CALF1LERE4D3R1N5RC1 /* SecureLocalFileReader.swift in Sources */,
 				9207DDB127B46575474EC6F5 /* ConnectionListViewModel.swift in Sources */,
@@ -712,6 +719,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				D5R0P0P3R4T10N5Y5N0C1T5ST /* DropOperationSyncTests.swift in Sources */,
 				F1L3D3R0P4C3C3P7T4N5C3T5ST /* FileDropAcceptanceTests.swift in Sources */,
 				T7R4N5F3R0P4R0G3F0RM4T3TS /* TransferProgressFormatterTests.swift in Sources */,
+				QEUE5ESS10NF1LT3RB1 /* TransferQueueSessionFilterTests.swift in Sources */,
 				F1D2R3O4P5V6A7L8I9D0T1E2S3T4 /* FileDropValidationTests.swift in Sources */,
 				C3D4E5F60718293A4B5C6D7E /* RemotePathTests.swift in Sources */,
 				E5F60718293A4B5C6D7E8F90 /* HostKeyStoreTests.swift in Sources */,

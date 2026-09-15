@@ -137,6 +137,8 @@ pub enum PrivateKeyAlgorithmRecord {
 #[derive(uniffi::Record)]
 pub struct TransferTaskRecord {
     pub id: u64,
+    /// ID of the SSH session that enqueued this transfer.
+    pub session_id: u64,
     pub direction: TransferDirectionRecord,
     pub local_path: String,
     pub remote_path: String,
@@ -376,7 +378,12 @@ impl DockBridgeClient {
                     })?
                 };
                 transfer_manager
-                    .enqueue_upload_entry(session.as_ref(), &local_path, remote_directory)
+                    .enqueue_upload_entry(
+                        session.as_ref(),
+                        session_id,
+                        &local_path,
+                        remote_directory,
+                    )
                     .await
                     .map_err(map_error)?;
                 Ok(())
@@ -403,7 +410,12 @@ impl DockBridgeClient {
                     })?
                 };
                 transfer_manager
-                    .enqueue_download_entry(session.as_ref(), remote_path, &local_directory)
+                    .enqueue_download_entry(
+                        session.as_ref(),
+                        session_id,
+                        remote_path,
+                        &local_directory,
+                    )
                     .await
                     .map_err(map_error)?;
                 Ok(())
@@ -623,6 +635,7 @@ fn to_remote_file_record(file: RemoteFile) -> RemoteFileRecord {
 fn to_transfer_task_record(task: TransferTask) -> TransferTaskRecord {
     TransferTaskRecord {
         id: task.id,
+        session_id: task.session_id,
         direction: match task.direction {
             TransferDirection::Upload => TransferDirectionRecord::Upload,
             TransferDirection::Download => TransferDirectionRecord::Download,
