@@ -3,6 +3,7 @@ import SwiftUI
 struct RemotePaneView: View {
     @ObservedObject var viewModel: MainViewModel
     @State private var isDropTargeted = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
@@ -62,7 +63,7 @@ struct RemotePaneView: View {
                                 .transition(.opacity.combined(with: .scale(scale: 0.98)))
                             }
                         }
-                        .animation(.easeInOut(duration: 0.2), value: isDropTargeted)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isDropTargeted)
                 }
                 .layoutPriority(0)
             } else {

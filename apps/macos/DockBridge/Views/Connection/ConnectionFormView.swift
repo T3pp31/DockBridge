@@ -54,13 +54,14 @@ struct ConnectionFormView: View {
                     if profile.authType == .password {
                         SecureField("Password", text: $password.text)
                     } else {
-                        HStack {
-                            TextField("Private key path", text: Binding(
-                                get: { profile.privateKeyPath ?? "" },
-                                set: { profile.privateKeyPath = $0.isEmpty ? nil : $0 }
-                            ))
-                            .disabled(true)
-                            Button("Browse…") { pickPrivateKey() }
+                        LabeledContent("Private key") {
+                            HStack {
+                                Text(profile.privateKeyPath ?? "No key selected")
+                                    .textSelection(.enabled)
+                                    .foregroundStyle(profile.privateKeyPath == nil ? .secondary : .primary)
+                                Spacer()
+                                Button("Browse…") { pickPrivateKey() }
+                            }
                         }
                         if profile.privateKeyBookmark == nil {
                             Text("Use Browse… to grant access to the private key file.")
