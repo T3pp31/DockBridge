@@ -8,6 +8,23 @@ struct RemotePaneView: View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
             RemotePanePathBar(viewModel: viewModel)
 
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Filter files", text: $viewModel.remoteFilter)
+                    .textFieldStyle(.plain)
+                if !viewModel.remoteFilter.isEmpty {
+                    Button {
+                        viewModel.remoteFilter = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 6)
+
             Divider()
 
             if viewModel.bridge.isConnected {
