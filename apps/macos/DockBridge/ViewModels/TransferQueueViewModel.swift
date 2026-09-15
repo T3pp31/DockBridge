@@ -20,12 +20,12 @@ final class TransferQueueViewModel: ObservableObject {
         }
     }
 
-    private let bridge: RustBridgeService
+    private let bridge: any RemoteBridging
     private var refreshTask: Task<Void, Never>?
     private var progressSamples: [UInt64: (bytes: UInt64, date: Date)] = [:]
     private var transferSpeeds: [UInt64: Double] = [:]
 
-    init(bridge: RustBridgeService) {
+    init(bridge: any RemoteBridging) {
         self.bridge = bridge
     }
 

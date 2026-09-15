@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, ConnectionEventHandler {
+final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostKeyHandler, ConnectionEventHandler {
     @Published private(set) var connectionStatus: ConnectionStatus = .disconnected
     @Published private(set) var connectedProfileID: UUID?
     @Published private(set) var lastDisconnectReason: String?
