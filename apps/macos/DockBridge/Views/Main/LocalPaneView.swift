@@ -10,6 +10,23 @@ struct LocalPaneView: View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
             LocalPanePathBar(viewModel: viewModel)
 
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Filter files", text: $viewModel.localFilter)
+                    .textFieldStyle(.plain)
+                if !viewModel.localFilter.isEmpty {
+                    Button {
+                        viewModel.localFilter = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 6)
+
             Divider()
 
             ExpandingFrame { size in
