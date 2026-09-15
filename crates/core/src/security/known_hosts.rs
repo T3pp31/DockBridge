@@ -337,7 +337,7 @@ impl KnownHostsManager {
                         aliases,
                         excluded_aliases,
                         marker,
-                    }) {
+                    })? {
                         merged += 1;
                     }
                 }
@@ -478,7 +478,10 @@ impl KnownHostsManager {
         true
     }
 
-    fn merge_imported_entry(&mut self, imported: ImportedPlainEntry) -> bool {
+    fn merge_imported_entry(
+        &mut self,
+        imported: ImportedPlainEntry,
+    ) -> Result<bool, SecurityError> {
         let ImportedPlainEntry {
             host,
             port,
@@ -496,7 +499,7 @@ impl KnownHostsManager {
                     && entry_matches_host(entry, &host, port)
                     && fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256)
             }) {
-                return false;
+                return Ok(false);
             }
 
             self.entries.insert(
@@ -512,7 +515,7 @@ impl KnownHostsManager {
                     marker: Some(KnownHostMarker::Revoked),
                 },
             );
-            return true;
+            return Ok(true);
         }
 
         if marker == Some(KnownHostMarker::CertAuthority) {
@@ -521,7 +524,7 @@ impl KnownHostsManager {
                     && entry_matches_host(entry, &host, port)
                     && fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256)
             }) {
-                return false;
+                return Ok(false);
             }
 
             self.entries.insert(
@@ -537,16 +540,20 @@ impl KnownHostsManager {
                     marker: Some(KnownHostMarker::CertAuthority),
                 },
             );
-            return true;
+            return Ok(true);
         }
 
         if let Some(canonical_key) =
             self.find_canonical_key_by_fingerprint(port, &fingerprint_sha256)
         {
-            let entry = self
-                .entries
-                .get_mut(&canonical_key)
-                .expect("canonical key must exist");
+            let entry = self.entries.get_mut(&canonical_key).ok_or_else(|| {
+                SecurityError::KnownHostsWriteFailed {
+                    path: self.path.display().to_string(),
+                    message: format!(
+                        "internal known hosts index inconsistency: canonical key {canonical_key} missing"
+                    ),
+                }
+            })?;
 
             if !entry_matches_host(entry, &host, port) {
                 entry.aliases.push(HostAlias { host, port });
@@ -563,21 +570,28 @@ impl KnownHostsManager {
                 entry.public_key_openssh = public_key_openssh;
             }
 
-            return false;
+            return Ok(false);
         }
 
         if let Some(existing) = self.find_entry(&host, port) {
             if existing.marker == Some(KnownHostMarker::Revoked)
                 || existing.marker == Some(KnownHostMarker::CertAuthority)
             {
-                return false;
+                return Ok(false);
             }
 
             let canonical_key = entry_key(&existing.host, existing.port);
-            let entry = self.entries.get_mut(&canonical_key).expect("entry exists");
+            let entry = self.entries.get_mut(&canonical_key).ok_or_else(|| {
+                SecurityError::KnownHostsWriteFailed {
+                    path: self.path.display().to_string(),
+                    message: format!(
+                        "internal known hosts index inconsistency: canonical key {canonical_key} missing"
+                    ),
+                }
+            })?;
 
             if !fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256) {
-                return false;
+                return Ok(false);
             }
 
             for alias in aliases {
@@ -591,7 +605,7 @@ impl KnownHostsManager {
                 entry.public_key_openssh = public_key_openssh;
             }
 
-            return false;
+            return Ok(false);
         }
 
         self.entries.insert(
@@ -608,7 +622,7 @@ impl KnownHostsManager {
             },
         );
 
-        true
+        Ok(true)
     }
 
     fn persist(&self) -> Result<(), SecurityError> {
@@ -805,17 +819,20 @@ pub fn fingerprint_sha256(key: &PublicKey) -> String {
 const KNOWN_HOSTS_PARTIAL_SUFFIX_BYTES: usize = 16;
 const MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS: usize = 5;
 
-fn random_known_hosts_partial_suffix() -> String {
+fn random_known_hosts_partial_suffix() -> Result<String, SecurityError> {
     use rand::TryRng;
 
     let mut bytes = [0_u8; KNOWN_HOSTS_PARTIAL_SUFFIX_BYTES];
     rand::rng()
         .try_fill_bytes(&mut bytes)
-        .expect("failed to generate random partial suffix");
-    bytes
+        .map_err(|err| SecurityError::KnownHostsWriteFailed {
+            path: "<memory>".to_string(),
+            message: format!("failed to generate random partial suffix: {err}"),
+        })?;
+    Ok(bytes
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
+        .collect::<String>())
 }
 
 fn known_hosts_partial_file_name(suffix: &str) -> String {
@@ -953,7 +970,7 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
 
     for _ in 0..MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS {
         let candidate = parent.join(known_hosts_partial_file_name(
-            &random_known_hosts_partial_suffix(),
+            &random_known_hosts_partial_suffix()?,
         ));
         match open_exclusive_local_file_sync(&candidate) {
             Ok(opened) => {
@@ -977,7 +994,10 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
             "failed to create exclusive partial file after {MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS} attempts"
         ),
     })?;
-    let mut file = file.expect("partial file handle must exist when temp path was created");
+    let mut file = file.ok_or_else(|| SecurityError::KnownHostsWriteFailed {
+        path: path.display().to_string(),
+        message: "partial file handle missing after exclusive create".to_string(),
+    })?;
 
     if let Err(err) = file.write_all(data) {
         let _ = fs::remove_file(&temp_path);
