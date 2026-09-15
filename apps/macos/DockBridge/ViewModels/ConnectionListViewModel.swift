@@ -80,6 +80,41 @@ final class ConnectionListViewModel: ObservableObject {
         }
     }
 
+    /// Imports connection profiles from an OpenSSH `~/.ssh/config` file the
+    /// user selects (sandbox requires an explicit picker). Only plain `Host`
+    /// aliases with a `HostName` are imported; wildcards are skipped.
+    func importFromSSHConfig() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.plainText]
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        guard let contents = try? String(contentsOf: url, encoding: .utf8) else {
+            errorMessage = "Could not read SSH config file."
+            return
+        }
+
+        let hosts = SSHConfigParser.parse(contents)
+        guard !hosts.isEmpty else {
+            errorMessage = "No importable Host blocks found in the SSH config."
+            return
+        }
+
+        let imported = SSHConfigParser.toProfiles(hosts)
+        var updated = profiles
+        for profile in imported {
+            updated.append(profile)
+        }
+        do {
+            profiles = try store.saveProfiles(updated)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func save(_ profile: ConnectionProfile, password: String?, passphrase: String?) {
         if profile.requiresPrivateKeyBookmark, !profile.hasPrivateKeyBookmark {
             errorMessage = """
