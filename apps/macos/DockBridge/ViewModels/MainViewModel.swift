@@ -155,9 +155,13 @@ final class MainViewModel: ObservableObject {
     @Published var renameText = ""
     @Published var showMkdirPrompt = false
     @Published var mkdirName = ""
-@Published var showOverwriteAsk = false
+    @Published var showOverwriteAsk = false
     @Published var overwriteAskDestination = ""
-    private var pendingTransferAction: (() async -> Bool)?
+    /// Continuation resumed when the user answers the overwrite sheet.
+    /// Replaces the previous single-slot `pendingTransferAction` so that a
+    /// batch loop pauses until the user decides, instead of overwriting the
+    /// pending action with the next colliding item.
+    private var overwriteAskContinuation: CheckedContinuation<Bool, Never>?
     @Published private(set) var pathBookmarks: [PathBookmark] = []
 
     let bridge: RustBridgeService
@@ -738,18 +742,18 @@ final class MainViewModel: ObservableObject {
 
     func confirmOverwriteAsk() {
         showOverwriteAsk = false
-        let action = pendingTransferAction
-        pendingTransferAction = nil
+        let continuation = overwriteAskContinuation
+        overwriteAskContinuation = nil
         overwriteAskDestination = ""
-        if let action {
-            Task { _ = await action() }
-        }
+        continuation?.resume(returning: true)
     }
 
     func cancelOverwriteAsk() {
         showOverwriteAsk = false
-        pendingTransferAction = nil
+        let continuation = overwriteAskContinuation
+        overwriteAskContinuation = nil
         overwriteAskDestination = ""
+        continuation?.resume(returning: false)
     }
 
     /// Whether the transfer destination lives on the remote host or the local filesystem.
@@ -783,9 +787,11 @@ final class MainViewModel: ObservableObject {
         case .ask:
             if await destinationExists(at: destinationPath, side: destinationSide) {
                 overwriteAskDestination = destinationPath
-                pendingTransferAction = perform
                 showOverwriteAsk = true
-                return false
+                let replace = await withCheckedContinuation { continuation in
+                    overwriteAskContinuation = continuation
+                }
+                return replace ? await perform() : false
             }
             errorMessage = nil
             return await perform()
