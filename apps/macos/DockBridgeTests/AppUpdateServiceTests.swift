@@ -274,3 +274,31 @@ final class AppUpdateServiceTests: XCTestCase {
         }
     }
 }
+
+extension AppUpdateServiceTests {
+    func testCheckForUpdateTreats304AsNoUpdate() async throws {
+        // Given: the server returns 304 (If-None-Match matched)
+        UserDefaults.standard.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
+        defer { UserDefaults.standard.removeObject(forKey: AppUpdateConfig.etagDefaultsKey) }
+
+        let service = AppUpdateService(session: MockURLSession(statusCode: 304, data: Data()))
+        let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+        XCTAssertNil(update, "304 Not Modified must mean no new update")
+    }
+
+    func testCheckForUpdateSurfacesRateLimit() async {
+        // Given: the server responds 429 (rate limited)
+        let service = AppUpdateService(session: MockURLSession(statusCode: 429, data: Data()))
+        do {
+            _ = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+            XCTFail("expected rateLimited error")
+        } catch let error as AppUpdateServiceError {
+            if case .rateLimited = error {
+                return
+            }
+            XCTFail("expected rateLimited, got \(error)")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+}
