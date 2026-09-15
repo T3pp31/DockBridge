@@ -39,8 +39,13 @@ struct ConnectionListView: View {
         .navigationTitle("Connections")
         .toolbar {
             ToolbarItemGroup {
-                Button {
-                    showNewConnection = true
+                Menu {
+                    Button("New Connection…") {
+                        showNewConnection = true
+                    }
+                    Button("Import from SSH Config…") {
+                        viewModel.importFromSSHConfig()
+                    }
                 } label: {
                     Label("Add", systemImage: "plus")
                 }
