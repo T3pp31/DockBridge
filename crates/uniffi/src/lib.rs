@@ -14,8 +14,9 @@ use dockbridge_core::{
     inspect_private_key_algorithm as core_inspect_private_key_algorithm,
     is_connection_lost_message, validate_transfer_chunk_size, AppConfig, AuthType,
     ConnectionProfile, HostKeyPrompt, KnownHostsManager, PrivateKeyAlgorithm, RemoteFile,
-    SecretPassword, SftpClient, SshSession, TransferDirection, TransferManager, TransferStatus,
-    TransferTask, DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
+    SecretPassword, SftpClient, SshSession, TransferDirection, TransferManager,
+    TransferOverwritePolicy, TransferStatus, TransferTask,
+    DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
 };
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
@@ -112,6 +113,22 @@ pub struct RemoteFileRecord {
 pub enum TransferDirectionRecord {
     Upload,
     Download,
+}
+
+/// Policy applied when the transfer destination already exists.
+#[derive(uniffi::Enum)]
+pub enum TransferOverwritePolicyRecord {
+    Replace,
+    FailIfExists,
+}
+
+impl From<TransferOverwritePolicyRecord> for TransferOverwritePolicy {
+    fn from(value: TransferOverwritePolicyRecord) -> Self {
+        match value {
+            TransferOverwritePolicyRecord::Replace => TransferOverwritePolicy::Replace,
+            TransferOverwritePolicyRecord::FailIfExists => TransferOverwritePolicy::FailIfExists,
+        }
+    }
 }
 
 /// Lifecycle status of a transfer task.
@@ -345,8 +362,9 @@ impl DockBridgeClient {
         session_id: u64,
         local_path: String,
         remote_path: String,
+        overwrite_policy: TransferOverwritePolicyRecord,
     ) -> Result<(), DockBridgeError> {
-        self.upload_entry(session_id, local_path, remote_path)
+        self.upload_entry(session_id, local_path, remote_path, overwrite_policy)
     }
 
     fn download(
@@ -354,8 +372,9 @@ impl DockBridgeClient {
         session_id: u64,
         remote_path: String,
         local_path: String,
+        overwrite_policy: TransferOverwritePolicyRecord,
     ) -> Result<(), DockBridgeError> {
-        self.download_entry(session_id, remote_path, local_path)
+        self.download_entry(session_id, remote_path, local_path, overwrite_policy)
     }
 
     fn upload_entry(
@@ -363,9 +382,11 @@ impl DockBridgeClient {
         session_id: u64,
         local_path: String,
         remote_directory: String,
+        overwrite_policy: TransferOverwritePolicyRecord,
     ) -> Result<(), DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
         let transfer_manager = Arc::clone(&self.transfer_manager);
+        let overwrite_policy: TransferOverwritePolicy = overwrite_policy.into();
         self.handle_session_result(
             session_id,
             block_on(async move {
@@ -376,7 +397,12 @@ impl DockBridgeClient {
                     })?
                 };
                 transfer_manager
-                    .enqueue_upload_entry(session.as_ref(), &local_path, remote_directory)
+                    .enqueue_upload_entry_with_policy(
+                        session.as_ref(),
+                        &local_path,
+                        remote_directory,
+                        overwrite_policy,
+                    )
                     .await
                     .map_err(map_error)?;
                 Ok(())
@@ -390,9 +416,11 @@ impl DockBridgeClient {
         session_id: u64,
         remote_path: String,
         local_directory: String,
+        overwrite_policy: TransferOverwritePolicyRecord,
     ) -> Result<(), DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
         let transfer_manager = Arc::clone(&self.transfer_manager);
+        let overwrite_policy: TransferOverwritePolicy = overwrite_policy.into();
         self.handle_session_result(
             session_id,
             block_on(async move {
@@ -403,7 +431,12 @@ impl DockBridgeClient {
                     })?
                 };
                 transfer_manager
-                    .enqueue_download_entry(session.as_ref(), remote_path, &local_directory)
+                    .enqueue_download_entry_with_policy(
+                        session.as_ref(),
+                        remote_path,
+                        &local_directory,
+                        overwrite_policy,
+                    )
                     .await
                     .map_err(map_error)?;
                 Ok(())
