@@ -551,11 +551,16 @@ mod tests {
 
     #[test]
     fn validate_remote_entry_name_accepts_normal_names() {
-        // Given: a normal file name
+        // Given: normal file names, including names that contain ".." as a
+        // substring (only the exact "." / ".." entries are rejected)
         // When: validate_remote_entry_name is called
         // Then: validation succeeds
         assert!(validate_remote_entry_name("file.txt").is_ok());
         assert!(validate_remote_entry_name(".hidden").is_ok());
+        assert!(validate_remote_entry_name("a..b").is_ok());
+        assert!(validate_remote_entry_name("v1..v2.diff").is_ok());
+        assert!(validate_remote_entry_name("report..final.txt").is_ok());
+        assert!(validate_remote_entry_name("..hidden").is_ok());
     }
 
     #[test]
