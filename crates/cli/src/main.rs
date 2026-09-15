@@ -199,7 +199,7 @@ async fn main() -> anyhow::Result<()> {
             let session = connect(connection.into_profile()?, &config, known_hosts, prompt).await?;
 
             let manager = TransferManager::new(&config);
-            let task = manager.enqueue_upload(&session, &local, remote).await?;
+            let task = manager.enqueue_upload(&session, 0, &local, remote).await?;
             println!("upload completed (task #{})", task.id);
         }
         Commands::Download {
@@ -210,7 +210,9 @@ async fn main() -> anyhow::Result<()> {
             let session = connect(connection.into_profile()?, &config, known_hosts, prompt).await?;
 
             let manager = TransferManager::new(&config);
-            let task = manager.enqueue_download(&session, remote, &local).await?;
+            let task = manager
+                .enqueue_download(&session, 0, remote, &local)
+                .await?;
             println!("download completed (task #{})", task.id);
         }
         Commands::Delete { connection, remote } => {
