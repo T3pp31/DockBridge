@@ -34,7 +34,16 @@ final class TransferQueueViewModel: ObservableObject {
         refreshTask = Task {
             while !Task.isCancelled {
                 await refresh()
-                try? await Task.sleep(for: .seconds(1))
+                // Poll every second while a transfer is active; back off to
+                // 5 seconds when idle to avoid unneeded FFI + redraws.
+                let hasActive = tasks.contains { task in
+                    switch task.status {
+                    case .pending, .inProgress: return true
+                    case .completed, .failed, .cancelled: return false
+                    }
+                }
+                let delay: Duration = hasActive ? .seconds(1) : .seconds(5)
+                try? await Task.sleep(for: delay)
             }
         }
     }
@@ -63,8 +72,12 @@ final class TransferQueueViewModel: ObservableObject {
                 return
             }
             updateProgressSamples(for: fetched)
-            tasks = fetched
-            errorMessage = nil
+            if fetched != tasks {
+                tasks = fetched
+            }
+            if errorMessage != nil {
+                errorMessage = nil
+            }
         } catch {
             errorMessage = error.dockBridgeUserMessage
         }
