@@ -150,18 +150,26 @@ impl SftpHandler {
     fn attrs_for(path: &Path) -> FileAttributes {
         let mut attrs = FileAttributes::empty();
         #[cfg(unix)]
-        if path.is_symlink() {
-            attrs.set_symlink(true);
-            return attrs;
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            if let Ok(meta) = std::fs::symlink_metadata(path) {
+                if meta.file_type().is_symlink() {
+                    attrs.set_symlink(true);
+                    return attrs;
+                }
+                // Include the real permission bits so clients can round-trip
+                // them (the file-type bits are OR-ed on top by set_*).
+                attrs.permissions = Some(meta.permissions().mode() & 0o7777);
+                attrs.mtime = meta.mtime().try_into().ok();
+                attrs.uid = Some(meta.uid());
+                attrs.gid = Some(meta.gid());
+            }
         }
         if path.is_dir() {
             attrs.set_dir(true);
         } else if path.is_file() {
             attrs.set_regular(true);
-            attrs.size = std::fs::symlink_metadata(path)
-                .ok()
-                .or_else(|| std::fs::metadata(path).ok())
-                .map(|meta| meta.len());
+            attrs.size = std::fs::metadata(path).ok().map(|meta| meta.len());
         }
         attrs
     }
@@ -469,6 +477,36 @@ impl russh_sftp::server::Handler for SftpHandler {
         fs::rename(&from, &to)
             .await
             .map_err(|_| StatusCode::Failure)?;
+        Ok(Self::ok_status(id))
+    }
+
+    async fn setstat(
+        &mut self,
+        id: u32,
+        path: String,
+        attrs: FileAttributes,
+    ) -> Result<Status, Self::Error> {
+        let local = self.resolve(&path);
+        if let Some(permissions) = attrs.permissions {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&local, std::fs::Permissions::from_mode(permissions))
+                    .await
+                    .map_err(|_| StatusCode::Failure)?;
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = &local;
+            }
+        }
+        if let Some(mtime) = attrs.mtime {
+            let times = std::fs::FileTimes::new()
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64));
+            if let Ok(file) = std::fs::File::options().write(true).open(&local) {
+                let _ = file.set_times(times);
+            }
+        }
         Ok(Self::ok_status(id))
     }
 }

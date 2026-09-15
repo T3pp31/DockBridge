@@ -7,7 +7,7 @@ use rand::TryRng;
 use russh_sftp::client::error::Error as SftpClientError;
 use russh_sftp::client::fs::File as RemoteFileHandle;
 use russh_sftp::client::SftpSession;
-use russh_sftp::protocol::OpenFlags;
+use russh_sftp::protocol::{FileAttributes, OpenFlags};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::config::{
@@ -142,6 +142,19 @@ impl<'a> SftpClient<'a> {
         Ok(metadata.size.unwrap_or(0))
     }
 
+    /// Applies metadata (permissions, mtime, atime) to a remote entry via SFTP
+    /// SETSTAT. Only fields that are `Some` are sent.
+    pub async fn set_metadata(
+        &self,
+        remote_path: &str,
+        attrs: FileAttributes,
+    ) -> Result<(), SftpError> {
+        let path = normalize_remote_path(remote_path)?;
+        self.sftp().set_metadata(&path, attrs).await.map_err(|err| {
+            SftpError::Other(anyhow::anyhow!("failed to set metadata on '{path}': {err}"))
+        })
+    }
+
     /// Uploads a local file to a remote path.
     pub async fn upload(&self, local_path: &Path, remote_path: &str) -> Result<(), SftpError> {
         self.upload_cancellable(
@@ -263,8 +276,17 @@ impl<'a> SftpClient<'a> {
                 })?;
 
         let local_parent = local_path.parent().unwrap_or_else(|| Path::new("."));
-        let mut partial =
-            PartialLocalTransfer::begin(local_parent, &remote, &local, overwrite_policy).await?;
+        // Best-effort capture of the remote mtime/permissions for preservation
+        // after the local rename completes.
+        let remote_metadata = self.sftp().metadata(&remote_path).await.ok();
+        let mut partial = PartialLocalTransfer::begin(
+            local_parent,
+            &remote,
+            &local,
+            overwrite_policy,
+            remote_metadata,
+        )
+        .await?;
 
         let writer_file =
             partial
@@ -912,6 +934,26 @@ impl<'a> PartialRemoteTransfer<'a> {
         match self.client.rename(&self.partial_path, final_path).await {
             Ok(()) => {
                 self.committed = true;
+                // Preserve the source file's mtime and permission bits on the
+                // remote copy. Failures are logged but do not fail the transfer
+                // (metadata is best-effort; scp/rsync expose the same caveat).
+                if let Ok(metadata) = std::fs::metadata(&self.local) {
+                    let mut attrs = FileAttributes::empty();
+                    attrs.mtime = metadata.modified().ok().and_then(modified_secs);
+                    attrs.atime = attrs.mtime;
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        attrs.permissions = Some(metadata.permissions().mode() & 0o7777);
+                    }
+                    if let Err(err) = self.client.set_metadata(final_path, attrs).await {
+                        tracing::warn!(
+                            remote = %final_path,
+                            error = %err,
+                            "failed to preserve mtime/permissions on uploaded file"
+                        );
+                    }
+                }
                 Ok(())
             }
             Err(err) => {
@@ -964,6 +1006,8 @@ struct PartialLocalTransfer {
     remote: String,
     local: String,
     overwrite_policy: TransferOverwritePolicy,
+    /// Remote mtime/permissions to apply to the local final file, when available.
+    remote_metadata: Option<FileAttributes>,
 }
 
 impl PartialLocalTransfer {
@@ -972,6 +1016,7 @@ impl PartialLocalTransfer {
         remote: &str,
         local: &str,
         overwrite_policy: TransferOverwritePolicy,
+        remote_metadata: Option<FileAttributes>,
     ) -> Result<Self, SftpError> {
         let (partial_path, local_file) = create_exclusive_local_partial(parent).await?;
         Ok(Self {
@@ -981,7 +1026,52 @@ impl PartialLocalTransfer {
             remote: remote.to_string(),
             local: local.to_string(),
             overwrite_policy,
+            remote_metadata,
         })
+    }
+
+    /// Applies the captured remote mtime (and Unix permission bits) to the
+    /// local final file. Failures are logged and do not fail the transfer.
+    fn apply_remote_metadata(&self, final_path: &Path) {
+        let Some(metadata) = &self.remote_metadata else {
+            return;
+        };
+        if let Some(mtime) = metadata.mtime {
+            if let Ok(file) = std::fs::File::options().write(true).open(final_path) {
+                let times = std::fs::FileTimes::new()
+                    .set_accessed(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64),
+                    )
+                    .set_modified(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64),
+                    );
+                if let Err(err) = file.set_times(times) {
+                    tracing::warn!(
+                        local = %final_path.display(),
+                        error = %err,
+                        "failed to preserve mtime on downloaded file"
+                    );
+                }
+            }
+        }
+        #[cfg(unix)]
+        if let Some(permissions) = metadata.permissions {
+            let mode = permissions & 0o7777;
+            // Only apply when the server actually reported permission bits;
+            // some servers report a bare file-type flag (e.g. 0o100000).
+            if mode != 0 {
+                use std::os::unix::fs::PermissionsExt;
+                if let Err(err) =
+                    std::fs::set_permissions(final_path, std::fs::Permissions::from_mode(mode))
+                {
+                    tracing::warn!(
+                        local = %final_path.display(),
+                        error = %err,
+                        "failed to preserve permissions on downloaded file"
+                    );
+                }
+            }
+        }
     }
 
     /// Clones the underlying file handle for out-of-band streaming writes
@@ -1041,6 +1131,7 @@ impl PartialLocalTransfer {
                             );
                         }
                         self.committed = true;
+                        self.apply_remote_metadata(final_path);
                         Ok(())
                     }
                     Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -1071,6 +1162,7 @@ impl PartialLocalTransfer {
                 match tokio::fs::rename(&self.partial_path, final_path).await {
                     Ok(()) => {
                         self.committed = true;
+                        self.apply_remote_metadata(final_path);
                         Ok(())
                     }
                     Err(err) => {
@@ -1152,6 +1244,15 @@ impl<'a> SftpClient<'a> {
                 message: err.to_string(),
             })
     }
+}
+
+/// Converts a stdout/systemtime mtime to the SFTP `u32` seconds representation.
+fn modified_secs(modified: std::time::SystemTime) -> Option<u32> {
+    use std::time::UNIX_EPOCH;
+    modified
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| d.as_secs().try_into().ok())
 }
 
 async fn create_exclusive_remote_partial(
@@ -1423,6 +1524,7 @@ mod tests {
             "/download/file.txt",
             &local_path.display().to_string(),
             TransferOverwritePolicy::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1481,6 +1583,7 @@ mod tests {
             "/download/file.txt",
             &local_path.display().to_string(),
             TransferOverwritePolicy::default(),
+            None,
         )
         .await
         .unwrap();
@@ -3066,5 +3169,88 @@ mod tests {
         eprintln!(
             "bench_download_rtt_proxy summary one_way_ms=20 bytes={BENCH_BYTES} mean_depth1_ms={mean1} mean_depth64_ms={mean64}"
         );
+    }
+
+    fn system_time_secs(t: std::time::SystemTime) -> u64 {
+        t.duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn download_preserves_remote_mtime_and_permissions() {
+        // Given: a remote file with a known mtime and mode 0755
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/mp/meta.bin", b"metadata").await;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                server.root.join("mp/meta.bin"),
+                std::fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("meta.bin");
+
+        // When: the file is downloaded
+        client.download("/mp/meta.bin", &local_path).await.unwrap();
+
+        // Then: the local file carries the remote mtime and permission bits
+        let local_meta = std::fs::metadata(&local_path).unwrap();
+        let remote_meta = std::fs::metadata(server.root.join("mp/meta.bin")).unwrap();
+        // SFTP mtime is second-resolution; the preserved value matches the
+        // remote mtime truncated to a whole second.
+        assert_eq!(
+            system_time_secs(local_meta.modified().unwrap()),
+            system_time_secs(remote_meta.modified().unwrap()),
+            "mtime should be preserved (second resolution)"
+        );
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(local_meta.permissions().mode() & 0o777, 0o755);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn upload_preserves_local_mtime_and_permissions() {
+        // Given: a local source file with a known mtime and mode 0711
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("deploy.sh");
+        std::fs::write(&local_path, b"#!/bin/sh\necho hi\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&local_path, std::fs::Permissions::from_mode(0o711)).unwrap();
+        }
+
+        // When: the file is uploaded
+        client
+            .upload(&local_path, "/upload/deploy.sh")
+            .await
+            .unwrap();
+
+        // Then: the remote copy preserves mtime and mode (executable bit kept)
+        let remote_meta = std::fs::metadata(server.root.join("upload/deploy.sh")).unwrap();
+        let local_meta = std::fs::metadata(&local_path).unwrap();
+        assert_eq!(
+            system_time_secs(remote_meta.modified().unwrap()),
+            system_time_secs(local_meta.modified().unwrap()),
+            "remote mtime should match source (second resolution)"
+        );
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_ne!(
+                remote_meta.permissions().mode() & 0o111,
+                0,
+                "executable bit should be preserved"
+            );
+        }
     }
 }
