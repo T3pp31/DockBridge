@@ -71,12 +71,26 @@ pub struct HashedHostEntry {
     pub marker: Option<KnownHostMarker>,
 }
 
+/// Signature of the on-disk known_hosts store used to detect write races
+/// between processes (last-writer-wins). Re-created after every successful
+/// `persist()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DiskFileState {
+    #[cfg(unix)]
+    inode: u64,
+    modified_secs: i64,
+    #[cfg(unix)]
+    modified_nsecs: i64,
+    len: u64,
+}
+
 /// Manages trusted host keys in a DockBridge-specific JSON store.
 #[derive(Debug, Clone)]
 pub struct KnownHostsManager {
     path: PathBuf,
     entries: HashMap<String, KnownHostEntry>,
     hashed_entries: Vec<HashedHostEntry>,
+    disk_state: Option<DiskFileState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -126,10 +140,12 @@ impl KnownHostsManager {
             (HashMap::new(), Vec::new())
         };
 
+        let disk_state = compute_disk_state(&path);
         Ok(Self {
             path,
             entries,
             hashed_entries,
+            disk_state,
         })
     }
 
@@ -181,6 +197,41 @@ impl KnownHostsManager {
         HostKeyCheckResult::Unknown
     }
 
+    /// Re-reads the store from disk when another process changed it since we
+    /// last loaded or wrote it. This keeps inter-process `last-writer-wins`
+    /// races from silently dropping an entry accepted by another process
+    /// (e.g. the CLI and the macOS app sharing one store).
+    ///
+    /// Call at the start of every mutating operation. When the on-disk file is
+    /// missing or unreadable we keep the in-memory state, matching the existing
+    /// behaviour of treating a missing store as empty.
+    fn reload_if_changed(&mut self) {
+        let Some(current) = compute_disk_state(&self.path) else {
+            return;
+        };
+        if self.disk_state == Some(current) {
+            return;
+        }
+
+        let Ok(contents) =
+            read_secure_known_hosts_file(&self.path, KnownHostsReadPolicy::DockBridgeStore)
+        else {
+            return;
+        };
+        let Ok(file) = serde_json::from_str::<KnownHostsFile>(&contents) else {
+            return;
+        };
+
+        self.entries = file
+            .entries
+            .into_iter()
+            .map(|entry| (entry_key(&entry.host, entry.port), entry))
+            .collect();
+        self.hashed_entries = file.hashed_entries;
+        self.disk_state = Some(current);
+        tracing::debug!(path = %self.path.display(), "reloaded known_hosts store changed by another process");
+    }
+
     /// Saves a trusted host key to the store with file mode `0600`.
     ///
     /// When the fingerprint already exists for the same port under another host,
@@ -191,6 +242,7 @@ impl KnownHostsManager {
         port: u16,
         key: &PublicKey,
     ) -> Result<(), SecurityError> {
+        self.reload_if_changed();
         let fingerprint = fingerprint_sha256(key);
         let public_key_openssh = key.to_openssh().ok();
 
@@ -286,6 +338,7 @@ impl KnownHostsManager {
     /// Imports plain and hashed entries, including `@revoked` and `@cert-authority` markers.
     /// Returns the number of newly merged entries.
     pub fn import_openssh(&mut self, path: &Path) -> Result<usize, SecurityError> {
+        self.reload_if_changed();
         let contents = read_secure_known_hosts_file(path, KnownHostsReadPolicy::OpenSshImport)?;
 
         let mut merged = 0;
@@ -611,7 +664,7 @@ impl KnownHostsManager {
         true
     }
 
-    fn persist(&self) -> Result<(), SecurityError> {
+    fn persist(&mut self) -> Result<(), SecurityError> {
         ensure_known_hosts_parent(&self.path)?;
 
         let mut entries: Vec<KnownHostEntry> = self.entries.values().cloned().collect();
@@ -640,7 +693,39 @@ impl KnownHostsManager {
         })?;
 
         write_file_mode_0600(&self.path, format!("{json}\n").as_bytes())?;
+        self.disk_state = compute_disk_state(&self.path);
         Ok(())
+    }
+}
+
+/// Computes the current on-disk signature for a store path. Returns `None`
+/// when the file does not exist or its metadata cannot be read, in which case
+/// callers keep their in-memory state.
+fn compute_disk_state(path: &Path) -> Option<DiskFileState> {
+    let metadata = fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(DiskFileState {
+            inode: metadata.ino(),
+            modified_secs: metadata.mtime(),
+            modified_nsecs: metadata.mtime_nsec(),
+            len: metadata.len(),
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        use std::time::UNIX_EPOCH;
+        let secs = metadata
+            .modified()
+            .ok()?
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_secs() as i64;
+        Some(DiskFileState {
+            modified_secs: secs,
+            len: metadata.len(),
+        })
     }
 }
 
@@ -1807,5 +1892,71 @@ mod tests {
         assert!(!fingerprints_match("SHA256:abc", "SHA256:abd"));
         assert!(!fingerprints_match("SHA256:abc", "SHA256:ab"));
         assert!(fingerprints_match("", ""));
+    }
+    #[test]
+    fn reload_if_changed_merges_entries_written_by_another_instance() {
+        // Given: two KnownHostsManager instances sharing one store path
+        // When: they accept keys for different hosts
+        // Then: a later instance re-reads the file and keeps the other host
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key_a = test_public_key();
+        let key_b = test_public_key();
+
+        let mut manager_a = KnownHostsManager::load(&path).unwrap();
+        let mut manager_b = KnownHostsManager::load(&path).unwrap();
+
+        // Process A accepts host A first.
+        manager_a
+            .accept_host_key("alpha.example.com", 22, &key_a)
+            .unwrap();
+
+        // Process B has a stale view; accepting writes its entry too.
+        manager_b
+            .accept_host_key("beta.example.com", 22, &key_b)
+            .unwrap();
+
+        // Process A accepts another host: reload_if_changed picks up B's entry.
+        manager_a
+            .accept_host_key("gamma.example.com", 22, &key_a)
+            .unwrap();
+
+        // Both hosts must be trusted after the interleaving.
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("alpha.example.com", 22, &key_a, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            reloaded.check_host_key("beta.example.com", 22, &key_b, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            reloaded.check_host_key("gamma.example.com", 22, &key_a, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn reload_if_changed_is_noop_when_store_unchanged() {
+        // Given: a single manager whose store is untouched on disk
+        // When: reload_if_changed is called
+        // Then: in-memory entries are preserved
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("alpha.example.com", 22, &key)
+            .unwrap();
+        let in_memory_len = manager.entries.len();
+
+        manager.reload_if_changed();
+        assert_eq!(manager.entries.len(), in_memory_len);
+        assert_eq!(
+            manager.check_host_key("alpha.example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
     }
 }
