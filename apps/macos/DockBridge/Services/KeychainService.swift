@@ -179,9 +179,22 @@ final class KeychainService: @unchecked Sendable {
         var addQuery = makeQuery(account: account, kind: kind)
         addQuery.merge(attributes) { _, new in new }
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-        guard addStatus == errSecSuccess else {
-            throw KeychainServiceError.unexpectedStatus(addStatus)
+        if addStatus == errSecSuccess {
+            return
         }
+        // A concurrent save may have created the item between our
+        // copy-matching check and this add. Treat duplicate as an update.
+        if addStatus == errSecDuplicateItem {
+            let updateStatus = SecItemUpdate(
+                makeQuery(account: account, kind: kind) as CFDictionary,
+                attributes as CFDictionary
+            )
+            if updateStatus == errSecSuccess {
+                return
+            }
+            throw KeychainServiceError.unexpectedStatus(updateStatus)
+        }
+        throw KeychainServiceError.unexpectedStatus(addStatus)
     }
 
     private func makeQuery(account: String, kind: String) -> [String: Any] {
@@ -189,6 +202,9 @@ final class KeychainService: @unchecked Sendable {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
             kSecAttrAccount as String: accountLabel(account: account, kind: kind),
+            // Store items in the data-protection keychain so kSecAttrAccessible
+            // is honored and re-signing does not invalidate the ACL.
+            kSecUseDataProtectionKeychain as String: true,
         ]
     }
 
