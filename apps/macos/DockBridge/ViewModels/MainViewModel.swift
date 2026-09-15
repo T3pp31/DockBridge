@@ -158,6 +158,8 @@ final class MainViewModel: ObservableObject {
 @Published var showOverwriteAsk = false
     @Published var overwriteAskDestination = ""
     private var pendingTransferAction: (() async -> Bool)?
+    /// Resolved remote directory for the current transfer (set by `upload`).
+    private var transferDestinationOverride: String?
     @Published private(set) var pathBookmarks: [PathBookmark] = []
 
     let bridge: RustBridgeService
@@ -670,7 +672,7 @@ final class MainViewModel: ObservableObject {
     }
 
     @discardableResult
-    func upload(localURL: URL, toRemoteDirectory: String) async -> Bool {
+    func upload(localURL: URL, toRemoteDirectory: String?) async -> Bool {
         guard bridge.isConnected else {
             errorMessage = "Not connected to a remote host."
             return false
@@ -678,10 +680,16 @@ final class MainViewModel: ObservableObject {
 
         let fileName = localURL.lastPathComponent
         let destinationPath: String
+        // Resolve the destination ONCE, before the transfer. `nil` means the
+        // currently displayed remote folder; `"/"` always means the root — it
+        // is NOT rewritten to the current folder (that caused `..`-row drops
+        // to land in the wrong directory).
         do {
-            let directory = toRemoteDirectory == "/" ? remotePath : toRemoteDirectory
+            let directory = toRemoteDirectory ?? remotePath
             let normalizedDirectory = try RemotePath.normalize(directory)
             destinationPath = RemotePath.join(normalizedDirectory, fileName)
+            // Capture so the closure below uses exactly this resolved value.
+            transferDestinationOverride = normalizedDirectory
         } catch {
             errorMessage = error.dockBridgeUserMessage
             return false
@@ -691,9 +699,11 @@ final class MainViewModel: ObservableObject {
             destinationPath: destinationPath,
             destinationSide: .remote
         ) {
+            // do NOT call prepareRemoteWorkingDirectory() here: it rewrites
+            // `remotePath` (when browsing "/") and would change the target.
             do {
-                try await self.prepareRemoteWorkingDirectory()
-                let directory = toRemoteDirectory == "/" ? self.remotePath : toRemoteDirectory
+                let directory = self.transferDestinationOverride
+                    ?? self.remotePath
                 let normalizedDirectory = try RemotePath.normalize(directory)
                 try await self.bridge.upload(localPath: localURL.path, remoteDirectory: normalizedDirectory)
                 await self.transferQueue.refresh()
