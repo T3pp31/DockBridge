@@ -32,6 +32,10 @@ struct RemotePaneView: View {
                                 }
 
                                 if items.count == 1, let item = items.first {
+                                    Button("Get Info") {
+                                        viewModel.remoteInfoItem = item
+                                    }
+                                    .keyboardShortcut("i", modifiers: [.command])
                                     Button("Rename") {
                                         viewModel.beginRename(item: item)
                                     }

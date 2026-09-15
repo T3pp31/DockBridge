@@ -33,6 +33,10 @@ struct LocalPaneView: View {
                                 Button("Reveal in Finder") {
                                     NSWorkspace.shared.activateFileViewerSelecting([item.url])
                                 }
+                                Button("Get Info") {
+                                    viewModel.localInfoItem = item
+                                }
+                                .keyboardShortcut("i", modifiers: [.command])
                             }
 
                             Button(items.count == 1 ? "Upload" : "Upload \(items.count) Items") {
@@ -79,6 +83,20 @@ struct LocalPaneView: View {
         }
         .task(id: viewModel.localPath) {
             viewModel.reloadLocal()
+        }
+        .sheet(item: $viewModel.localInfoItem) { item in
+            GetInfoSheet(
+                title: "Info — \(item.name)",
+                rows: [
+                    ("Path", item.url.path),
+                    ("Kind", item.isDirectory ? "Folder" : "File"),
+                    ("Size", ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)),
+                    ("Modified", item.modificationDate.map {
+                        DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .medium)
+                    } ?? "—"),
+                    ("Permissions", LocalFileItem.posixPermissionsString(for: item.url) ?? "—"),
+                ]
+            )
         }
     }
 

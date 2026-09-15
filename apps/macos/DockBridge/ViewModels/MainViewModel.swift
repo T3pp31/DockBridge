@@ -155,6 +155,9 @@ final class MainViewModel: ObservableObject {
     @Published var renameText = ""
     @Published var showMkdirPrompt = false
     @Published var mkdirName = ""
+    /// Item whose metadata is shown in the Get Info sheet (⌘I).
+    @Published var localInfoItem: LocalFileItem? = nil
+    @Published var remoteInfoItem: RemoteFileRecord? = nil
 @Published var showOverwriteAsk = false
     @Published var overwriteAskDestination = ""
     private var pendingTransferAction: (() async -> Bool)?
