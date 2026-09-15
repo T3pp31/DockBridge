@@ -203,10 +203,59 @@ impl KnownHostsManager {
                 }
             })?;
 
-            entry.fingerprint_sha256 = fingerprint.clone();
-            entry.algorithm = format!("{:?}", key.algorithm());
-            entry.public_key_openssh = public_key_openssh;
-            entry.marker = None;
+            // The presented key is already trusted for this exact (host, port).
+            if fingerprints_match(&entry.fingerprint_sha256, &fingerprint) {
+                return Ok(());
+            }
+
+            // The user accepted a CHANGED key for (host, port). Only that
+            // (host, port) may trust the new key; the other hosts attached to
+            // this entry (aliases) keep the old key. Detach (host, port) into a
+            // dedicated entry with the new key instead of rewriting the shared
+            // fingerprint for every alias.
+            let mut old_entry = self.entries.remove(&canonical_key).ok_or_else(|| {
+                SecurityError::KnownHostsWriteFailed {
+                    path: self.path.display().to_string(),
+                    message: "internal known hosts index inconsistency".to_string(),
+                }
+            })?;
+            let host_is_canonical = old_entry.host == host && old_entry.port == port;
+
+            let mut remaining_aliases: Vec<HostAlias> = old_entry
+                .aliases
+                .drain(..)
+                .filter(|alias| !(alias.host == host && alias.port == port))
+                .collect();
+
+            if host_is_canonical {
+                // Promote the first remaining alias to canonical so the old key
+                // stays trusted for the other hosts of this entry. When no
+                // aliases remain the old entry covered only (host, port) and is
+                // dropped entirely.
+                if !remaining_aliases.is_empty() {
+                    let promoted = remaining_aliases.remove(0);
+                    old_entry.host = promoted.host;
+                    old_entry.port = promoted.port;
+                    old_entry.aliases = remaining_aliases;
+                    self.entries
+                        .insert(entry_key(&old_entry.host, old_entry.port), old_entry);
+                }
+            } else {
+                old_entry.aliases = remaining_aliases;
+                self.entries.insert(canonical_key, old_entry);
+            }
+
+            let entry = KnownHostEntry {
+                host: host.to_string(),
+                port,
+                fingerprint_sha256: fingerprint,
+                algorithm: format!("{:?}", key.algorithm()),
+                aliases: Vec::new(),
+                excluded_aliases: Vec::new(),
+                public_key_openssh,
+                marker: None,
+            };
+            self.entries.insert(entry_key(host, port), entry);
 
             return self.persist();
         }
@@ -1515,6 +1564,267 @@ mod tests {
             HostKeyCheckResult::Mismatch { .. } => {}
             other => panic!("expected mismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn accept_changed_key_detaches_only_accepted_host_from_aliases() {
+        // Given: example.com and 203.0.113.1 share one entry (same old key)
+        // When: the user accepts a NEW key for example.com
+        // Then: only example.com trusts the new key; 203.0.113.1 keeps the old
+        //       key (Mismatch with new key, Trust with old key)
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("203.0.113.1", 22, &old_key)
+            .unwrap();
+
+        // Sanity: both share one entry as an alias pair.
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.aliases.len(), 1);
+
+        manager
+            .accept_host_key("example.com", 22, &new_key)
+            .unwrap();
+
+        // example.com now trusts the new key only.
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key("example.com", 22, &old_key, false) {
+            HostKeyCheckResult::Mismatch { .. } => {}
+            other => panic!("expected mismatch, got {other:?}"),
+        }
+
+        // 203.0.113.1 still trusts the old key, and warns on the new key.
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key("203.0.113.1", 22, &new_key, false) {
+            HostKeyCheckResult::Mismatch { .. } => {}
+            other => panic!("expected mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_changed_key_on_alias_preserves_canonical_entry() {
+        // Given: example.com (canonical) and 203.0.113.1 (alias) share old key
+        // When: the user accepts a NEW key for the ALIAS 203.0.113.1
+        // Then: 203.0.113.1 gets a dedicated new-key entry; example.com keeps old key
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("203.0.113.1", 22, &old_key)
+            .unwrap();
+
+        manager
+            .accept_host_key("203.0.113.1", 22, &new_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key("203.0.113.1", 22, &old_key, false) {
+            HostKeyCheckResult::Mismatch { .. } => {}
+            other => panic!("expected mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_changed_key_with_no_remaining_aliases_drops_old_entry() {
+        // Given: a single-host entry with the old key (no aliases)
+        // When: a new key is accepted for it
+        // Then: only the new-key entry remains and is trusted after reload
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("example.com", 22, &new_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        // The old entry covered only example.com and must be gone.
+        assert!(manager.find_entry("example.com", 22).is_some());
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn accept_same_key_is_idempotent_and_keeps_aliases() {
+        // Given: example.com + 203.0.113.1 share one entry (same key)
+        // When: the same key is accepted again for example.com
+        // Then: nothing changes; both hosts keep trusting the key
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+        manager.accept_host_key("203.0.113.1", 22, &key).unwrap();
+
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.aliases.len(), 1);
+    }
+
+    #[test]
+    fn accept_changed_key_on_canonical_keeps_multiple_aliases() {
+        // Given: example.com (canonical) with aliases 203.0.113.1 and
+        //        example.internal, all sharing the old key
+        // When: the user accepts a NEW key for the canonical example.com
+        // Then: example.com alone trusts the new key; both aliases keep the
+        //       old key and are not silently removed
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("203.0.113.1", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("example.internal", 22, &old_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.find_entry("example.com", 22).unwrap().aliases.len(),
+            2
+        );
+
+        manager
+            .accept_host_key("example.com", 22, &new_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        for alias in ["203.0.113.1", "example.internal"] {
+            assert_eq!(
+                manager.check_host_key(alias, 22, &old_key, false),
+                HostKeyCheckResult::Trust,
+                "{alias} should keep trusting the old key"
+            );
+            match manager.check_host_key(alias, 22, &new_key, false) {
+                HostKeyCheckResult::Mismatch { .. } => {}
+                other => panic!("expected mismatch for {alias}, got {other:?}"),
+            }
+        }
+
+        // Both aliases are still attached to one old-key entry after reload.
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded
+                .find_entry("203.0.113.1", 22)
+                .unwrap()
+                .aliases
+                .len(),
+            1
+        );
+        assert_eq!(
+            reloaded
+                .find_entry("example.internal", 22)
+                .unwrap()
+                .aliases
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn accept_changed_key_on_alias_keeps_other_aliases() {
+        // Given: example.com (canonical) with aliases 203.0.113.1 and
+        //        example.internal, all sharing the old key
+        // When: the user accepts a NEW key for the alias 203.0.113.1
+        // Then: example.com and example.internal keep the old key as one entry
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("203.0.113.1", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("example.internal", 22, &old_key)
+            .unwrap();
+
+        manager
+            .accept_host_key("203.0.113.1", 22, &new_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        for host in ["example.com", "example.internal"] {
+            assert_eq!(
+                manager.check_host_key(host, 22, &old_key, false),
+                HostKeyCheckResult::Trust,
+                "{host} should keep trusting the old key"
+            );
+            match manager.check_host_key(host, 22, &new_key, false) {
+                HostKeyCheckResult::Mismatch { .. } => {}
+                other => panic!("expected mismatch for {host}, got {other:?}"),
+            }
+        }
+
+        // example.com (promoted or kept canonical) still carries example.internal.
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert!(entry
+            .aliases
+            .iter()
+            .any(|alias| alias.host == "example.internal" && alias.port == 22));
     }
 
     #[test]
