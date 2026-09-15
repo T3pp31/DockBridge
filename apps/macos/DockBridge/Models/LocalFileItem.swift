@@ -42,6 +42,20 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
 
     var isParentDirectory: Bool { name == ".." }
 
+    /// POSIX permission bits (e.g. "rwxr-xr-x") from the file system, or nil
+    /// when they cannot be read.
+    static func posixPermissionsString(for url: URL) -> String? {
+        let values = try? url.resourceValues(forKeys: [.fileResourceIdentifierKey])
+        _ = values
+        var mode: UInt16 = 0
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        if let posix = attributes?[.posixPermissions] as? NSNumber {
+            mode = UInt16(truncating: posix)
+        }
+        guard mode != 0 else { return nil }
+        return PermissionFormatter.string(from: mode)
+    }
+
     var modificationSortKey: Date { modificationDate ?? .distantPast }
 
     static func list(
