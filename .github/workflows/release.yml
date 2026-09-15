@@ -22,12 +22,19 @@ jobs:
   release:
     name: Build and publish release
     runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable (tag via rust-toolchain.toml)
 
       - name: Add Rust macOS targets
         run: |
@@ -115,7 +122,7 @@ jobs:
           echo "sbom_sha256=dist/${SBOM_NAME}.sha256" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@5113cdc90fd4d541c801c55356214017bf5ae34b  # v3
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', steps.version.outputs.version) || github.ref_name }}
           name: DockBridge ${{ steps.version.outputs.version }}
@@ -130,3 +137,11 @@ jobs:
             ${{ steps.assets.outputs.sbom }}
             ${{ steps.assets.outputs.sbom_sha256 }}
           generate_release_notes: false
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45  # v2
+        with:
+          subject-path: |
+            ${{ steps.assets.outputs.dmg }}
+            ${{ steps.assets.outputs.cli }}
+            ${{ steps.assets.outputs.sbom }}
