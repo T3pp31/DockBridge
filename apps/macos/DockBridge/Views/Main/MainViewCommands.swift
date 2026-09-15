@@ -51,6 +51,15 @@ struct MainViewCommands: Commands {
             }
             .keyboardShortcut("r", modifiers: [.command])
 
+            Toggle(
+                "Show Hidden Files",
+                isOn: Binding(
+                    get: { viewModel.isShowingHiddenFiles },
+                    set: { _ in viewModel.toggleHiddenFiles() }
+                )
+            )
+            .keyboardShortcut(".", modifiers: [.command, .shift])
+
             Button("Delete") {
                 // Destructive: require exactly one selection (never Set.first under multi-select).
                 guard viewModel.selectedRemoteItemIDs.count == 1,
