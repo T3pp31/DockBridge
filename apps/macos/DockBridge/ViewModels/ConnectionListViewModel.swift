@@ -167,7 +167,11 @@ final class ConnectionListViewModel: ObservableObject {
             case .some(false):
                 break
             case .none:
-                return
+                // Cannot determine the algorithm (e.g. an encrypted key with no
+                // saved passphrase). Skip the RSA warning and proceed to
+                // connect; authentication failure surfaces the passphrase
+                // prompt instead of blocking the flow here.
+                break
             }
         }
 
@@ -429,9 +433,8 @@ final class ConnectionListViewModel: ObservableObject {
 
     private func profileUsesRsaPrivateKey(_ profile: ConnectionProfile) -> Bool? {
         guard let bookmark = profile.privateKeyBookmark else {
-            errorMessage = """
-            Access to the private key was denied. Open the connection settings and use Browse… to select the key again.
-            """
+            // Pre-check only: without a bookmark we cannot inspect the key.
+            // Treat as unknown and let the real connection flow produce the error.
             return nil
         }
 
@@ -447,7 +450,9 @@ final class ConnectionListViewModel: ObservableObject {
                 return algorithm == .rsa
             }
         } catch {
-            errorMessage = error.dockBridgeUserMessage
+            // Pre-check only: an undecryptable key (e.g. encrypted key with no
+            // saved passphrase) returns "unknown" so the connection proceeds to
+            // the passphrase prompt. No user-facing error is raised here.
             return nil
         }
     }
