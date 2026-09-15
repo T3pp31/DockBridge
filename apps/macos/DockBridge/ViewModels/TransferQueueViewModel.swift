@@ -6,7 +6,11 @@ final class TransferQueueViewModel: ObservableObject {
     @Published var errorMessage: String?
 
     var activeTransferSummary: String? {
-        TransferProgressFormatter.activeTransferSummary(for: tasks)
+        let totalSpeed = transferSpeeds.values.reduce(0, +)
+        return TransferProgressFormatter.activeTransferSummary(
+            for: tasks,
+            totalBytesPerSecond: totalSpeed > 0 ? totalSpeed : nil
+        )
     }
 
     var hasFinishedTasks: Bool {
@@ -45,9 +49,10 @@ final class TransferQueueViewModel: ObservableObject {
     }
 
     func refresh() async {
+        // Do NOT clear tasks on disconnect: the user must be able to inspect
+        // and retry failed transfers after reconnecting. Progress speeds are
+        // stale once disconnected and are reset.
         guard bridge.isConnected else {
-            tasks = []
-            errorMessage = nil
             progressSamples.removeAll()
             transferSpeeds.removeAll()
             return
@@ -56,8 +61,6 @@ final class TransferQueueViewModel: ObservableObject {
         do {
             let fetched = try await bridge.fetchTransferTasks()
             guard bridge.isConnected else {
-                tasks = []
-                errorMessage = nil
                 progressSamples.removeAll()
                 transferSpeeds.removeAll()
                 return
