@@ -166,6 +166,35 @@ impl SftpHandler {
         attrs
     }
 
+    /// Like `attrs_for`, but follows symlinks (matching SFTP `STAT`, which
+    /// resolves the target for the attributes).
+    fn attrs_for_follow(path: &Path) -> FileAttributes {
+        let mut attrs = FileAttributes::empty();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let metadata = match std::fs::metadata(path) {
+                Ok(meta) => meta,
+                Err(_) => return Self::attrs_for(path),
+            };
+            attrs.uid = Some(metadata.uid());
+            attrs.gid = Some(metadata.gid());
+            attrs.permissions = Some(metadata.permissions().mode() & 0o777);
+            if metadata.is_dir() {
+                attrs.set_dir(true);
+            } else if metadata.is_file() {
+                attrs.set_regular(true);
+                attrs.size = Some(metadata.len());
+            }
+            attrs.mtime = metadata.mtime().try_into().ok();
+            attrs
+        }
+        #[cfg(not(unix))]
+        {
+            Self::attrs_for(path)
+        }
+    }
+
     async fn read_directory_entries(&self, path: &str) -> Result<Vec<File>, StatusCode> {
         let local = self.resolve(path);
         if !local.is_dir() {
@@ -245,7 +274,7 @@ impl russh_sftp::server::Handler for SftpHandler {
         }
         Ok(Attrs {
             id,
-            attrs: Self::attrs_for(&local),
+            attrs: Self::attrs_for_follow(&local),
         })
     }
 
@@ -470,6 +499,78 @@ impl russh_sftp::server::Handler for SftpHandler {
             .await
             .map_err(|_| StatusCode::Failure)?;
         Ok(Self::ok_status(id))
+    }
+
+    async fn setstat(
+        &mut self,
+        id: u32,
+        path: String,
+        attrs: FileAttributes,
+    ) -> Result<Status, Self::Error> {
+        let local = self.resolve(&path);
+        if let Some(mode) = attrs.permissions {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&local, std::fs::Permissions::from_mode(mode))
+                    .await
+                    .map_err(|_| StatusCode::Failure)?;
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = &local;
+            }
+        }
+        Ok(Self::ok_status(id))
+    }
+
+    async fn symlink(
+        &mut self,
+        id: u32,
+        linkpath: String,
+        targetpath: String,
+    ) -> Result<Status, Self::Error> {
+        #[cfg(unix)]
+        {
+            let link = self.resolve(&linkpath);
+            if let Some(parent) = link.parent() {
+                fs::create_dir_all(parent)
+                    .await
+                    .map_err(|_| StatusCode::Failure)?;
+            }
+            // Resolve the virtual remote target to the server's local root so
+            // the created link stays inside the sandbox and can be lstat'ed.
+            let target_local = self.resolve(&targetpath);
+            std::os::unix::fs::symlink(&target_local, &link).map_err(|_| StatusCode::Failure)?;
+            Ok(Self::ok_status(id))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (linkpath, targetpath);
+            Err(self.unimplemented())
+        }
+    }
+
+    async fn readlink(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
+        #[cfg(unix)]
+        {
+            let local = self.resolve(&path);
+            let target = std::fs::read_link(&local).map_err(|_| StatusCode::Failure)?;
+            // Return the link target as the remote-relative path.
+            let remote_target = target
+                .strip_prefix(&self.root)
+                .map(|t| format!("/{}", t.display()))
+                .unwrap_or_else(|_| target.display().to_string());
+            Ok(Name {
+                id,
+                files: vec![File::dummy(remote_target)],
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (id, path);
+            Err(self.unimplemented())
+        }
     }
 }
 
