@@ -216,12 +216,12 @@ Entitlements not granted include `network.server`, `temporary-exception.files.ab
 
 ### Code signing and distribution
 
-- Hardened Runtime enabled for Release builds
+- Hardened Runtime enabled in the Xcode project; it takes effect once release builds are signed (current public builds are unsigned, so it is not active)
 - GitHub Release workflow (`.github/workflows/release.yml`) sets `SIGN_AND_NOTARIZE=false` and publishes unsigned DMGs (`CODE_SIGNING_ALLOWED=NO` during the Xcode build)
-- Developer ID signing, Apple Notarization, and Gatekeeper verification are planned for v1.0; the scripts below are ready when repository secrets are configured
+- Developer ID signing, Apple Notarization, and Gatekeeper verification are planned (tracked in [#391](https://github.com/T3pp31/DockBridge/issues/391)); the scripts below are ready when repository secrets are configured
 - **In-app update installation** (`Download update` in the app) is gated at runtime by `AppUpdateConfig.swift` (`requireSignedUpdates` / `requireNotarizedUpdates`). Keep those flags in sync with `config/release.toml`. Until either flag is enabled, the app opens the GitHub release page only (intentional short-term killswitch). When verification is disabled, `ReleaseCodeSignatureVerifier` checks only `CFBundleIdentifier`, which is **not** sufficient to prove authenticity — an attacker could ship a DMG with a matching bundle ID. Enabling `requireSignedUpdates` without a non-empty `expectedTeamIdentifier` and `signingCertificateFingerprintSHA256` is rejected as a misconfigured policy (those checks are not silently skipped).
 
-#### Release signing pipeline (planned for v1.0)
+#### Release signing pipeline (planned; see [#391](https://github.com/T3pp31/DockBridge/issues/391))
 
 When signing is enabled, the release workflow will require these repository secrets:
 
