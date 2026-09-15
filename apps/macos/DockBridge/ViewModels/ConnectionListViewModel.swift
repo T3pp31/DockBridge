@@ -148,10 +148,10 @@ final class ConnectionListViewModel: ObservableObject {
         pendingConnectProfile = profile
         rootWarningAcknowledged = false
         rsaWarningAcknowledged = false
-        continueConnectAfterWarnings()
+        Task { await continueConnectAfterWarnings() }
     }
 
-    private func continueConnectAfterWarnings() {
+    private func continueConnectAfterWarnings() async {
         guard let profile = pendingConnectProfile else { return }
 
         if profile.isRootUser, !rootWarningAcknowledged {
@@ -160,7 +160,17 @@ final class ConnectionListViewModel: ObservableObject {
         }
 
         if profile.authType == .privateKey, !rsaWarningAcknowledged {
-            switch profileUsesRsaPrivateKey(profile) {
+            // The private-key pre-check decrypts the key (bcrypt KDF) and reads
+            // the Keychain; run it off the main actor so Connect does not
+            // freeze the UI (beachball) while inspecting an encrypted key.
+            let usesRsa = await Task.detached(priority: .userInitiated) {
+                Self.inspectRsa(
+                    profile: profile,
+                    keychain: keychain,
+                    bookmarkService: bookmarkService
+                )
+            }.value
+            switch usesRsa {
             case .some(true):
                 showRsaKeyWarning = true
                 return
@@ -270,13 +280,13 @@ final class ConnectionListViewModel: ObservableObject {
     func confirmRootConnect() {
         showRootWarning = false
         rootWarningAcknowledged = true
-        continueConnectAfterWarnings()
+        Task { await continueConnectAfterWarnings() }
     }
 
     func confirmRsaConnect() {
         showRsaKeyWarning = false
         rsaWarningAcknowledged = true
-        continueConnectAfterWarnings()
+        Task { await continueConnectAfterWarnings() }
     }
 
     // MARK: - Interactive credential prompt (Issue #213)
@@ -427,11 +437,15 @@ final class ConnectionListViewModel: ObservableObject {
         selectedProfileID = updated.id
     }
 
-    private func profileUsesRsaPrivateKey(_ profile: ConnectionProfile) -> Bool? {
+    /// Runs off the main actor; returns `.some(true)` when the private key is
+    /// RSA, `.some(false)` otherwise, and `nil` when the key cannot be
+    /// inspected (missing bookmark / undecryptable key).
+    private nonisolated static func inspectRsa(
+        profile: ConnectionProfile,
+        keychain: KeychainService,
+        bookmarkService: SecurityScopedBookmarkService
+    ) -> Bool? {
         guard let bookmark = profile.privateKeyBookmark else {
-            errorMessage = """
-            Access to the private key was denied. Open the connection settings and use Browse… to select the key again.
-            """
             return nil
         }
 
@@ -447,7 +461,6 @@ final class ConnectionListViewModel: ObservableObject {
                 return algorithm == .rsa
             }
         } catch {
-            errorMessage = error.dockBridgeUserMessage
             return nil
         }
     }
