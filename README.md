@@ -97,13 +97,16 @@ Swift bindings were generated from a different library than the one linked into 
 ## Project layout
 
 ```text
-crates/core/     Rust SFTP core
-crates/uniffi/   UniFFI bridge
-crates/cli/      Development CLI
-apps/macos/      SwiftUI macOS app
-config/          CLI default configuration
-docs/            Product and architecture docs
-scripts/         Build helpers
+crates/core/       Rust SFTP core
+crates/uniffi/     UniFFI bridge
+crates/cli/        Development CLI
+apps/macos/        SwiftUI macOS app
+config/            CLI default configuration
+docs/              Product / architecture / security docs
+scripts/           Build, packaging, and verification helpers (e2e-verify.sh, verify-*.sh)
+website/           GitHub Pages download site
+.cargo/            Rust toolchain and cargo-audit ignore policy
+.github/           Workflows, issue/PR templates, SECURITY.md, CONTRIBUTING.md
 ```
 
 ## License
