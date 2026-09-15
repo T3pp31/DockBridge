@@ -45,7 +45,9 @@ struct DockBridgeApp: App {
         }
 
         Settings {
-            SettingsView(config: settingsConfig) { config in
+            SettingsView(
+                config: AppSettingsService.shared.loadConfig()
+            ) { config in
                 AppSettingsService.shared.saveConfig(config)
                 settingsConfig = config
             }
