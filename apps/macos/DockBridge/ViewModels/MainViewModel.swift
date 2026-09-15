@@ -158,6 +158,11 @@ final class MainViewModel: ObservableObject {
 @Published var showOverwriteAsk = false
     @Published var overwriteAskDestination = ""
     private var pendingTransferAction: (() async -> Bool)?
+    /// Profile that was active when the last connection was established.
+    /// Captured on the connect transition because `connectedProfileID` is
+    /// cleared synchronously by the bridge before `.onChange(of: isConnected)`
+    /// fires for the disconnect.
+    private var lastConnectedProfileID: UUID?
     @Published private(set) var pathBookmarks: [PathBookmark] = []
 
     let bridge: RustBridgeService
@@ -305,8 +310,14 @@ final class MainViewModel: ObservableObject {
     }
 
     func onConnectionChanged(isConnected: Bool) async {
+        if isConnected {
+            // Remember which profile established this connection. The bridge
+            // clears `connectedProfileID` before the disconnect callback fires.
+            lastConnectedProfileID = connectionList.connectedProfileID
+        }
+
         guard isConnected else {
-            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID {
+            if let profileID = lastConnectedProfileID ?? connectionList.connectedProfileID {
                 connectionList.saveSessionPaths(
                     for: profileID,
                     localPath: localPath.path,
@@ -326,7 +337,7 @@ final class MainViewModel: ObservableObject {
 
         do {
             try await prepareRemoteWorkingDirectory()
-            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID,
+            if let profileID = lastConnectedProfileID ?? connectionList.connectedProfileID,
                let profile = connectionList.profiles.first(where: { $0.id == profileID }),
                let savedRemotePath = profile.lastRemotePath,
                !savedRemotePath.isEmpty {
@@ -337,7 +348,7 @@ final class MainViewModel: ObservableObject {
                 // Missing lastRemotePath keeps the initial-directory result from prepareRemoteWorkingDirectory().
             }
             await reloadRemote()
-            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID,
+            if let profileID = lastConnectedProfileID ?? connectionList.connectedProfileID,
                let profile = connectionList.profiles.first(where: { $0.id == profileID }),
                let savedLocalPath = profile.lastLocalPath,
                !savedLocalPath.isEmpty {
