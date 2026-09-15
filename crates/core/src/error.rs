@@ -121,6 +121,9 @@ pub enum SftpError {
     #[error("failed to clean up partial file at '{path}': {message}")]
     CleanupFailed { path: String, message: String },
 
+    #[error("directory is not empty: '{path}' (use recursive delete to remove its contents)")]
+    DirectoryNotEmpty { path: String },
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
