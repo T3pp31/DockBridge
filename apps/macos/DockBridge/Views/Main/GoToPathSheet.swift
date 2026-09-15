@@ -27,11 +27,11 @@ struct GoToPathSheet: View {
 
             HStack(spacing: 12) {
                 Spacer()
-                Button("Cancel", role: .cancel) {
+                Button(String(localized: "Cancel"), role: .cancel) {
                     viewModel.showGoToPath = false
                 }
                 .keyboardShortcut(.cancelAction)
-                Button("Go") {
+                Button(String(localized: "Go")) {
                     viewModel.commitGoToPath()
                     viewModel.showGoToPath = false
                 }

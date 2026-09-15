@@ -83,13 +83,13 @@ struct MainView: View {
             }
             .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         }
-        .navigationTitle("DockBridge")
+        .navigationTitle(String(localized: "DockBridge"))
         .toolbar {
             ToolbarItemGroup {
                 Button {
                     Task { await viewModel.uploadSelected() }
                 } label: {
-                    Label("Upload", systemImage: "square.and.arrow.up")
+                    Label(String(localized: "Upload"), systemImage: "square.and.arrow.up")
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.selectedLocalItems.isEmpty || !viewModel.bridge.isConnected)
@@ -97,7 +97,7 @@ struct MainView: View {
                 Button {
                     Task { await viewModel.downloadSelected() }
                 } label: {
-                    Label("Download", systemImage: "square.and.arrow.down")
+                    Label(String(localized: "Download"), systemImage: "square.and.arrow.down")
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.selectedRemoteItems.isEmpty || !viewModel.bridge.isConnected)
@@ -105,7 +105,7 @@ struct MainView: View {
                 Button {
                     viewModel.showMkdirPrompt = true
                 } label: {
-                    Label("New Folder", systemImage: "folder.badge.plus")
+                    Label(String(localized: "New Folder"), systemImage: "folder.badge.plus")
                 }
                 .disabled(!viewModel.bridge.isConnected)
             }
@@ -115,7 +115,7 @@ struct MainView: View {
                     settingsConfig = AppSettingsService.shared.loadConfig()
                     showSettings = true
                 } label: {
-                    Label("Settings", systemImage: "gearshape")
+                    Label(String(localized: "Settings"), systemImage: "gearshape")
                 }
             }
         }
@@ -212,32 +212,32 @@ struct MainView: View {
         ) {
             switch viewModel.errorRecoveryKind {
             case .editConnection:
-                Button("Edit Connection") {
+                Button(String(localized: "Edit Connection")) {
                     guard let profile = viewModel.recoveryConnectionProfile else { return }
                     viewModel.errorMessage = nil
                     editingProfile = profile
                 }
                 .disabled(!viewModel.canPerformErrorRecoveryAction)
-                Button("OK", role: .cancel) {
+                Button(String(localized: "OK"), role: .cancel) {
                     viewModel.errorMessage = nil
                 }
             case .reconnect:
-                Button("Reconnect") {
+                Button(String(localized: "Reconnect")) {
                     viewModel.reconnect()
                 }
                 .disabled(!viewModel.canPerformErrorRecoveryAction)
-                Button("OK", role: .cancel) {
+                Button(String(localized: "OK"), role: .cancel) {
                     viewModel.errorMessage = nil
                 }
             case .showInQueue:
-                Button("Show in Queue") {
+                Button(String(localized: "Show in Queue")) {
                     viewModel.revealTransferQueue()
                 }
-                Button("OK", role: .cancel) {
+                Button(String(localized: "OK"), role: .cancel) {
                     viewModel.errorMessage = nil
                 }
             case .none:
-                Button("OK", role: .cancel) {
+                Button(String(localized: "OK"), role: .cancel) {
                     viewModel.errorMessage = nil
                 }
             }

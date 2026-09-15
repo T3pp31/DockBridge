@@ -16,7 +16,7 @@ struct TransferQueueView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
             HStack(spacing: 8) {
-                Text("Transfer Queue")
+                Text(String(localized: "Transfer Queue"))
                     .font(.headline)
 
                 if activeTransferCount > 0 {
@@ -26,21 +26,21 @@ struct TransferQueueView: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Capsule().fill(DesignTokens.Status.connecting.opacity(0.2)))
-                        .accessibilityLabel("\(activeTransferCount) active transfers")
+                        .accessibilityLabel(String(format: String(localized: "%lld active transfers"), activeTransferCount))
                 }
 
                 Spacer()
 
                 if viewModel.hasFinishedTasks {
                     Menu {
-                        Button("Clear Completed") {
+                        Button(String(localized: "Clear Completed")) {
                             Task { await viewModel.clearCompleted() }
                         }
-                        Button("Clear All", role: .destructive) {
+                        Button(String(localized: "Clear All"), role: .destructive) {
                             Task { await viewModel.clearAll() }
                         }
                     } label: {
-                        Label("Clear", systemImage: "trash")
+                        Label(String(localized: "Clear"), systemImage: "trash")
                     }
                     .fixedSize()
                 }
@@ -51,7 +51,7 @@ struct TransferQueueView: View {
                 }
                 .buttonStyle(.borderless)
                 .fixedSize()
-                .help("Refresh")
+                .help(String(localized: "Refresh"))
 
                 Button {
                     isExpanded.toggle()
@@ -60,7 +60,7 @@ struct TransferQueueView: View {
                 }
                 .buttonStyle(.borderless)
                 .fixedSize()
-                .help(isExpanded ? "Collapse transfer queue" : "Expand transfer queue")
+                .help(isExpanded ? String(localized: "Collapse transfer queue") : String(localized: "Expand transfer queue"))
             }
 
             if isExpanded {
@@ -76,9 +76,9 @@ struct TransferQueueView: View {
     private var expandedContent: some View {
         if viewModel.tasks.isEmpty {
             ContentUnavailableView(
-                "No transfers",
+                String(localized: "No transfers"),
                 systemImage: "arrow.up.arrow.down.circle",
-                description: Text("Upload or download files to see progress here.")
+                description: Text(String(localized: "Upload or download files to see progress here."))
             )
             .frame(maxWidth: .infinity, minHeight: WindowLayout.transferQueueMinHeight)
         } else {
@@ -91,20 +91,20 @@ struct TransferQueueView: View {
 
     private var transferTable: some View {
         Table(viewModel.tasks) {
-            TableColumn("Direction") { task in
+            TableColumn(String(localized: "Direction")) { task in
                 Image(systemName: task.direction == .upload ? "arrow.up" : "arrow.down")
-                    .help(task.direction == .upload ? "Upload" : "Download")
-                    .accessibilityLabel(task.direction == .upload ? "Upload" : "Download")
+                    .help(task.direction == .upload ? String(localized: "Upload") : String(localized: "Download"))
+                    .accessibilityLabel(task.direction == .upload ? String(localized: "Upload") : String(localized: "Download"))
             }
-            TableColumn("Local") { task in
+            TableColumn(String(localized: "Local")) { task in
                 Text((task.localPath as NSString).lastPathComponent)
                     .help(task.localPath)
             }
-            TableColumn("Remote") { task in
+            TableColumn(String(localized: "Remote")) { task in
                 Text((task.remotePath as NSString).lastPathComponent)
                     .help(task.remotePath)
             }
-            TableColumn("Status") { task in
+            TableColumn(String(localized: "Status")) { task in
                 statusView(for: task)
             }
             TableColumn("") { task in
@@ -116,8 +116,8 @@ struct TransferQueueView: View {
                             Image(systemName: "arrow.clockwise")
                         }
                         .buttonStyle(.borderless)
-                        .help("Retry")
-                        .accessibilityLabel("Retry")
+                        .help(String(localized: "Retry"))
+                        .accessibilityLabel(String(localized: "Retry"))
                     }
                     if canCancel(task: task) {
                         Button {
@@ -126,8 +126,8 @@ struct TransferQueueView: View {
                             Image(systemName: "xmark")
                         }
                         .buttonStyle(.borderless)
-                        .help("Cancel")
-                        .accessibilityLabel("Cancel")
+                        .help(String(localized: "Cancel"))
+                        .accessibilityLabel(String(localized: "Cancel"))
                     }
                 }
             }
@@ -157,11 +157,11 @@ struct TransferQueueView: View {
                     .truncationMode(.tail)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("In progress, \(progressLabel)")
+            .accessibilityLabel(String(format: String(localized: "In progress, %@"), progressLabel))
         } else if case .failed(let message) = task.status {
             let summary = DockBridgeError.friendlyMessage(for: message)
             VStack(alignment: .leading, spacing: 2) {
-                Label("Failed", systemImage: "xmark.circle.fill")
+                Label(String(localized: "Failed"), systemImage: "xmark.circle.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(DesignTokens.Status.error)
                     .accessibilityHidden(true)
@@ -172,7 +172,7 @@ struct TransferQueueView: View {
                     .truncationMode(.tail)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Failed: \(summary). \(message)")
+            .accessibilityLabel(String(format: String(localized: "Failed: %@. %@"), summary, message))
             .help(message)
         } else {
             statusLabelView(for: task.status)
@@ -183,21 +183,21 @@ struct TransferQueueView: View {
     private func statusLabelView(for status: TransferStatusRecord) -> some View {
         switch status {
         case .pending:
-            Label("Pending", systemImage: "clock")
-                .accessibilityLabel("Pending")
+            Label(String(localized: "Pending"), systemImage: "clock")
+                .accessibilityLabel(String(localized: "Pending"))
         case .inProgress:
-            Label("In Progress", systemImage: "arrow.up.arrow.down.circle")
-                .accessibilityLabel("In progress")
+            Label(String(localized: "In Progress"), systemImage: "arrow.up.arrow.down.circle")
+                .accessibilityLabel(String(localized: "In progress"))
         case .completed:
-            Label("Completed", systemImage: "checkmark.circle.fill")
+            Label(String(localized: "Completed"), systemImage: "checkmark.circle.fill")
                 .foregroundStyle(DesignTokens.Status.success)
-                .accessibilityLabel("Completed")
+                .accessibilityLabel(String(localized: "Completed"))
         case .failed:
             EmptyView()
         case .cancelled:
-            Label("Cancelled", systemImage: "minus.circle")
+            Label(String(localized: "Cancelled"), systemImage: "minus.circle")
                 .foregroundStyle(DesignTokens.Status.disconnected)
-                .accessibilityLabel("Cancelled")
+                .accessibilityLabel(String(localized: "Cancelled"))
         }
     }
 

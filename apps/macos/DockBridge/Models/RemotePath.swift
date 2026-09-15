@@ -6,7 +6,7 @@ enum RemoteEntryNameError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidCharacters:
-            return "The name cannot contain '/', '..', or null characters."
+            return String(localized: "The name cannot contain '/', '..', or null characters.")
         }
     }
 }
@@ -17,7 +17,8 @@ enum RemotePathError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidPath(let path):
-            return "The remote path '\(path)' contains an invalid '..', or null character."
+            let format = String(localized: "The remote path '%@' contains an invalid '..', or null character.")
+            return String(format: format, path)
         }
     }
 }

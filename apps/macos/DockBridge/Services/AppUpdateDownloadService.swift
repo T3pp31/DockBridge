@@ -83,19 +83,19 @@ extension AppUpdateDownloadError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidDownloadResponse:
-            return "The update download could not be completed."
+            return String(localized: "The update download could not be completed.")
         case .checksumMissing:
-            return "The update checksum is not available. Download the update manually from the release page."
+            return String(localized: "The update checksum is not available. Download the update manually from the release page.")
         case .checksumFetchFailed:
-            return "The update checksum could not be verified."
+            return String(localized: "The update checksum could not be verified.")
         case .checksumMismatch:
-            return "The downloaded update does not match the published checksum."
+            return String(localized: "The downloaded update does not match the published checksum.")
         case .mountFailed:
-            return "The update disk image could not be opened."
+            return String(localized: "The update disk image could not be opened.")
         case .unmountFailed:
-            return "The update disk image could not be closed."
+            return String(localized: "The update disk image could not be closed.")
         case .appBundleNotFound:
-            return "The update disk image does not contain the DockBridge app."
+            return String(localized: "The update disk image does not contain the DockBridge app.")
         case .signatureVerificationFailed(let error):
             return signatureVerificationMessage(for: error)
         }
@@ -104,19 +104,19 @@ extension AppUpdateDownloadError: LocalizedError {
     private func signatureVerificationMessage(for error: ReleaseCodeSignatureVerifierError) -> String {
         switch error {
         case .unsignedBundle:
-            return "The update is not properly signed."
+            return String(localized: "The update is not properly signed.")
         case .bundleIdentifierMismatch:
-            return "The update app bundle identifier does not match DockBridge."
+            return String(localized: "The update app bundle identifier does not match DockBridge.")
         case .missingDeveloperIDSignature:
-            return "The update is not signed with a Developer ID certificate."
+            return String(localized: "The update is not signed with a Developer ID certificate.")
         case .teamIdentifierMismatch:
-            return "The update was signed by an unexpected Apple Developer team."
+            return String(localized: "The update was signed by an unexpected Apple Developer team.")
         case .certificateFingerprintMismatch:
-            return "The update signing certificate does not match the expected release certificate."
+            return String(localized: "The update signing certificate does not match the expected release certificate.")
         case .notarizationMissing:
-            return "The update is not notarized by Apple."
+            return String(localized: "The update is not notarized by Apple.")
         case .misconfiguredSignaturePolicy:
-            return "Update signature policy is misconfigured. Expected team identifier and certificate fingerprint must both be set when signed updates are required."
+            return String(localized: "Update signature policy is misconfigured. Expected team identifier and certificate fingerprint must both be set when signed updates are required.")
         }
     }
 }

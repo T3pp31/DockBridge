@@ -44,9 +44,8 @@ final class TransferProgressFormatterTests: XCTestCase {
         // When: summary is generated
         let summary = TransferProgressFormatter.activeTransferSummary(for: tasks)
 
-        // Then: summary includes the progress prefix and slash label
+        // Then: summary includes a progress label with the slash separator
         XCTAssertNotNil(summary)
-        XCTAssertTrue(summary?.hasPrefix("Transferring:") == true)
         XCTAssertTrue(summary?.contains("/") == true)
     }
 
@@ -77,7 +76,15 @@ final class TransferProgressFormatterTests: XCTestCase {
         let summary = TransferProgressFormatter.activeTransferSummary(for: tasks)
 
         // Then: additional in-progress count is appended
-        XCTAssertEqual(summary?.contains("+1 more"), true)
+        // +1 additional task must be reflected; wording is localized.
+        if summary == nil {
+            XCTFail("expected an active summary")
+        } else {
+            XCTAssertTrue(
+                summary?.contains("+1 more") == true || summary?.contains("ほか 1 件") == true,
+                "additional count should appear in the summary"
+            )
+        }
     }
 
     func testActiveTransferSummaryReturnsNilWithoutInProgressTasks() {

@@ -11,20 +11,20 @@ struct UpdateAvailableView: View {
     let onLater: () -> Void
 
     var body: some View {
-        DialogCard(title: "Update Available") {
-            Text("A newer version of DockBridge is available.")
+        DialogCard(title: String(localized: "Update Available")) {
+            Text(String(localized: "A newer version of DockBridge is available."))
                 .fixedSize(horizontal: false, vertical: true)
 
-            DialogDetailSection("Version") {
+            DialogDetailSection(String(localized: "Version")) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Current: \(currentVersion)")
-                    Text("Latest: \(update.version)")
+                    Text(String(format: String(localized: "Current: %@"), currentVersion))
+                    Text(String(format: String(localized: "Latest: %@"), update.version))
                         .bold()
                 }
             }
 
             if let releaseNotes, !releaseNotes.isEmpty {
-                DialogDetailSection("Release Notes") {
+                DialogDetailSection(String(localized: "Release Notes")) {
                     ScrollView {
                         Text(releaseNotes)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -58,13 +58,13 @@ struct UpdateAvailableView: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text("Downloading and verifying update...")
+                    Text(String(localized: "Downloading and verifying update..."))
                         .foregroundStyle(.secondary)
                         .font(.callout)
                 }
             }
         } footer: {
-            Button("Later", role: .cancel, action: onLater)
+            Button(String(localized: "Later"), role: .cancel, action: onLater)
                 .disabled(isDownloading)
             Button(inAppUpdateInstallationEnabled ? "Download" : "Open Release Page", action: onDownload)
                 .keyboardShortcut(.defaultAction)

@@ -14,11 +14,12 @@ final class KnownHostsErrorMessageTests: XCTestCase {
     }
 
     func testConnectionStatusTitles() {
-        XCTAssertEqual(ConnectionStatus.disconnected.statusTitle, "Disconnected")
-        XCTAssertEqual(
-            ConnectionStatus.connected(endpoint: "user@host:22").statusTitle,
-            "Connected: user@host:22"
-        )
+        // The title is localized; assert the state transition is reflected
+        // rather than a specific language string.
+        XCTAssertFalse(ConnectionStatus.disconnected.statusTitle.isEmpty)
+        let connectedTitle = ConnectionStatus.connected(endpoint: "user@host:22").statusTitle
+        XCTAssertFalse(connectedTitle.isEmpty)
+        XCTAssertTrue(connectedTitle.contains("user@host:22"))
     }
 
     func testPermissionDeniedErrorMessageMentionsRemoteDirectory() {

@@ -44,30 +44,30 @@ struct LocalPanePathBar: View {
                 Button(action: viewModel.navigateLocalBack) {
                     Image(systemName: "chevron.left")
                 }
-                .help("Back")
+                .help(String(localized: "Back"))
                 .disabled(!viewModel.canNavigateLocalBack)
 
                 Button(action: viewModel.navigateLocalForward) {
                     Image(systemName: "chevron.right")
                 }
-                .help("Forward")
+                .help(String(localized: "Forward"))
                 .disabled(!viewModel.canNavigateLocalForward)
 
                 Button(action: viewModel.navigateLocalUp) {
                     Image(systemName: "arrow.up.circle")
                 }
-                .help("Parent directory")
+                .help(String(localized: "Parent directory"))
                 .disabled(!viewModel.canNavigateLocalUp)
 
                 Button(action: viewModel.reloadLocal) {
                     Image(systemName: "arrow.clockwise")
                 }
-                .help("Refresh")
+                .help(String(localized: "Refresh"))
 
                 Button(action: { viewModel.beginGoToPath(.local) }) {
                     Image(systemName: "line.3.horizontal")
                 }
-                .help("Go to Path")
+                .help(String(localized: "Go to Path"))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -111,19 +111,19 @@ struct RemotePanePathBar: View {
                 Button(action: viewModel.navigateRemoteBack) {
                     Image(systemName: "chevron.left")
                 }
-                .help("Back")
+                .help(String(localized: "Back"))
                 .disabled(!viewModel.bridge.isConnected || !viewModel.canNavigateRemoteBack)
 
                 Button(action: viewModel.navigateRemoteForward) {
                     Image(systemName: "chevron.right")
                 }
-                .help("Forward")
+                .help(String(localized: "Forward"))
                 .disabled(!viewModel.bridge.isConnected || !viewModel.canNavigateRemoteForward)
 
                 Button(action: viewModel.navigateRemoteUp) {
                     Image(systemName: "arrow.up.circle")
                 }
-                .help("Parent directory")
+                .help(String(localized: "Parent directory"))
                 .disabled(!viewModel.bridge.isConnected || !viewModel.canNavigateRemoteUp)
 
                 Button {
@@ -131,13 +131,13 @@ struct RemotePanePathBar: View {
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .help("Refresh")
+                .help(String(localized: "Refresh"))
                 .disabled(!viewModel.bridge.isConnected)
 
                 Button(action: { viewModel.beginGoToPath(.remote) }) {
                     Image(systemName: "line.3.horizontal")
                 }
-                .help("Go to Path")
+                .help(String(localized: "Go to Path"))
                 .disabled(!viewModel.bridge.isConnected)
             }
         }

@@ -123,6 +123,9 @@ jobs:
       - name: Generate UniFFI bindings
         run: ./scripts/generate-uniffi.sh
 
+      - name: Verify localization catalog (en + ja)
+        run: ./scripts/verify-localization.sh
+
       - name: Verify committed Swift bindings are up to date
         run: |
           if ! git diff --exit-code apps/macos/DockBridge/Generated/DockBridgeUniffi.swift; then
