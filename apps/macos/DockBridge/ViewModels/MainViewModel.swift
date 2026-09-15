@@ -155,6 +155,10 @@ final class MainViewModel: ObservableObject {
     @Published var renameText = ""
     @Published var showMkdirPrompt = false
     @Published var mkdirName = ""
+    // Local pane operations (Issue #341)
+    @Published var localRenameTarget: LocalFileItem? = nil
+    @Published var showLocalMkdirPrompt = false
+    @Published var localMkdirName = ""
 @Published var showOverwriteAsk = false
     @Published var overwriteAskDestination = ""
     private var pendingTransferAction: (() async -> Bool)?
@@ -916,6 +920,69 @@ final class MainViewModel: ObservableObject {
             await reloadRemote()
         } catch {
             errorMessage = error.dockBridgeUserMessage
+        }
+    }
+
+    // MARK: - Local pane operations (Issue #341)
+
+    /// Moves the given local items to the Trash (recoverable).
+    func trashLocalItems(_ items: [LocalFileItem]) {
+        for item in items where !item.isParentDirectory {
+            do {
+                try FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
+            } catch {
+                AppLogging.ui.error("failed to trash local item: \(error.localizedDescription, privacy: .public)")
+                errorMessage = error.localizedDescription
+            }
+        }
+        reloadLocal()
+    }
+
+    func beginLocalRename(item: LocalFileItem) {
+        localRenameTarget = item
+        renameText = item.name
+    }
+
+    func commitLocalRename() async {
+        guard let target = localRenameTarget else { return }
+        let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard RemotePath.isValidEntryName(name) else {
+            errorMessage = RemoteEntryNameError.invalidCharacters.localizedDescription
+            return
+        }
+        let newURL = target.url.deletingLastPathComponent()
+            .appendingPathComponent(name)
+        do {
+            try FileManager.default.moveItem(at: target.url, to: newURL)
+            localRenameTarget = nil
+            renameText = ""
+            reloadLocal()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func beginLocalMkdir() {
+        localMkdirName = ""
+        showLocalMkdirPrompt = true
+    }
+
+    func commitLocalMkdir() {
+        let name = localMkdirName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard RemotePath.isValidEntryName(name) else {
+            errorMessage = RemoteEntryNameError.invalidCharacters.localizedDescription
+            return
+        }
+        do {
+            try FileManager.default.createDirectory(
+                at: localPath.appendingPathComponent(name),
+                withIntermediateDirectories: false
+            )
+            localMkdirName = ""
+            showLocalMkdirPrompt = false
+            reloadLocal()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
