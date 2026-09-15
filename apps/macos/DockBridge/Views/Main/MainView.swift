@@ -174,7 +174,8 @@ struct MainView: View {
                             await updateCheck.downloadUpdate()
                         }
                     },
-                    onLater: updateCheck.skipUpdate
+                    onLater: updateCheck.skipUpdate,
+                    onSkipVersion: updateCheck.skipVersion
                 )
             }
         }
