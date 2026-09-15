@@ -130,7 +130,12 @@ struct MainView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
-            SettingsView(config: settingsConfig) { config in
+            // Reload the latest persisted config every time the sheet opens so
+            // ⌘, or the toolbar gear never shows a stale copy (settings saved
+            // through another path used to be rolled back).
+            SettingsView(
+                config: AppSettingsService.shared.loadConfig()
+            ) { config in
                 AppSettingsService.shared.saveConfig(config)
                 showSettings = false
             }
