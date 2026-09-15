@@ -15,7 +15,7 @@ use dockbridge_core::{
     is_connection_lost_message, validate_transfer_chunk_size, AppConfig, AuthType,
     ConnectionProfile, HostKeyPrompt, KnownHostsManager, PrivateKeyAlgorithm, RemoteFile,
     SecretPassword, SftpClient, SshSession, TransferDirection, TransferManager, TransferStatus,
-    TransferTask, DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
+    TransferTask, DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH, DEFAULT_TRANSFER_UPLOAD_PIPELINE_DEPTH,
 };
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
@@ -253,6 +253,7 @@ impl DockBridgeClient {
             directory_walk_max_depth: app_config.directory_walk_max_depth,
             directory_walk_max_total_bytes: app_config.directory_walk_max_total_bytes,
             transfer_download_pipeline_depth: DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
+            transfer_upload_pipeline_depth: DEFAULT_TRANSFER_UPLOAD_PIPELINE_DEPTH,
         };
         let known_hosts_manager =
             KnownHostsManager::load(config.known_hosts_path()).map_err(map_error)?;

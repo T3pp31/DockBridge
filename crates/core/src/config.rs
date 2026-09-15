@@ -28,6 +28,17 @@ pub const MAX_TRANSFER_DOWNLOAD_PIPELINE_DEPTH: usize = 256;
 /// memory bounded (depth x chunk size).
 pub const DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH: usize = 64;
 
+/// Minimum concurrent in-flight WRITE requests during an upload.
+pub const MIN_TRANSFER_UPLOAD_PIPELINE_DEPTH: usize = 1;
+/// Maximum concurrent in-flight WRITE requests during an upload.
+pub const MAX_TRANSFER_UPLOAD_PIPELINE_DEPTH: usize = 256;
+/// Default concurrent in-flight WRITE requests during an upload.
+///
+/// Mirrors OpenSSH sftp(1) default of ~64 outstanding requests (upload twin
+/// of DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH), hiding per-request RTT while
+/// keeping memory bounded.
+pub const DEFAULT_TRANSFER_UPLOAD_PIPELINE_DEPTH: usize = 64;
+
 /// Resource limits applied while recursively walking local or remote directory trees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DirectoryWalkLimits {
@@ -65,6 +76,11 @@ pub struct AppConfig {
     /// Peak buffered memory is roughly `depth × ~256 KiB` (SFTP packet ceiling).
     #[serde(default = "default_transfer_download_pipeline_depth")]
     pub transfer_download_pipeline_depth: usize,
+    /// Maximum number of concurrent in-flight WRITE requests during an
+    /// upload (pipelined SFTP writes hide per-request round-trip latency).
+    /// Peak buffered memory is roughly `depth × ~256 KiB` (SFTP packet ceiling).
+    #[serde(default = "default_transfer_upload_pipeline_depth")]
+    pub transfer_upload_pipeline_depth: usize,
     /// Path to the DockBridge known hosts JSON store.
     pub known_hosts_path: PathBuf,
     /// Path to the OpenSSH `known_hosts` file merged on connect.
@@ -98,6 +114,7 @@ impl Default for AppConfig {
             transfer_retry_count: 3,
             transfer_chunk_size_bytes: DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
             transfer_download_pipeline_depth: DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
+            transfer_upload_pipeline_depth: DEFAULT_TRANSFER_UPLOAD_PIPELINE_DEPTH,
             known_hosts_path: default_known_hosts_path(),
             openssh_known_hosts_path: default_openssh_known_hosts_path(),
             merge_openssh_known_hosts_on_connect: true,
@@ -139,6 +156,8 @@ impl AppConfig {
             validate_transfer_chunk_size(config.transfer_chunk_size_bytes)?;
         config.transfer_download_pipeline_depth =
             validate_transfer_download_pipeline_depth(config.transfer_download_pipeline_depth);
+        config.transfer_upload_pipeline_depth =
+            validate_transfer_upload_pipeline_depth(config.transfer_upload_pipeline_depth);
         Ok(config)
     }
 
@@ -192,6 +211,24 @@ pub fn clamp_transfer_download_pipeline_depth(depth: usize) -> usize {
     depth.clamp(
         MIN_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
         MAX_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
+    )
+}
+
+/// Validates a transfer upload pipeline depth from configuration.
+///
+/// Alias of `clamp_transfer_upload_pipeline_depth`; kept for callers that
+/// load config from TOML.
+pub fn validate_transfer_upload_pipeline_depth(depth: usize) -> usize {
+    clamp_transfer_upload_pipeline_depth(depth)
+}
+
+/// Clamps a transfer upload pipeline depth to the allowed range
+/// (`MIN_TRANSFER_UPLOAD_PIPELINE_DEPTH` ..=
+/// `MAX_TRANSFER_UPLOAD_PIPELINE_DEPTH`).
+pub fn clamp_transfer_upload_pipeline_depth(depth: usize) -> usize {
+    depth.clamp(
+        MIN_TRANSFER_UPLOAD_PIPELINE_DEPTH,
+        MAX_TRANSFER_UPLOAD_PIPELINE_DEPTH,
     )
 }
 
@@ -276,6 +313,10 @@ fn default_directory_walk_max_total_bytes() -> u64 {
 
 fn default_transfer_download_pipeline_depth() -> usize {
     DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH
+}
+
+fn default_transfer_upload_pipeline_depth() -> usize {
+    DEFAULT_TRANSFER_UPLOAD_PIPELINE_DEPTH
 }
 
 /// Ensures the parent directory for the known hosts file exists.
@@ -455,6 +496,31 @@ mod tests {
         );
         // The default is a concrete, in-range value (OpenSSH sftp's ~64).
         assert_eq!(DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH, 64);
+    }
+
+    #[test]
+    fn clamp_transfer_upload_pipeline_depth_enforces_bounds() {
+        // Given: pipeline depths at and beyond the allowed range
+        // When: clamp_transfer_upload_pipeline_depth is called
+        // Then: values are clamped to the allowed range
+        assert_eq!(
+            clamp_transfer_upload_pipeline_depth(0),
+            MIN_TRANSFER_UPLOAD_PIPELINE_DEPTH
+        );
+        assert_eq!(
+            clamp_transfer_upload_pipeline_depth(MIN_TRANSFER_UPLOAD_PIPELINE_DEPTH),
+            MIN_TRANSFER_UPLOAD_PIPELINE_DEPTH
+        );
+        assert_eq!(
+            clamp_transfer_upload_pipeline_depth(MAX_TRANSFER_UPLOAD_PIPELINE_DEPTH),
+            MAX_TRANSFER_UPLOAD_PIPELINE_DEPTH
+        );
+        assert_eq!(
+            clamp_transfer_upload_pipeline_depth(MAX_TRANSFER_UPLOAD_PIPELINE_DEPTH + 1),
+            MAX_TRANSFER_UPLOAD_PIPELINE_DEPTH
+        );
+        // The default is a concrete, in-range value (OpenSSH sftp's ~64).
+        assert_eq!(DEFAULT_TRANSFER_UPLOAD_PIPELINE_DEPTH, 64);
     }
 
     #[test]
