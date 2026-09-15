@@ -18,7 +18,7 @@
 - Drag and drop
 - chmod, hidden files, symlinks
 - Encrypted connection-profile storage (AES-GCM envelope + Keychain master key) — implemented; see [security.md](security.md#connection-profiles-profilesjson)
-- Developer ID signing and notarization for release DMGs — planned for v1.0; see [security.md](security.md#code-signing-and-distribution)
+- [ ] Developer ID signing and notarization for release DMGs — planned; tracked in [#391](https://github.com/T3pp31/DockBridge/issues/391)
 
 ## v0.3
 
