@@ -162,6 +162,24 @@ struct ConnectionListView: View {
                 onCancel: viewModel.cancelCredentialPrompt
             )
         }
+        .confirmationDialog(
+            "Delete Profile?",
+            isPresented: Binding(
+                get: { viewModel.confirmDeleteProfile != nil },
+                set: { if !$0 { viewModel.confirmDeleteProfile = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: viewModel.confirmDeleteProfile
+        ) { profile in
+            Button("Delete", role: .destructive) {
+                viewModel.delete(profile: profile)
+            }
+            Button("Cancel", role: .cancel) {
+                viewModel.confirmDeleteProfile = nil
+            }
+        } message: { profile in
+            Text("Delete \"\(profile.name)\"? The saved password/passphrase for this profile will also be removed from the Keychain.")
+        }
     }
 
     private struct CredentialPromptItem: Identifiable {
@@ -218,7 +236,7 @@ struct ConnectionListView: View {
             }
 
             Button("Delete", role: .destructive) {
-                viewModel.delete(profile: profile)
+                viewModel.requestDelete(profile: profile)
             }
             .disabled(isConnectedProfile(profile))
         }
