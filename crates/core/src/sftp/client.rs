@@ -522,7 +522,7 @@ async fn upload_from_reader(
         }
 
         if let Err(err) = partial
-            .remote_file_mut()
+            .remote_file_mut()?
             .write_all(&buffer[..bytes_read])
             .await
         {
@@ -673,11 +673,12 @@ where
         (self.on_progress)(transferred);
     }
 
-    fn start_pending_write(&mut self, buf: &[u8]) {
-        let mut file = self
-            .file
-            .take()
-            .expect("partial file handle must be available");
+    fn start_pending_write(&mut self, buf: &[u8]) -> Option<io::Error> {
+        // `file` is guaranteed to be present by the `AsyncWrite` contract:
+        // `poll_write` only calls this when idle, and every completed poll
+        // restores the handle via `poll_pending`. Still, tolerate a missing
+        // handle as an I/O error instead of panicking on an index invariant.
+        let mut file = self.file.take()?;
         let offset = self.write_pos;
         let data = buf.to_vec();
         self.pending_len = Some(buf.len());
@@ -699,19 +700,19 @@ where
             // Always return the handle so the writer can restore it on error.
             (file, result)
         }));
+        None
     }
 
     fn poll_pending(
         self: &mut Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Result<usize, io::Error>> {
-        match self
-            .pending_write
-            .as_mut()
-            .expect("pending write set")
-            .as_mut()
-            .poll(cx)
-        {
+        let Some(pending_write) = self.pending_write.as_mut() else {
+            return Poll::Ready(Err(io::Error::other(
+                DownloadFlowError::Write("pending write not set".to_string()).to_string(),
+            )));
+        };
+        match pending_write.as_mut().poll(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready((file, Ok(()))) => {
                 let len = self.pending_len.take().unwrap_or(0);
@@ -770,7 +771,9 @@ where
             )));
         }
 
-        self.start_pending_write(buf);
+        if let Some(err) = self.start_pending_write(buf) {
+            return Poll::Ready(Err(err));
+        }
         self.poll_pending(cx)
     }
 
@@ -819,15 +822,19 @@ where
 const PARTIAL_SUFFIX_BYTES: usize = 16;
 const MAX_PARTIAL_CREATE_ATTEMPTS: usize = 5;
 
-fn random_partial_suffix() -> String {
+fn random_partial_suffix() -> Result<String, SftpError> {
     let mut bytes = [0_u8; PARTIAL_SUFFIX_BYTES];
     rand::rng()
         .try_fill_bytes(&mut bytes)
-        .expect("failed to generate random partial suffix");
-    bytes
+        .map_err(|err| SftpError::UploadFailed {
+            local: String::new(),
+            remote: String::new(),
+            message: format!("failed to generate random partial suffix: {err}"),
+        })?;
+    Ok(bytes
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
+        .collect::<String>())
 }
 
 fn partial_file_name(suffix: &str) -> String {
@@ -875,10 +882,14 @@ impl<'a> PartialRemoteTransfer<'a> {
         })
     }
 
-    fn remote_file_mut(&mut self) -> &mut RemoteFileHandle {
+    fn remote_file_mut(&mut self) -> Result<&mut RemoteFileHandle, SftpError> {
         self.remote_file
             .as_mut()
-            .expect("partial remote file handle must exist before commit")
+            .ok_or_else(|| SftpError::UploadFailed {
+                local: self.local.clone(),
+                remote: self.remote.clone(),
+                message: "partial remote file handle missing before commit".to_string(),
+            })
     }
 
     async fn shutdown(&mut self) -> Result<(), SftpError> {
@@ -1161,7 +1172,7 @@ async fn create_exclusive_remote_partial(
     remote: &str,
 ) -> Result<(String, RemoteFileHandle), SftpError> {
     for _ in 0..MAX_PARTIAL_CREATE_ATTEMPTS {
-        let suffix = random_partial_suffix();
+        let suffix = random_partial_suffix()?;
         let partial_path = join_remote_path(parent, Path::new(&partial_file_name(&suffix)))?;
         match client
             .sftp()
@@ -1196,7 +1207,7 @@ async fn create_exclusive_local_partial(
     parent: &Path,
 ) -> Result<(PathBuf, tokio::fs::File), SftpError> {
     for _ in 0..MAX_PARTIAL_CREATE_ATTEMPTS {
-        let suffix = random_partial_suffix();
+        let suffix = random_partial_suffix()?;
         let partial_path = partial_local_path_for_suffix(parent, &suffix);
         match open_exclusive_local_file(&partial_path).await {
             Ok(file) => return Ok((partial_path, file)),
@@ -1810,7 +1821,7 @@ mod tests {
 
     #[test]
     fn random_partial_suffix_is_32_hex_chars() {
-        let suffix = random_partial_suffix();
+        let suffix = random_partial_suffix().unwrap();
         assert_eq!(suffix.len(), 32);
         assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
