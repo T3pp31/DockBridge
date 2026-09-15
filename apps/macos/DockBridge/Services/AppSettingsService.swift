@@ -80,15 +80,33 @@ final class AppSettingsService: @unchecked Sendable {
     }
 
     func loadConfig() -> AppConfig {
+        // Integer fields are read clamp-safe: `UInt64(Int)` / `UInt32(Int)`
+        // trap at runtime on negative or out-of-range values, which a broken
+        // plist or a different app version can produce. Clamp instead of
+        // crashing so the app always launches.
+        let minChunk = 4_096
+        let maxChunk = 8_388_608
+
         AppConfig(
-            connectionTimeoutSecs: UInt64(defaults.integer(forKey: AppSettingsKeys.connectionTimeoutSecs)),
-            sessionHealthCheckIntervalSecs: UInt64(
-                defaults.integer(forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs)
+            connectionTimeoutSecs: UInt64(
+                clamping: max(1, defaults.integer(forKey: AppSettingsKeys.connectionTimeoutSecs))
             ),
-            transferRetryCount: UInt32(defaults.integer(forKey: AppSettingsKeys.transferRetryCount)),
+            sessionHealthCheckIntervalSecs: UInt64(
+                clamping: max(1, defaults.integer(forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs))
+            ),
+            transferRetryCount: UInt32(
+                clamping: max(0, defaults.integer(forKey: AppSettingsKeys.transferRetryCount))
+            ),
             transferChunkSizeBytes: UInt64(
-                defaults.object(forKey: AppSettingsKeys.transferChunkSizeBytes) as? Int
-                    ?? Int(AppConfig.default.transferChunkSizeBytes)
+                clamping: min(
+                    maxChunk,
+                    max(
+                        minChunk,
+                        defaults.integer(forKey: AppSettingsKeys.transferChunkSizeBytes) == 0
+                            ? Int(AppConfig.default.transferChunkSizeBytes)
+                            : defaults.integer(forKey: AppSettingsKeys.transferChunkSizeBytes)
+                    )
+                )
             ),
             defaultLocalPath: defaults.string(forKey: AppSettingsKeys.defaultLocalPath)
                 ?? AppConfig.default.defaultLocalPath,
@@ -106,16 +124,25 @@ final class AppSettingsService: @unchecked Sendable {
                 forKey: AppSettingsKeys.failConnectOnOpensshMergeError
             ),
             directoryWalkMaxFiles: UInt64(
-                defaults.object(forKey: AppSettingsKeys.directoryWalkMaxFiles) as? Int
-                    ?? Int(AppConfig.default.directoryWalkMaxFiles)
+                clamping: max(
+                    0,
+                    defaults.object(forKey: AppSettingsKeys.directoryWalkMaxFiles) as? Int
+                        ?? Int(AppConfig.default.directoryWalkMaxFiles)
+                )
             ),
             directoryWalkMaxDepth: UInt32(
-                defaults.object(forKey: AppSettingsKeys.directoryWalkMaxDepth) as? Int
-                    ?? Int(AppConfig.default.directoryWalkMaxDepth)
+                clamping: max(
+                    0,
+                    defaults.object(forKey: AppSettingsKeys.directoryWalkMaxDepth) as? Int
+                        ?? Int(AppConfig.default.directoryWalkMaxDepth)
+                )
             ),
             directoryWalkMaxTotalBytes: UInt64(
-                defaults.object(forKey: AppSettingsKeys.directoryWalkMaxTotalBytes) as? Int
-                    ?? Int(AppConfig.default.directoryWalkMaxTotalBytes)
+                clamping: max(
+                    0,
+                    defaults.object(forKey: AppSettingsKeys.directoryWalkMaxTotalBytes) as? Int
+                        ?? Int(AppConfig.default.directoryWalkMaxTotalBytes)
+                )
             ),
             transferOverwritePolicy: TransferOverwritePolicy(
                 rawValue: defaults.string(forKey: AppSettingsKeys.transferOverwritePolicy)
