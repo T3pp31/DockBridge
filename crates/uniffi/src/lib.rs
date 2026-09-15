@@ -17,6 +17,8 @@ use dockbridge_core::{
     SecretPassword, SftpClient, SshSession, TransferDirection, TransferManager, TransferStatus,
     TransferTask, DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
 };
+#[cfg(test)]
+use dockbridge_core::{MAX_TRANSFER_CHUNK_SIZE_BYTES, MIN_TRANSFER_CHUNK_SIZE_BYTES};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -671,4 +673,122 @@ fn inspect_private_key_algorithm(
         PrivateKeyAlgorithm::Rsa => PrivateKeyAlgorithmRecord::Rsa,
         PrivateKeyAlgorithm::Other(label) => PrivateKeyAlgorithmRecord::Other { label },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(status: TransferStatus) -> TransferTask {
+        TransferTask {
+            id: 1,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/local.txt"),
+            remote_path: "/remote.txt".to_string(),
+            status,
+            bytes_transferred: 0,
+            total_bytes: 100,
+        }
+    }
+
+    #[test]
+    fn transfer_task_record_maps_all_statuses() {
+        // Given: every TransferStatus variant
+        // When: converted to TransferTaskRecord
+        // Then: each maps to the corresponding TransferStatusRecord variant
+        let cases = [
+            (TransferStatus::Pending, TransferStatusRecord::Pending),
+            (TransferStatus::InProgress, TransferStatusRecord::InProgress),
+            (TransferStatus::Completed, TransferStatusRecord::Completed),
+            (TransferStatus::Cancelled, TransferStatusRecord::Cancelled),
+        ];
+        for (status, expected) in cases {
+            let record = to_transfer_task_record(task(status));
+            assert!(
+                std::mem::discriminant(&record.status) == std::mem::discriminant(&expected),
+                "status mapping mismatch"
+            );
+        }
+
+        let failed = to_transfer_task_record(task(TransferStatus::Failed {
+            message: "boom".to_string(),
+        }));
+        match failed.status {
+            TransferStatusRecord::Failed { message } => assert_eq!(message, "boom"),
+            _ => panic!("expected Failed status in record"),
+        }
+    }
+
+    #[test]
+    fn transfer_task_record_maps_direction() {
+        // Given: an upload and a download task
+        // When: converted to TransferTaskRecord
+        // Then: directions round-trip to the correct record variants
+        let upload = to_transfer_task_record(task(TransferStatus::Pending));
+        assert!(
+            std::mem::discriminant(&upload.direction)
+                == std::mem::discriminant(&TransferDirectionRecord::Upload)
+        );
+
+        let mut t = task(TransferStatus::Pending);
+        t.direction = TransferDirection::Download;
+        let download = to_transfer_task_record(t);
+        assert!(
+            std::mem::discriminant(&download.direction)
+                == std::mem::discriminant(&TransferDirectionRecord::Download)
+        );
+    }
+
+    #[test]
+    fn chunk_size_below_minimum_is_raised_to_minimum() {
+        // Given: a chunk size below the 4 KiB minimum
+        // When: validated
+        // Then: it is raised to the minimum instead of erroring
+        let validated = validate_transfer_chunk_size(1).unwrap();
+        assert_eq!(validated, MIN_TRANSFER_CHUNK_SIZE_BYTES);
+        let validated = validate_transfer_chunk_size(MIN_TRANSFER_CHUNK_SIZE_BYTES - 1).unwrap();
+        assert_eq!(validated, MIN_TRANSFER_CHUNK_SIZE_BYTES);
+    }
+
+    #[test]
+    fn chunk_size_at_minimum_and_maximum_are_accepted() {
+        // Given: chunk sizes at the accepted boundaries
+        // When: validated
+        // Then: they pass through unchanged
+        assert_eq!(
+            validate_transfer_chunk_size(MIN_TRANSFER_CHUNK_SIZE_BYTES).unwrap(),
+            MIN_TRANSFER_CHUNK_SIZE_BYTES
+        );
+        assert_eq!(
+            validate_transfer_chunk_size(MAX_TRANSFER_CHUNK_SIZE_BYTES).unwrap(),
+            MAX_TRANSFER_CHUNK_SIZE_BYTES
+        );
+    }
+
+    #[test]
+    fn chunk_size_above_maximum_is_rejected() {
+        // Given: a chunk size above the 8 MiB maximum
+        // When: validated
+        // Then: Err is returned
+        assert!(validate_transfer_chunk_size(MAX_TRANSFER_CHUNK_SIZE_BYTES + 1).is_err());
+        assert!(validate_transfer_chunk_size(usize::MAX).is_err());
+    }
+
+    #[test]
+    fn map_error_wraps_display_message() {
+        // Given: a displayable error
+        // When: mapped via map_error
+        // Then: a Generic DockBridgeError is produced with its message
+        struct TestError;
+        impl std::fmt::Display for TestError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "test display error")
+            }
+        }
+
+        let err = map_error(TestError);
+        match err {
+            DockBridgeError::Generic { message } => assert_eq!(message, "test display error"),
+        }
+    }
 }
