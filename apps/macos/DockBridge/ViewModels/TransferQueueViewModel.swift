@@ -24,6 +24,8 @@ final class TransferQueueViewModel: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var progressSamples: [UInt64: (bytes: UInt64, date: Date)] = [:]
     private var transferSpeeds: [UInt64: Double] = [:]
+    /// Previous snapshot used to detect inProgress -> completed/failed transitions.
+    private var previousTasks: [TransferTaskRecord] = []
 
     init(bridge: RustBridgeService) {
         self.bridge = bridge
@@ -63,7 +65,10 @@ final class TransferQueueViewModel: ObservableObject {
                 return
             }
             updateProgressSamples(for: fetched)
+            notifyFinishedTransitions(from: previousTasks, to: fetched)
             tasks = fetched
+            updateDockBadge(tasks: fetched)
+            previousTasks = fetched
             errorMessage = nil
         } catch {
             errorMessage = error.dockBridgeUserMessage
@@ -109,6 +114,52 @@ final class TransferQueueViewModel: ObservableObject {
     func bytesPerSecond(for task: TransferTaskRecord) -> Double? {
         guard let speed = transferSpeeds[task.id], speed > 0 else { return nil }
         return speed
+    }
+
+    /// Posts a user notification when a transfer transitions from
+    /// in-progress to completed/failed, but only while the app is in the
+    /// background (otherwise the queue UI is the feedback).
+    private func notifyFinishedTransitions(from old: [TransferTaskRecord], to new: [TransferTaskRecord]) {
+        guard !NSApp.isActive else { return }
+        let oldMap = Dictionary(uniqueKeysWithValues: old.map { ($0.id, $0) })
+
+        for task in new {
+            guard let previous = oldMap[task.id] else { continue }
+            let wasActive = previous.status == .inProgress || previous.status == .pending
+            let isFinished = task.status == .completed || task.status == .failed || task.status == .cancelled
+            guard wasActive, isFinished else { continue }
+
+            let direction = task.direction == .upload ? "Upload" : "Download"
+            let title: String
+            switch task.status {
+            case .completed:
+                title = "\(direction) finished"
+            case .failed:
+                title = "\(direction) failed"
+            case .cancelled, .pending, .inProgress:
+                continue
+            }
+
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = task.localPath
+            content.sound = .default
+
+            let request = UNNotificationRequest(
+                identifier: "transfer-\(task.id)-\(UUID().uuidString)",
+                content: content,
+                trigger: nil
+            )
+            UNUserNotificationCenter.current().add(request)
+        }
+    }
+
+    /// Shows the number of active transfers on the Dock tile; clears it at zero.
+    private func updateDockBadge(tasks: [TransferTaskRecord]) {
+        let active = tasks.filter {
+            $0.status == .inProgress || $0.status == .pending
+        }.count
+        NSApp.dockTile.badgeLabel = active > 0 ? "\(active)" : nil
     }
 
     private func updateProgressSamples(for fetched: [TransferTaskRecord]) {
