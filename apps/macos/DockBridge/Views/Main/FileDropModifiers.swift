@@ -303,7 +303,9 @@ struct LocalFileTable: View {
     @State private var sortOrder = [KeyPathComparator(\LocalFileItem.name, order: .forward)]
 
     private var sortedItems: [LocalFileItem] {
-        viewModel.localItems.sorted(using: sortOrder)
+        viewModel.localItems.sorted(using: [
+            KeyPathComparator(\.isDirectory, order: .reverse)  // folders first
+        ] + sortOrder)
     }
 
     var body: some View {
@@ -401,7 +403,9 @@ struct RemoteFileTable: View {
     @State private var sortOrder = [KeyPathComparator(\RemoteFileRecord.name, order: .forward)]
 
     private var sortedItems: [RemoteFileRecord] {
-        viewModel.remoteItems.sorted(using: sortOrder)
+        viewModel.remoteItems.sorted(using: [
+            KeyPathComparator(\.isDirectory, order: .reverse)  // folders first
+        ] + sortOrder)
     }
 
     var body: some View {
