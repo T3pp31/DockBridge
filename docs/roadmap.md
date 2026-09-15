@@ -13,8 +13,8 @@
 ## v0.2
 
 - OpenSSH known_hosts compatibility
-- External editor integration
-- Auto-upload on save
+- External editor integration（#361）: リモートファイルを一時コピーして開き、編集監視による自動アップロード・一時掃除を実装
+- Auto-upload on save（#361 で対応）
 - Drag and drop
 - chmod, hidden files, symlinks
 - Encrypted connection-profile storage (AES-GCM envelope + Keychain master key) — implemented; see [security.md](security.md#connection-profiles-profilesjson)
