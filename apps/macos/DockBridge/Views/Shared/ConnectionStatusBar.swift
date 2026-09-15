@@ -20,7 +20,7 @@ struct ConnectionStatusBar: View {
                     .font(DesignTokens.Fonts.monospacedDigit)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                    .accessibilityLabel("Transfer activity: \(transferSummary)")
+                    .accessibilityLabel(String(format: String(localized: "Transfer activity: %@"), transferSummary))
             }
 
             Spacer()

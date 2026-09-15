@@ -69,7 +69,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
     ) async throws {
         try prepareClient()
         guard let client else {
-            throw DockBridgeError.Generic(message: "Rust client is not initialized.")
+            throw DockBridgeError.Generic(message: String(localized: "Rust client is not initialized."))
         }
 
         connectedProfileID = profile.id
@@ -351,7 +351,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
         _ operation: @escaping @Sendable (DockBridgeClient, UInt64) throws -> T
     ) async throws -> T {
         guard let client, let sessionId else {
-            throw DockBridgeError.Generic(message: "Not connected to a remote host.")
+            throw DockBridgeError.Generic(message: String(localized: "Not connected to a remote host."))
         }
 
         do {

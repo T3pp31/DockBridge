@@ -25,11 +25,12 @@ enum ConnectionStatus: Equatable {
     var statusTitle: String {
         switch self {
         case .disconnected:
-            return "Disconnected"
+            return String(localized: "Disconnected")
         case .connecting:
-            return "Connecting…"
+            return String(localized: "Connecting…")
         case .connected(let endpoint):
-            return "Connected: \(endpoint)"
+            let format = String(localized: "Connected: %@")
+            return String(format: format, endpoint)
         }
     }
 }

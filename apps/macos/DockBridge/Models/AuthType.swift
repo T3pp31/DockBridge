@@ -8,8 +8,8 @@ enum AuthType: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var label: String {
         switch self {
-        case .password: "Password"
-        case .privateKey: "Private Key"
+        case .password: String(localized: "Password")
+        case .privateKey: String(localized: "Private Key")
         }
     }
 }

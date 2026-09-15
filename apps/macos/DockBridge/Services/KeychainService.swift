@@ -8,7 +8,7 @@ enum KeychainServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .encodingFailed:
-            return "Failed to encode secret for Keychain storage."
+            return String(localized: "Failed to encode secret for Keychain storage.")
         case .unexpectedStatus(let status):
             if status == errSecAuthFailed {
                 return """

@@ -11,7 +11,7 @@ struct ErrorAlertModifier: ViewModifier {
                 set: { if !$0 { message = nil } }
             ),
             actions: {
-                Button("OK", role: .cancel) {
+                Button(String(localized: "OK"), role: .cancel) {
                     message = nil
                 }
             },

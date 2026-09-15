@@ -9,13 +9,13 @@ enum FileDropError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidMove:
-            return "Cannot move the item to that location."
+            return String(localized: "Cannot move the item to that location.")
         case .notConnected:
-            return "Not connected to a remote host. Connect first, then drop the items."
+            return String(localized: "Not connected to a remote host. Connect first, then drop the items.")
         case .emptyPayload:
-            return "Nothing to transfer from that drop."
+            return String(localized: "Nothing to transfer from that drop.")
         case .unreadableSource:
-            return "One or more dropped items could not be read."
+            return String(localized: "One or more dropped items could not be read.")
         }
     }
 }

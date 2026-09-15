@@ -42,7 +42,7 @@ struct RemoteEntryNameSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel, action: onCancel)
+                Button(String(localized: "Cancel"), role: .cancel, action: onCancel)
                 Button(confirmLabel, action: onConfirm)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!isValid)
@@ -58,9 +58,9 @@ struct RemoteRenameSheet: View {
 
     var body: some View {
         RemoteEntryNameSheet(
-            title: "Rename",
-            fieldLabel: "New name",
-            confirmLabel: "Rename",
+            title: String(localized: "Rename"),
+            fieldLabel: String(localized: "New name"),
+            confirmLabel: String(localized: "Rename"),
             name: $viewModel.renameText,
             onCancel: {
                 viewModel.renameTarget = nil
@@ -77,9 +77,9 @@ struct RemoteNewFolderSheet: View {
 
     var body: some View {
         RemoteEntryNameSheet(
-            title: "New Folder",
-            fieldLabel: "Folder name",
-            confirmLabel: "Create",
+            title: String(localized: "New Folder"),
+            fieldLabel: String(localized: "Folder name"),
+            confirmLabel: String(localized: "Create"),
             name: $viewModel.mkdirName,
             onCancel: {
                 viewModel.mkdirName = ""
@@ -99,14 +99,14 @@ struct RemoteDeleteConfirmSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("Delete remote item?", systemImage: "trash")
+            Label(String(localized: "Delete remote item?"), systemImage: "trash")
                 .font(.title2)
                 .bold()
 
-            Text("This action cannot be undone.")
+            Text(String(localized: "This action cannot be undone."))
                 .foregroundStyle(.secondary)
 
-            GroupBox("Path") {
+            GroupBox(String(localized: "Path")) {
                 Text(path)
                     .font(.system(.body, design: .monospaced))
                     .textSelection(.enabled)
@@ -115,8 +115,8 @@ struct RemoteDeleteConfirmSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel, action: onCancel)
-                Button("Delete", role: .destructive, action: onDelete)
+                Button(String(localized: "Cancel"), role: .cancel, action: onCancel)
+                Button(String(localized: "Delete"), role: .destructive, action: onDelete)
                     .keyboardShortcut(.defaultAction)
             }
         }
