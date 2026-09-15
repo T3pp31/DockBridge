@@ -69,7 +69,15 @@ final class UpdateCheckViewModel: ObservableObject {
         }
     }
 
+    /// "Later": dismiss the sheet WITHOUT persisting a skip, so the update is
+    /// offered again on the next launch/check.
     func skipUpdate() {
+        dismissSheet()
+    }
+
+    /// "Skip This Version": persist the skip so this version is not offered
+    /// again (unless the user checks manually or a newer version appears).
+    func skipVersion() {
         guard let pendingUpdate else { return }
         settingsService.saveSkippedUpdateVersion(pendingUpdate.version)
         dismissSheet()
