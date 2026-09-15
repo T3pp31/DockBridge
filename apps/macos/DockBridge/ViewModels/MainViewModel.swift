@@ -155,6 +155,10 @@ final class MainViewModel: ObservableObject {
     @Published var renameText = ""
     @Published var showMkdirPrompt = false
     @Published var mkdirName = ""
+    /// Whether hidden (dot) files are shown in the REMOTE pane. Synced from
+    /// AppConfig (`showHiddenFiles`) so the Settings toggle and the View menu
+    /// shortcut agree with the local pane.
+    @Published var showRemoteHiddenFiles: Bool
 @Published var showOverwriteAsk = false
     @Published var overwriteAskDestination = ""
     private var pendingTransferAction: (() async -> Bool)?
@@ -486,6 +490,23 @@ final class MainViewModel: ObservableObject {
         return await bridge.firstExistingHomeDirectoryCandidate(for: profile.username)
     }
 
+    /// Whether hidden files are currently shown (Settings toggle or View menu).
+    var isShowingHiddenFiles: Bool {
+        showRemoteHiddenFiles ?? settings.loadConfig().showHiddenFiles
+    }
+
+    /// Toggles hidden-file visibility for the remote pane, persists the
+    /// preference, and refreshes both panes.
+    func toggleHiddenFiles() {
+        let next = !(showRemoteHiddenFiles ?? settings.loadConfig().showHiddenFiles)
+        showRemoteHiddenFiles = next
+        var config = settings.loadConfig()
+        config.showHiddenFiles = next
+        settings.saveConfig(config)
+        reloadLocal()
+        Task { await reloadRemote() }
+    }
+
     func reloadRemote() async {
         guard bridge.isConnected else {
             remoteItems = []
@@ -498,8 +519,12 @@ final class MainViewModel: ObservableObject {
 
         do {
             let items = try await bridge.listDirectory(path: path)
+            let showHidden = showRemoteHiddenFiles ?? settings.loadConfig().showHiddenFiles
             let filtered = items.filter { item in
-                RemotePath.pathMatchesEntry(parent: path, entryPath: item.path, name: item.name)
+                // `..` parent entries and non-hidden names are always kept.
+                if item.isParentDirectory { return true }
+                if !showHidden && item.name.hasPrefix(".") { return false }
+                return RemotePath.pathMatchesEntry(parent: path, entryPath: item.path, name: item.name)
             }
             guard generation == remoteLoadGeneration, path == remotePath else { return }
             remoteItems = filtered
