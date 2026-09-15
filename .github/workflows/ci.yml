@@ -123,6 +123,15 @@ jobs:
       - name: Generate UniFFI bindings
         run: ./scripts/generate-uniffi.sh
 
+      - name: Verify xcodeproj matches project.yml (xcodegen)
+        run: |
+          cd apps/macos
+          xcodegen generate
+          if ! git diff --exit-code DockBridge.xcodeproj; then
+            echo "::error::DockBridge.xcodeproj is out of date. Run 'cd apps/macos && xcodegen generate' and commit the result."
+            exit 1
+          fi
+
       - name: Verify committed Swift bindings are up to date
         run: |
           if ! git diff --exit-code apps/macos/DockBridge/Generated/DockBridgeUniffi.swift; then
