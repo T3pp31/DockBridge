@@ -49,7 +49,7 @@ struct UpdateAvailableView: View {
 
             if let downloadErrorMessage {
                 Text(downloadErrorMessage)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(DesignTokens.Status.error)
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
             }
