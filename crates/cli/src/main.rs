@@ -231,7 +231,11 @@ fn prompt_yes_no(prompt: &str) -> bool {
         }
     }
 
-    let mut stdin = std::io::BufReader::new(std::io::stdin());
+    // No controlling terminal (CI, fully scripted runs): fall back to stdin.
+    // Credential readers use `BufRead` on stdin too, so any piped `yes`
+    // (sent after the secret line) remains available; we read from the same
+    // shared handle via `lock()` to avoid an extra buffering layer.
+    let mut stdin = std::io::stdin().lock();
     read_line(&mut stdin).unwrap_or(false)
 }
 
