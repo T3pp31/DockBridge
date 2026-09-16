@@ -952,6 +952,13 @@ final class MainViewModel: ObservableObject {
         }
         let newURL = target.url.deletingLastPathComponent()
             .appendingPathComponent(name)
+        // Guard against overwriting an existing item before the move. A
+        // destination collision would otherwise surface only as a generic
+        // move error.
+        if FileManager.default.fileExists(atPath: newURL.path) {
+            errorMessage = "A file or folder named '\(name)' already exists."
+            return
+        }
         do {
             try FileManager.default.moveItem(at: target.url, to: newURL)
             localRenameTarget = nil
