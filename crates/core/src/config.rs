@@ -135,10 +135,8 @@ impl AppConfig {
 
         config.known_hosts_path = expand_tilde(&config.known_hosts_path);
         config.openssh_known_hosts_path = expand_tilde(&config.openssh_known_hosts_path);
-        config.transfer_chunk_size_bytes =
-            validate_transfer_chunk_size(config.transfer_chunk_size_bytes)?;
-        config.transfer_download_pipeline_depth =
-            validate_transfer_download_pipeline_depth(config.transfer_download_pipeline_depth);
+        // Single source of truth for validation: validate() normalizes and
+        // checks chunk size / pipeline depth / retry count / timeouts here too.
         config = config.validate()?;
         Ok(config)
     }
@@ -158,6 +156,12 @@ impl AppConfig {
             self.session_health_check_interval_secs,
             1..=3600,
             "must be between 1 and 3600 seconds",
+        )?;
+        ensure_range(
+            "transfer_retry_count",
+            u64::from(self.transfer_retry_count),
+            0..=10,
+            "must be between 0 and 10",
         )?;
         self.transfer_chunk_size_bytes =
             validate_transfer_chunk_size(self.transfer_chunk_size_bytes)?;
@@ -216,6 +220,23 @@ fn ensure_range(
             reason,
         })
     }
+}
+
+/// Converts a `u64`-typed config value into `usize` without silent truncation.
+///
+/// UniFFI receives chunk-size / pipeline-depth values as `u64`; on 32-bit
+/// targets a value above `usize::MAX` would otherwise be truncated before
+/// `validate()` sees it. Rejecting the value here (rather than wrapping)
+/// keeps the "single source of truth" validation meaningful.
+pub fn u64_to_usize_or_invalid(
+    field: &'static str,
+    value: u64,
+) -> Result<usize, ConfigError> {
+    usize::try_from(value).map_err(|_| ConfigError::InvalidValue {
+        field,
+        value,
+        reason: "value exceeds usize::MAX on this platform",
+    })
 }
 
 /// Validates a transfer chunk size from configuration.
@@ -705,5 +726,80 @@ mod tests {
             config.directory_walk_max_files,
             DEFAULT_DIRECTORY_WALK_MAX_FILES
         );
+    }
+
+    #[test]
+    fn validate_rejects_retry_count_above_maximum() {
+        // Given: a transfer_retry_count above the allowed maximum
+        let config = AppConfig {
+            transfer_retry_count: 11,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: an InvalidValue error is returned
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue {
+                field: "transfer_retry_count",
+                value: 11,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_zero_retry_count() {
+        // Given: transfer_retry_count = 0 (retries explicitly disabled)
+        // When: validating
+        // Then: it is accepted
+        let config = AppConfig {
+            transfer_retry_count: 0,
+            ..AppConfig::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_timeout_above_maximum() {
+        // Given: connection_timeout_secs above the allowed maximum
+        let config = AppConfig {
+            connection_timeout_secs: 3601,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: an InvalidValue error is returned
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue {
+                field: "connection_timeout_secs",
+                value: 3601,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_directory_walk_depth_above_maximum() {
+        // Given: directory_walk_max_depth above the allowed maximum
+        let config = AppConfig {
+            directory_walk_max_depth: 1025,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: an InvalidValue error is returned
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue {
+                field: "directory_walk_max_depth",
+                value: 1025,
+                ..
+            }
+        ));
     }
 }

@@ -12,9 +12,9 @@ use std::time::Duration;
 use dockbridge_core::{
     ensure_known_hosts_parent, expand_tilde,
     inspect_private_key_algorithm as core_inspect_private_key_algorithm,
-    is_connection_lost_message, AppConfig, AuthType, ConnectionProfile, HostKeyPrompt,
-    KnownHostsManager, PrivateKeyAlgorithm, RemoteFile, SecretPassword, SftpClient, SshSession,
-    TransferDirection, TransferManager, TransferStatus, TransferTask,
+    is_connection_lost_message, u64_to_usize_or_invalid, AppConfig, AuthType, ConnectionProfile,
+    HostKeyPrompt, KnownHostsManager, PrivateKeyAlgorithm, RemoteFile, SecretPassword, SftpClient,
+    SshSession, TransferDirection, TransferManager, TransferStatus, TransferTask,
 };
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
@@ -240,7 +240,11 @@ impl DockBridgeClient {
             connection_timeout_secs: app_config.connection_timeout_secs,
             session_health_check_interval_secs: app_config.session_health_check_interval_secs,
             transfer_retry_count: app_config.transfer_retry_count,
-            transfer_chunk_size_bytes: app_config.transfer_chunk_size_bytes as usize,
+            transfer_chunk_size_bytes: u64_to_usize_or_invalid(
+                "transfer_chunk_size_bytes",
+                app_config.transfer_chunk_size_bytes,
+            )
+            .map_err(map_error)?,
             known_hosts_path,
             openssh_known_hosts_path,
             merge_openssh_known_hosts_on_connect: app_config.merge_openssh_known_hosts_on_connect,
@@ -249,7 +253,11 @@ impl DockBridgeClient {
             directory_walk_max_files: app_config.directory_walk_max_files,
             directory_walk_max_depth: app_config.directory_walk_max_depth,
             directory_walk_max_total_bytes: app_config.directory_walk_max_total_bytes,
-            transfer_download_pipeline_depth: app_config.transfer_download_pipeline_depth as usize,
+            transfer_download_pipeline_depth: u64_to_usize_or_invalid(
+                "transfer_download_pipeline_depth",
+                app_config.transfer_download_pipeline_depth,
+            )
+            .map_err(map_error)?,
         }
         .validate()
         .map_err(map_error)?;
