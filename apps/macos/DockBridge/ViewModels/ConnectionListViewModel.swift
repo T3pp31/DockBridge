@@ -177,6 +177,13 @@ final class ConnectionListViewModel: ObservableObject {
             case .some(false):
                 break
             case .none:
+                // The key could not be inspected (missing bookmark or
+                // undecryptable key): tell the user instead of silently
+                // aborting the connect attempt.
+                errorMessage = """
+                Access to the private key was denied. Open the connection settings and use Browse… to select the key again.
+                """
+                clearPendingConnectState()
                 return
             }
         }
