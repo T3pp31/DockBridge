@@ -27,6 +27,9 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
     private let hostKeyStore: HostKeyStore
     private let bookmarkService: SecurityScopedBookmarkService
     private var sessionCancellables: [UUID: AnyCancellable] = [:]
+    /// Insertion order of open sessions; used to pick a fallback active
+    /// session without depending on Rust-side sessionId reuse.
+    private var sessionOrder: [UUID] = []
 
     init(
         settings: AppSettingsService = .shared,
@@ -56,15 +59,13 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
         if let id = activeSessionID, let session = sessions[id] {
             return session
         }
-        // Fall back to the most recently connected session for API compat.
-        return sessions.values.max {
-            ($0.sessionId ?? 0) < ($1.sessionId ?? 0)
-        }
+        // Fall back to the most recently opened session for API compat.
+        return sessionOrder.compactMap { sessions[$0] }.last
     }
 
-    /// All sessions sorted by creation order (oldest first).
+    /// All sessions in creation order (oldest first).
     var allSessions: [RemoteSession] {
-        sessions.values.sorted { ($0.sessionId ?? 0) < ($1.sessionId ?? 0) }
+        sessionOrder.compactMap { sessions[$0] }
     }
 
     /// Returns the session with the given id, if open.
@@ -121,18 +122,18 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
 
     func disconnect() async throws {
         guard let client else { return }
-        let target = activeSession
-        let rustSessionId = target?.sessionId ?? sessionId
-        guard let rustSessionId else { return }
-        try await Task.detached(priority: .userInitiated) {
-            try client.disconnect(sessionId: rustSessionId)
-        }.value
-        if let target {
-            removeSession(target)
-        } else {
-            resetSessionFields()
-            connectedProfileID = nil
+        // Disconnect every open session: with multiple sessions active, only
+        // disconnecting the active one would leak the rest.
+        let targets = Array(sessions.values)
+        for session in targets {
+            guard let rustSessionId = session.sessionId else { continue }
+            try await Task.detached(priority: .userInitiated) {
+                try client.disconnect(sessionId: rustSessionId)
+            }.value
+            removeSession(session)
         }
+        resetSessionFields()
+        connectedProfileID = nil
         refreshActiveSessionState()
     }
 
@@ -412,6 +413,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
             endpointLabel: profile.endpointLabel
         )
         sessions[session.id] = session
+        sessionOrder.append(session.id)
         activeSessionID = session.id
         session.markConnecting()
 
@@ -460,6 +462,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
             observe(session)
             return session
         } catch {
+            sessionId = nil
             removeSession(session)
             throw error
         }
@@ -476,6 +479,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
 
     private func removeSession(_ session: RemoteSession) {
         sessions.removeValue(forKey: session.id)
+        sessionOrder.removeAll { $0 == session.id }
         sessionCancellables.removeValue(forKey: session.id)
         if activeSessionID == session.id {
             activeSessionID = nil
@@ -520,6 +524,7 @@ extension RustBridgeService {
         }
         let session = RemoteSession(profileID: profileID, endpointLabel: "test@example.com")
         sessions[session.id] = session
+        sessionOrder.append(session.id)
         activeSessionID = session.id
         switch status {
         case .disconnected:
@@ -540,14 +545,7 @@ extension RustBridgeService {
     }
 
     func simulateSessionDisconnectedForTesting(sessionId: UInt64, reason: String) {
-        if let target = sessions.values.first(where: { $0.sessionId == sessionId }) {
-            target.markLost(reason: reason)
-            if target.id == activeSessionID {
-                syncPublishedState(from: target)
-            }
-        } else if self.sessionId == sessionId {
-            handleImplicitDisconnect(reason: reason)
-        }
+        onSessionDisconnected(sessionId: sessionId, reason: reason)
     }
 }
 #endif
