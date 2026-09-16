@@ -504,14 +504,14 @@ mod tests {
     #[test]
     fn from_toml_empty_file_equals_default() {
         // Given: an empty TOML file
-        let dir =
-            std::env::temp_dir().join(format!("dockbridge-config-empty-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("empty.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.toml");
         std::fs::write(&path, "").unwrap();
 
         // When: loading it as an AppConfig
         // Then: it succeeds and equals AppConfig::default()
+        // (struct-level #[serde(default)] falls back to AppConfig::default(),
+        // so path fields keep their real defaults rather than empty PathBufs)
         let config = AppConfig::from_toml_file(&path).unwrap();
         assert_eq!(config.connection_timeout_secs, 30);
         assert_eq!(
@@ -522,6 +522,14 @@ mod tests {
             config.transfer_download_pipeline_depth,
             DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH
         );
+        assert_eq!(
+            config.known_hosts_path,
+            PathBuf::from(default_known_hosts_path())
+        );
+        assert_eq!(
+            config.openssh_known_hosts_path,
+            PathBuf::from(default_openssh_known_hosts_path())
+        );
         assert!(config.known_hosts_strict_mode);
         assert!(config.merge_openssh_known_hosts_on_connect);
     }
@@ -529,10 +537,8 @@ mod tests {
     #[test]
     fn from_toml_partial_file_uses_defaults() {
         // Given: a TOML file with only one key
-        let dir =
-            std::env::temp_dir().join(format!("dockbridge-config-partial-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("partial.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("partial.toml");
         std::fs::write(&path, "connection_timeout_secs = 15\n").unwrap();
 
         // When: loading it as an AppConfig
@@ -540,20 +546,38 @@ mod tests {
         let config = AppConfig::from_toml_file(&path).unwrap();
         assert_eq!(config.connection_timeout_secs, 15);
         assert_eq!(config.transfer_retry_count, 3);
+        assert_eq!(
+            config.known_hosts_path,
+            PathBuf::from(default_known_hosts_path())
+        );
     }
 
     #[test]
     fn from_toml_unknown_key_is_rejected() {
         // Given: a TOML file with a typo'd key name
-        let dir =
-            std::env::temp_dir().join(format!("dockbridge-config-unknown-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("unknown.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unknown.toml");
         std::fs::write(&path, "known_host_strict_mode = false\n").unwrap();
 
         // When: loading it as an AppConfig
         // Then: it fails with a parse error instead of silently ignoring it
         let err = AppConfig::from_toml_file(&path).unwrap_err();
         assert!(matches!(err, ConfigError::ParseFailed { .. }));
+    }
+
+    #[test]
+    fn default_toml_fields_match_app_config_schema() {
+        // Given: config/default.toml (the schema template the CLI ships with)
+        // When: every key it defines is loaded as an AppConfig
+        // Then: parsing succeeds, proving deny_unknown_fields rejects only
+        //       truly unknown keys in the repo's own config files
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let path = manifest_dir.join("../../config/default.toml");
+        AppConfig::from_toml_file(&path).unwrap_or_else(|err| {
+            panic!(
+                "config/default.toml must match AppConfig schema: {err} (path: {})",
+                path.display()
+            )
+        });
     }
 }
