@@ -96,7 +96,7 @@ final class AppSettingsService: @unchecked Sendable {
             ? Int(AppConfig.default.transferChunkSizeBytes)
             : rawChunkSize
 
-        AppConfig(
+        return AppConfig(
             connectionTimeoutSecs: UInt64(
                 clamping: min(
                     maxTimeoutSecs,
