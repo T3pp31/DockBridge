@@ -329,3 +329,31 @@ Run `cargo audit` locally to match CI (`.cargo/audit.toml` applies tracked excep
 cargo install cargo-audit --locked
 cargo audit
 ```
+
+### Supply chain: SFTP implementation
+
+DockBridge uses `bssh-russh-sftp`, a temporary fork of `russh-sftp` that adds
+pipelined SFTP file I/O (`read_to_writer_pipelined` / `write_all_pipelined`) used
+for high-throughput downloads.
+
+- **Pin** — the crate is pinned exactly (`=2.4.0`). Version bumps must be explicit,
+  reviewed PRs; `cargo update` never moves it silently.
+- **Origin** — the fork is published by Lablup (upstream of their `bssh` product) and
+  re-applies a `patches/pipelined-file-io.patch` on top of upstream `russh-sftp`.
+- **Audit on bump** — every fork version bump PR must verify the diff stays limited to
+  the pipelined-IO methods. The reviewer diffs the vendored fork source
+  (`cargo vendor` into a temp dir, then `git diff --no-index` against the matching
+  upstream `russh-sftp` release) and confirms the delta. This is a PR-checklist item,
+  not an automated CI gate, because the fork is a third-party crate outside this repo.
+- **Risk** — upstream security fixes reach us only when the fork re-syncs, and
+  `cargo audit`/SBOM report the fork crate name (`bssh-russh-sftp`) rather than
+  `russh-sftp`. Upstream advisory tracking is therefore on the checklist when a
+  `russh`/`russh-sftp` advisory is published.
+- **Monitoring** — the fork's maintenance status is re-checked quarterly: whether
+  upstream `russh-sftp` has merged pipelined I/O, whether the fork published a newer
+  release, and whether it has gone stale. Record the check date in the bump PR or a
+  tracking issue so the exit plan below actually fires.
+- **Exit plan** — when upstream `russh-sftp` merges pipelined I/O (or a maintained
+  fork is abandoned), DockBridge should re-vendor or switch back to upstream and drop
+  the alias. The difference from upstream is limited to the two pipelined-IO methods
+  (verified on each bump).
