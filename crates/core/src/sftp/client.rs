@@ -95,6 +95,24 @@ impl<'a> SftpClient<'a> {
         Ok(metadata.file_type().is_dir())
     }
 
+    /// Reports whether `path` exists remotely and, when it does, whether it is
+    /// a directory.
+    ///
+    /// Returns `Ok(None)` when the path does not exist (`SSH_FX_NO_SUCH_FILE`);
+    /// `Ok(Some(true))` for a directory; `Ok(Some(false))` for a regular file
+    /// / symlink / other type. Any other stat failure is surfaced as an error.
+    pub async fn remote_path_kind(&self, path: &str) -> Result<Option<bool>, SftpError> {
+        let path = normalize_remote_path(path)?;
+        match self.sftp().metadata(&path).await {
+            Ok(metadata) => Ok(Some(metadata.file_type().is_dir())),
+            Err(err) if is_remote_no_such_file_error(&err) => Ok(None),
+            Err(err) => Err(SftpError::ListFailed {
+                path: path.clone(),
+                message: err.to_string(),
+            }),
+        }
+    }
+
     /// Lists entries in a remote directory.
     pub async fn list_directory(&self, path: &str) -> Result<Vec<RemoteFile>, SftpError> {
         let path = normalize_remote_path(path)?;
