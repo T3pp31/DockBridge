@@ -72,8 +72,8 @@ enum SSHConfigParser {
             ConnectionProfile(
                 name: host.alias,
                 host: host.hostName ?? host.alias,
-                username: host.user ?? NSUserName(),
                 port: host.port ?? 22,
+                username: host.user ?? NSUserName(),
                 privateKeyPath: host.identityFile
             )
         }

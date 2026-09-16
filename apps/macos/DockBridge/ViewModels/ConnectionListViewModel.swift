@@ -120,7 +120,8 @@ final class ConnectionListViewModel: ObservableObject {
             updated.append(profile)
         }
         do {
-            profiles = try store.saveProfiles(updated)
+            try store.saveProfiles(updated)
+            profiles = updated
             if let first = skipped.first {
                 errorMessage = "Imported \(imported.count - skipped.count) profile(s); skipped \(skipped.count) existing name(s), including: \(first)"
             }
