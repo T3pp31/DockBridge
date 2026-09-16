@@ -1022,4 +1022,13 @@ final class MainViewModel: ObservableObject {
         shouldRevealTransferQueue = true
         errorMessage = nil
     }
+
+    /// Resumes any pending overwrite confirmation so a batch transfer awaiting
+    /// user input does not hang when the view model is torn down.
+    deinit {
+        if let continuation = overwriteAskContinuation {
+            overwriteAskContinuation = nil
+            continuation.resume(returning: false)
+        }
+    }
 }
