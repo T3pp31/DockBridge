@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validate HOME is absolute and reject `..` in `expand_tilde` (#183)
 - Avoid deadlock and clarify result unwrap in DropOperationSync (#192)
 
-## [1.0.7] - 2026-06-27
+## [v1.0.7] - 2026-06-27
 
 ### Added
 
@@ -134,7 +134,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [v1.1.1]: https://github.com/T3pp31/DockBridge/releases/tag/v1.1.1
 [v1.1.0]: https://github.com/T3pp31/DockBridge/releases/tag/v1.1.0
-[1.0.7]: https://github.com/T3pp31/DockBridge/releases/tag/v1.0.7
+[v1.0.7]: https://github.com/T3pp31/DockBridge/releases/tag/v1.0.7
 [0.1.6]: https://github.com/T3pp31/DockBridge/releases/tag/v0.1.6
 [0.1.2]: https://github.com/T3pp31/DockBridge/releases/tag/v0.1.2
 [0.1.1]: https://github.com/T3pp31/DockBridge/releases/tag/v0.1.1
