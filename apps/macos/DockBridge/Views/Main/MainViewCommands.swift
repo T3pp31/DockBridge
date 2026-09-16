@@ -36,6 +36,7 @@ struct MainViewCommands: Commands {
                 viewModel.beginGoToPathForFocusedPane()
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
+            .disabled(!viewModel.bridge.isConnected)
         }
 
         CommandMenu("Transfer") {
