@@ -1385,13 +1385,14 @@ mod tests {
         // backoff sleep (first retry waits 0.5-1s without override), then
         // cancel while it is sleeping.
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let tasks = manager.tasks.lock().unwrap();
-        let task_id = tasks
-            .iter()
-            .find(|task| task.local_path.ends_with("cancelled-retry.bin"))
-            .map(|task| task.id)
-            .unwrap_or_else(|| panic!("task not found"));
-        drop(tasks);
+        let task_id = {
+            let tasks = manager.tasks.lock().unwrap();
+            tasks
+                .iter()
+                .find(|task| task.local_path.ends_with("cancelled-retry.bin"))
+                .map(|task| task.id)
+                .unwrap_or_else(|| panic!("task not found"))
+        };
 
         let cancel_result = manager.cancel_transfer(task_id);
         assert!(
