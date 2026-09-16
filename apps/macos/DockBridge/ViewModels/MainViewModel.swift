@@ -4,6 +4,16 @@ import Foundation
 @MainActor
 final class MainViewModel: ObservableObject {
     private static let remoteOpenTempFolderName = "DockBridge-open"
+
+    /// A remote file opened for external editing; the temp copy is watched and
+    /// re-uploaded on save.
+    struct RemoteEditSession: Identifiable {
+        let id = UUID()
+        let remotePath: String
+        let remoteDirectory: String
+        let localURL: URL
+        var lastModified: Date
+    }
     @Published var localPath: URL {
         didSet {
             if !isApplyingNavigationHistory {
@@ -166,6 +176,8 @@ final class MainViewModel: ObservableObject {
 
     private let settings: AppSettingsService
     private let bookmarkService: SecurityScopedBookmarkService
+    @Published private(set) var remoteEditSessions: [RemoteEditSession] = []
+    private var editMonitorTask: Task<Void, Never>?
     private let pathBookmarkStore: PathBookmarkStore
     private var defaultLocalAccessURL: URL?
     private var pathBookmarkAccessURL: URL?
@@ -234,9 +246,13 @@ final class MainViewModel: ObservableObject {
         connectionList.load()
         transferQueue.startPolling()
         refreshPathBookmarks()
+        // Remove leftover temp folders from previous runs (tracked sessions
+        // are skipped).
+        cleanupRemoteOpenTemp()
     }
 
     func onDisappear() {
+        stopRemoteEditMonitoring()
         transferQueue.stopPolling()
         releasePathBookmarkAccess()
         if let scopedURL = defaultLocalAccessURL {
@@ -621,7 +637,86 @@ final class MainViewModel: ObservableObject {
             errorMessage = "Downloaded file was not found at \(localFile.path)."
             return
         }
+
+        // Track the temporary copy so edits are re-uploaded on save and
+        // cleaned up later.
+        let remoteDirectory = (try? RemotePath.parent(of: item.path)) ?? "/"
+        let session = RemoteEditSession(
+            remotePath: item.path,
+            remoteDirectory: remoteDirectory,
+            localURL: localFile,
+            lastModified: (try? FileManager.default.attributesOfItem(atPath: localFile.path)[.modificationDate] as? Date) ?? Date()
+        )
+        remoteEditSessions.append(session)
         NSWorkspace.shared.open(localFile)
+        startRemoteEditMonitoring()
+    }
+
+    /// Starts periodic checks (1 s) while any remote edit sessions are active;
+    /// re-uploads the temp file on external save.
+    func startRemoteEditMonitoring() {
+        guard editMonitorTask == nil, !remoteEditSessions.isEmpty else { return }
+        editMonitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                await self.checkRemoteEditSessions()
+            }
+        }
+    }
+
+    func stopRemoteEditMonitoring() {
+        editMonitorTask?.cancel()
+        editMonitorTask = nil
+    }
+
+    func stopRemoteEditSession(_ session: RemoteEditSession) {
+        remoteEditSessions.removeAll { $0.id == session.id }
+        try? FileManager.default.removeItem(at: session.localURL.deletingLastPathComponent())
+    }
+
+    private func checkRemoteEditSessions() async {
+        var removedIDs: Set<UUID> = []
+        for i in remoteEditSessions.indices {
+            var session = remoteEditSessions[i]
+            guard FileManager.default.fileExists(atPath: session.localURL.path) else {
+                removedIDs.insert(session.id)
+                continue
+            }
+            let attributes = try? FileManager.default.attributesOfItem(atPath: session.localURL.path)
+            let modified = attributes?[.modificationDate] as? Date
+            if let modified, modified > session.lastModified {
+                session.lastModified = modified
+                remoteEditSessions[i] = session
+                // Debounce by uploading immediately; the 1 s cadence already
+                // acts as the debounce. On failure the session is kept so the
+                // next poll retries (upload() already sets errorMessage).
+                if !(await upload(localURL: session.localURL, toRemoteDirectory: session.remoteDirectory)) {
+                    errorMessage = "Failed to upload edited file to \(session.remotePath). It will retry."
+                }
+            }
+        }
+        if !removedIDs.isEmpty {
+            for id in removedIDs {
+                if let session = remoteEditSessions.first(where: { $0.id == id }) {
+                    try? FileManager.default.removeItem(at: session.localURL.deletingLastPathComponent())
+                }
+            }
+            remoteEditSessions.removeAll { removedIDs.contains($0.id) }
+        }
+    }
+
+    /// Removes temp folders from previous sessions that are no longer tracked.
+    func cleanupRemoteOpenTemp() {
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(Self.remoteOpenTempFolderName, isDirectory: true)
+        let trackedURLs = Set(remoteEditSessions.map { $0.localURL.deletingLastPathComponent() })
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: tempRoot.path) else { return }
+        for name in names {
+            let dir = tempRoot.appendingPathComponent(name, isDirectory: true)
+            if trackedURLs.contains(dir) { continue }
+            try? FileManager.default.removeItem(at: dir)
+        }
     }
 
     func openRemoteTableItem(_ item: RemoteFileRecord) {
