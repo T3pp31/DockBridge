@@ -59,7 +59,8 @@ DockBridge pins the SSH transport algorithms it offers at `crates/core/src/ssh/a
 
 | Category | Allowed (preferred order) |
 |----------|---------------------------|
-| KEX | `mlkem768x25519-sha256` (post-quantum hybrid, preferred), `curve25519-sha256`, `curve25519-sha256@libssh.org`, `diffie-hellman-group16-sha512`, `diffie-hellman-group14-sha256`, `ext-info-c`, `kex-strict-c-v00@openssh.com` |
+| KEX | `mlkem768x25519-sha256` (post-quantum hybrid, preferred), `curve25519-sha256`, `curve25519-sha256@libssh.org`, `diffie-hellman-group16-sha512`, `diffie-hellman-group14-sha256` |
+| Protocol extensions | `ext-info-c`, `kex-strict-c-v00@openssh.com` |
 | Server host keys | `ssh-ed25519`, `ecdsa-sha2-nistp256/384/521`, `rsa-sha2-512`, `rsa-sha2-256` (no legacy `ssh-rsa`) |
 | Cipher | `chacha20-poly1305@openssh.com`, `aes256-gcm@openssh.com`, `aes256-ctr`, `aes192-ctr`, `aes128-ctr` |
 | MAC | `hmac-sha2-512-etm@openssh.com`, `hmac-sha2-256-etm@openssh.com`, `hmac-sha2-512`, `hmac-sha2-256` |
