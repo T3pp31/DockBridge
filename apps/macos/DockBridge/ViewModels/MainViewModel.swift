@@ -128,7 +128,8 @@ final class MainViewModel: ObservableObject {
         if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
             navigateLocal(to: url.path)
         } else {
-            errorMessage = "No such local folder: \(url.path)"
+            let format = String(localized: "No such local folder: %@")
+            errorMessage = String(format: format, url.path)
         }
     }
 
@@ -138,7 +139,8 @@ final class MainViewModel: ObservableObject {
         if let directory = try? RemotePath.directoryPath(normalized) {
             navigateRemote(to: directory)
         } else {
-            errorMessage = "Invalid remote path: \(normalized)"
+            let format = String(localized: "Invalid remote path: %@")
+            errorMessage = String(format: format, normalized)
         }
     }
 
@@ -618,7 +620,8 @@ final class MainViewModel: ObservableObject {
 
         let localFile = sessionDirectory.appendingPathComponent(item.name, isDirectory: false)
         guard FileManager.default.fileExists(atPath: localFile.path) else {
-            errorMessage = "Downloaded file was not found at \(localFile.path)."
+            let format = String(localized: "Downloaded file was not found at %@.")
+            errorMessage = String(format: format, localFile.path)
             return
         }
         NSWorkspace.shared.open(localFile)
@@ -672,7 +675,7 @@ final class MainViewModel: ObservableObject {
     @discardableResult
     func upload(localURL: URL, toRemoteDirectory: String) async -> Bool {
         guard bridge.isConnected else {
-            errorMessage = "Not connected to a remote host."
+            errorMessage = String(localized: "Not connected to a remote host.")
             return false
         }
 
@@ -709,7 +712,7 @@ final class MainViewModel: ObservableObject {
     @discardableResult
     func download(remotePath: String, toLocalDirectory: URL) async -> Bool {
         guard bridge.isConnected else {
-            errorMessage = "Not connected to a remote host."
+            errorMessage = String(localized: "Not connected to a remote host.")
             return false
         }
 
@@ -774,7 +777,7 @@ final class MainViewModel: ObservableObject {
             // Pre-check only: UniFFI AppConfigRecord does not yet carry overwrite policy,
             // so the Rust engine still uses Replace after the transfer starts.
             if await destinationExists(at: destinationPath, side: destinationSide) {
-                errorMessage = "A file already exists at the destination."
+                errorMessage = String(localized: "A file already exists at the destination.")
                 return false
             }
             errorMessage = nil
@@ -826,7 +829,7 @@ final class MainViewModel: ObservableObject {
     @discardableResult
     func moveRemoteItem(from source: String, toDirectory directory: String) async -> Bool {
         guard bridge.isConnected else {
-            errorMessage = "Not connected to a remote host."
+            errorMessage = String(localized: "Not connected to a remote host.")
             return false
         }
 

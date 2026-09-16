@@ -46,17 +46,18 @@ enum TransferProgressFormatter {
 
         let additionalCount = inProgressTasks.count - 1
         if additionalCount > 0 {
-            return "\(prefix): \(label) +\(additionalCount) more"
+            let format = String(localized: "Transferring: %@ +%lld more")
+            return String(format: format, label, additionalCount)
         }
-        return "\(prefix): \(label)"
+        let format = String(localized: "Transferring: %@")
+        return String(format: format, label)
     }
 
     private static func formattedDuration(_ seconds: Double) -> String {
-        if seconds < 60 {
-            return String(format: "%.0fs", seconds)
-        }
-        let minutes = Int(seconds) / 60
-        let remainder = Int(seconds) % 60
-        return "\(minutes)m \(remainder)s"
+        let clamped = max(0, seconds)
+        let duration = Duration.seconds(clamped.rounded())
+        return duration.formatted(
+            .units(allowed: [.minutes, .seconds], width: .narrow)
+        )
     }
 }

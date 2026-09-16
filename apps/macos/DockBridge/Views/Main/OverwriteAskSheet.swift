@@ -6,19 +6,19 @@ struct OverwriteAskSheet: View {
     let onReplace: () -> Void
 
     var body: some View {
-        DialogCard(title: "Replace Existing File?") {
-            Text("An item already exists at the destination. Replace it?")
+        DialogCard(title: String(localized: "Replace Existing File?")) {
+            Text(String(localized: "An item already exists at the destination. Replace it?"))
                 .fixedSize(horizontal: false, vertical: true)
 
-            DialogDetailSection("Destination") {
+            DialogDetailSection(String(localized: "Destination")) {
                 Text(destinationLabel)
                     .lineLimit(2)
                     .truncationMode(.middle)
             }
         } footer: {
-            Button("Keep Existing", role: .cancel, action: onKeep)
+            Button(String(localized: "Keep Existing"), role: .cancel, action: onKeep)
                 .keyboardShortcut(.cancelAction)
-            Button("Replace", role: .destructive, action: onReplace)
+            Button(String(localized: "Replace"), role: .destructive, action: onReplace)
                 .keyboardShortcut(.defaultAction)
         }
     }

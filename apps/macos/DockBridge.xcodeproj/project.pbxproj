@@ -41,6 +41,7 @@
 		C6C9511134C456CD869B7886 /* ErrorAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2B8765D556D65748132CE54 /* ErrorAlert.swift */; };
 		B88C98D983E322436E126A74 /* TransferQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB9667933C17755C399E575 /* TransferQueueView.swift */; };
 		4D3B078A85CF43E4F57F1AD1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9AED1666CA758F242828EB4F /* Assets.xcassets */; };
+		L0C4L1Z4BL3XCS7R1NGSB1 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = L0C4L1Z4BL3XCS7R1NGSR1 /* Localizable.xcstrings */; };
 		A1B2C3D4E5F60718293A4B5C /* RemotePath.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */; };
 		7B93DBDFA0EAC7D859065E1B /* SensitiveString.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A40063842C3BF02492D35D4 /* SensitiveString.swift */; };
 		0v3rwr1t3P0l1cy1N5rc3s1 /* TransferOverwritePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0v3rwr1t3P0l1cyF1l3R3F /* TransferOverwritePolicy.swift */; };
@@ -145,6 +146,7 @@
 		D2B8765D556D65748132CE54 /* ErrorAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ErrorAlert.swift; sourceTree = "<group>"; };
 		BBB9667933C17755C399E575 /* TransferQueueView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferQueueView.swift; sourceTree = "<group>"; };
 		9AED1666CA758F242828EB4F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		L0C4L1Z4BL3XCS7R1NGSR1 /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		22787F42C6257B4877799DC8 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		4D3B24470D299F0C0DA4E563 /* DockBridge.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = DockBridge.entitlements; sourceTree = "<group>"; };
 		B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePath.swift; sourceTree = "<group>"; };
@@ -377,6 +379,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 			isa = PBXGroup;
 			children = (
 				9AED1666CA758F242828EB4F /* Assets.xcassets */,
+				L0C4L1Z4BL3XCS7R1NGSR1 /* Localizable.xcstrings */,
 				4D3B24470D299F0C0DA4E563 /* DockBridge.entitlements */,
 				22787F42C6257B4877799DC8 /* Info.plist */,
 			);
@@ -560,6 +563,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				ja,
 				Base,
 			);
 			mainGroup = DE99CDF01B2999AFA1EC9582;
@@ -579,6 +583,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 			buildActionMask = 2147483647;
 			files = (
 				4D3B078A85CF43E4F57F1AD1 /* Assets.xcassets in Resources */,
+				L0C4L1Z4BL3XCS7R1NGSB1 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -836,6 +841,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				PRODUCT_BUNDLE_IDENTIFIER = "com.dockbridge.app";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_STRICT_CONCURRENCY = "complete";
+				SWIFT_EMIT_LOC_STRINGS = "YES";
 			};
 			name = Debug;
 		};
@@ -877,6 +883,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				PRODUCT_BUNDLE_IDENTIFIER = "com.dockbridge.app";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_STRICT_CONCURRENCY = "complete";
+				SWIFT_EMIT_LOC_STRINGS = "YES";
 				ENABLE_HARDENED_RUNTIME = YES;
 			};
 			name = Release;

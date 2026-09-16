@@ -29,22 +29,22 @@ struct ConnectionFormView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text(isEditing ? "Edit Connection" : "New Connection")
+            Text(isEditing ? String(localized: "Edit Connection") : String(localized: "New Connection"))
                 .font(.title2)
                 .bold()
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, DialogCardMetrics.contentSpacing)
 
             Form {
-                Section("General") {
-                    TextField("Name", text: $profile.name)
-                    TextField("Host", text: $profile.host)
-                    TextField("Port", value: $profile.port, format: .number.grouping(.never))
-                    TextField("Username", text: $profile.username)
+                Section(String(localized: "General")) {
+                    TextField(String(localized: "Name"), text: $profile.name)
+                    TextField(String(localized: "Host"), text: $profile.host)
+                    TextField(String(localized: "Port"), value: $profile.port, format: .number.grouping(.never))
+                    TextField(String(localized: "Username"), text: $profile.username)
                 }
 
-                Section("Authentication") {
-                    Picker("Method", selection: $profile.authType) {
+                Section(String(localized: "Authentication")) {
+                    Picker(String(localized: "Method"), selection: $profile.authType) {
                         ForEach(AuthType.allCases) { type in
                             Text(type.label).tag(type)
                         }
@@ -52,36 +52,36 @@ struct ConnectionFormView: View {
                     .pickerStyle(.segmented)
 
                     if profile.authType == .password {
-                        SecureField("Password", text: $password.text)
+                        SecureField(String(localized: "Password"), text: $password.text)
                     } else {
                         HStack {
-                            TextField("Private key path", text: Binding(
+                            TextField(String(localized: "Private key path"), text: Binding(
                                 get: { profile.privateKeyPath ?? "" },
                                 set: { profile.privateKeyPath = $0.isEmpty ? nil : $0 }
                             ))
                             .disabled(true)
-                            Button("Browse…") { pickPrivateKey() }
+                            Button(String(localized: "Browse…")) { pickPrivateKey() }
                         }
                         if profile.privateKeyBookmark == nil {
-                            Text("Use Browse… to grant access to the private key file.")
+                            Text(String(localized: "Use Browse… to grant access to the private key file."))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        SecureField("Passphrase (optional)", text: $passphrase.text)
+                        SecureField(String(localized: "Passphrase (optional)"), text: $passphrase.text)
                     }
 
-                    Toggle("Save credentials in Keychain", isOn: $saveSecrets)
+                    Toggle(String(localized: "Save credentials in Keychain"), isOn: $saveSecrets)
                 }
             }
             .formStyle(.grouped)
 
             HStack(spacing: 12) {
                 Spacer()
-                Button("Cancel", role: .cancel) {
+                Button(String(localized: "Cancel"), role: .cancel) {
                     closeForm()
                 }
                 .keyboardShortcut(.cancelAction)
-                Button("Save") {
+                Button(String(localized: "Save")) {
                     save()
                 }
                 .disabled(!canSave)
@@ -92,11 +92,11 @@ struct ConnectionFormView: View {
         }
         .padding()
         .frame(minWidth: DialogCardMetrics.minWidth, minHeight: 380)
-        .alert("File Selection", isPresented: Binding(
+        .alert(String(localized: "File Selection"), isPresented: Binding(
             get: { pickerErrorMessage != nil },
             set: { if !$0 { pickerErrorMessage = nil } }
         )) {
-            Button("OK", role: .cancel) {}
+            Button(String(localized: "OK"), role: .cancel) {}
         } message: {
             Text(pickerErrorMessage ?? "")
         }

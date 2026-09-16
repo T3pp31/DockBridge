@@ -18,10 +18,10 @@ struct RemotePaneView: View {
                             let items = transferableRemoteItems(from: ids)
                             if !items.isEmpty {
                                 if items.count == 1, let item = items.first {
-                                    Button("Copy Path") {
+                                    Button(String(localized: "Copy Path")) {
                                         ClipboardHelper.copy(item.path)
                                     }
-                                    Button("Open") {
+                                    Button(String(localized: "Open")) {
                                         Task { await viewModel.openRemoteFile(item) }
                                     }
                                 }
@@ -32,10 +32,10 @@ struct RemotePaneView: View {
                                 }
 
                                 if items.count == 1, let item = items.first {
-                                    Button("Rename") {
+                                    Button(String(localized: "Rename")) {
                                         viewModel.beginRename(item: item)
                                     }
-                                    Button("Delete", role: .destructive) {
+                                    Button(String(localized: "Delete"), role: .destructive) {
                                         viewModel.requestDeleteRemote(item: item)
                                     }
                                 }
@@ -55,7 +55,7 @@ struct RemotePaneView: View {
                         .overlay {
                             if isDropTargeted {
                                 DropTargetOverlay(
-                                    title: "Drop to upload",
+                                    title: String(localized: "Drop to upload"),
                                     systemImage: "arrow.up.doc"
                                 )
                                 .padding(4)
@@ -69,7 +69,7 @@ struct RemotePaneView: View {
                 ContentUnavailableView(
                     "Not connected to a remote host",
                     systemImage: "network.slash",
-                    description: Text("Select a connection profile and press Connect.")
+                    description: Text(String(localized: "Select a connection profile and press Connect."))
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

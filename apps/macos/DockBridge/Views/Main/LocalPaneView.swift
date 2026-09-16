@@ -19,23 +19,25 @@ struct LocalPaneView: View {
                         let items = transferableLocalItems(from: ids)
                         if !items.isEmpty {
                             if items.count == 1, let item = items.first {
-                                Button("Copy Path") {
+                                Button(String(localized: "Copy Path")) {
                                     ClipboardHelper.copy(item.url.path)
                                 }
-                                Button("Open") {
+                                Button(String(localized: "Open")) {
                                     viewModel.openLocalFile(item)
                                 }
                                 if !item.isDirectory {
-                                    Button("Quick Look") {
+                                    Button(String(localized: "Quick Look")) {
                                         viewModel.quickLookLocalFile(item)
                                     }
                                 }
-                                Button("Reveal in Finder") {
+                                Button(String(localized: "Reveal in Finder")) {
                                     NSWorkspace.shared.activateFileViewerSelecting([item.url])
                                 }
                             }
 
-                            Button(items.count == 1 ? "Upload" : "Upload \(items.count) Items") {
+                            Button(items.count == 1
+                                ? String(localized: "Upload")
+                                : String(format: String(localized: "Upload %lld Items"), items.count)) {
                                 viewModel.selectedLocalItemIDs = Set(items.map(\.id))
                                 Task { await viewModel.uploadSelected() }
                             }

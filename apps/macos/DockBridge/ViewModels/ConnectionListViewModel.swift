@@ -82,9 +82,7 @@ final class ConnectionListViewModel: ObservableObject {
 
     func save(_ profile: ConnectionProfile, password: String?, passphrase: String?) {
         if profile.requiresPrivateKeyBookmark, !profile.hasPrivateKeyBookmark {
-            errorMessage = """
-            Select the private key with Browse…. A security-scoped bookmark is required.
-            """
+            errorMessage = String(localized: "Select the private key with Browse…. A security-scoped bookmark is required.")
             return
         }
 
@@ -346,9 +344,7 @@ final class ConnectionListViewModel: ObservableObject {
         do {
             if profile.authType == .privateKey {
                 guard let bookmark = profile.privateKeyBookmark else {
-                    errorMessage = """
-                    Access to the private key was denied. Open the connection settings and use Browse… to select the key again.
-                    """
+                    errorMessage = String(localized: "Access to the private key was denied. Open the connection settings and use Browse… to select the key again.")
                     return
                 }
 
@@ -429,9 +425,7 @@ final class ConnectionListViewModel: ObservableObject {
 
     private func profileUsesRsaPrivateKey(_ profile: ConnectionProfile) -> Bool? {
         guard let bookmark = profile.privateKeyBookmark else {
-            errorMessage = """
-            Access to the private key was denied. Open the connection settings and use Browse… to select the key again.
-            """
+            errorMessage = String(localized: "Access to the private key was denied. Open the connection settings and use Browse… to select the key again.")
             return nil
         }
 

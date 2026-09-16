@@ -8,7 +8,7 @@ struct PathBookmarkMenu: View {
 
     var body: some View {
         Menu {
-            Button("Bookmark This Path", action: onBookmarkCurrent)
+            Button(String(localized: "Bookmark This Path"), action: onBookmarkCurrent)
 
             if !bookmarks.isEmpty {
                 Divider()
@@ -30,7 +30,7 @@ struct PathBookmarkMenu: View {
         } label: {
             Image(systemName: "star")
         }
-        .help("Path bookmarks")
+        .help(String(localized: "Path bookmarks"))
         .menuStyle(.borderlessButton)
     }
 }
