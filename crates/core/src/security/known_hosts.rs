@@ -24,9 +24,15 @@ pub struct ImportSummary {
 }
 
 impl ImportSummary {
-    /// Returns `true` when nothing was imported (no new entries, no skipped lines).
+    /// Returns `true` when nothing was imported *and* no lines were skipped
+    /// (i.e. the store contents are untouched).
     pub fn is_empty(self) -> bool {
         self.merged == 0 && self.skipped == 0
+    }
+
+    /// Returns `true` when at least one entry was merged into the store.
+    pub fn has_merged_entries(self) -> bool {
+        self.merged > 0
     }
 }
 
@@ -318,6 +324,8 @@ impl KnownHostsManager {
             let entry = match line_result {
                 Ok(entry) => entry,
                 Err(err) => {
+                    // Log only the file path and error kind, never the raw line
+                    // contents (a known_hosts line embeds the public key).
                     tracing::warn!(
                         path = %path.display(),
                         error = %err,
@@ -378,7 +386,11 @@ impl KnownHostsManager {
         }
 
         let summary = ImportSummary { merged, skipped };
-        if merged > 0 {
+        // Persist when anything changed OR lines were skipped. Skipped lines
+        // don't currently mutate the store, but persisting ensures a future
+        // side effect on the skipped path cannot be missed (e.g. if a parse
+        // failure were recorded in the store).
+        if summary.has_merged_entries() || summary.skipped > 0 {
             self.persist()?;
         }
 
@@ -1632,6 +1644,60 @@ mod tests {
         let summary = manager.merge_openssh_on_connect(&config).unwrap();
         assert_eq!(summary.merged, 0);
         assert_eq!(summary.skipped, 1);
+    }
+
+    #[test]
+    fn import_openssh_empty_file_imports_nothing() {
+        // Given: an empty OpenSSH known_hosts file
+        // When: it is imported
+        // Then: the summary is empty (merged == 0, skipped == 0)
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(&openssh_path, "");
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        let summary = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(summary.merged, 0);
+        assert_eq!(summary.skipped, 0);
+        assert!(summary.is_empty());
+    }
+
+    #[test]
+    fn import_openssh_comment_only_file_is_not_skipped() {
+        // Given: a known_hosts file with only comment lines
+        // When: it is imported
+        // Then: comments are not counted as skipped or merged
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(
+            &openssh_path,
+            "# comment line 1\n# another comment\n",
+        );
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        let summary = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(summary.merged, 0);
+        assert_eq!(summary.skipped, 0);
+        assert!(summary.is_empty());
+    }
+
+    #[test]
+    fn import_openssh_blank_line_file_is_not_skipped() {
+        // Given: a known_hosts file with only blank lines
+        // When: it is imported
+        // Then: blank lines are not counted as skipped or merged
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(&openssh_path, "\n\n\n");
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        let summary = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(summary.merged, 0);
+        assert_eq!(summary.skipped, 0);
+        assert!(summary.is_empty());
     }
 
     #[cfg(unix)]
