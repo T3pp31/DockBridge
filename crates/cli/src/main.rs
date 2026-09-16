@@ -255,30 +255,210 @@ fn load_config(explicit: Option<&Path>) -> anyhow::Result<AppConfig> {
         return AppConfig::from_toml_file(path).map_err(Into::into);
     }
 
+    // An explicitly set $DOCKBRIDGE_CONFIG is treated like --config: a missing
+    // file is an error rather than a silent fall-back to other locations.
+    if let Some(path) = std::env::var_os("DOCKBRIDGE_CONFIG") {
+        let path = PathBuf::from(path);
+        tracing::info!(path = %path.display(), "using $DOCKBRIDGE_CONFIG configuration file");
+        return AppConfig::from_toml_file(&path).map_err(Into::into);
+    }
+
     let candidates = [
-        std::env::var_os("DOCKBRIDGE_CONFIG").map(PathBuf::from),
+        // XDG_CONFIG_HOME must be absolute (per the XDG Base Directory spec);
+        // a relative value would silently depend on the CWD.
         std::env::var_os("XDG_CONFIG_HOME")
-            .map(|dir| PathBuf::from(dir).join("dockbridge/config.toml")),
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .map(|dir| dir.join("dockbridge/config.toml")),
         home_dir_path().map(|home| home.join(".dockbridge/config.toml")),
     ]
     .into_iter()
-    .flatten();
+    .flatten()
+    .collect::<Vec<_>>();
 
-    for candidate in candidates {
+    for candidate in &candidates {
+        tracing::debug!(path = %candidate.display(), "checking configuration file");
         if candidate.exists() {
             tracing::info!(path = %candidate.display(), "using configuration file");
-            return AppConfig::from_toml_file(&candidate).map_err(Into::into);
+            return AppConfig::from_toml_file(candidate).map_err(Into::into);
         }
     }
 
-    tracing::info!("no configuration file found; using built-in default configuration");
+    tracing::info!(
+        paths = ?candidates,
+        "no configuration file found; using built-in default configuration"
+    );
     Ok(AppConfig::default())
 }
 
 fn home_dir_path() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
+    let home = if cfg!(target_os = "windows") {
+        std::env::var_os("USERPROFILE")
+    } else {
+        std::env::var_os("HOME")
+    };
+    home.map(PathBuf::from).filter(|p| p.is_absolute())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+
+    // Snapshot the three env vars the search reads, run `f`, then restore.
+    // Tests mutating process-wide env are also marked #[serial].
+    fn with_config_env(f: impl FnOnce()) {
+        const VARS: [&str; 3] = ["DOCKBRIDGE_CONFIG", "XDG_CONFIG_HOME", "HOME"];
+        let saved: Vec<(&str, Option<std::ffi::OsString>)> = VARS
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+        for (name, _) in &saved {
+            std::env::remove_var(name);
+        }
+
+        struct Guard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                for (name, value) in self.0.drain(..).rev() {
+                    match value {
+                        Some(v) => std::env::set_var(name, v),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+        let _guard = Guard(saved);
+
+        f();
+    }
+
+    fn app_config_matches_default(config: &AppConfig) -> bool {
+        config.connection_timeout_secs == AppConfig::default().connection_timeout_secs
+            && config.transfer_retry_count == AppConfig::default().transfer_retry_count
+    }
+
+    fn write_temp_toml(dir: &Path, contents: &str) -> PathBuf {
+        let path = dir.join("config.toml");
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    fn write_temp_config(dir: &Path, timeout: u32, retry: u32) -> PathBuf {
+        write_temp_toml(
+            dir,
+            &format!(
+                "connection_timeout_secs = {timeout}\n\
+                 session_health_check_interval_secs = 10\n\
+                 transfer_retry_count = {retry}\n\
+                 transfer_chunk_size_bytes = 262144\n\
+                 transfer_download_pipeline_depth = 64\n\
+                 known_hosts_path = \"{}/known_hosts.json\"\n\
+                 openssh_known_hosts_path = \"/dev/null\"\n\
+                 merge_openssh_known_hosts_on_connect = false\n\
+                 known_hosts_strict_mode = true\n\
+                 fail_connect_on_openssh_merge_error = false\n\
+                 directory_walk_max_files = 100000\n\
+                 directory_walk_max_depth = 64\n\
+                 directory_walk_max_total_bytes = 107374182400\n",
+                dir.display()
+            ),
+        )
+    }
+
+    #[test]
+    fn explicit_missing_config_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.toml");
+        let err = load_config(Some(&missing)).unwrap_err();
+        assert!(
+            err.to_string().contains("not found") || err.to_string().contains("No such file"),
+            "expected a not-found error, got: {err}"
+        );
+    }
+
+    #[serial]
+    #[test]
+    fn environment_missing_config_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.toml");
+        with_config_env(|| {
+            std::env::set_var("DOCKBRIDGE_CONFIG", missing.as_os_str());
+            let err = load_config(None).unwrap_err();
+            assert!(
+                err.to_string().contains("not found"),
+                "expected a not-found error, got: {err}"
+            );
+        });
+    }
+
+    #[serial]
+    #[test]
+    fn environment_config_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_temp_config(dir.path(), 42, 7);
+        with_config_env(|| {
+            std::env::set_var("DOCKBRIDGE_CONFIG", path.as_os_str());
+            let config = load_config(None).unwrap();
+            assert_eq!(config.connection_timeout_secs, 42);
+            assert_eq!(config.transfer_retry_count, 7);
+        });
+    }
+
+    #[serial]
+    #[test]
+    fn xdg_config_home_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("dockbridge");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        write_temp_config(&config_dir, 99, 3);
+
+        with_config_env(|| {
+            std::env::set_var("XDG_CONFIG_HOME", dir.path().as_os_str());
+            let config = load_config(None).unwrap();
+            assert_eq!(config.connection_timeout_secs, 99);
+        });
+    }
+
+    #[serial]
+    #[test]
+    fn relative_xdg_config_home_is_ignored() {
+        // A relative XDG_CONFIG_HOME must not be used (spec requires absolute).
+        with_config_env(|| {
+            std::env::set_var("XDG_CONFIG_HOME", "relative/path");
+            let config = load_config(None).unwrap();
+            assert!(
+                app_config_matches_default(&config),
+                "relative XDG_CONFIG_HOME must be ignored"
+            );
+        });
+    }
+
+    #[serial]
+    #[test]
+    fn home_config_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".dockbridge");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        write_temp_config(&config_dir, 123, 3);
+
+        with_config_env(|| {
+            std::env::set_var("HOME", dir.path().as_os_str());
+            let config = load_config(None).unwrap();
+            assert_eq!(config.connection_timeout_secs, 123);
+        });
+    }
+
+    #[serial]
+    #[test]
+    fn no_config_falls_back_to_default() {
+        let dir = tempfile::tempdir().unwrap();
+        with_config_env(|| {
+            let config = load_config(None).unwrap();
+            assert!(app_config_matches_default(&config));
+        });
+        drop(dir);
+    }
 }
 
 async fn connect(
