@@ -1,10 +1,12 @@
 pub mod client;
+pub mod path;
 pub mod tree;
 
 #[cfg(test)]
 pub(crate) mod test_server;
 
 pub use client::{RemoteFile, SftpClient};
+pub use path::parent_remote_path;
 pub use tree::{
     ensure_local_path_within_root, ensure_remote_path_within_root, is_local_directory,
     join_remote_path, local_entry_name, normalize_remote_path, validate_remote_entry_name,

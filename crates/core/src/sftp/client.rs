@@ -14,10 +14,11 @@ use crate::config::{
     clamp_transfer_chunk_size, clamp_transfer_download_pipeline_depth, DirectoryWalkLimits,
     DEFAULT_TRANSFER_CHUNK_SIZE_BYTES, DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
 };
-use crate::error::SftpError;
+use crate::error::{RemoteStatusCode, SftpError};
 use crate::ssh::session::SshSession;
 use crate::transfer::TransferOverwritePolicy;
 
+use super::path::parent_remote_path;
 use super::tree::{
     ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
     normalize_remote_path, validated_remote_entry, walk_local_directory_with_options,
@@ -1172,7 +1173,23 @@ async fn create_exclusive_remote_partial(
             .await
         {
             Ok(remote_file) => return Ok((partial_path, remote_file)),
-            Err(err) if is_remote_file_exists_error(&err) => continue,
+            Err(err) if is_remote_file_exists_error(&err) => {
+                // SSH_FX_FAILURE is generic; it may be the exclusivity race but
+                // also permission/IO problems. Confirm the partial path really
+                // exists via stat before retrying, otherwise surface the error.
+                match client.sftp().metadata(&partial_path).await {
+                    Ok(_) => continue,
+                    Err(stat_err) => {
+                        return Err(SftpError::UploadFailed {
+                            local: local.to_string(),
+                            remote: remote.to_string(),
+                            message: format!(
+                                "{err}; failed to confirm path: {stat_err}"
+                            ),
+                        });
+                    }
+                }
+            }
             Err(err) => {
                 return Err(SftpError::UploadFailed {
                     local: local.to_string(),
@@ -1290,57 +1307,74 @@ async fn remote_path_exists(client: &SftpClient<'_>, path: &str) -> Result<bool,
     match client.sftp().metadata(path).await {
         Ok(_) => Ok(true),
         Err(err) if is_remote_no_such_file_error(&err) => Ok(false),
-        Err(err) => Err(SftpError::UploadFailed {
-            local: String::new(),
-            remote: path.to_string(),
-            message: err.to_string(),
-        }),
+        Err(err) => Err(classify_sftp_client_error(err, path)),
     }
 }
 
-fn is_remote_file_exists_error(err: &SftpClientError) -> bool {
+/// Classifies a raw russh-sftp client error into a typed [`SftpError`].
+///
+/// SFTP `Status` packets map to [`SftpError::RemoteStatus`] using the
+/// protocol-defined `status_code`; timeouts map to [`SftpError::Timeout`];
+/// anything else is preserved as a generic error with a message.
+fn classify_sftp_client_error(err: SftpClientError, path: &str) -> SftpError {
+    match err {
+        SftpClientError::Status(status) => SftpError::RemoteStatus {
+            code: RemoteStatusCode::from_raw(status.status_code as u32),
+            path: path.to_string(),
+        },
+        SftpClientError::Timeout => SftpError::Timeout {
+            path: path.to_string(),
+        },
+        // Protocol violations (unexpected packet / unexpected behavior) are
+        // typed as SSH_FX_BAD_MESSAGE rather than a generic error so
+        // is_non_retryable_error can classify them as non-retryable without
+        // string matching.
+        SftpClientError::UnexpectedBehavior(message) => SftpError::RemoteStatus {
+            code: RemoteStatusCode::BadMessage,
+            path: format!("{path}: {message}"),
+        },
+        SftpClientError::UnexpectedPacket => SftpError::RemoteStatus {
+            code: RemoteStatusCode::BadMessage,
+            path: path.to_string(),
+        },
+        // Local I/O errors (timeouts, interrupted reads) are retryable.
+        SftpClientError::IO(message) | SftpClientError::Limited(message) => {
+            SftpError::Other(anyhow::anyhow!("SFTP error for '{path}': {message}"))
+        }
+    }
+}
+
+/// Extracts the typed SFTP status code from a russh-sftp client error.
+///
+/// Uses the protocol-defined numeric `status_code` (SSH_FX_*) rather than the
+/// free-form, server-localized `error_message` text. OpenSSH reports most
+/// conditions generically as `SSH_FX_FAILURE` with message `"Failure"`, and
+/// localized appliances return translated messages, so text matching is
+/// unreliable (issue #308).
+fn remote_status_code(err: &SftpClientError) -> Option<RemoteStatusCode> {
     match err {
         SftpClientError::Status(status) => {
-            let message = status.error_message.to_lowercase();
-            message.contains("file exists") || message.contains("already exists")
+            Some(RemoteStatusCode::from_raw(status.status_code as u32))
         }
-        SftpClientError::IO(message) => {
-            let message = message.to_lowercase();
-            message.contains("file exists") || message.contains("already exists")
-        }
-        _ => false,
+        _ => None,
     }
 }
 
+/// Returns `true` when `err` is a typed SFTP `SSH_FX_NO_SUCH_FILE` status.
 fn is_remote_no_such_file_error(err: &SftpClientError) -> bool {
-    match err {
-        SftpClientError::Status(status) => {
-            let message = status.error_message.to_lowercase();
-            message.contains("no such file") || message.contains("not found")
-        }
-        SftpClientError::IO(message) => {
-            let message = message.to_lowercase();
-            message.contains("no such file") || message.contains("not found")
-        }
-        _ => false,
-    }
+    matches!(remote_status_code(err), Some(RemoteStatusCode::NoSuchFile))
 }
 
-fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
-    let normalized = normalize_remote_path(remote_path)?;
-    if normalized == "/" {
-        return Ok(None);
-    }
-
-    let trimmed = normalized.trim_end_matches('/');
-    let Some((parent, _)) = trimmed.rsplit_once('/') else {
-        return Ok(None);
-    };
-    Ok(Some(if parent.is_empty() {
-        "/".to_string()
-    } else {
-        parent.to_string()
-    }))
+/// Returns `true` when `err` is a typed SFTP status that *might* mean the open
+/// with `SSH_FX_EXCLUDE` failed because the partial path already exists.
+///
+/// Only `SSH_FX_FAILURE` is treated as a candidate: OpenSSH reports the
+/// exclusive-create race with `SSH_FX_FAILURE`, while `SSH_FX_PERMISSION_DENIED`
+/// more often indicates a real permissions problem (quota, read-only FS) that
+/// retrying would never fix. Callers must still confirm the path exists via
+/// `stat` before treating a failure as "already exists".
+fn is_remote_file_exists_error(err: &SftpClientError) -> bool {
+    matches!(remote_status_code(err), Some(RemoteStatusCode::Failure))
 }
 
 #[cfg(test)]
@@ -1359,18 +1393,20 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
 
     use super::{
-        append_cleanup_context, create_exclusive_local_partial, download_pipelined_to_writer,
-        normalize_remote_path, open_exclusive_local_file, parent_remote_path, partial_file_name,
+        append_cleanup_context, classify_sftp_client_error, create_exclusive_local_partial,
+        download_pipelined_to_writer, is_remote_file_exists_error, is_remote_no_such_file_error,
+        normalize_remote_path, open_exclusive_local_file, partial_file_name,
         partial_local_path_for_suffix, partial_remote_path_for_suffix,
         pipeline_depth_for_chunk_budget, prepare_local_finalize_destination, random_partial_suffix,
-        upload_from_reader, DownloadFlowError, PartialLocalTransfer, PartialRemoteTransfer,
-        PipelinableTransferWriter, SftpClient,
+        remote_status_code, upload_from_reader, DownloadFlowError, PartialLocalTransfer,
+        PartialRemoteTransfer, PipelinableTransferWriter, SftpClient,
     };
     use crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
-    use crate::error::SftpError;
+    use crate::error::{RemoteStatusCode, SftpError};
     use crate::sftp::test_server::{list_partial_paths, TestSftpServer};
     use crate::sftp::tree::walk_remote_directory;
     use crate::transfer::TransferOverwritePolicy;
+    use russh_sftp::client::error::Error as SftpClientError;
 
     struct FailOnRead {
         fail_after_successful_reads: usize,
@@ -1765,21 +1801,6 @@ mod tests {
         assert!(!local_path.exists());
     }
 
-    #[test]
-    fn parent_remote_path_returns_parent_directory() {
-        assert_eq!(
-            parent_remote_path("/remote/dir/file.txt")
-                .unwrap()
-                .as_deref(),
-            Some("/remote/dir")
-        );
-        assert_eq!(
-            parent_remote_path("/file.txt").unwrap().as_deref(),
-            Some("/")
-        );
-        assert_eq!(parent_remote_path("/").unwrap(), None);
-    }
-
     #[tokio::test]
     async fn create_directory_all_succeeds_when_directory_exists() {
         let server = TestSftpServer::start().await;
@@ -1813,6 +1834,95 @@ mod tests {
         let suffix = random_partial_suffix();
         assert_eq!(suffix.len(), 32);
         assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn status_code_classification_ignores_error_message_text() {
+        use russh_sftp::protocol::{Status, StatusCode as RawCode};
+
+        let make_status = |code: RawCode, message: &str| {
+            SftpClientError::Status(Status {
+                id: 1,
+                status_code: code,
+                error_message: message.to_string(),
+                language_tag: "en-US".to_string(),
+            })
+        };
+
+        // OpenSSH reports EEXIST as SSH_FX_FAILURE + "Failure": previously the
+        // text matcher never matched, making the partial-create retry loop dead.
+        let err = make_status(RawCode::Failure, "Failure");
+        assert!(is_remote_file_exists_error(&err));
+
+        // A non-English message must not break NoSuchFile detection: judged by
+        // status_code (2), not by the text.
+        let localized = make_status(RawCode::NoSuchFile, "ファイルが存在しません");
+        assert!(is_remote_no_such_file_error(&localized));
+        assert_eq!(
+            remote_status_code(&localized),
+            Some(RemoteStatusCode::NoSuchFile)
+        );
+
+        // A path that merely mentions "failure" in the message (not a status)
+        // is not treated as a file-exists error.
+        let io_err = SftpClientError::IO("permission denied".to_string());
+        assert!(!is_remote_file_exists_error(&io_err));
+        assert_eq!(remote_status_code(&io_err), None);
+
+        // SSH_FX_PERMISSION_DENIED is a real permission problem, not proof the
+        // exclusive-create lost a race; it must not trigger the retry loop.
+        let permission = make_status(RawCode::PermissionDenied, "Permission denied");
+        assert!(!is_remote_file_exists_error(&permission));
+    }
+
+    #[test]
+    fn classify_sftp_client_error_maps_status_and_timeout() {
+        use russh_sftp::protocol::{Status, StatusCode as RawCode};
+
+        let status = SftpClientError::Status(Status {
+            id: 1,
+            status_code: RawCode::PermissionDenied,
+            error_message: "nope".to_string(),
+            language_tag: "en-US".to_string(),
+        });
+        match classify_sftp_client_error(status, "/upload/f.txt") {
+            SftpError::RemoteStatus {
+                code: RemoteStatusCode::PermissionDenied,
+                path,
+            } => assert_eq!(path, "/upload/f.txt"),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        match classify_sftp_client_error(SftpClientError::Timeout, "/upload/f.txt") {
+            SftpError::Timeout { path } => assert_eq!(path, "/upload/f.txt"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_maps_protocol_violations_to_bad_message() {
+        use russh_sftp::protocol::{Status, StatusCode as RawCode};
+
+        // UnexpectedBehavior / UnexpectedPacket are protocol violations:
+        // typed as SSH_FX_BAD_MESSAGE so retry policy is decided without
+        // matching message text.
+        let behavior = SftpClientError::UnexpectedBehavior("broken sequence".to_string());
+        match classify_sftp_client_error(behavior, "/upload/f.txt") {
+            SftpError::RemoteStatus {
+                code: RemoteStatusCode::BadMessage,
+                path,
+            } => assert!(path.contains("/upload/f.txt")),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let packet = SftpClientError::UnexpectedPacket;
+        match classify_sftp_client_error(packet, "/upload/f.txt") {
+            SftpError::RemoteStatus {
+                code: RemoteStatusCode::BadMessage,
+                ..
+            } => {}
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[test]

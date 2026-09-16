@@ -115,6 +115,21 @@ pub enum SftpError {
         path: String,
     },
 
+    #[error("SFTP server reported {code} for '{path}'")]
+    RemoteStatus {
+        code: RemoteStatusCode,
+        path: String,
+    },
+
+    #[error("timed out waiting for the SFTP server to respond for '{path}'")]
+    Timeout { path: String },
+
+    #[error("failed to stat '{path}': {message}")]
+    StatFailed { path: String, message: String },
+
+    #[error("failed to walk directory '{path}': {message}")]
+    WalkFailed { path: String, message: String },
+
     #[error("transfer was cancelled")]
     Cancelled,
 
@@ -123,6 +138,68 @@ pub enum SftpError {
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+/// SFTP status codes from the SFTP protocol specification
+/// (draft-ietf-secsh-filexfer-02 section 7, SSH_FX_*).
+///
+/// These are protocol-defined numeric codes, unlike `error_message` which is
+/// a free-form, server-localized string. Judging errors by these codes works
+/// with OpenSSH and any standards-conforming server regardless of locale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum RemoteStatusCode {
+    /// End-of-file condition.
+    Eof = 1,
+    /// The referenced file or directory should exist but does not.
+    NoSuchFile = 2,
+    /// The authenticated user lacks sufficient permissions.
+    PermissionDenied = 3,
+    /// Generic catch-all failure.
+    Failure = 4,
+    /// Badly formatted packet or protocol incompatibility.
+    BadMessage = 5,
+    /// No connection to the server (generated locally).
+    NoConnection = 6,
+    /// The connection to the server has been lost (generated locally).
+    ConnectionLost = 7,
+    /// The server does not implement the requested operation.
+    OpUnsupported = 8,
+    /// Any other status code.
+    Other(u32),
+}
+
+impl RemoteStatusCode {
+    /// Converts a raw SFTP `SSH_FX_*` status code to a typed variant.
+    pub fn from_raw(code: u32) -> Self {
+        match code {
+            1 => Self::Eof,
+            2 => Self::NoSuchFile,
+            3 => Self::PermissionDenied,
+            4 => Self::Failure,
+            5 => Self::BadMessage,
+            6 => Self::NoConnection,
+            7 => Self::ConnectionLost,
+            8 => Self::OpUnsupported,
+            other => Self::Other(other),
+        }
+    }
+}
+
+impl std::fmt::Display for RemoteStatusCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Eof => write!(f, "SSH_FX_EOF"),
+            Self::NoSuchFile => write!(f, "SSH_FX_NO_SUCH_FILE"),
+            Self::PermissionDenied => write!(f, "SSH_FX_PERMISSION_DENIED"),
+            Self::Failure => write!(f, "SSH_FX_FAILURE"),
+            Self::BadMessage => write!(f, "SSH_FX_BAD_MESSAGE"),
+            Self::NoConnection => write!(f, "SSH_FX_NO_CONNECTION"),
+            Self::ConnectionLost => write!(f, "SSH_FX_CONNECTION_LOST"),
+            Self::OpUnsupported => write!(f, "SSH_FX_OP_UNSUPPORTED"),
+            Self::Other(code) => write!(f, "SSH_FX_{code}"),
+        }
+    }
 }
 
 /// Errors related to file transfer queue operations.

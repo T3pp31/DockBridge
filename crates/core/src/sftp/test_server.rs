@@ -31,6 +31,9 @@ pub struct FailureConfig {
     /// Artificial delay applied to every SSH_FXP_READ reply, used by benchmarks
     /// to emulate a high-latency link (milliseconds).
     pub read_delay_ms: AtomicU64,
+    /// When `true`, `open` with `SSH_FX_EXCLUDE` reports `SSH_FX_PERMISSION_DENIED`
+    /// for an already-existing exclusive path (some servers' EEXIST).
+    pub exclude_exists_permission_denied: AtomicBool,
 }
 
 pub struct TestSftpServer {
@@ -297,7 +300,16 @@ impl russh_sftp::server::Handler for SftpHandler {
 
         let file = options.open(&local).await.map_err(|err| {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
-                StatusCode::Failure
+                if self
+                    .failures
+                    .exclude_exists_permission_denied
+                    .load(Ordering::Relaxed)
+                {
+                    // Some servers report EEXIST as permission denied.
+                    StatusCode::PermissionDenied
+                } else {
+                    StatusCode::Failure
+                }
             } else if err.kind() == std::io::ErrorKind::NotFound {
                 StatusCode::NoSuchFile
             } else {
