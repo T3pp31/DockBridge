@@ -158,7 +158,7 @@ final class MainViewModel: ObservableObject {
     /// Whether hidden (dot) files are shown in the REMOTE pane. Synced from
     /// AppConfig (`showHiddenFiles`) so the Settings toggle and the View menu
     /// shortcut agree with the local pane.
-    @Published var showRemoteHiddenFiles: Bool
+    @Published var showRemoteHiddenFiles: Bool?
 @Published var showOverwriteAsk = false
     @Published var overwriteAskDestination = ""
     private var pendingTransferAction: (() async -> Bool)?
