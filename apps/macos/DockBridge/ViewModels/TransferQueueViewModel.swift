@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import UserNotifications
 
 @MainActor
 final class TransferQueueViewModel: ObservableObject {
@@ -131,7 +133,13 @@ final class TransferQueueViewModel: ObservableObject {
         for task in new {
             guard let previous = oldMap[task.id] else { continue }
             let wasActive = previous.status == .inProgress || previous.status == .pending
-            let isFinished = task.status == .completed || task.status == .failed || task.status == .cancelled
+            let isFinished: Bool
+            switch task.status {
+            case .completed, .failed, .cancelled:
+                isFinished = true
+            case .pending, .inProgress:
+                isFinished = false
+            }
             guard wasActive, isFinished else { continue }
 
             let direction = task.direction == .upload ? "Upload" : "Download"
