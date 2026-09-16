@@ -504,11 +504,17 @@ final class MainViewModel: ObservableObject {
             let filtered = items.filter { item in
                 RemotePath.pathMatchesEntry(parent: path, entryPath: item.path, name: item.name)
             }
-            guard generation == remoteLoadGeneration, path == remotePath else { return }
+            guard generation == remoteLoadGeneration, path == remotePath else {
+                isLoadingRemote = false
+                return
+            }
             remoteItems = filtered
             isLoadingRemote = false
         } catch {
-            guard generation == remoteLoadGeneration else { return }
+            guard generation == remoteLoadGeneration else {
+                isLoadingRemote = false
+                return
+            }
             isLoadingRemote = false
             errorMessage = error.dockBridgeUserMessage
             if error.isConnectionLost {
