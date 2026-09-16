@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import UserNotifications
 
 @MainActor
 final class TransferQueueViewModel: ObservableObject {
@@ -24,6 +26,9 @@ final class TransferQueueViewModel: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var progressSamples: [UInt64: (bytes: UInt64, date: Date)] = [:]
     private var transferSpeeds: [UInt64: Double] = [:]
+    /// Previous snapshot used to detect inProgress -> completed/failed transitions.
+    /// `nil` until the first fetch so already-finished tasks are not re-notified.
+    private var previousTasks: [TransferTaskRecord]?
 
     init(bridge: RustBridgeService) {
         self.bridge = bridge
@@ -63,7 +68,10 @@ final class TransferQueueViewModel: ObservableObject {
                 return
             }
             updateProgressSamples(for: fetched)
+            notifyFinishedTransitions(from: previousTasks, to: fetched)
             tasks = fetched
+            updateDockBadge(tasks: fetched)
+            previousTasks = fetched
             errorMessage = nil
         } catch {
             errorMessage = error.dockBridgeUserMessage
@@ -109,6 +117,72 @@ final class TransferQueueViewModel: ObservableObject {
     func bytesPerSecond(for task: TransferTaskRecord) -> Double? {
         guard let speed = transferSpeeds[task.id], speed > 0 else { return nil }
         return speed
+    }
+
+    /// Posts a user notification when a transfer transitions from
+    /// in-progress to completed/failed, but only while the app is in the
+    /// background (otherwise the queue UI is the feedback). The first fetch
+    /// has no previous snapshot and never notifies (no spurious notifications
+    /// for tasks that finished before the app looked at them).
+    private func notifyFinishedTransitions(from old: [TransferTaskRecord]?, to new: [TransferTaskRecord]) {
+        guard !NSApp.isActive else { return }
+        let oldMap = Dictionary(uniqueKeysWithValues: (old ?? []).map { ($0.id, $0) })
+        // With no previous snapshot there is nothing to diff against.
+        guard old != nil else { return }
+
+        for task in new {
+            guard let previous = oldMap[task.id] else { continue }
+            let wasActive = previous.status == .inProgress || previous.status == .pending
+            let isFinished: Bool
+            switch task.status {
+            case .completed, .failed, .cancelled:
+                isFinished = true
+            case .pending, .inProgress:
+                isFinished = false
+            }
+            guard wasActive, isFinished else { continue }
+
+            let direction = task.direction == .upload ? "Upload" : "Download"
+            let title: String
+            switch task.status {
+            case .completed:
+                title = "\(direction) finished"
+            case .failed:
+                title = "\(direction) failed"
+            case .cancelled, .pending, .inProgress:
+                continue
+            }
+
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = URL(fileURLWithPath: task.localPath).lastPathComponent
+            content.sound = .default
+
+            // Stable per (task, status) identifier: re-registering the same
+            // transition replaces the pending notification instead of
+            // stacking duplicates.
+            let statusKey: String
+            switch task.status {
+            case .completed: statusKey = "completed"
+            case .failed: statusKey = "failed"
+            case .cancelled: statusKey = "cancelled"
+            case .pending, .inProgress: continue
+            }
+            let request = UNNotificationRequest(
+                identifier: "transfer-\(task.id)-\(statusKey)",
+                content: content,
+                trigger: nil
+            )
+            UNUserNotificationCenter.current().add(request)
+        }
+    }
+
+    /// Shows the number of active transfers on the Dock tile; clears it at zero.
+    private func updateDockBadge(tasks: [TransferTaskRecord]) {
+        let active = tasks.filter {
+            $0.status == .inProgress || $0.status == .pending
+        }.count
+        NSApp.dockTile.badgeLabel = active > 0 ? "\(active)" : nil
     }
 
     private func updateProgressSamples(for fetched: [TransferTaskRecord]) {
