@@ -85,12 +85,10 @@ mod tests {
 
     const DISALLOWED_KEX: &[kex::Name] = &[kex::DH_G1_SHA1, kex::DH_G14_SHA1];
 
-    const DISALLOWED_CIPHER: &[cipher::Name] = &[
-        cipher::TRIPLE_DES_CBC,
-        cipher::AES_128_CBC,
-        cipher::AES_192_CBC,
-        cipher::AES_256_CBC,
-    ];
+    // Deprecated ciphers referenced by name so the russh `des` feature (which
+    // pulls in 3DES) never has to be enabled in release builds.
+    const DISALLOWED_CIPHER_NAMES: &[&str] =
+        &["3des-cbc", "aes128-cbc", "aes192-cbc", "aes256-cbc"];
 
     const DISALLOWED_MAC: &[mac::Name] = &[mac::HMAC_SHA1, mac::HMAC_SHA1_ETM];
 
@@ -167,11 +165,16 @@ mod tests {
             );
         }
 
-        for cipher in DISALLOWED_CIPHER {
+        // Each disallowed cipher (e.g. 3DES, CBC modes) must not appear in the
+        // client's offer list.
+        for cipher in DISALLOWED_CIPHER_NAMES {
             assert!(
-                !preferred.cipher.contains(cipher),
+                !preferred
+                    .cipher
+                    .iter()
+                    .any(|c| c.as_ref() == *cipher),
                 "weak cipher `{}` must not be allowed",
-                cipher.as_ref()
+                cipher
             );
         }
 
