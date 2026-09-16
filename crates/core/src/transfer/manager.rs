@@ -1394,7 +1394,10 @@ mod tests {
         drop(tasks);
 
         let cancel_result = manager.cancel_transfer(task_id);
-        assert!(cancel_result.is_ok(), "task should be cancellable: {cancel_result:?}");
+        assert!(
+            cancel_result.is_ok(),
+            "task should be cancellable: {cancel_result:?}"
+        );
 
         // Then: the spawned upload finishes with an error (cancelled at the
         // next check boundary) and the task settles as Cancelled.
