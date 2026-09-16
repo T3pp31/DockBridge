@@ -86,27 +86,34 @@ final class AppSettingsService: @unchecked Sendable {
         // crashing so the app always launches.
         let minChunk = 4_096
         let maxChunk = 8_388_608
+        // Upper bounds keep runaway plist values from becoming effectively
+        // infinite retries/timeouts.
+        let maxRetryCount = 100
+        let maxTimeoutSecs = 86_400
+
+        let rawChunkSize = defaults.integer(forKey: AppSettingsKeys.transferChunkSizeBytes)
+        let chunkSize = rawChunkSize == 0
+            ? Int(AppConfig.default.transferChunkSizeBytes)
+            : rawChunkSize
 
         AppConfig(
             connectionTimeoutSecs: UInt64(
-                clamping: max(1, defaults.integer(forKey: AppSettingsKeys.connectionTimeoutSecs))
+                clamping: min(
+                    maxTimeoutSecs,
+                    max(1, defaults.integer(forKey: AppSettingsKeys.connectionTimeoutSecs))
+                )
             ),
             sessionHealthCheckIntervalSecs: UInt64(
                 clamping: max(1, defaults.integer(forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs))
             ),
             transferRetryCount: UInt32(
-                clamping: max(0, defaults.integer(forKey: AppSettingsKeys.transferRetryCount))
+                clamping: min(
+                    maxRetryCount,
+                    max(0, defaults.integer(forKey: AppSettingsKeys.transferRetryCount))
+                )
             ),
             transferChunkSizeBytes: UInt64(
-                clamping: min(
-                    maxChunk,
-                    max(
-                        minChunk,
-                        defaults.integer(forKey: AppSettingsKeys.transferChunkSizeBytes) == 0
-                            ? Int(AppConfig.default.transferChunkSizeBytes)
-                            : defaults.integer(forKey: AppSettingsKeys.transferChunkSizeBytes)
-                    )
-                )
+                clamping: min(maxChunk, max(minChunk, chunkSize))
             ),
             defaultLocalPath: defaults.string(forKey: AppSettingsKeys.defaultLocalPath)
                 ?? AppConfig.default.defaultLocalPath,
@@ -127,21 +134,21 @@ final class AppSettingsService: @unchecked Sendable {
                 clamping: max(
                     0,
                     defaults.object(forKey: AppSettingsKeys.directoryWalkMaxFiles) as? Int
-                        ?? Int(AppConfig.default.directoryWalkMaxFiles)
+                        ?? Int(clamping: AppConfig.default.directoryWalkMaxFiles)
                 )
             ),
             directoryWalkMaxDepth: UInt32(
                 clamping: max(
                     0,
                     defaults.object(forKey: AppSettingsKeys.directoryWalkMaxDepth) as? Int
-                        ?? Int(AppConfig.default.directoryWalkMaxDepth)
+                        ?? Int(clamping: AppConfig.default.directoryWalkMaxDepth)
                 )
             ),
             directoryWalkMaxTotalBytes: UInt64(
                 clamping: max(
                     0,
                     defaults.object(forKey: AppSettingsKeys.directoryWalkMaxTotalBytes) as? Int
-                        ?? Int(AppConfig.default.directoryWalkMaxTotalBytes)
+                        ?? Int(clamping: AppConfig.default.directoryWalkMaxTotalBytes)
                 )
             ),
             transferOverwritePolicy: TransferOverwritePolicy(
