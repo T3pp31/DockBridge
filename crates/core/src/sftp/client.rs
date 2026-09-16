@@ -434,22 +434,6 @@ impl<'a> SftpClient<'a> {
         Ok(())
     }
 
-    /// Returns metadata (`size` / `is_directory`) for a remote path.
-    /// Used by the transfer manager for progress totals.
-    #[allow(dead_code)]
-    pub(crate) async fn metadata_info(&self, remote_path: &str) -> Result<(u64, bool), SftpError> {
-        let normalized = normalize_remote_path(remote_path)?;
-        let metadata =
-            self.sftp()
-                .metadata(&normalized)
-                .await
-                .map_err(|err| SftpError::StatFailed {
-                    path: normalized.clone(),
-                    message: err.to_string(),
-                })?;
-        Ok((metadata.size.unwrap_or(0), metadata.file_type().is_dir()))
-    }
-
     /// Uploads a local file or directory tree into a remote directory.
     pub async fn upload_entry(
         &self,
@@ -476,9 +460,12 @@ impl<'a> SftpClient<'a> {
             let remote_root = join_remote_path(remote_directory, Path::new(&directory_name))?;
             self.create_directory_all_cached(&remote_root, created)
                 .await?;
-            // Track the root with a trailing slash so children skip it.
+            // Track the root with a normalized (no trailing slash) key so
+            // child paths created later hit the cache. create_directory_all_cached
+            // compares with normalized keys, so a trailing slash here would
+            // miss the cache and cause redundant mkdir round-trips.
             if let Some(created) = created.as_mut() {
-                created.insert(format!("{remote_root}/"));
+                created.insert(normalize_remote_path(&remote_root)?);
             }
 
             let files = walk_local_directory_with_options(
@@ -561,7 +548,13 @@ impl<'a> SftpClient<'a> {
                                 message: err.to_string(),
                             }
                         })?;
-                        ancestor = ancestor.parent().map(Path::to_path_buf).unwrap_or_default();
+                        // Stop at the filesystem root ("/"); parent() is None
+                        // there, and treating it as an empty PathBuf would
+                        // otherwise call create_dir_all("") forever.
+                        match ancestor.parent() {
+                            Some(next) if !next.as_os_str().is_empty() => ancestor = next.to_path_buf(),
+                            _ => break,
+                        }
                     }
                 }
 
@@ -1309,7 +1302,20 @@ async fn create_exclusive_remote_partial(
             .await
         {
             Ok(remote_file) => return Ok((partial_path, remote_file)),
-            Err(err) if is_remote_file_exists_error(&err) => continue,
+            Err(err) if is_remote_file_exists_error(&err) => {
+                // SSH_FX_FAILURE / SSH_FX_PERMISSION_DENIED are generic: they may
+                // mean "the exclusive create lost a race", but also permission
+                // problems, I/O errors, etc. Confirm the path actually exists via
+                // stat before retrying; otherwise propagate the real error.
+                if remote_path_exists(client, &partial_path).await? {
+                    continue;
+                }
+                return Err(SftpError::UploadFailed {
+                    local: local.to_string(),
+                    remote: remote.to_string(),
+                    message: err.to_string(),
+                });
+            }
             Err(err) => {
                 return Err(SftpError::UploadFailed {
                     local: local.to_string(),
@@ -1394,7 +1400,7 @@ async fn prepare_remote_finalize_destination(
         },
         // Destination does not exist yet or is a regular file: rename will
         // create or atomically replace it.
-        Ok(_) | Err(_) => {
+        Ok(_) => {
             if matches!(overwrite_policy, TransferOverwritePolicy::FailIfExists)
                 && remote_path_exists(client, final_path).await?
             {
@@ -1406,6 +1412,15 @@ async fn prepare_remote_finalize_destination(
             }
             Ok(())
         }
+        // `SSH_FX_NO_SUCH_FILE` → the destination does not exist yet; rename
+        // will create it. Any other stat failure (network error, timeout,
+        // permissions) is a real error and must not be misread as "missing" —
+        // doing so could let FailIfExists overwrite an existing file.
+        Err(err) if is_remote_no_such_file_error(&err) => Ok(()),
+        Err(err) => Err(SftpError::StatFailed {
+            path: final_path.to_string(),
+            message: err.to_string(),
+        }),
     }
 }
 

@@ -197,7 +197,31 @@ impl std::fmt::Display for RemoteStatusCode {
             Self::NoConnection => write!(f, "SSH_FX_NO_CONNECTION"),
             Self::ConnectionLost => write!(f, "SSH_FX_CONNECTION_LOST"),
             Self::OpUnsupported => write!(f, "SSH_FX_OP_UNSUPPORTED"),
-            Self::Other(code) => write!(f, "SSH_FX_{code}"),
+            // draft-ietf-secsh-filexfer-02 §7.1 codes beyond the common eight;
+            // rendered with their protocol name when known, raw otherwise.
+            Self::Other(9) => write!(f, "SSH_FX_INVALID_HANDLE(9)"),
+            Self::Other(10) => write!(f, "SSH_FX_NO_SUCH_PATH(10)"),
+            Self::Other(11) => write!(f, "SSH_FX_FILE_ALREADY_EXISTS(11)"),
+            Self::Other(12) => write!(f, "SSH_FX_WRITE_PROTECT(12)"),
+            Self::Other(13) => write!(f, "SSH_FX_NO_MEDIA(13)"),
+            Self::Other(14) => write!(f, "SSH_FX_NO_SPACE_ON_FILESYSTEM(14)"),
+            Self::Other(15) => write!(f, "SSH_FX_QUOTA_EXCEEDED(15)"),
+            Self::Other(16) => write!(f, "SSH_FX_UNKNOWN_PRINCIPAL(16)"),
+            Self::Other(17) => write!(f, "SSH_FX_LOCK_CONFLICT(17)"),
+            Self::Other(18) => write!(f, "SSH_FX_DIR_NOT_EMPTY(18)"),
+            Self::Other(19) => write!(f, "SSH_FX_NOT_A_DIRECTORY(19)"),
+            Self::Other(20) => write!(f, "SSH_FX_INVALID_FILENAME(20)"),
+            Self::Other(21) => write!(f, "SSH_FX_LINK_LOOP(21)"),
+            Self::Other(22) => write!(f, "SSH_FX_CANNOT_DELETE(22)"),
+            Self::Other(23) => write!(f, "SSH_FX_INVALID_PARAMETER(23)"),
+            Self::Other(24) => write!(f, "SSH_FX_FILE_IS_A_DIRECTORY(24)"),
+            Self::Other(25) => write!(f, "SSH_FX_BYTE_RANGE_LOCK_CONFLICT(25)"),
+            Self::Other(26) => write!(f, "SSH_FX_BYTE_RANGE_LOCK_REFUSED(26)"),
+            Self::Other(27) => write!(f, "SSH_FX_DELETE_PENDING(27)"),
+            Self::Other(28) => write!(f, "SSH_FX_FILE_CORRUPT(28)"),
+            Self::Other(29) => write!(f, "SSH_FX_OWNER_INVALID(29)"),
+            Self::Other(30) => write!(f, "SSH_FX_GROUP_INVALID(30)"),
+            Self::Other(code) => write!(f, "SSH_FX_{code}(unknown)"),
         }
     }
 }
