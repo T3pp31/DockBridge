@@ -9,11 +9,11 @@ enum ProfileEncryptionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .encryptionFailed(let message):
-            String(format: String(localized: "Failed to encrypt connection profiles: %@"), message)
+            return String(format: String(localized: "Failed to encrypt connection profiles: %@"), message)
         case .decryptionFailed(let message):
-            String(format: String(localized: "Failed to decrypt connection profiles: %@"), message)
+            return String(format: String(localized: "Failed to decrypt connection profiles: %@"), message)
         case .invalidEnvelope:
-            "Connection profile store has an unsupported or corrupt encrypted format."
+            return "Connection profile store has an unsupported or corrupt encrypted format."
         }
     }
 }
