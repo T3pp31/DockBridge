@@ -54,10 +54,10 @@ pub struct TransferManager {
     directory_walk_limits: DirectoryWalkLimits,
     tasks: Mutex<Vec<TransferTask>>,
     cancellation_flags: Mutex<HashMap<u64, Arc<AtomicBool>>>,
-    /// Fixed backoff delay in seconds between retries, used by tests to
+    /// Fixed backoff delay in milliseconds between retries, used by tests to
     /// avoid real sleeping. `None` uses the exponential jittered backoff.
     #[cfg(test)]
-    backoff_override_secs: Option<u64>,
+    backoff_override_ms: Option<u64>,
 }
 
 impl TransferManager {
@@ -72,7 +72,7 @@ impl TransferManager {
             tasks: Mutex::new(Vec::new()),
             cancellation_flags: Mutex::new(HashMap::new()),
             #[cfg(test)]
-            backoff_override_secs: None,
+            backoff_override_ms: None,
         }
     }
 
@@ -578,7 +578,9 @@ impl TransferManager {
                 Err(SftpError::CleanupFailed { message, .. }) if self.is_cancelled(task_id) => {
                     return Err(TransferError::RetriesExhausted {
                         attempts: 1,
-                        message,
+                        message: format!(
+                            "転送はキャンセルされましたが、部分ファイルの削除に失敗しました: {message}"
+                        ),
                     });
                 }
                 Err(err) => {
@@ -615,19 +617,20 @@ impl TransferManager {
     /// during the wait (so the caller aborts immediately).
     async fn sleep_backoff(&self, task_id: u64, retry_index: u32) -> bool {
         #[cfg(test)]
-        let delay_secs = self
-            .backoff_override_secs
-            .unwrap_or_else(|| backoff_delay_secs(retry_index));
+        let delay = Duration::from_millis(
+            self.backoff_override_ms
+                .unwrap_or_else(|| backoff_delay_ms(retry_index)),
+        );
         #[cfg(not(test))]
-        let delay_secs = backoff_delay_secs(retry_index);
+        let delay = Duration::from_millis(backoff_delay_ms(retry_index));
 
         tracing::info!(
             task_id,
-            retry_backoff_secs = delay_secs,
+            retry_backoff_ms = delay.as_millis(),
             "waiting before retrying transfer"
         );
 
-        tokio::time::timeout(Duration::from_secs(delay_secs), async {
+        tokio::time::timeout(delay, async {
             loop {
                 if self.is_cancelled(task_id) {
                     return true;
@@ -681,7 +684,9 @@ impl TransferManager {
                 Err(SftpError::CleanupFailed { message, .. }) if self.is_cancelled(task_id) => {
                     return Err(TransferError::RetriesExhausted {
                         attempts: 1,
-                        message,
+                        message: format!(
+                            "転送はキャンセルされましたが、部分ファイルの削除に失敗しました: {message}"
+                        ),
                     });
                 }
                 Err(err) => {
@@ -731,18 +736,18 @@ fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
     }))
 }
 
-/// Returns the exponential-backoff delay in seconds for retry `retry_index`
-/// (1-based), with 50%..100% jitter. Sequence: ~1s, ~2s, ~4s, ... capped at
-/// 30s.
-fn backoff_delay_secs(retry_index: u32) -> u64 {
-    const BACKOFF_BASE_SECS: u64 = 1;
-    const BACKOFF_MAX_SECS: u64 = 30;
+/// Returns the exponential-backoff delay in milliseconds for retry
+/// `retry_index` (1-based), with 50%..100% jitter. Sequence: ~1s, ~2s, ~4s,
+/// ... capped at 30s.
+fn backoff_delay_ms(retry_index: u32) -> u64 {
+    const BACKOFF_BASE_MS: u64 = 1_000;
+    const BACKOFF_MAX_MS: u64 = 30_000;
 
     let exponent = (retry_index.saturating_sub(1)).min(6);
-    let base = BACKOFF_BASE_SECS.saturating_mul(1_u64 << exponent);
-    let capped = base.min(BACKOFF_MAX_SECS);
+    let base = BACKOFF_BASE_MS.saturating_mul(1_u64 << exponent);
+    let capped = base.min(BACKOFF_MAX_MS);
     // Jitter: 50%..100% of the computed delay to avoid thundering herds.
-    capped - rand::rng().random_range(0..=(capped / 2))
+    rand::rng().random_range(capped / 2..=capped)
 }
 
 /// Returns `true` when retrying the same transfer is unlikely to succeed.
@@ -850,27 +855,30 @@ mod tests {
     #[test]
     fn backoff_delay_is_exponential_and_capped() {
         // Jitter range is 50%..100% of the base delay:
-        // first retry ~1s (1), second ~2s (1-2), third ~4s (2-4).
-        let d1 = backoff_delay_secs(1);
-        assert_eq!(d1, 1, "first retry delay should be 1s: {d1}");
-
-        let d2 = backoff_delay_secs(2);
+        // first retry 0.5-1s, second 1-2s, third 2-4s.
+        let d1 = backoff_delay_ms(1);
         assert!(
-            (1..=2).contains(&d2),
-            "second retry delay should be ~2s: {d2}"
+            (500..=1_000).contains(&d1),
+            "first retry delay should be 0.5-1s: {d1}ms"
         );
 
-        let d3 = backoff_delay_secs(3);
+        let d2 = backoff_delay_ms(2);
         assert!(
-            (2..=4).contains(&d3),
-            "third retry delay should be ~4s: {d3}"
+            (1_000..=2_000).contains(&d2),
+            "second retry delay should be 1-2s: {d2}ms"
+        );
+
+        let d3 = backoff_delay_ms(3);
+        assert!(
+            (2_000..=4_000).contains(&d3),
+            "third retry delay should be 2-4s: {d3}ms"
         );
 
         for index in [8, 20, 100] {
-            let delay = backoff_delay_secs(index);
+            let delay = backoff_delay_ms(index);
             assert!(
-                (15..=30).contains(&delay),
-                "large retry indexes must be capped at 30s, got {delay} (index {index})"
+                (15_000..=30_000).contains(&delay),
+                "large retry indexes must be capped at 30s, got {delay}ms (index {index})"
             );
         }
     }
@@ -1279,7 +1287,7 @@ mod tests {
             ..AppConfig::default()
         };
         let mut manager = TransferManager::new(&config);
-        manager.backoff_override_secs = Some(0);
+        manager.backoff_override_ms = Some(0);
 
         let server = TestSftpServer::start().await;
         let session = server.connect_session().await;
@@ -1340,5 +1348,66 @@ mod tests {
             task,
             TransferError::RetriesExhausted { attempts: 1, .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn retry_sleep_aborts_when_cancelled_during_backoff() {
+        // Given: a manager with retries enabled, a server whose first WRITE
+        // fails (one-shot), and the real exponential backoff so the retry is
+        // still waiting when we cancel.
+        let config = AppConfig {
+            transfer_retry_count: 5,
+            ..AppConfig::default()
+        };
+        let manager = Arc::new(TransferManager::new(&config));
+
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("cancelled-retry.bin");
+        tokio::fs::write(&local_path, b"payload").await.unwrap();
+
+        server
+            .failures
+            .fail_remote_write
+            .store(true, Ordering::SeqCst);
+
+        // When: an upload task is spawned, then cancelled while it waits on
+        // the exponential backoff before retrying.
+        let manager_for_task = Arc::clone(&manager);
+        let upload = tokio::spawn(async move {
+            manager_for_task
+                .enqueue_upload(&session, &local_path, "/upload/cancelled-retry.bin")
+                .await
+        });
+
+        // Give the transfer a moment to fail the first write and enter the
+        // backoff sleep (first retry waits 0.5-1s without override), then
+        // cancel while it is sleeping.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let tasks = manager.tasks.lock().unwrap();
+        let task_id = tasks
+            .iter()
+            .find(|task| task.local_path.ends_with("cancelled-retry.bin"))
+            .map(|task| task.id)
+            .unwrap_or_else(|| panic!("task not found"));
+        drop(tasks);
+
+        let cancel_result = manager.cancel_transfer(task_id);
+        assert!(cancel_result.is_ok(), "task should be cancellable: {cancel_result:?}");
+
+        // Then: the spawned upload finishes with an error (cancelled at the
+        // next check boundary) and the task settles as Cancelled.
+        let result = upload.await.unwrap();
+        assert!(result.is_err(), "upload should not complete");
+        let status = manager
+            .tasks
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|task| task.id == task_id)
+            .map(|task| task.status.clone())
+            .unwrap();
+        assert_eq!(status, TransferStatus::Cancelled);
     }
 }
