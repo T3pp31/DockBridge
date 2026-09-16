@@ -69,19 +69,22 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
     ) async throws {
         // Serialize connect attempts: if a connection is already in progress,
         // reject the second call instead of letting two sessions race (the
-        // second one would orphan the first session id).
+        // second one would orphan the first session id). The check and the
+        // status flip below are both synchronous on the main actor, so no
+        // interleaving can occur between them.
         if connectionStatus.isConnecting {
             throw DockBridgeError.Generic(message: "A connection is already in progress.")
         }
+        connectionStatus = .connecting(endpoint: profile.endpointLabel)
+        lastDisconnectReason = nil
 
         try prepareClient()
         guard let client else {
+            connectionStatus = .disconnected
             throw DockBridgeError.Generic(message: "Rust client is not initialized.")
         }
 
         connectedProfileID = profile.id
-        connectionStatus = .connecting(endpoint: profile.endpointLabel)
-        lastDisconnectReason = nil
 
         var password = password
         var passphrase = passphrase
@@ -126,10 +129,11 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
             initialRemoteDirectory = resolvedDirectory
             connectionStatus = .connected(endpoint: profile.endpointLabel)
         } catch {
-            // Best-effort teardown of the Rust session so its health-monitor
-            // task does not keep running after a failed connect. Use the
-            // just-created session id rather than the (stale) stored one.
-            if let pendingSessionId = newSessionIdForCatch ?? sessionId,
+            // Best-effort teardown of the Rust session created by this connect
+            // attempt so its health-monitor task does not keep running. Only
+            // use `newSessionIdForCatch`: `sessionId` still refers to a
+            // previously established session, which must not be torn down here.
+            if let pendingSessionId = newSessionIdForCatch,
                let dismissClient = client {
                 try? dismissClient.disconnect(sessionId: pendingSessionId)
             }
