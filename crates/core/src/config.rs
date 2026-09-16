@@ -50,7 +50,12 @@ impl Default for DirectoryWalkLimits {
 }
 
 /// Runtime configuration passed into DockBridge core.
+///
+/// `#[serde(default)]` lets users specify only the keys they care about, and
+/// `deny_unknown_fields` turns key typos into parse errors instead of silently
+/// ignoring them.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
     /// SSH connection timeout in seconds.
     pub connection_timeout_secs: u64,
@@ -63,30 +68,22 @@ pub struct AppConfig {
     /// Maximum number of concurrent in-flight READ requests during a
     /// download (pipelined SFTP reads hide per-request round-trip latency).
     /// Peak buffered memory is roughly `depth × ~256 KiB` (SFTP packet ceiling).
-    #[serde(default = "default_transfer_download_pipeline_depth")]
     pub transfer_download_pipeline_depth: usize,
     /// Path to the DockBridge known hosts JSON store.
     pub known_hosts_path: PathBuf,
     /// Path to the OpenSSH `known_hosts` file merged on connect.
-    #[serde(default = "default_openssh_known_hosts_path")]
     pub openssh_known_hosts_path: PathBuf,
     /// When true, merges [`openssh_known_hosts_path`] into the DockBridge store before connecting.
-    #[serde(default = "default_merge_openssh_known_hosts_on_connect")]
     pub merge_openssh_known_hosts_on_connect: bool,
     /// When true, trusts host keys only for exact host/port matches (no fingerprint alias fallback).
-    #[serde(default = "default_known_hosts_strict_mode")]
     pub known_hosts_strict_mode: bool,
     /// When true, aborts connection if merging OpenSSH `known_hosts` fails.
-    #[serde(default = "default_fail_connect_on_openssh_merge_error")]
     pub fail_connect_on_openssh_merge_error: bool,
     /// Maximum number of files collected during recursive directory walks.
-    #[serde(default = "default_directory_walk_max_files")]
     pub directory_walk_max_files: u64,
     /// Maximum directory nesting depth during recursive directory walks.
-    #[serde(default = "default_directory_walk_max_depth")]
     pub directory_walk_max_depth: u32,
     /// Maximum combined file bytes collected during recursive directory walks.
-    #[serde(default = "default_directory_walk_max_total_bytes")]
     pub directory_walk_max_total_bytes: u64,
 }
 
@@ -248,34 +245,6 @@ fn default_known_hosts_path() -> PathBuf {
 
 fn default_openssh_known_hosts_path() -> PathBuf {
     expand_tilde(Path::new("~/.ssh/known_hosts"))
-}
-
-fn default_merge_openssh_known_hosts_on_connect() -> bool {
-    true
-}
-
-fn default_known_hosts_strict_mode() -> bool {
-    true
-}
-
-fn default_fail_connect_on_openssh_merge_error() -> bool {
-    true
-}
-
-fn default_directory_walk_max_files() -> u64 {
-    DEFAULT_DIRECTORY_WALK_MAX_FILES
-}
-
-fn default_directory_walk_max_depth() -> u32 {
-    DEFAULT_DIRECTORY_WALK_MAX_DEPTH
-}
-
-fn default_directory_walk_max_total_bytes() -> u64 {
-    DEFAULT_DIRECTORY_WALK_MAX_TOTAL_BYTES
-}
-
-fn default_transfer_download_pipeline_depth() -> usize {
-    DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH
 }
 
 /// Ensures the parent directory for the known hosts file exists.
@@ -530,5 +499,85 @@ mod tests {
         assert_eq!(mode, 0o700);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_toml_empty_file_equals_default() {
+        // Given: an empty TOML file
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty.toml");
+        std::fs::write(&path, "").unwrap();
+
+        // When: loading it as an AppConfig
+        // Then: it succeeds and equals AppConfig::default()
+        // (struct-level #[serde(default)] falls back to AppConfig::default(),
+        // so path fields keep their real defaults rather than empty PathBufs)
+        let config = AppConfig::from_toml_file(&path).unwrap();
+        assert_eq!(config.connection_timeout_secs, 30);
+        assert_eq!(
+            config.transfer_chunk_size_bytes,
+            DEFAULT_TRANSFER_CHUNK_SIZE_BYTES
+        );
+        assert_eq!(
+            config.transfer_download_pipeline_depth,
+            DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH
+        );
+        assert_eq!(
+            config.known_hosts_path,
+            PathBuf::from(default_known_hosts_path())
+        );
+        assert_eq!(
+            config.openssh_known_hosts_path,
+            PathBuf::from(default_openssh_known_hosts_path())
+        );
+        assert!(config.known_hosts_strict_mode);
+        assert!(config.merge_openssh_known_hosts_on_connect);
+    }
+
+    #[test]
+    fn from_toml_partial_file_uses_defaults() {
+        // Given: a TOML file with only one key
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("partial.toml");
+        std::fs::write(&path, "connection_timeout_secs = 15\n").unwrap();
+
+        // When: loading it as an AppConfig
+        // Then: the specified key is applied and the rest use defaults
+        let config = AppConfig::from_toml_file(&path).unwrap();
+        assert_eq!(config.connection_timeout_secs, 15);
+        assert_eq!(config.transfer_retry_count, 3);
+        assert_eq!(
+            config.known_hosts_path,
+            PathBuf::from(default_known_hosts_path())
+        );
+    }
+
+    #[test]
+    fn from_toml_unknown_key_is_rejected() {
+        // Given: a TOML file with a typo'd key name
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("unknown.toml");
+        std::fs::write(&path, "known_host_strict_mode = false\n").unwrap();
+
+        // When: loading it as an AppConfig
+        // Then: it fails with a parse error instead of silently ignoring it
+        let err = AppConfig::from_toml_file(&path).unwrap_err();
+        assert!(matches!(err, ConfigError::ParseFailed { .. }));
+    }
+
+    #[test]
+    fn default_toml_fields_match_app_config_schema() {
+        // Given: config/default.toml (the schema template the CLI ships with)
+        // When: every key it defines is loaded as an AppConfig
+        // Then: parsing succeeds, proving deny_unknown_fields rejects only
+        //       truly unknown keys in the repo's own config files
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let path = manifest_dir.join("../../config/default.toml");
+        AppConfig::from_toml_file(&path).unwrap_or_else(|err| {
+            panic!(
+                "config/default.toml must match AppConfig schema: {err} (path: {})",
+                path.display()
+            )
+        });
     }
 }

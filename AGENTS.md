@@ -46,8 +46,11 @@ Then drive the CLI (it reads the password, then `yes` to trust the host key on f
 
 Non-obvious gotchas discovered during setup:
 
-- The CLI config TOML has **no serde defaults**: a partial config fails with `missing field ...`.
-  Provide all `AppConfig` fields (see `config/default.toml`), e.g. `transfer_chunk_size_bytes`.
+- The CLI config TOML uses `#[serde(default, deny_unknown_fields)]` on `AppConfig`, so a partial
+  config (with only the keys you want to set) loads with defaults for the rest, and a typo'd key
+  name fails loudly instead of being silently ignored. When a field is omitted, the default comes
+  from `AppConfig::default()` (including `known_hosts_path` → `~/.dockbridge/known_hosts.json`),
+  never an empty path.
   Point `known_hosts_path` at a writable temp file and set
   `merge_openssh_known_hosts_on_connect = false` to avoid touching `~/.ssh/known_hosts`.
 - Remote paths resolve **absolute from `/`**, not the login home. Use full paths like
