@@ -567,19 +567,17 @@ impl KnownHostsManager {
                 .expect("canonical key must exist");
 
             let mut changed = false;
-            if !entry_matches_host(entry, &host, port) {
-                entry.aliases.push(HostAlias { host, port });
-                changed = true;
-            }
+            changed |= merge_trusted_alias(entry, &host, port);
 
             for alias in aliases {
-                if !entry_matches_host(entry, &alias.host, alias.port) {
-                    entry.aliases.push(alias);
-                    changed = true;
-                }
+                changed |= merge_trusted_alias(entry, &alias.host, alias.port);
             }
             changed |= merge_excluded_aliases(entry, &excluded_aliases);
 
+            // The fingerprint of this entry is guaranteed to match the imported
+            // key (find_canonical_key_by_fingerprint matched on port +
+            // fingerprint), so backfilling the OpenSSH representation cannot
+            // replace a trusted key with an untrusted one.
             if entry.public_key_openssh.is_none() {
                 entry.public_key_openssh = public_key_openssh;
                 changed = true;
@@ -592,12 +590,6 @@ impl KnownHostsManager {
         }
 
         if let Some(existing) = self.find_entry(&host, port) {
-            if existing.marker == Some(KnownHostMarker::Revoked)
-                || existing.marker == Some(KnownHostMarker::CertAuthority)
-            {
-                return MergeOutcome::default();
-            }
-
             let canonical_key = entry_key(&existing.host, existing.port);
             let entry = self.entries.get_mut(&canonical_key).expect("entry exists");
 
@@ -605,15 +597,34 @@ impl KnownHostsManager {
                 return MergeOutcome::default();
             }
 
-            let mut changed = false;
-            for alias in aliases {
-                if !entry_matches_host(entry, &alias.host, alias.port) {
-                    entry.aliases.push(alias);
+            // Marked (revoked / cert-authority) entries keep their marker — it
+            // is never changed by an import — but aliases, exclusions, and a
+            // missing OpenSSH public key are still merged so revocation scope
+            // and export completeness stay in sync with the source file.
+            if entry_is_non_trusting_marker(entry.marker) {
+                let mut changed = false;
+                for alias in aliases {
+                    changed |= merge_trusted_alias(entry, &alias.host, alias.port);
+                }
+                changed |= merge_excluded_aliases(entry, &excluded_aliases);
+                if entry.public_key_openssh.is_none() {
+                    entry.public_key_openssh = public_key_openssh;
                     changed = true;
                 }
+                return MergeOutcome {
+                    added: false,
+                    changed,
+                };
+            }
+
+            let mut changed = false;
+            for alias in aliases {
+                changed |= merge_trusted_alias(entry, &alias.host, alias.port);
             }
             changed |= merge_excluded_aliases(entry, &excluded_aliases);
 
+            // Fingerprints must match here (checked above), so backfilling the
+            // OpenSSH representation cannot swap in an untrusted key.
             if entry.public_key_openssh.is_none() {
                 entry.public_key_openssh = public_key_openssh;
                 changed = true;
@@ -706,6 +717,24 @@ fn entry_is_excluded_for_host(entry: &KnownHostEntry, host: &str, port: u16) -> 
         .excluded_aliases
         .iter()
         .any(|alias| alias.host == host && alias.port == port)
+}
+
+/// Appends `alias` to `entry.aliases` unless the host is already covered
+/// (as canonical host, an existing alias, or an exclusion). Returns `true`
+/// when the alias list changed.
+///
+/// A host in `excluded_aliases` must never also become a trusted alias:
+/// `entry_matches_host` treats exclusions as taking precedence, so a host in
+/// both lists would be silently untrusted while still looking like an alias.
+fn merge_trusted_alias(entry: &mut KnownHostEntry, host: &str, port: u16) -> bool {
+    if entry_matches_host(entry, host, port) || entry_is_excluded_for_host(entry, host, port) {
+        return false;
+    }
+    entry.aliases.push(HostAlias {
+        host: host.to_string(),
+        port,
+    });
+    true
 }
 
 fn merge_excluded_aliases(entry: &mut KnownHostEntry, excluded: &[HostAlias]) -> bool {
@@ -1410,6 +1439,79 @@ mod tests {
             entry.public_key_openssh.as_deref(),
             Some(openssh_key.as_str())
         );
+    }
+
+    #[test]
+    fn import_openssh_does_not_alias_a_host_that_is_excluded() {
+        // Given: an entry that excludes bad.example.com
+        // When: a later import lists bad.example.com as a plain alias
+        // Then: it is not added as a trusted alias (exclusion takes precedence)
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+
+        // Seed with the exclusion first.
+        {
+            let mut manager = KnownHostsManager::load(&json_path).unwrap();
+            let seed = dir.path().join("seed_known_hosts");
+            write_test_file_mode_0600(
+                &seed,
+                format!("example.com,!bad.example.com {openssh_key}\n"),
+            );
+            manager.import_openssh(&seed).unwrap();
+        }
+
+        // Now import a file that adds bad.example.com as a plain alias.
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("example.com,bad.example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert!(
+            !entry.aliases.iter().any(|a| a.host == "bad.example.com"),
+            "excluded host must not become a trusted alias"
+        );
+        assert!(
+            entry.excluded_aliases.iter().any(|a| a.host == "bad.example.com"),
+            "exclusion must be preserved"
+        );
+    }
+
+    #[test]
+    fn import_openssh_revoked_entry_merges_aliases_and_keeps_marker() {
+        // Given: a @revoked entry for example.com
+        // When: a later import lists the same host with an additional alias
+        // Then: the marker is preserved and the alias ships the revocation scope
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("@revoked example.com,revoked-alias.example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.marker, Some(KnownHostMarker::Revoked));
+        assert!(
+            entry.aliases.iter().any(|a| a.host == "revoked-alias.example.com"),
+            "revocation scope alias should be merged"
+        );
+
+        let reloaded = KnownHostsManager::load(&json_path).unwrap();
+        let entry = reloaded.find_entry("revoked-alias.example.com", 22).unwrap();
+        assert_eq!(entry.marker, Some(KnownHostMarker::Revoked));
     }
 
     #[test]
