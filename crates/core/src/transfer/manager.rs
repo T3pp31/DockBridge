@@ -34,6 +34,8 @@ pub enum TransferStatus {
 #[derive(Debug, Clone)]
 pub struct TransferTask {
     pub id: u64,
+    /// ID of the SSH session that enqueued this transfer.
+    pub session_id: u64,
     pub direction: TransferDirection,
     pub local_path: PathBuf,
     pub remote_path: String,
@@ -134,12 +136,22 @@ impl TransferManager {
 
         match task.direction {
             TransferDirection::Upload => {
-                self.enqueue_upload(session, &task.local_path, &task.remote_path)
-                    .await
+                self.enqueue_upload(
+                    session,
+                    task.session_id,
+                    &task.local_path,
+                    &task.remote_path,
+                )
+                .await
             }
             TransferDirection::Download => {
-                self.enqueue_download(session, &task.remote_path, &task.local_path)
-                    .await
+                self.enqueue_download(
+                    session,
+                    task.session_id,
+                    &task.remote_path,
+                    &task.local_path,
+                )
+                .await
             }
         }
     }
@@ -314,6 +326,7 @@ impl TransferManager {
     pub async fn enqueue_upload(
         &self,
         session: &SshSession,
+        session_id: u64,
         local_path: impl AsRef<Path>,
         remote_path: impl Into<String>,
     ) -> Result<TransferTask, TransferError> {
@@ -322,6 +335,7 @@ impl TransferManager {
 
         let task = TransferTask {
             id: self.next_id.fetch_add(1, Ordering::Relaxed),
+            session_id,
             direction: TransferDirection::Upload,
             local_path: local_path.clone(),
             remote_path: remote_path.clone(),
@@ -351,6 +365,7 @@ impl TransferManager {
     pub async fn enqueue_download(
         &self,
         session: &SshSession,
+        session_id: u64,
         remote_path: impl Into<String>,
         local_path: impl AsRef<Path>,
     ) -> Result<TransferTask, TransferError> {
@@ -359,6 +374,7 @@ impl TransferManager {
 
         let task = TransferTask {
             id: self.next_id.fetch_add(1, Ordering::Relaxed),
+            session_id,
             direction: TransferDirection::Download,
             local_path: local_path.clone(),
             remote_path: remote_path.clone(),
@@ -388,6 +404,7 @@ impl TransferManager {
     pub async fn enqueue_upload_entry(
         &self,
         session: &SshSession,
+        session_id: u64,
         local_path: impl AsRef<std::path::Path>,
         remote_directory: impl Into<String>,
     ) -> Result<Vec<TransferTask>, TransferError> {
@@ -430,7 +447,7 @@ impl TransferManager {
                         .map_err(transfer_error_from_sftp)?;
                 }
                 let task = self
-                    .enqueue_upload(session, &entry.local_path, remote_path)
+                    .enqueue_upload(session, session_id, &entry.local_path, remote_path)
                     .await?;
                 tasks.push(task);
             }
@@ -449,7 +466,7 @@ impl TransferManager {
                 .map_err(transfer_error_from_sftp)?;
         }
         let task = self
-            .enqueue_upload(session, local_path, remote_path)
+            .enqueue_upload(session, session_id, local_path, remote_path)
             .await?;
         Ok(vec![task])
     }
@@ -458,6 +475,7 @@ impl TransferManager {
     pub async fn enqueue_download_entry(
         &self,
         session: &SshSession,
+        session_id: u64,
         remote_path: impl Into<String>,
         local_directory: impl AsRef<std::path::Path>,
     ) -> Result<Vec<TransferTask>, TransferError> {
@@ -505,7 +523,7 @@ impl TransferManager {
                         .map_err(|err| transfer_error_from_message(err.to_string()))?;
                 }
                 let task = self
-                    .enqueue_download(session, &entry.remote_path, &local_path)
+                    .enqueue_download(session, session_id, &entry.remote_path, &local_path)
                     .await?;
                 tasks.push(task);
             }
@@ -518,7 +536,7 @@ impl TransferManager {
                 .unwrap_or("download");
             let local_path = local_directory.join(file_name);
             let task = self
-                .enqueue_download(session, &normalized, &local_path)
+                .enqueue_download(session, session_id, &normalized, &local_path)
                 .await?;
             Ok(vec![task])
         }
@@ -725,6 +743,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 1,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -745,6 +764,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 42,
+            session_id: 1,
             direction: TransferDirection::Download,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -765,6 +785,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 7,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -792,6 +813,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 8,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -839,6 +861,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 99,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -874,6 +897,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 11,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -900,6 +924,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 13,
+            session_id: 1,
             direction: TransferDirection::Download,
             local_path: PathBuf::from("/tmp/downloaded.txt"),
             remote_path: "/remote/downloaded.txt".to_string(),
@@ -931,6 +956,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 12,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -957,6 +983,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 3,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -988,6 +1015,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 100,
+            session_id: 1,
             direction: TransferDirection::Download,
             local_path: PathBuf::from("/tmp/file.bin"),
             remote_path: "/remote/file.bin".to_string(),
@@ -1011,6 +1039,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 101,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.bin"),
             remote_path: "/remote/file.bin".to_string(),
@@ -1034,6 +1063,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 102,
+            session_id: 1,
             direction: TransferDirection::Download,
             local_path: PathBuf::from("/tmp/file.bin"),
             remote_path: "/remote/file.bin".to_string(),
@@ -1058,6 +1088,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 103,
+            session_id: 1,
             direction: TransferDirection::Download,
             local_path: PathBuf::from("/tmp/file.bin"),
             remote_path: "/remote/file.bin".to_string(),
@@ -1080,6 +1111,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         manager.insert_task(TransferTask {
             id: 1,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/a.txt"),
             remote_path: "/remote/a.txt".to_string(),
@@ -1089,6 +1121,7 @@ mod tests {
         });
         manager.insert_task(TransferTask {
             id: 2,
+            session_id: 1,
             direction: TransferDirection::Download,
             local_path: PathBuf::from("/tmp/b.txt"),
             remote_path: "/remote/b.txt".to_string(),
@@ -1109,6 +1142,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         manager.insert_task(TransferTask {
             id: 1,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/a.txt"),
             remote_path: "/remote/a.txt".to_string(),
@@ -1140,7 +1174,7 @@ mod tests {
         // When: a download task is enqueued (goes through the retry loop and the
         // pipelined download path)
         let task = manager
-            .enqueue_download(&session, "/download/e2e.bin", &local_path)
+            .enqueue_download(&session, 1, "/download/e2e.bin", &local_path)
             .await
             .expect("download should succeed");
 

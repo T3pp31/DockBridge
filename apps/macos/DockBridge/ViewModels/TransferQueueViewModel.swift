@@ -21,12 +21,26 @@ final class TransferQueueViewModel: ObservableObject {
     }
 
     private let bridge: RustBridgeService
+    /// Rust-side session ID whose transfer tasks this queue shows.
+    ///
+    /// When set, only tasks belonging to that session are surfaced (the
+    /// transfer queue is global in the Rust engine, so each window/tab filters
+    /// to its own session). `nil` shows all sessions (legacy behavior).
+    var sessionId: UInt64?
+
     private var refreshTask: Task<Void, Never>?
     private var progressSamples: [UInt64: (bytes: UInt64, date: Date)] = [:]
     private var transferSpeeds: [UInt64: Double] = [:]
 
     init(bridge: RustBridgeService) {
         self.bridge = bridge
+    }
+
+    /// Returns tasks filtered to this queue's session (or all when nil).
+    /// Internal so the session-scoping behavior can be unit-tested.
+    func filteredTasks(from fetched: [TransferTaskRecord]) -> [TransferTaskRecord] {
+        guard let sessionId else { return fetched }
+        return fetched.filter { $0.sessionId == sessionId }
     }
 
     func startPolling() {
@@ -62,8 +76,9 @@ final class TransferQueueViewModel: ObservableObject {
                 transferSpeeds.removeAll()
                 return
             }
-            updateProgressSamples(for: fetched)
-            tasks = fetched
+            let sessionTasks = filteredTasks(from: fetched)
+            updateProgressSamples(for: sessionTasks)
+            tasks = sessionTasks
             errorMessage = nil
         } catch {
             errorMessage = error.dockBridgeUserMessage
