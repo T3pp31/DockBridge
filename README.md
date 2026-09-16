@@ -82,7 +82,7 @@ The CLI exits with distinct codes so scripts can branch on the failure category 
 
 ### Machine-readable output
 
-`list --output json` emits an array of `{"kind":"file|dir","size":...,"path":"...","modified_at":...}` objects (tab-separated text is the default). This is safe for file names containing tabs or newlines:
+`list --output json` emits an array of `{"kind":"file|dir","size":...,"path":"...","modified_at":...}` objects (tab-separated text is the default). `modified_at` is a Unix timestamp (`null` when the server reported no modification time) — consumers must handle `null`. This format is safe for file names containing tabs or newlines:
 
 ```bash
 cargo run -q -p dockbridge-cli -- list \

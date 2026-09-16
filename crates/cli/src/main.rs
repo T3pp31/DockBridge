@@ -267,8 +267,13 @@ fn prompt_yes_no_tty(prompt: &str) -> bool {
         .open("/dev/tty")
     {
         Ok(tty) => tty,
-        Err(_) => {
-            eprintln!("no controlling terminal available; refusing to accept host key");
+        Err(err) => {
+            // /dev/tty open can fail for reasons other than "no tty"
+            // (permissions, missing device node); surface the OS error so the
+            // cause is actionable rather than a misleading blanket message.
+            eprintln!(
+                "cannot open controlling terminal (/dev/tty): {err}; refusing to accept host key"
+            );
             return false;
         }
     };
@@ -328,7 +333,7 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
                         println!("{kind}\t{}\t{}", entry.size, entry.path);
                     }
                 }
-                OutputFormat::Json => print_json_listing(entries),
+                OutputFormat::Json => print_json_listing(entries)?,
             }
         }
         Commands::Upload {
@@ -341,6 +346,11 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
 
             let manager = TransferManager::new(&config);
             if recursive {
+                // With --recursive the remote argument is a DESTINATION
+                // DIRECTORY. Reject it early if it points at an existing file
+                // so we never treat a file path as a directory (silent data
+                // loss / confusing rename).
+                reject_remote_file_destination(&session, &remote).await?;
                 let tasks = manager
                     .enqueue_upload_entry(&session, &local, &remote)
                     .await?;
@@ -364,6 +374,15 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
 
             let manager = TransferManager::new(&config);
             if recursive {
+                // With --recursive the local argument is a DESTINATION
+                // DIRECTORY. Reject an existing regular file up front so we
+                // never try to treat a file as a directory.
+                if local.exists() && local.is_file() {
+                    anyhow::bail!(
+                        "--recursive destination '{}' is an existing file; it must be a directory",
+                        local.display()
+                    );
+                }
                 let tasks = manager
                     .enqueue_download_entry(&session, &remote, &local)
                     .await?;
@@ -410,16 +429,20 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_json_listing(entries: Vec<dockbridge_core::RemoteFile>) {
-    println!("{}", json_listing(&entries));
+fn print_json_listing(entries: Vec<dockbridge_core::RemoteFile>) -> anyhow::Result<()> {
+    println!("{}", json_listing(&entries)?);
+    Ok(())
 }
 
-fn json_listing(entries: &[dockbridge_core::RemoteFile]) -> String {
+/// Serializes a remote directory listing as a JSON array. Each entry's
+/// `modified_at` is `null` when the server did not report a modification time.
+fn json_listing(entries: &[dockbridge_core::RemoteFile]) -> anyhow::Result<String> {
     #[derive(Serialize)]
     struct JsonEntry<'a> {
         kind: &'a str,
         size: u64,
         path: &'a str,
+        // `null` when no mtime is available — consumers must handle null.
         modified_at: Option<u64>,
     }
 
@@ -432,7 +455,7 @@ fn json_listing(entries: &[dockbridge_core::RemoteFile]) -> String {
             modified_at: entry.modified_at_secs,
         })
         .collect();
-    serde_json::to_string(&serde_entries).unwrap_or_else(|_| "[]".to_string())
+    serde_json::to_string(&serde_entries).map_err(Into::into)
 }
 
 /// Maps an application error to a stable CLI exit code so scripts can branch on
@@ -448,6 +471,9 @@ fn exit_code_for_error(err: &anyhow::Error) -> u8 {
                 AppError::Transfer(TransferError::Cancelled) => EXIT_CANCELLED,
                 AppError::Transfer(_) => EXIT_TRANSFER,
                 AppError::Sftp(SftpError::Cancelled) => EXIT_CANCELLED,
+                // Any other SFTP error during a transfer/list is a transfer
+                // failure (I/O, status code, timeout) for script classification.
+                AppError::Sftp(_) => EXIT_TRANSFER,
                 AppError::Security(
                     SecurityError::HostKeyMismatch { .. } | SecurityError::HostKeyRejected { .. },
                 ) => EXIT_HOST_KEY,
@@ -485,6 +511,28 @@ async fn connect(
     SshSession::connect(profile, config, known_hosts, prompt)
         .await
         .map_err(Into::into)
+}
+
+/// Rejects a remote destination that is an existing *file* when the caller is
+/// about to treat it as a directory (recursive upload). A `SSH_FX_NO_SUCH_FILE`
+/// (or an empty parent) is fine — the directory will be created.
+///
+/// Fails the whole command loudly rather than silently misinterpreting a file
+/// path as a directory (which could place files in an unexpected location or
+/// error only after transfer began).
+async fn reject_remote_file_destination(
+    session: &SshSession,
+    remote: &str,
+) -> anyhow::Result<()> {
+    let client = SftpClient::new(session);
+    // None = path does not exist (the directory will be created); Some(true) =
+    // directory; Some(false) = existing non-directory which must be rejected.
+    match client.remote_path_kind(remote).await? {
+        Some(true) | None => Ok(()),
+        Some(false) => anyhow::bail!(
+            "--recursive destination '{remote}' is an existing remote file; it must be a directory"
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -537,6 +585,40 @@ mod tests {
     }
 
     #[test]
+    fn exit_code_mapping_covers_additional_variants() {
+        // Non-cancelled SFTP errors map to EXIT_TRANSFER.
+        let err = anyhow::Error::new(AppError::Sftp(SftpError::ListFailed {
+            path: "/".to_string(),
+            message: "boom".to_string(),
+        }));
+        assert_eq!(exit_code_for_error(&err), EXIT_TRANSFER);
+
+        let err = anyhow::Error::new(AppError::Sftp(SftpError::UploadFailed {
+            local: "l".to_string(),
+            remote: "r".to_string(),
+            message: "boom".to_string(),
+        }));
+        assert_eq!(exit_code_for_error(&err), EXIT_TRANSFER);
+
+        // Host key mismatch is EXIT_HOST_KEY.
+        let err = anyhow::Error::new(AppError::Security(SecurityError::HostKeyMismatch {
+            host: "h".to_string(),
+            port: 22,
+            expected: "abc".to_string(),
+            actual: "def".to_string(),
+        }));
+        assert_eq!(exit_code_for_error(&err), EXIT_HOST_KEY);
+
+        // Non-host-key connection variants are EXIT_OTHER.
+        let err = anyhow::Error::new(AppError::Connection(ConnectionError::ConnectFailed {
+            host: "h".to_string(),
+            port: 22,
+            message: "nope".to_string(),
+        }));
+        assert_eq!(exit_code_for_error(&err), EXIT_OTHER);
+    }
+
+    #[test]
     fn unknown_anyhow_error_maps_to_other() {
         let err = anyhow::anyhow!("something else went wrong");
         assert_eq!(exit_code_for_error(&err), EXIT_OTHER);
@@ -566,7 +648,8 @@ mod tests {
             },
         ];
 
-        let json: Value = serde_json::from_str(&json_listing(&entries)).expect("valid JSON");
+        let json_text = json_listing(&entries).expect("serialize listing");
+        let json: Value = serde_json::from_str(&json_text).expect("valid JSON");
         let array = json.as_array().expect("array");
         assert_eq!(array.len(), 2);
         assert_eq!(array[0]["kind"], "file");
