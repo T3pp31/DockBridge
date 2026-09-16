@@ -1173,7 +1173,23 @@ async fn create_exclusive_remote_partial(
             .await
         {
             Ok(remote_file) => return Ok((partial_path, remote_file)),
-            Err(err) if is_remote_file_exists_error(&err) => continue,
+            Err(err) if is_remote_file_exists_error(&err) => {
+                // SSH_FX_FAILURE is generic; it may be the exclusivity race but
+                // also permission/IO problems. Confirm the partial path really
+                // exists via stat before retrying, otherwise surface the error.
+                match client.sftp().metadata(&partial_path).await {
+                    Ok(_) => continue,
+                    Err(stat_err) => {
+                        return Err(SftpError::UploadFailed {
+                            local: local.to_string(),
+                            remote: remote.to_string(),
+                            message: format!(
+                                "{err}; failed to confirm path: {stat_err}"
+                            ),
+                        });
+                    }
+                }
+            }
             Err(err) => {
                 return Err(SftpError::UploadFailed {
                     local: local.to_string(),
@@ -1309,14 +1325,22 @@ fn classify_sftp_client_error(err: SftpClientError, path: &str) -> SftpError {
         SftpClientError::Timeout => SftpError::Timeout {
             path: path.to_string(),
         },
-        SftpClientError::IO(message)
-        | SftpClientError::Limited(message)
-        | SftpClientError::UnexpectedBehavior(message) => {
+        // Protocol violations (unexpected packet / unexpected behavior) are
+        // typed as SSH_FX_BAD_MESSAGE rather than a generic error so
+        // is_non_retryable_error can classify them as non-retryable without
+        // string matching.
+        SftpClientError::UnexpectedBehavior(message) => SftpError::RemoteStatus {
+            code: RemoteStatusCode::BadMessage,
+            path: format!("{path}: {message}"),
+        },
+        SftpClientError::UnexpectedPacket => SftpError::RemoteStatus {
+            code: RemoteStatusCode::BadMessage,
+            path: path.to_string(),
+        },
+        // Local I/O errors (timeouts, interrupted reads) are retryable.
+        SftpClientError::IO(message) | SftpClientError::Limited(message) => {
             SftpError::Other(anyhow::anyhow!("SFTP error for '{path}': {message}"))
         }
-        SftpClientError::UnexpectedPacket => SftpError::Other(anyhow::anyhow!(
-            "SFTP protocol error for '{path}': unexpected packet"
-        )),
     }
 }
 
@@ -1341,16 +1365,16 @@ fn is_remote_no_such_file_error(err: &SftpClientError) -> bool {
     matches!(remote_status_code(err), Some(RemoteStatusCode::NoSuchFile))
 }
 
-/// Returns `true` when `err` is a typed SFTP status indicating the open with
-/// `SSH_FX_EXCLUDE` failed because the partial path already exists.
+/// Returns `true` when `err` is a typed SFTP status that *might* mean the open
+/// with `SSH_FX_EXCLUDE` failed because the partial path already exists.
 ///
-/// Servers express this with `SSH_FX_FAILURE` (OpenSSH) or `SSH_FX_PERMISSION_DENIED`
-/// depending on implementation; both mean "the exclusive create lost the race".
+/// Only `SSH_FX_FAILURE` is treated as a candidate: OpenSSH reports the
+/// exclusive-create race with `SSH_FX_FAILURE`, while `SSH_FX_PERMISSION_DENIED`
+/// more often indicates a real permissions problem (quota, read-only FS) that
+/// retrying would never fix. Callers must still confirm the path exists via
+/// `stat` before treating a failure as "already exists".
 fn is_remote_file_exists_error(err: &SftpClientError) -> bool {
-    matches!(
-        remote_status_code(err),
-        Some(RemoteStatusCode::Failure | RemoteStatusCode::PermissionDenied)
-    )
+    matches!(remote_status_code(err), Some(RemoteStatusCode::Failure))
 }
 
 #[cfg(test)]
@@ -1844,6 +1868,11 @@ mod tests {
         let io_err = SftpClientError::IO("permission denied".to_string());
         assert!(!is_remote_file_exists_error(&io_err));
         assert_eq!(remote_status_code(&io_err), None);
+
+        // SSH_FX_PERMISSION_DENIED is a real permission problem, not proof the
+        // exclusive-create lost a race; it must not trigger the retry loop.
+        let permission = make_status(RawCode::PermissionDenied, "Permission denied");
+        assert!(!is_remote_file_exists_error(&permission));
     }
 
     #[test]
@@ -1866,6 +1895,32 @@ mod tests {
 
         match classify_sftp_client_error(SftpClientError::Timeout, "/upload/f.txt") {
             SftpError::Timeout { path } => assert_eq!(path, "/upload/f.txt"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_maps_protocol_violations_to_bad_message() {
+        use russh_sftp::protocol::{Status, StatusCode as RawCode};
+
+        // UnexpectedBehavior / UnexpectedPacket are protocol violations:
+        // typed as SSH_FX_BAD_MESSAGE so retry policy is decided without
+        // matching message text.
+        let behavior = SftpClientError::UnexpectedBehavior("broken sequence".to_string());
+        match classify_sftp_client_error(behavior, "/upload/f.txt") {
+            SftpError::RemoteStatus {
+                code: RemoteStatusCode::BadMessage,
+                path,
+            } => assert!(path.contains("/upload/f.txt")),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let packet = SftpClientError::UnexpectedPacket;
+        match classify_sftp_client_error(packet, "/upload/f.txt") {
+            SftpError::RemoteStatus {
+                code: RemoteStatusCode::BadMessage,
+                ..
+            } => {}
             other => panic!("unexpected: {other:?}"),
         }
     }
