@@ -133,9 +133,8 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
             // attempt so its health-monitor task does not keep running. Only
             // use `newSessionIdForCatch`: `sessionId` still refers to a
             // previously established session, which must not be torn down here.
-            if let pendingSessionId = newSessionIdForCatch,
-               let dismissClient = client {
-                try? dismissClient.disconnect(sessionId: pendingSessionId)
+            if let pendingSessionId = newSessionIdForCatch {
+                try? client.disconnect(sessionId: pendingSessionId)
             }
             sessionId = nil
             clearConnectionState()
