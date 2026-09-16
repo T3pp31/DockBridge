@@ -640,7 +640,7 @@ final class MainViewModel: ObservableObject {
 
         // Track the temporary copy so edits are re-uploaded on save and
         // cleaned up later.
-        let remoteDirectory = RemotePath.parent(of: item.path) ?? "/"
+        let remoteDirectory = (try? RemotePath.parent(of: item.path)) ?? "/"
         let session = RemoteEditSession(
             remotePath: item.path,
             remoteDirectory: remoteDirectory,
