@@ -25,12 +25,13 @@ struct LocalFileDragPayload: Codable, Hashable, Transferable {
     }
 
     static var transferRepresentation: some TransferRepresentation {
-        // App-internal drops stay Codable; external destinations (Finder,
-        // Mail, Terminal) receive the file URL itself.
-        CodableRepresentation(contentType: .dockBridgeLocalFile)
+        // External destinations (Finder, Mail, Terminal) receive the file
+        // URL itself; app-internal drops stay Codable. FileRepresentation
+        // comes first so external apps do not fall back to the custom UTType.
         FileRepresentation(exportedContentType: .fileURL) { payload in
             SentTransferredFile(payload.url)
         }
+        CodableRepresentation(contentType: .dockBridgeLocalFile)
     }
 
     func itemProvider() -> NSItemProvider {
