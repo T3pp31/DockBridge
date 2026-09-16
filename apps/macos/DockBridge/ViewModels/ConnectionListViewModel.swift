@@ -92,8 +92,11 @@ final class ConnectionListViewModel: ObservableObject {
         panel.prompt = "Import"
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
-        guard let contents = try? String(contentsOf: url, encoding: .utf8) else {
-            errorMessage = "Could not read SSH config file."
+        let contents: String
+        do {
+            contents = try String(contentsOf: url, encoding: .utf8)
+        } catch {
+            errorMessage = "Could not read SSH config file: \(error.localizedDescription)"
             return
         }
 
@@ -105,11 +108,21 @@ final class ConnectionListViewModel: ObservableObject {
 
         let imported = SSHConfigParser.toProfiles(hosts)
         var updated = profiles
+        var skipped: [String] = []
         for profile in imported {
+            // Skip aliases that already exist (re-importing the same config
+            // or an alias colliding with a manual profile must not duplicate).
+            if profiles.contains(where: { $0.name == profile.name }) {
+                skipped.append(profile.name)
+                continue
+            }
             updated.append(profile)
         }
         do {
             profiles = try store.saveProfiles(updated)
+            if let first = skipped.first {
+                errorMessage = "Imported \(imported.count - skipped.count) profile(s); skipped \(skipped.count) existing name(s), including: \(first)"
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

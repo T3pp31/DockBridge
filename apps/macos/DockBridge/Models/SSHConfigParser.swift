@@ -29,11 +29,17 @@ enum SSHConfigParser {
 
             if key == "host" {
                 if let current { hosts.append(current) }
-                // Only a plain alias (no wildcards / patterns) is importable.
-                if value.contains("*") || value.contains("?") {
+                // Split space-separated aliases; blocks containing wildcards
+                // or patterns are skipped (not importable as a single host).
+                let aliases = value.split(separator: " ").map(String.init)
+                if aliases.contains(where: { $0.contains("*") || $0.contains("?") }) {
                     current = nil
+                } else if aliases.count == 1 {
+                    current = SSHConfigHost(alias: aliases[0])
                 } else {
-                    current = SSHConfigHost(alias: value)
+                    // Multiple aliases (`Host foo bar`) are uncommon for user
+                    // configs; import only the first one to keep profiles clean.
+                    current = SSHConfigHost(alias: aliases[0])
                 }
                 continue
             }
@@ -41,13 +47,16 @@ enum SSHConfigParser {
             guard var host = current else { continue }
             switch key {
             case "hostname":
-                host.hostName = value
+                // `%h` / `%n` token expansion is unsupported for imports.
+                if !value.contains("%") {
+                    host.hostName = value
+                }
             case "user":
                 host.user = value
             case "port":
                 host.port = UInt16(value)
             case "identityfile":
-                host.identityFile = value
+                host.identityFile = expandTilde(value)
             default:
                 break
             }
@@ -68,5 +77,12 @@ enum SSHConfigParser {
                 privateKeyPath: host.identityFile
             )
         }
+    }
+
+    /// Expands a leading `~` to the current user's home directory
+    /// (`~user` and bare `~` without a path suffix are left untouched).
+    private static func expandTilde(_ path: String) -> String {
+        guard path == "~" || path.hasPrefix("~/") else { return path }
+        return FileManager.default.homeDirectoryForCurrentUser.path + path.dropFirst()
     }
 }
