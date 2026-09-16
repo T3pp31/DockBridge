@@ -166,8 +166,8 @@ final class ConnectionListViewModel: ObservableObject {
             let usesRsa = await Task.detached(priority: .userInitiated) {
                 Self.inspectRsa(
                     profile: profile,
-                    keychain: keychain,
-                    bookmarkService: bookmarkService
+                    keychain: self.keychain,
+                    bookmarkService: self.bookmarkService
                 )
             }.value
             switch usesRsa {
