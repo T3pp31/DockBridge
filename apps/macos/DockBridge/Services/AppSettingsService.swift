@@ -42,6 +42,13 @@ extension Notification.Name {
     static let appConfigDidChange = Notification.Name("DockBridgeAppConfigDidChange")
 }
 
+/// Returns the value only when it is non-negative so a corrupt/negative
+/// UserDefaults entry cannot trap on `UInt64(...)` conversion.
+private func nonNegative(_ value: Int?) -> Int? {
+    guard let value, value >= 0 else { return nil }
+    return value
+}
+
 final class AppSettingsService: @unchecked Sendable {
     static let shared = AppSettingsService()
 
@@ -94,12 +101,15 @@ final class AppSettingsService: @unchecked Sendable {
                 defaults.object(forKey: AppSettingsKeys.transferChunkSizeBytes) as? Int
                     ?? Int(AppConfig.default.transferChunkSizeBytes)
             ),
-            sshInactivityTimeoutSecs: (defaults.object(
-                forKey: AppSettingsKeys.sshInactivityTimeoutSecs
-            ) as? Int).map(UInt64.init) ?? AppConfig.default.sshInactivityTimeoutSecs,
+            sshInactivityTimeoutSecs: nonNegative(
+                defaults.object(forKey: AppSettingsKeys.sshInactivityTimeoutSecs) as? Int
+            )
+                .map(UInt64.init)
+                ?? AppConfig.default.sshInactivityTimeoutSecs,
             sshKeepaliveIntervalSecs: UInt64(
-                defaults.object(forKey: AppSettingsKeys.sshKeepaliveIntervalSecs) as? Int
-                    ?? Int(AppConfig.default.sshKeepaliveIntervalSecs)
+                nonNegative(
+                    defaults.object(forKey: AppSettingsKeys.sshKeepaliveIntervalSecs) as? Int
+                ) ?? Int(AppConfig.default.sshKeepaliveIntervalSecs)
             ),
             defaultLocalPath: defaults.string(forKey: AppSettingsKeys.defaultLocalPath)
                 ?? AppConfig.default.defaultLocalPath,
@@ -142,6 +152,10 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(Int(config.transferChunkSizeBytes), forKey: AppSettingsKeys.transferChunkSizeBytes)
         if let inactivity = config.sshInactivityTimeoutSecs {
             defaults.set(Int(inactivity), forKey: AppSettingsKeys.sshInactivityTimeoutSecs)
+        } else {
+            // Persist an explicit "disabled" state instead of leaving a stale
+            // value from an earlier version that would resurface on relaunch.
+            defaults.removeObject(forKey: AppSettingsKeys.sshInactivityTimeoutSecs)
         }
         defaults.set(
             Int(config.sshKeepaliveIntervalSecs),
