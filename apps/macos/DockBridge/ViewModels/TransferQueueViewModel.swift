@@ -25,7 +25,8 @@ final class TransferQueueViewModel: ObservableObject {
     private var progressSamples: [UInt64: (bytes: UInt64, date: Date)] = [:]
     private var transferSpeeds: [UInt64: Double] = [:]
     /// Previous snapshot used to detect inProgress -> completed/failed transitions.
-    private var previousTasks: [TransferTaskRecord] = []
+    /// `nil` until the first fetch so already-finished tasks are not re-notified.
+    private var previousTasks: [TransferTaskRecord]?
 
     init(bridge: RustBridgeService) {
         self.bridge = bridge
@@ -118,10 +119,14 @@ final class TransferQueueViewModel: ObservableObject {
 
     /// Posts a user notification when a transfer transitions from
     /// in-progress to completed/failed, but only while the app is in the
-    /// background (otherwise the queue UI is the feedback).
-    private func notifyFinishedTransitions(from old: [TransferTaskRecord], to new: [TransferTaskRecord]) {
+    /// background (otherwise the queue UI is the feedback). The first fetch
+    /// has no previous snapshot and never notifies (no spurious notifications
+    /// for tasks that finished before the app looked at them).
+    private func notifyFinishedTransitions(from old: [TransferTaskRecord]?, to new: [TransferTaskRecord]) {
         guard !NSApp.isActive else { return }
-        let oldMap = Dictionary(uniqueKeysWithValues: old.map { ($0.id, $0) })
+        let oldMap = Dictionary(uniqueKeysWithValues: (old ?? []).map { ($0.id, $0) })
+        // With no previous snapshot there is nothing to diff against.
+        guard old != nil else { return }
 
         for task in new {
             guard let previous = oldMap[task.id] else { continue }
@@ -142,11 +147,21 @@ final class TransferQueueViewModel: ObservableObject {
 
             let content = UNMutableNotificationContent()
             content.title = title
-            content.body = task.localPath
+            content.body = URL(fileURLWithPath: task.localPath).lastPathComponent
             content.sound = .default
 
+            // Stable per (task, status) identifier: re-registering the same
+            // transition replaces the pending notification instead of
+            // stacking duplicates.
+            let statusKey: String
+            switch task.status {
+            case .completed: statusKey = "completed"
+            case .failed: statusKey = "failed"
+            case .cancelled: statusKey = "cancelled"
+            case .pending, .inProgress: continue
+            }
             let request = UNNotificationRequest(
-                identifier: "transfer-\(task.id)-\(UUID().uuidString)",
+                identifier: "transfer-\(task.id)-\(statusKey)",
                 content: content,
                 trigger: nil
             )
