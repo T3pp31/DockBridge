@@ -299,15 +299,19 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
 
     nonisolated func onSessionDisconnected(sessionId: UInt64, reason: String) {
         Task { @MainActor in
-            let target = self.sessions.values.first { $0.sessionId == sessionId }
-            if let target {
-                target.markLost(reason: reason)
-                if target.id == self.activeSessionID {
-                    self.syncPublishedState(from: target)
-                }
-            } else if self.sessionId == sessionId {
-                self.handleImplicitDisconnect(reason: reason)
+            handleSessionDisconnected(sessionId: sessionId, reason: reason)
+        }
+    }
+
+    private func handleSessionDisconnected(sessionId: UInt64, reason: String) {
+        let target = sessions.values.first { $0.sessionId == sessionId }
+        if let target {
+            target.markLost(reason: reason)
+            if target.id == activeSessionID {
+                syncPublishedState(from: target)
             }
+        } else if self.sessionId == sessionId {
+            handleImplicitDisconnect(reason: reason)
         }
     }
 
@@ -545,7 +549,8 @@ extension RustBridgeService {
     }
 
     func simulateSessionDisconnectedForTesting(sessionId: UInt64, reason: String) {
-        onSessionDisconnected(sessionId: sessionId, reason: reason)
+        // Synchronous so tests can assert immediately after the call.
+        handleSessionDisconnected(sessionId: sessionId, reason: reason)
     }
 }
 #endif
