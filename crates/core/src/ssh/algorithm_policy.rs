@@ -165,12 +165,14 @@ mod tests {
             );
         }
 
+        // Each disallowed cipher (e.g. 3DES, CBC modes) must not appear in the
+        // client's offer list.
         for cipher in DISALLOWED_CIPHER_NAMES {
             assert!(
-                preferred
+                !preferred
                     .cipher
                     .iter()
-                    .all(|c| !DISALLOWED_CIPHER_NAMES.contains(&c.as_ref())),
+                    .any(|c| c.as_ref() == *cipher),
                 "weak cipher `{}` must not be allowed",
                 cipher
             );
