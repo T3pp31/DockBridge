@@ -1036,6 +1036,34 @@ mod tests {
     }
 
     #[test]
+    fn finalize_cancelled_error_without_cancel_flag_marks_cancelled() {
+        // Given: a task whose transfer returned Cancelled, but whose cancel
+        // flag was not/is no longer set (e.g. late Detection after the flag
+        // was consumed).
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 16,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 1000,
+        };
+        manager.insert_task(task);
+
+        // No cancellation was requested/registered for this task.
+        let err = manager
+            .finalize_task_result(16, Err(TransferError::Cancelled))
+            .expect_err("cancelled transfer does not finalize as completed");
+
+        // Then: the task is Cancelled, never Failed.
+        assert!(matches!(err, TransferError::Cancelled));
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].status, TransferStatus::Cancelled);
+    }
+
+    #[test]
     fn failed_status_is_persisted_in_queue() {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
