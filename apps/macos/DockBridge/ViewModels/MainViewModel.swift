@@ -177,6 +177,7 @@ final class MainViewModel: ObservableObject {
     private let settings: AppSettingsService
     private let bookmarkService: SecurityScopedBookmarkService
     @Published private(set) var remoteEditSessions: [RemoteEditSession] = []
+    private var editMonitorTask: Task<Void, Never>?
     private let pathBookmarkStore: PathBookmarkStore
     private var defaultLocalAccessURL: URL?
     private var pathBookmarkAccessURL: URL?
@@ -671,6 +672,7 @@ final class MainViewModel: ObservableObject {
 
     func stopRemoteEditSession(_ session: RemoteEditSession) {
         remoteEditSessions.removeAll { $0.id == session.id }
+        try? FileManager.default.removeItem(at: session.localURL.deletingLastPathComponent())
     }
 
     private func checkRemoteEditSessions() async {
@@ -687,11 +689,19 @@ final class MainViewModel: ObservableObject {
                 session.lastModified = modified
                 remoteEditSessions[i] = session
                 // Debounce by uploading immediately; the 1 s cadence already
-                // acts as the debounce.
-                _ = await upload(localURL: session.localURL, toRemoteDirectory: session.remoteDirectory)
+                // acts as the debounce. On failure the session is kept so the
+                // next poll retries (upload() already sets errorMessage).
+                if !(await upload(localURL: session.localURL, toRemoteDirectory: session.remoteDirectory)) {
+                    errorMessage = "Failed to upload edited file to \(session.remotePath). It will retry."
+                }
             }
         }
         if !removedIDs.isEmpty {
+            for id in removedIDs {
+                if let session = remoteEditSessions.first(where: { $0.id == id }) {
+                    try? FileManager.default.removeItem(at: session.localURL.deletingLastPathComponent())
+                }
+            }
             remoteEditSessions.removeAll { removedIDs.contains($0.id) }
         }
     }
