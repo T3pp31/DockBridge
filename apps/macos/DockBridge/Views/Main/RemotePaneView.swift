@@ -12,8 +12,20 @@ struct RemotePaneView: View {
 
             if viewModel.bridge.isConnected {
                 ExpandingFrame { size in
-                    RemoteFileTable(viewModel: viewModel)
-                        .frame(width: size.width, height: size.height)
+                    Group {
+                        if viewModel.remoteItems.allSatisfy(\.isParentDirectory), !viewModel.isLoadingRemote {
+                            ContentUnavailableView(
+                                "Folder is Empty",
+                                systemImage: "folder",
+                                description: Text("No items in this directory.")
+                            )
+                        } else {
+                            RemoteFileTable(viewModel: viewModel)
+                                .opacity(viewModel.isLoadingRemote ? 0.5 : 1)
+                                .allowsHitTesting(!viewModel.isLoadingRemote)
+                        }
+                    }
+                    .frame(width: size.width, height: size.height)
                         .contextMenu(forSelectionType: String.self) { ids in
                             let items = transferableRemoteItems(from: ids)
                             if !items.isEmpty {
