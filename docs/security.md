@@ -333,7 +333,8 @@ cargo audit
 ### Rust toolchain and dependency pinning policy
 
 - **MSRV** — the workspace declares `rust-version = "1.91"` in `[workspace.package]`
-  (`Cargo.toml`). CI runs an `msrv` job (`cargo +1.91.0 check --workspace`) so an
+  (`Cargo.toml`). CI runs an `msrv` job (pinned to `1.91.0` via
+  `dtolnay/rust-toolchain`, then `cargo check --workspace --all-targets`) so an
   unintentional MSRV bump fails the build. `rust-toolchain.toml` keeps `stable` for
   local/CI primary builds; the MSRV job pins the floor.
 - **`ssh-key` is pinned to the 0.7.0 release candidate** (`=0.7.0-rc.10`). The stable
