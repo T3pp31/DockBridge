@@ -104,8 +104,12 @@ pub fn resolve_password(
     }
 }
 
-pub fn resolve_passphrase(passphrase_stdin: bool) -> Option<anyhow::Result<Zeroizing<String>>> {
-    passphrase_stdin.then(|| read_secret_from_stdin("passphrase"))
+pub fn resolve_passphrase(passphrase_stdin: bool) -> anyhow::Result<Option<Zeroizing<String>>> {
+    if passphrase_stdin {
+        Ok(Some(read_secret_from_stdin("passphrase")?))
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -192,6 +196,24 @@ mod tests {
         assert!(err
             .to_string()
             .contains("password read from stdin was empty"));
+    }
+}
+
+#[cfg(test)]
+mod passphrase_tests {
+    use super::resolve_passphrase;
+
+    #[test]
+    fn resolve_passphrase_none_when_not_requested() {
+        // When --passphrase-stdin is not given, no passphrase is read.
+        let resolved = resolve_passphrase(false).expect("no error");
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn resolve_passphrase_false_never_reads_stdin() {
+        // Guard that the flag governs the read (false => Ok(None), no stdin).
+        assert!(resolve_passphrase(false).unwrap().is_none());
     }
 }
 

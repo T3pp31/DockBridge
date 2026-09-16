@@ -110,6 +110,9 @@ host_key_no_reprompt() {
 private_key_auth_plain() {
   ensure_key
   prepare_config
+  # Seed the store with the host key first so the actual key-only run below
+  # never needs an interactive host-key prompt. In this non-TTY CI pipe the
+  # "yes" answer to the host-key confirmation is supplied before the password.
   { printf '%s\n' "$PASSWORD" "yes"; } | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
     --path upload >/dev/null

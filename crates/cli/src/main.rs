@@ -126,13 +126,11 @@ struct ConnectionArgs {
 impl ConnectionArgs {
     fn into_profile(self) -> anyhow::Result<ConnectionProfile> {
         if let Some(key_path) = self.identity {
-            if self.password_stdin {
-                anyhow::bail!("--identity and --password-stdin are mutually exclusive");
-            }
+            // --identity conflicts with --password-stdin / --passphrase-stdin
+            // are already enforced declaratively by clap (conflicts_with_all).
             // Read the passphrase first so encrypted keys can be inspected and,
             // later, unlocked by the core authenticator.
-            let passphrase = password::resolve_passphrase(self.passphrase_stdin)
-                .transpose()?
+            let passphrase = password::resolve_passphrase(self.passphrase_stdin)?
                 .map(|value| SecretPassword::new(value.as_str()));
             let key_path = expand_tilde(&key_path);
             let algorithm =
@@ -205,16 +203,36 @@ impl HostKeyPrompt for CliHostKeyPrompt {
     }
 }
 
+/// Prompts on stderr and reads the answer from the controlling terminal when
+/// one is available, falling back to stdin.
+///
+/// Reading from `/dev/tty` (rather than stdin) avoids racing with credentials
+/// piped via `--password-stdin` / `--passphrase-stdin`: the piped secret bytes
+/// are consumed by the credential reader, while an interactive user still gets
+/// the host-key prompt on the controlling terminal. When no TTY exists (fully
+/// non-interactive CI/scripts) the prompt degrades to stdin and a `yes` can be
+/// piped before the secret.
 fn prompt_yes_no(prompt: &str) -> bool {
     eprint!("{prompt}");
     let _ = std::io::stderr().flush();
 
-    let mut input = String::new();
-    if std::io::stdin().read_line(&mut input).is_err() {
-        return false;
+    let read_line = |source: &mut dyn std::io::BufRead| -> Option<bool> {
+        let mut input = String::new();
+        source.read_line(&mut input).ok()?;
+        Some(input.trim().eq_ignore_ascii_case("yes"))
+    };
+
+    // Prefer the controlling TTY so a script piping a secret via stdin does not
+    // starve the interactive host-key confirmation.
+    if let Ok(tty) = std::fs::File::open("/dev/tty") {
+        let mut tty = std::io::BufReader::new(tty);
+        if let Some(answer) = read_line(&mut tty) {
+            return answer;
+        }
     }
 
-    input.trim().eq_ignore_ascii_case("yes")
+    let mut stdin = std::io::BufReader::new(std::io::stdin());
+    read_line(&mut stdin).unwrap_or(false)
 }
 
 #[tokio::main]
