@@ -255,6 +255,7 @@ Do not remove Gatekeeper quarantine on public release DMGs. The dev-only helper 
 ### Automated scanning
 
 - **CI (`cargo audit`)**: Every push to `main` and every pull request runs `rustsec/audit-check` against `Cargo.lock`. The job fails when a new advisory is reported.
+- **Scheduled audit**: `.github/workflows/security-audit.yml` runs `cargo audit` daily (03:00 UTC) and on `workflow_dispatch`, so newly published RustSec advisories are detected even when the repository has no recent commits. It also enforces that every entry in `.cargo/audit.toml` carries an `# expires: YYYY-MM-DD` comment and fails once an expiry passes (forcing a re-review).
 - **Dependabot**: Weekly pull requests for `cargo` and `github-actions` dependency updates (see `.github/dependabot.yml`).
 
 ### Software Bill of Materials (SBOM)
@@ -284,7 +285,7 @@ Swift/SPM dependencies are not included (the macOS app has no SPM packages).
    - Merge a Dependabot PR or run `cargo update -p <crate>`.
    - Bump the direct dependency version in `Cargo.toml` and run tests.
    - If no fix exists, document the accepted risk (see step 4).
-4. **Document exceptions** — When remediation is blocked (no upstream fix, major-version migration, toolchain requirement), add the advisory ID to `.cargo/audit.toml` with an inline comment explaining the blocker and link a tracking issue. Remove the entry once fixed.
+4. **Document exceptions** — When remediation is blocked (no upstream fix, major-version migration, toolchain requirement), add the advisory ID to `.cargo/audit.toml` with an inline comment explaining the blocker, an `# expires: YYYY-MM-DD` date for re-review, and link a tracking issue. Remove the entry once fixed.
 5. **Verify** — Run `cargo audit` locally and confirm CI passes before merging.
 
 ### Severity targets
