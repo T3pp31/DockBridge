@@ -374,9 +374,14 @@ impl DockBridgeClient {
         }
         #[cfg(not(unix))]
         {
-            let _ = path;
-            // Non-Unix platforms have no meaningful file mode to repair.
-            Ok(())
+            // Non-Unix platforms have no meaningful file mode to repair, but a
+            // missing store still needs recovery (path may be absent after a
+            // partial reset), so fall back to the reset path like Unix does.
+            if path.exists() {
+                return Ok(());
+            }
+            let mut known_hosts = self.known_hosts.blocking_lock();
+            known_hosts.reset(false).map_err(map_error)
         }
     }
 
