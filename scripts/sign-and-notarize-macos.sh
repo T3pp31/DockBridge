@@ -68,7 +68,9 @@ sign_dmg() {
   if [[ -n "${DMG_PATH:-}" && -f "$DMG_PATH" ]]; then
     echo "Signing DMG ${DMG_PATH}..."
     codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+    codesign --verify --strict --verbose=2 "$DMG_PATH"
     if [[ "$SKIP_NOTARIZATION" == "true" ]]; then
+      echo "SKIP_NOTARIZATION=true — verifying signature only; notarization and Gatekeeper validation skipped."
       return
     fi
     echo "Notarizing DMG ${DMG_PATH}..."
