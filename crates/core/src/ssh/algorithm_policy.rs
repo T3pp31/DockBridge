@@ -80,9 +80,15 @@ pub fn secure_client_preferred() -> Preferred {
 pub fn build_client_config(config: &AppConfig) -> client::Config {
     let keepalive_interval = (config.ssh_keepalive_interval_secs != 0)
         .then(|| Duration::from_secs(config.ssh_keepalive_interval_secs));
+    // A 0-second inactivity timeout would disconnect immediately; treat it
+    // like "disabled" (None) just as a 0 keepalive interval does.
+    let inactivity_timeout = config
+        .ssh_inactivity_timeout_secs
+        .filter(|&secs| secs > 0)
+        .map(Duration::from_secs);
     client::Config {
         preferred: secure_client_preferred(),
-        inactivity_timeout: config.ssh_inactivity_timeout_secs.map(Duration::from_secs),
+        inactivity_timeout,
         keepalive_interval,
         keepalive_max: 3,
         ..Default::default()
@@ -311,9 +317,7 @@ mod tests {
         assert_eq!(
             config.inactivity_timeout,
             Some(Duration::from_secs(
-                app_config
-                    .ssh_inactivity_timeout_secs
-                    .unwrap_or_default()
+                app_config.ssh_inactivity_timeout_secs.unwrap_or_default()
             ))
         );
     }
