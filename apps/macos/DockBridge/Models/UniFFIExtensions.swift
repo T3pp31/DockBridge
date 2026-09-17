@@ -140,11 +140,3 @@ extension Error {
         return DockBridgeError.isAuthenticationMessage(dockBridgeUserMessage)
     }
 }
-
-extension RemoteFileRecord: Identifiable {}
-
-extension RemoteFileRecord {
-    // Stable identity for SwiftUI `.sheet(item:)`; the path uniquely
-    // identifies an entry within a listing.
-    public var id: String { path }
-}
