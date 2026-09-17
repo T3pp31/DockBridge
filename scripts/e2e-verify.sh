@@ -52,7 +52,9 @@ prepare_config() {
   # AppConfig has no serde(default) on most fields, so the generated TOML must
   # contain every field. Base it on the committed default and override the
   # test-specific paths / merge flag.
-  sed     -e "s|^known_hosts_path = .*|known_hosts_path = "$KNOWN_HOSTS"|"     -e "s|^merge_openssh_known_hosts_on_connect = .*|merge_openssh_known_hosts_on_connect = false|"     -e "s|^openssh_known_hosts_path = .*|openssh_known_hosts_path = "$WORKDIR/openssh_known_hosts"|"     config/default.toml >"$CONFIG"
+  # Keep TOML string literals quoted: the outer double quotes around the
+  # replacement would be stripped by the shell before sed sees them.
+  sed     -e "s|^known_hosts_path = .*|known_hosts_path = \"$KNOWN_HOSTS\"|"     -e "s|^merge_openssh_known_hosts_on_connect = .*|merge_openssh_known_hosts_on_connect = false|"     -e "s|^openssh_known_hosts_path = .*|openssh_known_hosts_path = \"$WORKDIR/openssh_known_hosts\"|"     config/default.toml >"$CONFIG"
   : >"$WORKDIR/openssh_known_hosts"
   echo "e2e upload $(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$LOCAL_FILE"
 }
