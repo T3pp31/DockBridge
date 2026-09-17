@@ -5,6 +5,8 @@ struct AppConfig: Codable, Equatable, Sendable {
     var sessionHealthCheckIntervalSecs: UInt64
     var transferRetryCount: UInt32
     var transferChunkSizeBytes: UInt64
+    var sshInactivityTimeoutSecs: UInt64?
+    var sshKeepaliveIntervalSecs: UInt64
     var defaultLocalPath: String
     var defaultLocalBookmark: Data?
     var confirmBeforeDelete: Bool
@@ -24,6 +26,8 @@ struct AppConfig: Codable, Equatable, Sendable {
         sessionHealthCheckIntervalSecs: 10,
         transferRetryCount: 3,
         transferChunkSizeBytes: 262_144,
+        sshInactivityTimeoutSecs: 600,
+        sshKeepaliveIntervalSecs: 30,
         defaultLocalPath: DefaultLocalPathResolver.containerHomeURL().path,
         defaultLocalBookmark: nil,
         confirmBeforeDelete: true,
@@ -47,6 +51,8 @@ struct AppConfig: Codable, Equatable, Sendable {
             sessionHealthCheckIntervalSecs: sessionHealthCheckIntervalSecs,
             transferRetryCount: transferRetryCount,
             transferChunkSizeBytes: transferChunkSizeBytes,
+            sshInactivityTimeoutSecs: sshInactivityTimeoutSecs,
+            sshKeepaliveIntervalSecs: sshKeepaliveIntervalSecs,
             knownHostsPath: knownHostsPath,
             opensshKnownHostsPath: opensshKnownHostsPath,
             mergeOpensshKnownHostsOnConnect: mergeOpensshKnownHostsOnConnect,

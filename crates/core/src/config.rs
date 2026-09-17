@@ -88,6 +88,16 @@ pub struct AppConfig {
     /// Maximum combined file bytes collected during recursive directory walks.
     #[serde(default = "default_directory_walk_max_total_bytes")]
     pub directory_walk_max_total_bytes: u64,
+    /// Time without any SSH traffic after which the client considers the
+    /// session dead. Independent of [`connection_timeout_secs`] (the TCP/SSH
+    /// handshake budget). `None` disables idle-based expiry.
+    #[serde(default = "default_ssh_inactivity_timeout_secs")]
+    pub ssh_inactivity_timeout_secs: Option<u64>,
+    /// Interval between SSH keepalive packets. When set, russh sends a
+    /// keepalive/ping at this cadence so idle sessions survive NAT/firewall
+    /// timeouts without relying on the SFTP health checker.
+    #[serde(default = "default_ssh_keepalive_interval_secs")]
+    pub ssh_keepalive_interval_secs: u64,
 }
 
 impl Default for AppConfig {
@@ -106,6 +116,8 @@ impl Default for AppConfig {
             directory_walk_max_files: DEFAULT_DIRECTORY_WALK_MAX_FILES,
             directory_walk_max_depth: DEFAULT_DIRECTORY_WALK_MAX_DEPTH,
             directory_walk_max_total_bytes: DEFAULT_DIRECTORY_WALK_MAX_TOTAL_BYTES,
+            ssh_inactivity_timeout_secs: default_ssh_inactivity_timeout_secs(),
+            ssh_keepalive_interval_secs: default_ssh_keepalive_interval_secs(),
         }
     }
 }
@@ -276,6 +288,14 @@ fn default_directory_walk_max_total_bytes() -> u64 {
 
 fn default_transfer_download_pipeline_depth() -> usize {
     DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH
+}
+
+fn default_ssh_inactivity_timeout_secs() -> Option<u64> {
+    Some(600)
+}
+
+fn default_ssh_keepalive_interval_secs() -> u64 {
+    30
 }
 
 /// Ensures the parent directory for the known hosts file exists.
