@@ -88,11 +88,13 @@ jq -e --arg spec "${SPEC_VERSION}" '
 
 # The SBOM is generated from crates/uniffi (what ships inside the DMG), so the
 # uniffi runtime must be present and the CLI-only clap crate must be absent.
-if ! jq -e '[.components[]?.purl // empty] | any(contains("uniffi"))' "$OUT_PATH" >/dev/null; then
+# Match the exact crate name from the purl to avoid partial-match false
+# positives (e.g. uniffi_bindgen / clap_derive).
+if ! jq -e '[.components[]?.purl // empty | capture("pkg:cargo/(?<name>[^@]+)").name] | any(. == "uniffi")' "$OUT_PATH" >/dev/null; then
   echo "SBOM validation failed: expected uniffi in components" >&2
   exit 1
 fi
-if jq -e '[.components[]?.purl // empty] | any(contains("clap"))' "$OUT_PATH" >/dev/null; then
+if jq -e '[.components[]?.purl // empty | capture("pkg:cargo/(?<name>[^@]+)").name] | any(. == "clap")' "$OUT_PATH" >/dev/null; then
   echo "SBOM validation failed: unexpected cli-only clap in components (uniffi manifest)" >&2
   exit 1
 fi
