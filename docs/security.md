@@ -263,7 +263,7 @@ DockBridge publishes a CycloneDX JSON SBOM for each release and verifies SBOM ge
 
 - **Format**: CycloneDX JSON (`.cdx.json`, spec version 1.5)
 - **Generator**: [`cargo-cyclonedx`](https://crates.io/crates/cargo-cyclonedx) (pinned in `config/release.toml`)
-- **Scope**: Source SBOM from `Cargo.lock`, generated from `crates/cli/Cargo.toml` (the release CLI entry point and its dependency graph)
+- **Scope**: Source SBOM from `Cargo.lock`, generated from `crates/uniffi/Cargo.toml` — the crate that ships as `libdockbridge_uniffi.a` inside the DMG. The CLI binary is a separate artifact with its own dependency graph and is NOT the SBOM subject.
 - **CI**: The `rust` job in `.github/workflows/ci.yml` runs `./scripts/generate-sbom.sh` and uploads the artifact for review
 - **Release**: `.github/workflows/release.yml` attaches `{app_name}-{version}.cdx.json` and its SHA-256 checksum to GitHub Releases alongside the DMG and CLI binaries
 
