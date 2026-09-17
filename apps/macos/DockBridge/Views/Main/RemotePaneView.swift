@@ -115,6 +115,24 @@ struct RemotePaneView: View {
         .sheet(isPresented: $viewModel.showMkdirPrompt) {
             RemoteNewFolderSheet(viewModel: viewModel)
         }
+        .sheet(item: $viewModel.remoteInfoItem) { item in
+            GetInfoSheet(
+                title: "Info — \(item.name)",
+                rows: [
+                    ("Path", item.path),
+                    ("Kind", item.isDirectory ? "Folder" : "File"),
+                    ("Size", ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)),
+                    ("Modified", item.modifiedAtSecs.map { secs in
+                        DateFormatter.localizedString(
+                            from: Date(timeIntervalSince1970: TimeInterval(secs)),
+                            dateStyle: .medium,
+                            timeStyle: .medium
+                        )
+                    } ?? "—"),
+                    ("Permissions", item.permissions.map { String(format: "%04o", $0) } ?? "—"),
+                ]
+            )
+        }
     }
 
     private func singleSelectedRemoteItem(from ids: Set<String>) -> RemoteFileRecord? {
