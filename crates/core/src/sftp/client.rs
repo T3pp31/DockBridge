@@ -201,9 +201,22 @@ impl<'a> SftpClient<'a> {
         if file_type.is_symlink() {
             if let Ok(target) = self.sftp().read_link(&path).await {
                 symlink_target = Some(target.clone());
+                // A relative READLINK target refers to the link's parent
+                // directory, not the session's current directory; join it with
+                // the parent before stat'ing so symlink_target_is_dir is correct.
+                let link_parent = path
+                    .rsplit_once('/')
+                    .map(|(parent, _)| parent)
+                    .filter(|parent| !parent.is_empty())
+                    .unwrap_or("/");
+                let target_path = if target.starts_with('/') {
+                    target.clone()
+                } else {
+                    format!("{}/{}", link_parent.trim_end_matches('/'), target)
+                };
                 symlink_target_is_dir = Some(
                     self.sftp()
-                        .metadata(&target)
+                        .metadata(&target_path)
                         .await
                         .map(|target_meta| target_meta.file_type().is_dir())
                         .unwrap_or(false),
