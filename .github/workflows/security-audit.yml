@@ -54,7 +54,7 @@ jobs:
                 fi
               fi
             fi
-          done < <(awk '/\[advisories\]/,/^\]/' .cargo/audit.toml | sed '/ignore = \[/d; /^\]/d')
+          done < <(awk '/\[advisories\]/,/^\]/' .cargo/audit.toml | sed '/ignore = \[/d; /^\]/d' | grep -v '^[[:space:]]*#')
           if [[ "$MISSING" -ne 0 ]]; then
             echo "add or refresh an '# expires: YYYY-MM-DD' comment for every ignore entry" >&2
             exit 1
