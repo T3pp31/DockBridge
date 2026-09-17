@@ -17,7 +17,7 @@ KNOWN_HOSTS="$WORKDIR/known_hosts.json"
 CONFIG="$WORKDIR/config.toml"
 LOCAL_FILE="$WORKDIR/local-upload.txt"
 DOWNLOAD_FILE="$WORKDIR/local-download.txt"
-REMOTE_FILE="upload/e2e-verify.txt"
+REMOTE_FILE="/upload/e2e-verify.txt"
 LOG="$WORKDIR/e2e.log"
 
 CLI=(cargo run -q -p dockbridge-cli -- --config "$CONFIG")
@@ -49,12 +49,13 @@ check() {
 
 prepare_config() {
   rm -f "$KNOWN_HOSTS"
-  cat >"$CONFIG" <<EOF
-connection_timeout_secs = 30
-session_health_check_interval_secs = 10
-transfer_retry_count = 3
-known_hosts_path = "$KNOWN_HOSTS"
-EOF
+  # AppConfig has no serde(default) on most fields, so the generated TOML must
+  # contain every field. Base it on the committed default and override the
+  # test-specific paths / merge flag.
+  # Keep TOML string literals quoted: the outer double quotes around the
+  # replacement would be stripped by the shell before sed sees them.
+  sed     -e "s|^known_hosts_path = .*|known_hosts_path = \"$KNOWN_HOSTS\"|"     -e "s|^merge_openssh_known_hosts_on_connect = .*|merge_openssh_known_hosts_on_connect = false|"     -e "s|^openssh_known_hosts_path = .*|openssh_known_hosts_path = \"$WORKDIR/openssh_known_hosts\"|"     config/default.toml >"$CONFIG"
+  : >"$WORKDIR/openssh_known_hosts"
   echo "e2e upload $(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$LOCAL_FILE"
 }
 
