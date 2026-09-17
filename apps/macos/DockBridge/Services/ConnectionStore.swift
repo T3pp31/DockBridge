@@ -216,8 +216,11 @@ final class ConnectionStore: @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
+        // Colon and '+' are both replaced so the stamp stays filesystem-safe
+        // on every platform (offset renders as e.g. `+09-00` otherwise).
         let stamp = formatter.string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: "+", with: "-")
         let backup = url.deletingLastPathComponent()
             .appendingPathComponent("profiles.json.bak-\(stamp)", isDirectory: false)
         try FileManager.default.copyItem(at: url, to: backup)
