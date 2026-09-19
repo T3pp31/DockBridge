@@ -428,10 +428,17 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertNil(viewModel.errorMessage)
     }
 
-    func testRequestConnectShowsRsaKeyWarningForRsaPrivateKey() throws {
+    func testRequestConnectShowsRsaKeyWarningForRsaPrivateKey() async throws {
         let profile = try makeGeneratedPrivateKeyProfile(keyFilename: "id_rsa", keyType: "rsa")
 
         viewModel.requestConnect(profile: profile)
+
+        // The RSA inspection runs off the main actor; wait for the warning
+        // to appear instead of asserting before the detached task completes.
+        for _ in 0..<50 {
+            if viewModel.showRsaKeyWarning { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
 
         XCTAssertTrue(viewModel.showRsaKeyWarning)
         XCTAssertNotNil(viewModel.pendingConnectProfile)
