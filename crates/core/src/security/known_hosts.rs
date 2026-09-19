@@ -30,6 +30,17 @@ pub enum HostKeyCheckResult {
     },
 }
 
+/// Health of the known hosts trust store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KnownHostsStatus {
+    /// The store was loaded or created successfully and is writable.
+    Available,
+    /// The store could not be read (corrupt JSON, insecure permissions, etc.).
+    /// The manager operates with an in-memory snapshot; `reason` explains how
+    /// to recover (repair permissions or recreate the file).
+    Unavailable { reason: String },
+}
+
 /// An alternate host identifier associated with a trusted key entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostAlias {
@@ -72,27 +83,34 @@ pub struct HashedHostEntry {
 }
 
 /// Manages trusted host keys in a DockBridge-specific JSON store.
+///
+/// When the underlying file cannot be read (e.g. corrupt JSON or drifted
+/// permissions), the manager can still be constructed empty via
+/// [`KnownHostsManager::load_or_empty`], keeping the app operable while
+/// remembering why the store is unavailable so the UI can surface recovery
+/// steps.
 #[derive(Debug, Clone)]
 pub struct KnownHostsManager {
     path: PathBuf,
     entries: HashMap<String, KnownHostEntry>,
     hashed_entries: Vec<HashedHostEntry>,
+    unavailable_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct KnownHostEntry {
-    host: String,
-    port: u16,
-    fingerprint_sha256: String,
-    algorithm: String,
+pub struct KnownHostEntry {
+    pub host: String,
+    pub port: u16,
+    pub fingerprint_sha256: String,
+    pub algorithm: String,
     #[serde(default)]
-    aliases: Vec<HostAlias>,
+    pub aliases: Vec<HostAlias>,
     #[serde(default)]
-    excluded_aliases: Vec<HostAlias>,
+    pub excluded_aliases: Vec<HostAlias>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    public_key_openssh: Option<String>,
+    pub public_key_openssh: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    marker: Option<KnownHostMarker>,
+    pub marker: Option<KnownHostMarker>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -130,7 +148,117 @@ impl KnownHostsManager {
             path,
             entries,
             hashed_entries,
+            unavailable_reason: None,
         })
+    }
+
+    /// Creates a manager, falling back to an empty in-memory store when the
+    /// on-disk store cannot be read. The failure reason is retained so callers
+    /// can surface recovery steps through [`KnownHostsManager::status`].
+    pub fn load_or_empty(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        match Self::load(&path) {
+            Ok(manager) => manager,
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "known_hosts store unreadable; continuing with empty in-memory store"
+                );
+                Self {
+                    path,
+                    entries: HashMap::new(),
+                    hashed_entries: Vec::new(),
+                    unavailable_reason: Some(err.to_string()),
+                }
+            }
+        }
+    }
+
+    /// Returns the current health of the trust store.
+    pub fn status(&self) -> KnownHostsStatus {
+        match &self.unavailable_reason {
+            Some(reason) => KnownHostsStatus::Unavailable {
+                reason: reason.clone(),
+            },
+            None => KnownHostsStatus::Available,
+        }
+    }
+
+    /// Returns a snapshot of the stored host key entries.
+    pub fn entries(&self) -> Vec<KnownHostEntry> {
+        self.entries.values().cloned().collect()
+    }
+
+    /// Removes every host identifier of an entry that matches (host, port) and
+    /// persists the change. Returns `false` when no entry matched.
+    ///
+    /// When the removed host is the canonical host, the first remaining alias
+    /// is promoted to canonical (mirroring the accept-changed-key detach logic).
+    pub fn remove(&mut self, host: &str, port: u16) -> Result<bool, SecurityError> {
+        let Some(canonical_key) = self.entries.iter().find_map(|(key, entry)| {
+            if entry_matches_host(entry, host, port) {
+                Some(key.clone())
+            } else {
+                None
+            }
+        }) else {
+            return Ok(false);
+        };
+
+        let Some(mut entry) = self.entries.remove(&canonical_key) else {
+            return Ok(false);
+        };
+        let host_is_canonical = entry.host.eq_ignore_ascii_case(host) && entry.port == port;
+        let lower_host = host.to_ascii_lowercase();
+        let remaining: Vec<HostAlias> = entry
+            .aliases
+            .drain(..)
+            .filter(|alias| !(alias.host.eq_ignore_ascii_case(&lower_host) && alias.port == port))
+            .collect();
+
+        if host_is_canonical {
+            // Promote the first remaining alias to canonical so the other hosts
+            // keep their trust. When no aliases remain the old entry is dropped.
+            if let Some(promoted) = remaining.first() {
+                let new_canonical_host = promoted.host.clone();
+                let new_canonical_port = promoted.port;
+                entry.host = new_canonical_host;
+                entry.port = new_canonical_port;
+                entry.aliases = remaining[1..].to_vec();
+                self.entries
+                    .insert(entry_key(&entry.host, entry.port), entry);
+            }
+        } else {
+            entry.host = entry.host.to_ascii_lowercase();
+            entry.aliases = remaining;
+            self.entries
+                .insert(entry_key(&entry.host, entry.port), entry);
+        }
+
+        self.persist()?;
+        Ok(true)
+    }
+
+    /// Resets the store, optionally backing up the current file first.
+    ///
+    /// When `backup` is `true`, the current file is copied to
+    /// `known_hosts.json.bak` before the store is replaced with an empty one.
+    /// Missing files are treated as a successful reset with no backup.
+    pub fn reset(&mut self, backup: bool) -> Result<(), SecurityError> {
+        if backup && self.path.exists() {
+            let backup_path = backup_path_for(&self.path);
+            fs::copy(&self.path, &backup_path).map_err(|err| {
+                SecurityError::KnownHostsWriteFailed {
+                    path: backup_path.display().to_string(),
+                    message: err.to_string(),
+                }
+            })?;
+        }
+        self.entries.clear();
+        self.hashed_entries.clear();
+        self.unavailable_reason = None;
+        self.persist()
     }
 
     /// Returns the store path.
@@ -688,6 +816,14 @@ fn merge_excluded_aliases(entry: &mut KnownHostEntry, excluded: &[HostAlias]) {
 
 fn entry_key(host: &str, port: u16) -> String {
     format!("{host}:{port}")
+}
+
+/// Returns the sibling backup path for a known hosts store file
+/// (`<file>.bak`), used by `reset(backup: true)`.
+fn backup_path_for(path: &Path) -> PathBuf {
+    let mut os = path.as_os_str().to_owned();
+    os.push(".bak");
+    PathBuf::from(os)
 }
 
 fn entry_is_non_trusting_marker(marker: Option<KnownHostMarker>) -> bool {
@@ -1807,5 +1943,136 @@ mod tests {
         assert!(!fingerprints_match("SHA256:abc", "SHA256:abd"));
         assert!(!fingerprints_match("SHA256:abc", "SHA256:ab"));
         assert!(fingerprints_match("", ""));
+    }
+    #[test]
+    fn load_or_empty_keeps_operable_when_store_is_corrupt() {
+        // Given: a store file with corrupt JSON
+        // When: load_or_empty is used
+        // Then: an empty operable manager is returned with Unavailable status
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        write_test_file_mode_0600(&path, "not valid json");
+
+        let manager = KnownHostsManager::load_or_empty(&path);
+        match manager.status() {
+            KnownHostsStatus::Unavailable { reason } => {
+                assert!(!reason.is_empty(), "expected a recovery reason");
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+        // The app can still ask about hosts (all Unknown) without panicking.
+        let result = manager.check_host_key("example.com", 22, &test_public_key(), false);
+        assert!(matches!(result, HostKeyCheckResult::Unknown));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_or_empty_reports_insecure_permissions() {
+        // Given: a store file with insecure (0644) permissions
+        // When: load_or_empty is used
+        // Then: status reports Unavailable with a permission-related reason
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        write_test_file_mode_0600(&path, r#"{"entries":[],"hashed_entries":[]}"#);
+        set_test_file_mode(&path, 0o644);
+
+        let manager = KnownHostsManager::load_or_empty(&path);
+        match manager.status() {
+            KnownHostsStatus::Unavailable { reason } => {
+                assert!(
+                    reason.contains("insecure permissions"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remove_forgets_host_and_persists() {
+        // Given: a trusted host
+        // When: remove is called for it
+        // Then: it is no longer trusted and the change is persisted
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+
+        assert!(manager.remove("example.com", 22).unwrap());
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Unknown
+        );
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Unknown
+        );
+    }
+
+    #[test]
+    fn remove_of_missing_host_returns_false() {
+        // Given: an empty store
+        // When: remove is called for a nonexistent host
+        // Then: false is returned without error
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        assert!(!manager.remove("example.com", 22).unwrap());
+    }
+
+    #[test]
+    fn reset_with_backup_creates_bak_and_clears_store() {
+        // Given: a store with one trusted host
+        // When: reset(backup: true) is called
+        // Then: a .bak file exists and the store is empty
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+
+        manager.reset(true).unwrap();
+
+        assert!(path.with_extension("json.bak").exists() || backup_path_for(&path).exists());
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Unknown
+        );
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(reloaded.entries().len(), 0);
+    }
+
+    #[test]
+    fn entries_exposes_stored_entries() {
+        // Given: a store with two trusted entries
+        // When: entries is called
+        // Then: both are visible with matching host names
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let key_b = test_public_key();
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("alpha.example.com", 22, &key)
+            .unwrap();
+        manager
+            .accept_host_key("beta.example.com", 22, &key_b)
+            .unwrap();
+
+        let entries = manager.entries();
+        let hosts: Vec<String> = entries.iter().map(|e| e.host.clone()).collect();
+        assert!(hosts.contains(&"alpha.example.com".to_string()));
+        assert!(hosts.contains(&"beta.example.com".to_string()));
     }
 }

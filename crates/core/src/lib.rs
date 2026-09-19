@@ -17,7 +17,10 @@ pub use config::{
 pub use error::{
     AppError, AuthError, ConfigError, ConnectionError, SecurityError, SftpError, TransferError,
 };
-pub use security::{fingerprint_sha256, HostAlias, HostKeyCheckResult, KnownHostsManager};
+pub use security::{
+    fingerprint_sha256, HostAlias, HostKeyCheckResult, KnownHostEntry, KnownHostsManager,
+    KnownHostsStatus,
+};
 pub use sftp::{
     ensure_local_path_within_root, ensure_remote_path_within_root, normalize_remote_path,
     validate_remote_entry_name, validated_remote_entry, RemoteFile, SftpClient,
