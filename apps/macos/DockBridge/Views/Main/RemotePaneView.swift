@@ -129,7 +129,6 @@ struct RemotePaneView: View {
                             timeStyle: .medium
                         )
                     } ?? "—"),
-                    ("Permissions", item.permissions.map { String(format: "%04o", $0) } ?? "—"),
                 ]
             )
         }
