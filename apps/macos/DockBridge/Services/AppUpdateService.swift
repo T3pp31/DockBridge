@@ -92,7 +92,7 @@ final class AppUpdateService: @unchecked Sendable {
         // Keep startup snappy even when api.github.com is slow / blocked.
         request.timeoutInterval = 15
         request.setValue(AppUpdateConfig.githubAPIAcceptHeader, forHTTPHeaderField: "Accept")
-        request.setValue(VersionComparator.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(AppUpdateConfig.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(AppUpdateConfig.githubAPIVersion, forHTTPHeaderField: "X-GitHub-Api-Version")
 
         let savedETag = AppUpdateConfig.showExistingETag()
