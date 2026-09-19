@@ -8,18 +8,7 @@ struct ConnectionListView: View {
     var body: some View {
         Group {
             if viewModel.profiles.isEmpty {
-                ContentUnavailableView {
-                    Label("No connections", systemImage: "server.rack")
-                } description: {
-                    Text("Add a connection profile to connect to a remote host.")
-                } actions: {
-                    Button("Add Connection") {
-                        showNewConnection = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.capsule)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                emptyState
             } else {
                 List(selection: $viewModel.selectedProfileID) {
                     profileRows
@@ -195,6 +184,21 @@ struct ConnectionListView: View {
     }
 
     @ViewBuilder
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("No connections", systemImage: "server.rack")
+        } description: {
+            Text("Add a connection profile to connect to a remote host.")
+        } actions: {
+            Button("Add Connection") {
+                showNewConnection = true
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var profileRows: some View {
         ForEach(viewModel.filteredProfiles) { profile in
             HStack(spacing: 8) {
