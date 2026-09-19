@@ -16,7 +16,7 @@
 - External editor integration
 - Auto-upload on save
 - Drag and drop
-- chmod, hidden files, symlinks
+- Get Info / chmod UI（#363）: ローカル/リモートの Get Info シートとローカル chmod 対応。リモート chmod は Rust `set_permissions` API（#300）マージ後に拡張
 - Encrypted connection-profile storage (AES-GCM envelope + Keychain master key) — implemented; see [security.md](security.md#connection-profiles-profilesjson)
 - Developer ID signing and notarization for release DMGs — planned for v1.0; see [security.md](security.md#code-signing-and-distribution)
 
