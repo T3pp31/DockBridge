@@ -5,7 +5,7 @@ struct ConnectionListView: View {
     @Binding var showNewConnection: Bool
     @Binding var editingProfile: ConnectionProfile?
 
-    var body: some View {
+    private var content: some View {
         Group {
             if viewModel.profiles.isEmpty {
                 emptyState
@@ -13,35 +13,44 @@ struct ConnectionListView: View {
                 profileList
             }
         }
-        .navigationTitle("Connections")
-        .toolbar {
-            ToolbarItemGroup {
-                Button {
-                    showNewConnection = true
-                } label: {
-                    Label("Add", systemImage: "plus")
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItemGroup {
+            Button {
+                showNewConnection = true
+            } label: {
+                Label("Add", systemImage: "plus")
+            }
+
+            if let selected = viewModel.profiles.first(where: { $0.id == viewModel.selectedProfileID }) {
+                Button("Connect") {
+                    viewModel.requestConnect(profile: selected)
                 }
+                .buttonStyle(.borderedProminent)
+                .disabled(viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting)
 
-                if let selected = viewModel.profiles.first(where: { $0.id == viewModel.selectedProfileID }) {
-                    Button("Connect") {
-                        viewModel.requestConnect(profile: selected)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting)
-
-                    Button("Disconnect") {
-                        Task { await viewModel.disconnect() }
-                    }
-                    .disabled(!viewModel.connectionStatus.isConnected)
-
-                    Button("Reconnect") {
-                        viewModel.reconnect()
-                    }
-                    .disabled(viewModel.connectionStatus.isConnecting)
+                Button("Disconnect") {
+                    Task { await viewModel.disconnect() }
                 }
+                .disabled(!viewModel.connectionStatus.isConnected)
+
+                Button("Reconnect") {
+                    viewModel.reconnect()
+                }
+                .disabled(viewModel.connectionStatus.isConnecting)
             }
         }
-        .alert(
+    }
+
+    var body: some View {
+        content
+            .navigationTitle("Connections")
+            .toolbar {
+                toolbarContent
+            }
+            .alert(
             "Connection endpoint changed",
             isPresented: $viewModel.showEndpointChangeWarning,
             presenting: viewModel.pendingEndpointChange
