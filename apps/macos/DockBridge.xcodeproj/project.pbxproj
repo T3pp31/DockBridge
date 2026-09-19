@@ -24,6 +24,7 @@
 		6B644EEA7799402A90D59AAA /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */; };
 		14A839F4D61A1075B5ACF82D /* RustBridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */; };
 		9207DDB127B46575474EC6F5 /* ConnectionListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00EBFBF60D5CB33F46A53DF /* ConnectionListViewModel.swift */; };
+		SSHC0NFIGP4RS3RBF1 /* SSHConfigParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSHC0NFIGP4RS3RBF2 /* SSHConfigParser.swift */; };
 		67E6AD45895AF44CA96D83BB /* MainViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C973CCD1AFF29E5BC535CC /* MainViewModel.swift */; };
 		5061A717EBE8AB1160ED99D1 /* TransferQueueViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD683D1BCC635FB229692D63 /* TransferQueueViewModel.swift */; };
 		E4EF5F2D30150DB88A95D17E /* ConnectionFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B662D1D9B28F3ED6B42DE7F6 /* ConnectionFormView.swift */; };
@@ -93,6 +94,7 @@
 		UPD4T3CH3CKV13WT3BF1 /* UpdateCheckViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPD4T3CH3CKV13WT3RC1 /* UpdateCheckViewModel.swift */; };
 		UPD4T34V4BL3V13WT3BF1 /* UpdateAvailableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = UPD4T34V4BL3V13WT3RC1 /* UpdateAvailableView.swift */; };
 		V3R5C0MP4R4T0T3ST5BF1 /* VersionComparatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = V3R5C0MP4R4T0T3ST5RC1 /* VersionComparatorTests.swift */; };
+		SSHC0NFIGP4RS3RT3ST5BF2 /* SSHConfigParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = SSHC0NFIGP4RS3RT3ST5BF1 /* SSHConfigParserTests.swift */; };
 		APPUPD4T3S3RV1C3T2 /* AppUpdateServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPUPD4T3S3RV1C3T1 /* AppUpdateServiceTests.swift */; };
 		APPUPD4T3DWNL0ADS3RV1C3T2 /* AppUpdateDownloadServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = APPUPD4T3DWNL0ADS3RV1C3T1 /* AppUpdateDownloadServiceTests.swift */; };
 		R3L34S3C0D35IGNV3R1F1C3T2 /* ReleaseCodeSignatureVerifierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3L34S3C0D35IGNV3R1F1C3T1 /* ReleaseCodeSignatureVerifierTests.swift */; };
@@ -128,6 +130,7 @@
 		6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridgeService.swift; sourceTree = "<group>"; };
 		D00EBFBF60D5CB33F46A53DF /* ConnectionListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionListViewModel.swift; sourceTree = "<group>"; };
+		SSHC0NFIGP4RS3RBF2 /* SSHConfigParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHConfigParser.swift; sourceTree = "<group>"; };
 		29C973CCD1AFF29E5BC535CC /* MainViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewModel.swift; sourceTree = "<group>"; };
 		CD683D1BCC635FB229692D63 /* TransferQueueViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferQueueViewModel.swift; sourceTree = "<group>"; };
 		B662D1D9B28F3ED6B42DE7F6 /* ConnectionFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionFormView.swift; sourceTree = "<group>"; };
@@ -209,6 +212,7 @@
 		UPD4T3CH3CKV13WT3RC1 /* UpdateCheckViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateCheckViewModel.swift; sourceTree = "<group>"; };
 		UPD4T34V4BL3V13WT3RC1 /* UpdateAvailableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateAvailableView.swift; sourceTree = "<group>"; };
 		V3R5C0MP4R4T0T3ST5RC1 /* VersionComparatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VersionComparatorTests.swift; sourceTree = "<group>"; };
+		SSHC0NFIGP4RS3RT3ST5BF1 /* SSHConfigParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHConfigParserTests.swift; sourceTree = "<group>"; };
 		APPUPD4T3S3RV1C3T1 /* AppUpdateServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateServiceTests.swift; sourceTree = "<group>"; };
 		APPUPD4T3DWNL0ADS3RV1C3T1 /* AppUpdateDownloadServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateDownloadServiceTests.swift; sourceTree = "<group>"; };
 		R3L34S3C0D35IGNV3R1F1C3T1 /* ReleaseCodeSignatureVerifierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseCodeSignatureVerifierTests.swift; sourceTree = "<group>"; };
@@ -366,6 +370,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				1E7FDBA4ECAABE2550A535FE /* UniFFIExtensions.swift */,
 				B2C3D4E5F60718293A4B5C6D /* RemotePath.swift */,
 				0A40063842C3BF02492D35D4 /* SensitiveString.swift */,
+				SSHC0NFIGP4RS3RBF2 /* SSHConfigParser.swift */,
 				0v3rwr1t3P0l1cyF1l3R3F /* TransferOverwritePolicy.swift */,
 				P4THN4V1G4T10NH15T0RC1 /* PathNavigationHistory.swift */,
 				P4THB00km4rkM0d3lF1l3R3F /* PathBookmark.swift */,
@@ -490,6 +495,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				S3NS1T1V3STR1NGT3ST5RC2 /* SensitiveStringTests.swift */,
 				UPD4T3CH3CKV13WT3ST5RC1 /* UpdateCheckViewModelTests.swift */,
 				V3R5C0MP4R4T0T3ST5RC1 /* VersionComparatorTests.swift */,
+				SSHC0NFIGP4RS3RT3ST5BF1 /* SSHConfigParserTests.swift */,
 				P4THN4V1H15T0RYT3STRC1 /* PathNavigationHistoryTests.swift */,
 				P4THB00km4rkT3stF1l3R3F /* PathBookmarkStoreTests.swift */,
 			);
@@ -646,6 +652,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				S3C8K0P3B00KM4RKS3RV1C3SW1 /* SecurityScopedBookmarkService.swift in Sources */,
 				SECUREL0CALF1LERE4D3R1N5RC1 /* SecureLocalFileReader.swift in Sources */,
 				9207DDB127B46575474EC6F5 /* ConnectionListViewModel.swift in Sources */,
+				SSHC0NFIGP4RS3RBF1 /* SSHConfigParser.swift in Sources */,
 				67E6AD45895AF44CA96D83BB /* MainViewModel.swift in Sources */,
 				5061A717EBE8AB1160ED99D1 /* TransferQueueViewModel.swift in Sources */,
 				E4EF5F2D30150DB88A95D17E /* ConnectionFormView.swift in Sources */,
@@ -730,6 +737,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				S3NS1T1V3STR1NGT3ST5RC1 /* SensitiveStringTests.swift in Sources */,
 				UPD4T3CH3CKV13WT3ST5BF1 /* UpdateCheckViewModelTests.swift in Sources */,
 				V3R5C0MP4R4T0T3ST5BF1 /* VersionComparatorTests.swift in Sources */,
+				SSHC0NFIGP4RS3RT3ST5BF2 /* SSHConfigParserTests.swift in Sources */,
 				P4THN4V1H15T0RYT3STBF1 /* PathNavigationHistoryTests.swift in Sources */,
 				P4THB00km4rkT3st1N5rc1 /* PathBookmarkStoreTests.swift in Sources */,
 			);
