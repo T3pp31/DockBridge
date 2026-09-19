@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import os
 
 @MainActor
 final class MainViewModel: ObservableObject {
@@ -931,7 +932,8 @@ final class MainViewModel: ObservableObject {
             do {
                 try FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
             } catch {
-                AppLogging.ui.error("failed to trash local item: \(error.localizedDescription, privacy: .public)")
+                Logger(subsystem: "com.dockbridge.app", category: "ui")
+                    .error("failed to trash local item: \(error.localizedDescription, privacy: .public)")
                 errorMessage = error.localizedDescription
             }
         }
