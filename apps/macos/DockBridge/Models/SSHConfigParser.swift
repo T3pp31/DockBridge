@@ -23,9 +23,9 @@ enum SSHConfigParser {
             if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
 
             let parts = trimmed.split(
-                whereSeparator: { $0 == " " || $0 == "\t" },
                 maxSplits: 1,
-                omittingEmptySubsequences: true
+                omittingEmptySubsequences: true,
+                whereSeparator: { $0 == " " || $0 == "\t" }
             )
             guard parts.count == 2 else { continue }
             let key = parts[0].lowercased()
