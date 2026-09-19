@@ -1055,6 +1055,63 @@ impl PartialLocalTransfer {
                             ),
                         })
                     }
+                    Err(err)
+                        if matches!(
+                            err.kind(),
+                            std::io::ErrorKind::Unsupported
+                                | std::io::ErrorKind::CrossesDevices
+                                | std::io::ErrorKind::PermissionDenied
+                        ) =>
+                    {
+                        // hard_link is not supported on all filesystems
+                        // (exFAT/FAT32/some SMB mounts). Fall back to a
+                        // guarded rename: re-check that the destination still
+                        // does not exist, then move the partial file into
+                        // place. This widens the TOCTOU window slightly but is
+                        // the best available option on such filesystems.
+                        match tokio::fs::symlink_metadata(final_path).await {
+                            Ok(_) => {
+                                let remote = self.remote.clone();
+                                let local = self.local.clone();
+                                self.abort(true, remote_file).await?;
+                                Err(SftpError::DownloadFailed {
+                                    remote,
+                                    local,
+                                    message: TransferOverwritePolicy::destination_exists_message(
+                                        &final_path.display().to_string(),
+                                    ),
+                                })
+                            }
+                            Err(probe_err) if probe_err.kind() == std::io::ErrorKind::NotFound => {
+                                match tokio::fs::rename(&self.partial_path, final_path).await {
+                                    Ok(()) => {
+                                        self.committed = true;
+                                        Ok(())
+                                    }
+                                    Err(rename_err) => {
+                                        let remote = self.remote.clone();
+                                        let local = self.local.clone();
+                                        self.abort(true, remote_file).await?;
+                                        Err(SftpError::DownloadFailed {
+                                            remote,
+                                            local,
+                                            message: rename_err.to_string(),
+                                        })
+                                    }
+                                }
+                            }
+                            Err(probe_err) => {
+                                let remote = self.remote.clone();
+                                let local = self.local.clone();
+                                self.abort(true, remote_file).await?;
+                                Err(SftpError::DownloadFailed {
+                                    remote,
+                                    local,
+                                    message: probe_err.to_string(),
+                                })
+                            }
+                        }
+                    }
                     Err(err) => {
                         let remote = self.remote.clone();
                         let local = self.local.clone();
