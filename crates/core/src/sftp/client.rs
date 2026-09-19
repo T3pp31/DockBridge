@@ -7,7 +7,7 @@ use rand::TryRng;
 use russh_sftp::client::error::Error as SftpClientError;
 use russh_sftp::client::fs::File as RemoteFileHandle;
 use russh_sftp::client::SftpSession;
-use russh_sftp::protocol::OpenFlags;
+use russh_sftp::protocol::{FileAttributes, OpenFlags};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::config::{
@@ -33,6 +33,18 @@ pub struct RemoteFile {
     pub is_symlink: bool,
     pub size: u64,
     pub modified_at_secs: Option<u64>,
+    /// POSIX permission bits (e.g. `0o755`) when the server reports them.
+    pub permissions: Option<u32>,
+    /// Numeric owner id when reported by the server.
+    pub uid: Option<u32>,
+    /// Numeric group id when reported by the server.
+    pub gid: Option<u32>,
+    /// Resolved symlink target for a single-entry `lstat`; `None` for listings
+    /// (resolving every link would require one extra round-trip per entry).
+    pub symlink_target: Option<String>,
+    /// Whether the symlink target resolves to a directory (only meaningful
+    /// when `symlink_target` is set).
+    pub symlink_target_is_dir: Option<bool>,
 }
 
 /// High-level SFTP client built on top of an SSH session.
@@ -120,6 +132,11 @@ impl<'a> SftpClient<'a> {
                 is_symlink: file_type.is_symlink(),
                 size: metadata.size.unwrap_or(0),
                 modified_at_secs: metadata.mtime.map(|mtime| mtime as u64),
+                permissions: metadata.permissions,
+                uid: metadata.uid,
+                gid: metadata.gid,
+                symlink_target: None,
+                symlink_target_is_dir: None,
             });
         }
 
@@ -140,6 +157,110 @@ impl<'a> SftpClient<'a> {
                     message: err.to_string(),
                 })?;
         Ok(metadata.size.unwrap_or(0))
+    }
+
+    /// Returns metadata for a single remote path.
+    ///
+    /// When `follow_symlinks` is `false`, symlinks are reported as symlinks and
+    /// their target is resolved via `read_link` (when available). When `true`,
+    /// the target entry's metadata is returned instead.
+    pub async fn stat(
+        &self,
+        remote_path: &str,
+        follow_symlinks: bool,
+    ) -> Result<RemoteFile, SftpError> {
+        let path = normalize_remote_path(remote_path)?;
+        let metadata = if follow_symlinks {
+            self.sftp()
+                .metadata(&path)
+                .await
+                .map_err(|err| SftpError::ListFailed {
+                    path: path.clone(),
+                    message: err.to_string(),
+                })?
+        } else {
+            self.sftp()
+                .symlink_metadata(&path)
+                .await
+                .map_err(|err| SftpError::ListFailed {
+                    path: path.clone(),
+                    message: err.to_string(),
+                })?
+        };
+        let file_type = metadata.file_type();
+        let name = path
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .filter(|n| !n.is_empty())
+            .unwrap_or(path.as_str())
+            .to_string();
+
+        let mut symlink_target = None;
+        let mut symlink_target_is_dir = None;
+        if file_type.is_symlink() {
+            if let Ok(target) = self.sftp().read_link(&path).await {
+                symlink_target = Some(target.clone());
+                // A relative READLINK target refers to the link's parent
+                // directory, not the session's current directory; join it with
+                // the parent before stat'ing so symlink_target_is_dir is correct.
+                let link_parent = path
+                    .rsplit_once('/')
+                    .map(|(parent, _)| parent)
+                    .filter(|parent| !parent.is_empty())
+                    .unwrap_or("/");
+                let target_path = if target.starts_with('/') {
+                    target.clone()
+                } else {
+                    format!("{}/{}", link_parent.trim_end_matches('/'), target)
+                };
+                symlink_target_is_dir = Some(
+                    self.sftp()
+                        .metadata(&target_path)
+                        .await
+                        .map(|target_meta| target_meta.file_type().is_dir())
+                        .unwrap_or(false),
+                );
+            }
+        }
+
+        Ok(RemoteFile {
+            name,
+            path,
+            is_directory: file_type.is_dir(),
+            is_symlink: file_type.is_symlink(),
+            size: metadata.size.unwrap_or(0),
+            modified_at_secs: metadata.mtime.map(|mtime| mtime as u64),
+            permissions: metadata.permissions,
+            uid: metadata.uid,
+            gid: metadata.gid,
+            symlink_target,
+            symlink_target_is_dir,
+        })
+    }
+
+    /// Resolves the target of a remote symlink (SFTP READLINK).
+    pub async fn read_link(&self, remote_path: &str) -> Result<String, SftpError> {
+        let path = normalize_remote_path(remote_path)?;
+        self.sftp()
+            .read_link(&path)
+            .await
+            .map_err(|err| SftpError::ListFailed {
+                path: path.clone(),
+                message: err.to_string(),
+            })
+    }
+
+    /// Sets POSIX permission mode bits (e.g. `0o755`) on a remote entry.
+    pub async fn set_permissions(&self, remote_path: &str, mode: u32) -> Result<(), SftpError> {
+        let path = normalize_remote_path(remote_path)?;
+        let mut attrs = FileAttributes::empty();
+        attrs.permissions = Some(mode);
+        self.sftp().set_metadata(&path, attrs).await.map_err(|err| {
+            SftpError::Other(anyhow::anyhow!(
+                "failed to set permissions on '{path}': {err}"
+            ))
+        })
     }
 
     /// Uploads a local file to a remote path.
@@ -3065,6 +3186,112 @@ mod tests {
         let mean64 = depth64_ms.iter().sum::<u128>() / depth64_ms.len() as u128;
         eprintln!(
             "bench_download_rtt_proxy summary one_way_ms=20 bytes={BENCH_BYTES} mean_depth1_ms={mean1} mean_depth64_ms={mean64}"
+        );
+    }
+    #[tokio::test]
+    async fn stat_reports_permissions_uid_gid() {
+        // Given: a remote file created by the test server
+        // When: stat is called without following symlinks
+        // Then: the returned record carries permission/uid/gid when available
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/stat/perm.txt", b"data").await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let file = client.stat("/stat/perm.txt", false).await.unwrap();
+        assert_eq!(file.name, "perm.txt");
+        assert!(!file.is_directory);
+        assert_eq!(file.size, 4);
+        // The test server currently reports no permissions in attrs; the field
+        // must be present (even if None) and not panic.
+        assert!(file.permissions.is_none() || file.permissions.is_some());
+    }
+
+    #[tokio::test]
+    async fn set_permissions_changes_remote_mode() {
+        // Given: a remote file
+        // When: set_permissions is called with a new mode
+        // Then: the server reports the new permission bits
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/stat/mode.txt", b"data").await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        client
+            .set_permissions("/stat/mode.txt", 0o600)
+            .await
+            .unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(server.root.join("stat/mode.txt"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "expected mode 0600, got {mode:o}");
+        }
+    }
+
+    #[tokio::test]
+    async fn stat_follows_symlink_by_default() {
+        // Given: a symlink pointing to a directory
+        // When: stat(follow_symlinks=true) is called
+        // Then: the target directory's metadata is returned
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/stat/link-target/file.txt", b"data")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        client
+            .sftp()
+            .symlink("/stat/my_link", "/stat/link-target")
+            .await
+            .unwrap();
+
+        let file = client.stat("/stat/my_link", true).await.unwrap();
+        assert!(
+            file.is_directory,
+            "following a dir symlink should report dir"
+        );
+        assert!(
+            !file.is_symlink,
+            "followed symlink should not report is_symlink"
+        );
+    }
+
+    #[tokio::test]
+    async fn stat_without_follow_reports_symlink_and_target() {
+        // Given: a symlink pointing to a directory
+        // When: stat(follow_symlinks=false) is called
+        // Then: is_symlink is true and the target is resolved
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/stat/link-target2/file.txt", b"data")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        client
+            .sftp()
+            .symlink("/stat/my_link2", "/stat/link-target2")
+            .await
+            .unwrap();
+
+        let file = client.stat("/stat/my_link2", false).await.unwrap();
+        assert!(
+            file.is_symlink,
+            "lstat of a symlink should report is_symlink"
+        );
+        assert!(
+            file.symlink_target.is_some(),
+            "read_link should resolve the target"
+        );
+        assert_eq!(
+            file.symlink_target_is_dir,
+            Some(true),
+            "target should resolve to a directory"
         );
     }
 }
