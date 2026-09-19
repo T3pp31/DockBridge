@@ -35,13 +35,16 @@ final class KeychainService: @unchecked Sendable {
     static let shared = KeychainService()
 
     private let serviceName: String
+    private let useDataProtectionKeychain: Bool
 
     private init() {
         self.serviceName = "com.dockbridge"
+        self.useDataProtectionKeychain = true
     }
 
-    init(serviceName: String) {
+    init(serviceName: String, useDataProtectionKeychain: Bool = false) {
         self.serviceName = serviceName
+        self.useDataProtectionKeychain = useDataProtectionKeychain
     }
 
     func savePassword(_ password: String, account: String) throws {
@@ -92,12 +95,12 @@ final class KeychainService: @unchecked Sendable {
     }
 
     private func save(data: Data, account: String, kind: String) throws {
-        let query = makeQuery(account: account, kind: kind)
         let attributes: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
 
+        let query = makeQuery(account: account, kind: kind)
         let status = SecItemCopyMatching(query as CFDictionary, nil)
         switch status {
         case errSecSuccess:
@@ -109,11 +112,6 @@ final class KeychainService: @unchecked Sendable {
 
         case errSecItemNotFound:
             try addItem(account: account, kind: kind, attributes: attributes)
-
-        case errSecAuthFailed, errSecMissingEntitlement:
-            // Access and entitlement failures do not prove that the item is
-            // corrupt. Never delete data in response to either condition.
-            throw KeychainServiceError.unexpectedStatus(status)
 
         default:
             throw KeychainServiceError.unexpectedStatus(status)
@@ -149,23 +147,6 @@ final class KeychainService: @unchecked Sendable {
             // key and make existing encrypted profiles unrecoverable.
             throw KeychainServiceError.unexpectedStatus(status)
 
-        case errSecMissingEntitlement, errSecNotAvailable, errSecInteractionNotAllowed:
-            // Configuration / environment issue (unsandboxed tests, no
-            // data-protection keychain): fall back to the default keychain,
-            // which is what addItem uses as its fallback too.
-            var fallback = makeQuery(account: account, kind: kind, useDataProtection: false)
-            fallback[kSecReturnData as String] = true
-            fallback[kSecMatchLimit as String] = kSecMatchLimitOne
-            var fallbackItem: CFTypeRef?
-            let fallbackStatus = SecItemCopyMatching(fallback as CFDictionary, &fallbackItem)
-            if fallbackStatus == errSecSuccess {
-                return fallbackItem as? Data
-            }
-            if fallbackStatus == errSecItemNotFound {
-                return nil
-            }
-            throw KeychainServiceError.unexpectedStatus(fallbackStatus)
-
         default:
             throw KeychainServiceError.unexpectedStatus(status)
         }
@@ -178,20 +159,9 @@ final class KeychainService: @unchecked Sendable {
     private func deleteData(account: String, kind: String) throws {
         let query = makeQuery(account: account, kind: kind)
         let status = SecItemDelete(query as CFDictionary)
-        if status == errSecSuccess || status == errSecItemNotFound {
-            return
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainServiceError.unexpectedStatus(status)
         }
-        // Fall back to the default keychain (addItem/loadData do the same
-        // when the data-protection keychain is unavailable).
-        if dataProtectionUnavailable(status) {
-            let fallback = makeQuery(account: account, kind: kind, useDataProtection: false)
-            let fallbackStatus = SecItemDelete(fallback as CFDictionary)
-            guard fallbackStatus == errSecSuccess || fallbackStatus == errSecItemNotFound else {
-                throw KeychainServiceError.unexpectedStatus(fallbackStatus)
-            }
-            return
-        }
-        throw KeychainServiceError.unexpectedStatus(status)
     }
 
     private func addItem(
@@ -204,18 +174,6 @@ final class KeychainService: @unchecked Sendable {
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
         if addStatus == errSecSuccess {
             return
-        }
-        // The data-protection keychain is unavailable outside an app context
-        // that can use it (e.g. unit tests / unsandboxed runs): fall back to
-        // the default keychain so saves still succeed there.
-        if dataProtectionUnavailable(addStatus) {
-            var fallback = makeQuery(account: account, kind: kind, useDataProtection: false)
-            fallback.merge(attributes) { _, new in new }
-            let fallbackStatus = SecItemAdd(fallback as CFDictionary, nil)
-            if fallbackStatus == errSecSuccess || fallbackStatus == errSecDuplicateItem {
-                return
-            }
-            throw KeychainServiceError.unexpectedStatus(fallbackStatus)
         }
         // A concurrent save may have created the item between our
         // copy-matching check and this add. Treat duplicate as an update.
@@ -232,25 +190,13 @@ final class KeychainService: @unchecked Sendable {
         throw KeychainServiceError.unexpectedStatus(addStatus)
     }
 
-    private func dataProtectionUnavailable(_ status: OSStatus) -> Bool {
-        // Data-protection keychain requires a signed app with entitlements;
-        // unsandboxed test runs hit these statuses.
-        status == errSecMissingEntitlement
-            || status == errSecInteractionNotAllowed
-            || status == errSecNotAvailable
-    }
-
-    private func makeQuery(
-        account: String,
-        kind: String,
-        useDataProtection: Bool = true
-    ) -> [String: Any] {
+    private func makeQuery(account: String, kind: String) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
             kSecAttrAccount as String: accountLabel(account: account, kind: kind),
         ]
-        if useDataProtection {
+        if useDataProtectionKeychain {
             // Store items in the data-protection keychain so kSecAttrAccessible
             // is honored and re-signing does not invalidate the ACL.
             query[kSecUseDataProtectionKeychain as String] = true
