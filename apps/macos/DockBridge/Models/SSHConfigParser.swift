@@ -22,7 +22,11 @@ enum SSHConfigParser {
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
 
-            let parts = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            let parts = trimmed.split(
+                whereSeparator: { $0 == " " || $0 == "\t" },
+                maxSplits: 1,
+                omittingEmptySubsequences: true
+            )
             guard parts.count == 2 else { continue }
             let key = parts[0].lowercased()
             let value = String(parts[1]).trimmingCharacters(in: .whitespaces)
