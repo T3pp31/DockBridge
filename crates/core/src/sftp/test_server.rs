@@ -446,6 +446,44 @@ impl russh_sftp::server::Handler for SftpHandler {
         Ok(Self::ok_status(id))
     }
 
+    async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
+        let local = self.resolve(&path);
+        if fs::remove_dir(&local).await.is_err() {
+            return Ok(Self::err_status(id, StatusCode::Failure, "rmdir failed"));
+        }
+        Ok(Self::ok_status(id))
+    }
+
+    async fn symlink(
+        &mut self,
+        id: u32,
+        linkpath: String,
+        targetpath: String,
+    ) -> Result<Status, Self::Error> {
+        #[cfg(unix)]
+        {
+            let link = self.resolve(&linkpath);
+            if let Some(parent) = link.parent() {
+                if let Err(err) = fs::create_dir_all(parent).await {
+                    tracing::warn!(path = %parent.display(), error = %err, "symlink parent mkdir failed");
+                    return Ok(Self::err_status(id, StatusCode::Failure, "symlink failed"));
+                }
+            }
+            // Resolve the virtual remote target to the server's local root so
+            // the created link stays inside the sandbox and can be lstat'ed.
+            let target_local = self.resolve(&targetpath);
+            if std::os::unix::fs::symlink(&target_local, &link).is_err() {
+                return Ok(Self::err_status(id, StatusCode::Failure, "symlink failed"));
+            }
+            Ok(Self::ok_status(id))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (linkpath, targetpath);
+            Err(self.unimplemented())
+        }
+    }
+
     async fn rename(
         &mut self,
         id: u32,

@@ -430,6 +430,34 @@ impl DockBridgeClient {
         Ok(())
     }
 
+    /// Deletes a remote entry, optionally recursing into directories.
+    ///
+    /// Returns the number of entries removed. Distinguishes between files,
+    /// symlinks (removed as links) and directories (recursively removed when
+    /// `recursive` is true, otherwise rejected when not empty).
+    fn delete_entry(
+        &self,
+        session_id: u64,
+        remote_path: String,
+        recursive: bool,
+    ) -> Result<u64, DockBridgeError> {
+        let sessions = Arc::clone(&self.sessions);
+        let count = self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let sessions = sessions.lock().await;
+                let session = sessions
+                    .get(&session_id)
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                SftpClient::new(session.as_ref())
+                    .delete_entry(&remote_path, recursive)
+                    .await
+                    .map_err(map_error)
+            }),
+        )?;
+        Ok(count as u64)
+    }
+
     fn rename(&self, session_id: u64, from: String, to: String) -> Result<(), DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
         self.handle_session_result(
