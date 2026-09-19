@@ -10,19 +10,7 @@ struct ConnectionListView: View {
             if viewModel.profiles.isEmpty {
                 emptyState
             } else {
-                List(selection: $viewModel.selectedProfileID) {
-                    profileRows
-                }
-                .contextMenu(forSelectionType: UUID.self) { ids in
-                    profileContextMenu(for: ids)
-                } primaryAction: { ids in
-                    guard let profile = singleSelectedProfile(from: ids) else { return }
-                    guard !viewModel.connectionStatus.isConnected,
-                          !viewModel.connectionStatus.isConnecting
-                    else { return }
-                    viewModel.requestConnect(profile: profile)
-                }
-                .searchable(text: $viewModel.searchText, prompt: "Search connections")
+                profileList
             }
         }
         .navigationTitle("Connections")
@@ -184,6 +172,22 @@ struct ConnectionListView: View {
     }
 
     @ViewBuilder
+    private var profileList: some View {
+        List(selection: $viewModel.selectedProfileID) {
+            profileRows
+        }
+        .contextMenu(forSelectionType: UUID.self) { ids in
+            profileContextMenu(for: ids)
+        } primaryAction: { ids in
+            guard let profile = singleSelectedProfile(from: ids) else { return }
+            guard !viewModel.connectionStatus.isConnected,
+                  !viewModel.connectionStatus.isConnecting
+            else { return }
+            viewModel.requestConnect(profile: profile)
+        }
+        .searchable(text: $viewModel.searchText, prompt: "Search connections")
+    }
+
     private var emptyState: some View {
         ContentUnavailableView {
             Label("No connections", systemImage: "server.rack")
