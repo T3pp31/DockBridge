@@ -121,7 +121,7 @@ struct RemotePaneView: View {
                 rows: [
                     ("Path", item.path),
                     ("Kind", item.isDirectory ? "Folder" : "File"),
-                    ("Size", ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)),
+                    ("Size", ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file)),
                     ("Modified", item.modifiedAtSecs.map { secs in
                         DateFormatter.localizedString(
                             from: Date(timeIntervalSince1970: TimeInterval(secs)),
