@@ -151,7 +151,8 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
             try client.uploadEntry(
                 sessionId: sessionId,
                 localPath: localPath,
-                remoteDirectory: remoteDirectory
+                remoteDirectory: remoteDirectory,
+                overwritePolicy: .replace
             )
         }
         await refreshTransferQueue()
@@ -162,7 +163,8 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
             try client.downloadEntry(
                 sessionId: sessionId,
                 remotePath: remotePath,
-                localDirectory: localDirectory
+                localDirectory: localDirectory,
+                overwritePolicy: .replace
             )
         }
         await refreshTransferQueue()
