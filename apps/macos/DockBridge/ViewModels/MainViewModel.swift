@@ -159,6 +159,11 @@ final class MainViewModel: ObservableObject {
     @Published var mkdirName = ""
     @Published var showOverwriteAsk = false
     @Published var overwriteAskDestination = ""
+    /// Profile that was active when the last connection was established.
+    /// Captured on the connect transition because `connectedProfileID` is
+    /// cleared synchronously by the bridge before `.onChange(of: isConnected)`
+    /// fires for the disconnect.
+    private var lastConnectedProfileID: UUID?
     /// Continuation resumed when the user answers the overwrite sheet.
     /// Replaces the previous single-slot `pendingTransferAction` so that a
     /// batch loop pauses until the user decides, instead of overwriting the
@@ -312,8 +317,14 @@ final class MainViewModel: ObservableObject {
     }
 
     func onConnectionChanged(isConnected: Bool) async {
+        if isConnected {
+            // Remember which profile established this connection. The bridge
+            // clears `connectedProfileID` before the disconnect callback fires.
+            lastConnectedProfileID = bridge.connectedProfileID
+        }
+
         guard isConnected else {
-            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID {
+            if let profileID = lastConnectedProfileID ?? bridge.connectedProfileID {
                 connectionList.saveSessionPaths(
                     for: profileID,
                     localPath: localPath.path,
@@ -333,7 +344,7 @@ final class MainViewModel: ObservableObject {
 
         do {
             try await prepareRemoteWorkingDirectory()
-            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID,
+            if let profileID = lastConnectedProfileID ?? bridge.connectedProfileID,
                let profile = connectionList.profiles.first(where: { $0.id == profileID }),
                let savedRemotePath = profile.lastRemotePath,
                !savedRemotePath.isEmpty {
@@ -344,7 +355,7 @@ final class MainViewModel: ObservableObject {
                 // Missing lastRemotePath keeps the initial-directory result from prepareRemoteWorkingDirectory().
             }
             await reloadRemote()
-            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID,
+            if let profileID = lastConnectedProfileID ?? bridge.connectedProfileID,
                let profile = connectionList.profiles.first(where: { $0.id == profileID }),
                let savedLocalPath = profile.lastLocalPath,
                !savedLocalPath.isEmpty {
@@ -484,7 +495,7 @@ final class MainViewModel: ObservableObject {
            username != "root" {
             return await bridge.firstExistingHomeDirectoryCandidate(for: username)
         }
-        guard let profileID = connectionList.selectedProfileID,
+        guard let profileID = lastConnectedProfileID ?? bridge.connectedProfileID,
               let profile = connectionList.profiles.first(where: { $0.id == profileID }),
               !profile.isRootUser
         else {

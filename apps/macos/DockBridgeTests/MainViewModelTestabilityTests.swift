@@ -236,22 +236,34 @@ final class MainViewModelTestabilityTests: XCTestCase {
     // MARK: - Path saving on disconnect
 
     func testDisconnectSavesCurrentPathsToConnectedProfile() async throws {
-        let profile = makeProfile()
-        try store.saveProfiles([profile])
-        try store.seedInitialTrust(for: [profile])
+        let connectedProfile = makeProfile(name: "Connected")
+        let selectedProfile = makeProfile(name: "Selected")
+        try store.saveProfiles([connectedProfile, selectedProfile])
+        try store.seedInitialTrust(for: [connectedProfile, selectedProfile])
         connectionList.load()
-        // load() selects the first profile, so selectedProfileID is set.
-        XCTAssertEqual(connectionList.selectedProfileID, profile.id)
+        connectionList.selectedProfileID = selectedProfile.id
+
+        bridge.connectionStatus = .connected(endpoint: connectedProfile.endpointLabel)
+        bridge.connectedProfileID = connectedProfile.id
+        bridge.initialRemoteDirectory = "/"
+        bridge.directoryListings["/"] = []
+        await viewModel.onConnectionChanged(isConnected: true)
 
         viewModel.remotePath = "/srv/current"
         viewModel.localPath = baseDirectory
 
+        bridge.connectionStatus = .disconnected
+        bridge.connectedProfileID = nil
         bridge.lastDisconnectReason = "session closed"
         await viewModel.onConnectionChanged(isConnected: false)
 
-        let saved = try store.loadProfiles()[0]
-        XCTAssertEqual(saved.lastRemotePath, "/srv/current")
-        XCTAssertEqual(saved.lastLocalPath, baseDirectory.path)
+        let profiles = try store.loadProfiles()
+        let savedConnectedProfile = try XCTUnwrap(profiles.first { $0.id == connectedProfile.id })
+        let unchangedSelectedProfile = try XCTUnwrap(profiles.first { $0.id == selectedProfile.id })
+        XCTAssertEqual(savedConnectedProfile.lastRemotePath, "/srv/current")
+        XCTAssertEqual(savedConnectedProfile.lastLocalPath, baseDirectory.path)
+        XCTAssertNil(unchangedSelectedProfile.lastRemotePath)
+        XCTAssertNil(unchangedSelectedProfile.lastLocalPath)
     }
 
     // MARK: - Transfer queue speed sampling
