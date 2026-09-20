@@ -48,18 +48,18 @@ targets:
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
-          export PATH="${HOME}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
-          ROOT="${SRCROOT}/../.."
-          "${ROOT}/scripts/build-rust.sh" "" release
-          "${ROOT}/scripts/generate-uniffi.sh" "" release
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          ROOT="$SRCROOT/../.."
+          "$ROOT/scripts/build-rust.sh" "" release
+          "$ROOT/scripts/generate-uniffi.sh" "" release
     postBuildScripts:
       - name: Generate Dock App Icon icns
         shell: /bin/bash
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
-          OUT="${BUILT_PRODUCTS_DIR}/${FULL_PRODUCT_NAME}/Contents/Resources/AppIcon.icns"
-          "${SRCROOT}/../../scripts/generate-app-icon-icns.sh" "$OUT"
+          OUT="$BUILT_PRODUCTS_DIR/$FULL_PRODUCT_NAME/Contents/Resources/AppIcon.icns"
+          "$SRCROOT/../../scripts/generate-app-icon-icns.sh" "$OUT"
   DockBridgeTests:
     type: bundle.unit-test
     platform: macOS

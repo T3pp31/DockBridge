@@ -609,7 +609,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\nexport PATH=\"/Users/fukutomiteppei/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/pkg/env/global/bin:/usr/local/co.palokaj.battery:/Library/Apple/usr/bin:/opt/homebrew/bin:/Users/fukutomiteppei/.codex/tmp/arg0/codex-arg0jDsbC6:/Users/fukutomiteppei/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/override:/Users/fukutomiteppei/.codeium/windsurf/bin:/Users/fukutomiteppei/.local/bin:/Users/fukutomiteppei/.cargo/bin:/Users/fukutomiteppei/.lmstudio/bin:/Users/fukutomiteppei/.cache/codex-runtimes/codex-primary-runtime/dependencies/bin/fallback:/Applications/ChatGPT.app/Contents/Resources\"\nROOT=\"${SRCROOT}/../..\"\n\"${ROOT}/scripts/build-rust.sh\" \"\" release\n\"${ROOT}/scripts/generate-uniffi.sh\" \"\" release\n";
+			shellScript = "set -euo pipefail\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\nROOT=\"$SRCROOT/../..\"\n\"$ROOT/scripts/build-rust.sh\" \"\" release\n\"$ROOT/scripts/generate-uniffi.sh\" \"\" release\n";
 		};
 		F237171785F52D87CD46728E /* Generate Dock App Icon icns */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -628,7 +628,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\nOUT=\"${BUILT_PRODUCTS_DIR}/${FULL_PRODUCT_NAME}/Contents/Resources/AppIcon.icns\"\n\"${SRCROOT}/../../scripts/generate-app-icon-icns.sh\" \"$OUT\"\n";
+			shellScript = "set -euo pipefail\nOUT=\"$BUILT_PRODUCTS_DIR/$FULL_PRODUCT_NAME/Contents/Resources/AppIcon.icns\"\n\"$SRCROOT/../../scripts/generate-app-icon-icns.sh\" \"$OUT\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
