@@ -279,20 +279,27 @@ impl TransferManager {
                     self.update_task_status(task_id, TransferStatus::Cancelled);
                     Err(TransferError::Cancelled)
                 }
-                Err(err) => {
-                    let message = format!(
-                        "転送はキャンセルされましたが、部分ファイルの削除に失敗しました: {err}"
-                    );
+                // A cancel raced with an actual partial-file cleanup failure.
+                Err(TransferError::CleanupFailed { message }) => {
+                    let failure = TransferError::CleanupFailed { message };
                     self.update_task_status(
                         task_id,
                         TransferStatus::Failed {
-                            message: message.clone(),
+                            message: failure.to_string(),
                         },
                     );
-                    Err(TransferError::RetriesExhausted {
-                        attempts: 1,
-                        message,
-                    })
+                    Err(failure)
+                }
+                // Any other error that surfaces after a cancel is reported as
+                // itself, never relabeled as a cleanup failure (issue #319).
+                Err(err) => {
+                    self.update_task_status(
+                        task_id,
+                        TransferStatus::Failed {
+                            message: err.to_string(),
+                        },
+                    );
+                    Err(err)
                 }
             };
         }
@@ -588,7 +595,9 @@ impl TransferManager {
                 Ok(()) => return Ok(()),
                 Err(SftpError::Cancelled) => return Err(TransferError::Cancelled),
                 Err(SftpError::CleanupFailed { message, .. }) if self.is_cancelled(task_id) => {
-                    return Err(cancelled_cleanup_failed(message));
+                    // Only a genuine partial-cleanup failure is labeled as one;
+                    // other errors that race a cancel propagate as themselves.
+                    return Err(TransferError::CleanupFailed { message });
                 }
                 Err(err) => {
                     last_error = Some(err);
@@ -691,7 +700,9 @@ impl TransferManager {
                 Ok(()) => return Ok(()),
                 Err(SftpError::Cancelled) => return Err(TransferError::Cancelled),
                 Err(SftpError::CleanupFailed { message, .. }) if self.is_cancelled(task_id) => {
-                    return Err(cancelled_cleanup_failed(message));
+                    // Only a genuine partial-cleanup failure is labeled as one;
+                    // other errors that race a cancel propagate as themselves.
+                    return Err(TransferError::CleanupFailed { message });
                 }
                 Err(err) => {
                     last_error = Some(err);
@@ -722,17 +733,6 @@ impl TransferManager {
                 .map(|error| error.to_string())
                 .unwrap_or_else(|| "unknown transfer error".to_string()),
         })
-    }
-}
-
-/// Builds the "transfer was cancelled but cleanup failed" error used when a
-/// cancel races with a partial-file cleanup failure. English to stay
-/// consistent with the rest of the core error messages; localization happens
-/// in the UI layer (issue #319).
-fn cancelled_cleanup_failed(message: String) -> TransferError {
-    TransferError::RetriesExhausted {
-        attempts: 1,
-        message: format!("transfer was cancelled, but deleting the partial file failed: {message}"),
     }
 }
 
@@ -1136,6 +1136,116 @@ mod tests {
             .finalize_task_result(12, Err(TransferError::Cancelled))
             .expect_err("cancelled transfer should not finalize as completed");
 
+        assert!(matches!(err, TransferError::Cancelled));
+        let queue = manager.get_transfer_queue();
+        assert_eq!(queue[0].status, TransferStatus::Cancelled);
+    }
+
+    #[test]
+    fn cancel_race_with_generic_error_reports_the_error_not_cleanup_message() {
+        // Given: a task that was cancelled while its transfer returned a
+        // non-cleanup error (e.g. remote write timeout) racing with the cancel.
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 14,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 1000,
+        };
+        manager.insert_task(task);
+        manager.register_cancellation_flag(14);
+        manager.request_cancellation(14);
+
+        let raced_error = TransferError::RetriesExhausted {
+            attempts: 1,
+            message: "timed out waiting for the SFTP server".to_string(),
+        };
+
+        let err = manager
+            .finalize_task_result(14, Err(raced_error))
+            .expect_err("a failed transfer must stay failed");
+
+        // Then: the original error is reported, NOT relabeled as a cleanup
+        // failure. The Japanese cleanup-only message must never appear.
+        let message = err.to_string();
+        assert!(
+            !message.contains("部分ファイルの削除に失敗"),
+            "generic errors must not be relabeled as cleanup failures: {message}"
+        );
+        assert!(
+            message.contains("timed out waiting for the SFTP server"),
+            "the original error must be preserved: {message}"
+        );
+
+        let queue = manager.get_transfer_queue();
+        assert!(matches!(
+            queue[0].status,
+            TransferStatus::Failed { ref message } if message.contains("timed out")
+        ));
+    }
+
+    #[test]
+    fn cancel_race_with_cleanup_failed_reports_cleanup_message() {
+        // Given: a task that was cancelled while the partial-file deletion
+        // genuinely failed.
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 15,
+            direction: TransferDirection::Download,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 1000,
+        };
+        manager.insert_task(task);
+        manager.register_cancellation_flag(15);
+        manager.request_cancellation(15);
+
+        let cleanup_error = TransferError::CleanupFailed {
+            message: "permission denied".to_string(),
+        };
+        let err = manager
+            .finalize_task_result(15, Err(cleanup_error))
+            .expect_err("cleanup failure must stay failed");
+
+        assert!(
+            matches!(err, TransferError::CleanupFailed { ref message } if message == "permission denied"),
+            "unexpected error: {err:?}"
+        );
+        let queue = manager.get_transfer_queue();
+        assert!(matches!(
+            queue[0].status,
+            TransferStatus::Failed { ref message } if message.contains("failed to clean up the partial file")
+        ));
+    }
+
+    #[test]
+    fn finalize_cancelled_error_without_cancel_flag_marks_cancelled() {
+        // Given: a task whose transfer returned Cancelled, but whose cancel
+        // flag was not/is no longer set (e.g. late Detection after the flag
+        // was consumed).
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = TransferTask {
+            id: 16,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 1000,
+        };
+        manager.insert_task(task);
+
+        // No cancellation was requested/registered for this task.
+        let err = manager
+            .finalize_task_result(16, Err(TransferError::Cancelled))
+            .expect_err("cancelled transfer does not finalize as completed");
+
+        // Then: the task is Cancelled, never Failed.
         assert!(matches!(err, TransferError::Cancelled));
         let queue = manager.get_transfer_queue();
         assert_eq!(queue[0].status, TransferStatus::Cancelled);
