@@ -12,10 +12,13 @@ use std::time::Duration;
 use dockbridge_core::{
     ensure_known_hosts_parent, expand_tilde,
     inspect_private_key_algorithm as core_inspect_private_key_algorithm,
-    is_connection_lost_message, validate_transfer_chunk_size, AppConfig, AuthType,
-    ConnectionProfile, HostKeyPrompt, KnownHostsManager, PrivateKeyAlgorithm, RemoteFile,
-    SecretPassword, SftpClient, SshSession, TransferDirection, TransferManager, TransferStatus,
-    TransferTask, DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
+    is_connection_lost_message, u64_to_usize_or_invalid, AppConfig, AuthType, ConnectionProfile,
+    HostKeyPrompt, KnownHostsManager, PrivateKeyAlgorithm, RemoteFile, SecretPassword, SftpClient,
+    SshSession, TransferDirection, TransferManager, TransferStatus, TransferTask,
+};
+#[cfg(test)]
+use dockbridge_core::{
+    validate_transfer_chunk_size, MAX_TRANSFER_CHUNK_SIZE_BYTES, MIN_TRANSFER_CHUNK_SIZE_BYTES,
 };
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
@@ -44,19 +47,24 @@ uniffi::custom_type!(SecretCredential, String, {
     try_lift: |v| Ok(SecretCredential(v)),
 });
 
-static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+static RUNTIME: OnceLock<Result<tokio::runtime::Runtime, DockBridgeError>> = OnceLock::new();
 
-fn runtime() -> &'static tokio::runtime::Runtime {
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("failed to create Tokio runtime")
-    })
+fn runtime() -> Result<&'static tokio::runtime::Runtime, DockBridgeError> {
+    RUNTIME
+        .get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|err| DockBridgeError::Generic {
+                    message: format!("failed to create Tokio runtime: {err}"),
+                })
+        })
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    runtime().block_on(future)
+fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, DockBridgeError> {
+    Ok(runtime()?.block_on(future))
 }
 
 /// Application configuration passed from Swift.
@@ -66,6 +74,9 @@ pub struct AppConfigRecord {
     pub session_health_check_interval_secs: u64,
     pub transfer_retry_count: u32,
     pub transfer_chunk_size_bytes: u64,
+    pub transfer_download_pipeline_depth: u64,
+    pub ssh_inactivity_timeout_secs: Option<u64>,
+    pub ssh_keepalive_interval_secs: u64,
     pub known_hosts_path: String,
     pub openssh_known_hosts_path: String,
     pub merge_openssh_known_hosts_on_connect: bool,
@@ -155,7 +166,7 @@ pub struct HostKeyChallenge {
 }
 
 /// Flat error type exposed to Swift.
-#[derive(Debug, uniffi::Error)]
+#[derive(Debug, Clone, uniffi::Error)]
 #[uniffi(flat_error)]
 pub enum DockBridgeError {
     Generic { message: String },
@@ -234,16 +245,17 @@ impl DockBridgeClient {
     ) -> Result<Arc<Self>, DockBridgeError> {
         let known_hosts_path = expand_tilde(PathBuf::from(app_config.known_hosts_path).as_path());
         ensure_known_hosts_parent(&known_hosts_path).map_err(map_error)?;
-        let transfer_chunk_size_bytes =
-            validate_transfer_chunk_size(app_config.transfer_chunk_size_bytes as usize)
-                .map_err(map_error)?;
         let openssh_known_hosts_path =
             expand_tilde(PathBuf::from(app_config.openssh_known_hosts_path).as_path());
         let config = AppConfig {
             connection_timeout_secs: app_config.connection_timeout_secs,
             session_health_check_interval_secs: app_config.session_health_check_interval_secs,
             transfer_retry_count: app_config.transfer_retry_count,
-            transfer_chunk_size_bytes,
+            transfer_chunk_size_bytes: u64_to_usize_or_invalid(
+                "transfer_chunk_size_bytes",
+                app_config.transfer_chunk_size_bytes,
+            )
+            .map_err(map_error)?,
             known_hosts_path,
             openssh_known_hosts_path,
             merge_openssh_known_hosts_on_connect: app_config.merge_openssh_known_hosts_on_connect,
@@ -252,8 +264,16 @@ impl DockBridgeClient {
             directory_walk_max_files: app_config.directory_walk_max_files,
             directory_walk_max_depth: app_config.directory_walk_max_depth,
             directory_walk_max_total_bytes: app_config.directory_walk_max_total_bytes,
-            transfer_download_pipeline_depth: DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
-        };
+            transfer_download_pipeline_depth: u64_to_usize_or_invalid(
+                "transfer_download_pipeline_depth",
+                app_config.transfer_download_pipeline_depth,
+            )
+            .map_err(map_error)?,
+            ssh_inactivity_timeout_secs: app_config.ssh_inactivity_timeout_secs,
+            ssh_keepalive_interval_secs: app_config.ssh_keepalive_interval_secs,
+        }
+        .validate()
+        .map_err(map_error)?;
         let known_hosts_manager =
             KnownHostsManager::load(config.known_hosts_path()).map_err(map_error)?;
 
@@ -282,7 +302,7 @@ impl DockBridgeClient {
             &config,
             known_hosts,
             prompt,
-        ))
+        ))?
         .map_err(map_error)?;
 
         let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
@@ -291,14 +311,13 @@ impl DockBridgeClient {
                 .lock()
                 .await
                 .insert(session_id, Arc::new(session));
-        });
-        self.spawn_health_monitor(session_id);
+        })?;
+        self.spawn_health_monitor(session_id)?;
         Ok(session_id)
     }
 
     fn disconnect(&self, session_id: u64) -> Result<(), DockBridgeError> {
-        self.remove_session(session_id, false, String::new());
-        Ok(())
+        self.remove_session(session_id, false, String::new())
     }
 
     fn get_initial_directory(&self, session_id: u64) -> Result<String, DockBridgeError> {
@@ -314,7 +333,7 @@ impl DockBridgeClient {
                     .initial_directory()
                     .await
                     .map_err(map_error)
-            }),
+            })?,
         )
     }
 
@@ -335,7 +354,7 @@ impl DockBridgeClient {
                     .list_directory(&path)
                     .await
                     .map_err(map_error)
-            }),
+            })?,
         )?;
         Ok(files.into_iter().map(to_remote_file_record).collect())
     }
@@ -380,7 +399,7 @@ impl DockBridgeClient {
                     .await
                     .map_err(map_error)?;
                 Ok(())
-            }),
+            })?,
         )?;
         Ok(())
     }
@@ -407,7 +426,7 @@ impl DockBridgeClient {
                     .await
                     .map_err(map_error)?;
                 Ok(())
-            }),
+            })?,
         )?;
         Ok(())
     }
@@ -425,9 +444,37 @@ impl DockBridgeClient {
                     .delete(&remote_path)
                     .await
                     .map_err(map_error)
-            }),
+            })?,
         )?;
         Ok(())
+    }
+
+    /// Deletes a remote entry, optionally recursing into directories.
+    ///
+    /// Returns the number of entries removed. Distinguishes between files,
+    /// symlinks (removed as links) and directories (recursively removed when
+    /// `recursive` is true, otherwise rejected when not empty).
+    fn delete_entry(
+        &self,
+        session_id: u64,
+        remote_path: String,
+        recursive: bool,
+    ) -> Result<u64, DockBridgeError> {
+        let sessions = Arc::clone(&self.sessions);
+        let count = self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let sessions = sessions.lock().await;
+                let session = sessions
+                    .get(&session_id)
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                SftpClient::new(session.as_ref())
+                    .delete_entry(&remote_path, recursive)
+                    .await
+                    .map_err(map_error)
+            })?,
+        )?;
+        Ok(count as u64)
     }
 
     fn rename(&self, session_id: u64, from: String, to: String) -> Result<(), DockBridgeError> {
@@ -443,7 +490,7 @@ impl DockBridgeClient {
                     .rename(&from, &to)
                     .await
                     .map_err(map_error)
-            }),
+            })?,
         )?;
         Ok(())
     }
@@ -465,7 +512,7 @@ impl DockBridgeClient {
                     .create_directory(&remote_path)
                     .await
                     .map_err(map_error)
-            }),
+            })?,
         )?;
         Ok(())
     }
@@ -511,25 +558,31 @@ impl DockBridgeClient {
                     .await
                     .map_err(map_error)?;
                 Ok(())
-            }),
+            })?,
         )?;
         Ok(())
     }
 }
 
 impl DockBridgeClient {
-    fn remove_session(&self, session_id: u64, notify: bool, reason: String) {
+    fn remove_session(
+        &self,
+        session_id: u64,
+        notify: bool,
+        reason: String,
+    ) -> Result<(), DockBridgeError> {
         block_on(async {
             if let Some(handle) = self.monitors.lock().await.remove(&session_id) {
                 handle.abort();
             }
             self.sessions.lock().await.remove(&session_id);
-        });
+        })?;
 
         if notify {
             self.connection_event_handler
                 .on_session_disconnected(session_id, reason);
         }
+        Ok(())
     }
 
     fn handle_session_result<T>(
@@ -539,20 +592,22 @@ impl DockBridgeClient {
     ) -> Result<T, DockBridgeError> {
         if let Err(DockBridgeError::Generic { ref message }) = result {
             if is_connection_lost_message(message) {
-                self.remove_session(session_id, true, message.clone());
+                if let Err(error) = self.remove_session(session_id, true, message.clone()) {
+                    eprintln!("failed to remove disconnected session {session_id}: {error}");
+                }
             }
         }
         result
     }
 
-    fn spawn_health_monitor(&self, session_id: u64) {
+    fn spawn_health_monitor(&self, session_id: u64) -> Result<(), DockBridgeError> {
         let interval_secs = self.config.session_health_check_interval_secs.max(1);
         let sessions = Arc::clone(&self.sessions);
         let monitors = Arc::clone(&self.monitors);
         let monitors_in_task = Arc::clone(&monitors);
         let connection_event_handler = Arc::clone(&self.connection_event_handler);
 
-        let monitor_task = runtime().spawn(async move {
+        let monitor_task = runtime()?.spawn(async move {
             let interval = Duration::from_secs(interval_secs);
 
             loop {
@@ -584,7 +639,8 @@ impl DockBridgeClient {
 
         block_on(async {
             monitors.lock().await.insert(session_id, monitor_task);
-        });
+        })?;
+        Ok(())
     }
 }
 
@@ -671,4 +727,122 @@ fn inspect_private_key_algorithm(
         PrivateKeyAlgorithm::Rsa => PrivateKeyAlgorithmRecord::Rsa,
         PrivateKeyAlgorithm::Other(label) => PrivateKeyAlgorithmRecord::Other { label },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(status: TransferStatus) -> TransferTask {
+        TransferTask {
+            id: 1,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/local.txt"),
+            remote_path: "/remote.txt".to_string(),
+            status,
+            bytes_transferred: 0,
+            total_bytes: 100,
+        }
+    }
+
+    #[test]
+    fn transfer_task_record_maps_all_statuses() {
+        // Given: every TransferStatus variant
+        // When: converted to TransferTaskRecord
+        // Then: each maps to the corresponding TransferStatusRecord variant
+        let cases = [
+            (TransferStatus::Pending, TransferStatusRecord::Pending),
+            (TransferStatus::InProgress, TransferStatusRecord::InProgress),
+            (TransferStatus::Completed, TransferStatusRecord::Completed),
+            (TransferStatus::Cancelled, TransferStatusRecord::Cancelled),
+        ];
+        for (status, expected) in cases {
+            let record = to_transfer_task_record(task(status));
+            assert!(
+                std::mem::discriminant(&record.status) == std::mem::discriminant(&expected),
+                "status mapping mismatch"
+            );
+        }
+
+        let failed = to_transfer_task_record(task(TransferStatus::Failed {
+            message: "boom".to_string(),
+        }));
+        match failed.status {
+            TransferStatusRecord::Failed { message } => assert_eq!(message, "boom"),
+            _ => panic!("expected Failed status in record"),
+        }
+    }
+
+    #[test]
+    fn transfer_task_record_maps_direction() {
+        // Given: an upload and a download task
+        // When: converted to TransferTaskRecord
+        // Then: directions round-trip to the correct record variants
+        let upload = to_transfer_task_record(task(TransferStatus::Pending));
+        assert!(
+            std::mem::discriminant(&upload.direction)
+                == std::mem::discriminant(&TransferDirectionRecord::Upload)
+        );
+
+        let mut t = task(TransferStatus::Pending);
+        t.direction = TransferDirection::Download;
+        let download = to_transfer_task_record(t);
+        assert!(
+            std::mem::discriminant(&download.direction)
+                == std::mem::discriminant(&TransferDirectionRecord::Download)
+        );
+    }
+
+    #[test]
+    fn chunk_size_below_minimum_is_raised_to_minimum() {
+        // Given: a chunk size below the 4 KiB minimum
+        // When: validated
+        // Then: it is raised to the minimum instead of erroring
+        let validated = validate_transfer_chunk_size(1).unwrap();
+        assert_eq!(validated, MIN_TRANSFER_CHUNK_SIZE_BYTES);
+        let validated = validate_transfer_chunk_size(MIN_TRANSFER_CHUNK_SIZE_BYTES - 1).unwrap();
+        assert_eq!(validated, MIN_TRANSFER_CHUNK_SIZE_BYTES);
+    }
+
+    #[test]
+    fn chunk_size_at_minimum_and_maximum_are_accepted() {
+        // Given: chunk sizes at the accepted boundaries
+        // When: validated
+        // Then: they pass through unchanged
+        assert_eq!(
+            validate_transfer_chunk_size(MIN_TRANSFER_CHUNK_SIZE_BYTES).unwrap(),
+            MIN_TRANSFER_CHUNK_SIZE_BYTES
+        );
+        assert_eq!(
+            validate_transfer_chunk_size(MAX_TRANSFER_CHUNK_SIZE_BYTES).unwrap(),
+            MAX_TRANSFER_CHUNK_SIZE_BYTES
+        );
+    }
+
+    #[test]
+    fn chunk_size_above_maximum_is_rejected() {
+        // Given: a chunk size above the 8 MiB maximum
+        // When: validated
+        // Then: Err is returned
+        assert!(validate_transfer_chunk_size(MAX_TRANSFER_CHUNK_SIZE_BYTES + 1).is_err());
+        assert!(validate_transfer_chunk_size(usize::MAX).is_err());
+    }
+
+    #[test]
+    fn map_error_wraps_display_message() {
+        // Given: a displayable error
+        // When: mapped via map_error
+        // Then: a Generic DockBridgeError is produced with its message
+        struct TestError;
+        impl std::fmt::Display for TestError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "test display error")
+            }
+        }
+
+        let err = map_error(TestError);
+        match err {
+            DockBridgeError::Generic { message } => assert_eq!(message, "test display error"),
+        }
+    }
 }

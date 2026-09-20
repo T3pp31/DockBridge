@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -13,6 +13,28 @@ use subtle::ConstantTimeEq;
 
 use crate::config::{ensure_known_hosts_parent, AppConfig};
 use crate::error::SecurityError;
+
+/// Result of importing an OpenSSH `known_hosts` file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ImportSummary {
+    /// Number of entries newly merged into the store.
+    pub merged: usize,
+    /// Number of lines skipped because they could not be parsed.
+    pub skipped: usize,
+}
+
+impl ImportSummary {
+    /// Returns `true` when nothing was imported *and* no lines were skipped
+    /// (i.e. the store contents are untouched).
+    pub fn is_empty(self) -> bool {
+        self.merged == 0 && self.skipped == 0
+    }
+
+    /// Returns `true` when at least one entry was merged into the store.
+    pub fn has_merged_entries(self) -> bool {
+        self.merged > 0
+    }
+}
 
 /// Result of checking a host key against the known hosts store.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +68,15 @@ pub enum KnownHostMarker {
     CertAuthority,
 }
 
+/// Results of merging one imported plain entry into the store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct MergeOutcome {
+    /// New entry was inserted into the store.
+    added: bool,
+    /// An existing entry was modified (aliases, excluded aliases, or public key).
+    changed: bool,
+}
+
 /// Plain host entry parsed from OpenSSH `known_hosts` during import.
 struct ImportedPlainEntry {
     host: String,
@@ -71,26 +102,12 @@ pub struct HashedHostEntry {
     pub marker: Option<KnownHostMarker>,
 }
 
-/// Signature of the on-disk known_hosts store used to detect write races
-/// between processes (last-writer-wins). Re-created after every successful
-/// `persist()`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DiskFileState {
-    #[cfg(unix)]
-    inode: u64,
-    modified_secs: i64,
-    #[cfg(unix)]
-    modified_nsecs: i64,
-    len: u64,
-}
-
 /// Manages trusted host keys in a DockBridge-specific JSON store.
 #[derive(Debug, Clone)]
 pub struct KnownHostsManager {
     path: PathBuf,
     entries: HashMap<String, KnownHostEntry>,
     hashed_entries: Vec<HashedHostEntry>,
-    disk_state: Option<DiskFileState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -120,32 +137,11 @@ impl KnownHostsManager {
     /// Creates a manager and loads entries from the given path.
     pub fn load(path: impl Into<PathBuf>) -> Result<Self, SecurityError> {
         let path = path.into();
-        let (entries, hashed_entries) = if path.exists() {
-            let contents =
-                read_secure_known_hosts_file(&path, KnownHostsReadPolicy::DockBridgeStore)?;
-            let file: KnownHostsFile = serde_json::from_str(&contents).map_err(|err| {
-                SecurityError::KnownHostsReadFailed {
-                    path: path.display().to_string(),
-                    message: err.to_string(),
-                }
-            })?;
-            let hashed_entries = file.hashed_entries;
-            let entries = file
-                .entries
-                .into_iter()
-                .map(|entry| (entry_key(&entry.host, entry.port), entry))
-                .collect();
-            (entries, hashed_entries)
-        } else {
-            (HashMap::new(), Vec::new())
-        };
-
-        let disk_state = compute_disk_state(&path);
+        let (entries, hashed_entries) = load_store_contents(&path)?;
         Ok(Self {
             path,
             entries,
             hashed_entries,
-            disk_state,
         })
     }
 
@@ -197,39 +193,14 @@ impl KnownHostsManager {
         HostKeyCheckResult::Unknown
     }
 
-    /// Re-reads the store from disk when another process changed it since we
-    /// last loaded or wrote it. This keeps inter-process `last-writer-wins`
-    /// races from silently dropping an entry accepted by another process
-    /// (e.g. the CLI and the macOS app sharing one store).
-    ///
-    /// Call at the start of every mutating operation. When the on-disk file is
-    /// missing or unreadable we keep the in-memory state, matching the existing
-    /// behaviour of treating a missing store as empty.
-    fn reload_if_changed(&mut self) {
-        let Some(current) = compute_disk_state(&self.path) else {
-            return;
-        };
-        if self.disk_state == Some(current) {
-            return;
-        }
-
-        let Ok(contents) =
-            read_secure_known_hosts_file(&self.path, KnownHostsReadPolicy::DockBridgeStore)
-        else {
-            return;
-        };
-        let Ok(file) = serde_json::from_str::<KnownHostsFile>(&contents) else {
-            return;
-        };
-
-        self.entries = file
-            .entries
-            .into_iter()
-            .map(|entry| (entry_key(&entry.host, entry.port), entry))
-            .collect();
-        self.hashed_entries = file.hashed_entries;
-        self.disk_state = Some(current);
-        tracing::debug!(path = %self.path.display(), "reloaded known_hosts store changed by another process");
+    /// Re-reads the latest store while the caller holds the sidecar lock.
+    /// Existing unreadable or malformed files fail closed so stale in-memory
+    /// contents can never overwrite an external update.
+    fn reload_for_update(&mut self) -> Result<(), SecurityError> {
+        let (entries, hashed_entries) = load_store_contents(&self.path)?;
+        self.entries = entries;
+        self.hashed_entries = hashed_entries;
+        Ok(())
     }
 
     /// Saves a trusted host key to the store with file mode `0600`.
@@ -242,23 +213,129 @@ impl KnownHostsManager {
         port: u16,
         key: &PublicKey,
     ) -> Result<(), SecurityError> {
-        self.reload_if_changed();
+        let _store_lock = acquire_store_lock(&self.path)?;
+        self.reload_for_update()?;
         let fingerprint = fingerprint_sha256(key);
         let public_key_openssh = key.to_openssh().ok();
 
+        // Marker entries are security policy records, not ordinary trusted
+        // host rows. Never overwrite an @revoked or @cert-authority entry via
+        // the interactive acceptance path: doing so would silently discard
+        // the old policy record because the store permits one canonical row
+        // per (host, port). Re-accepting the exact same key is an idempotent
+        // no-op and leaves the marker intact.
+        if let Some(existing) = self.find_entry(host, port) {
+            if let Some(marker) = existing.marker {
+                if fingerprints_match(&existing.fingerprint_sha256, &fingerprint) {
+                    return Ok(());
+                }
+                return Err(SecurityError::KnownHostsWriteFailed {
+                    path: self.path.display().to_string(),
+                    message: format!(
+                        "cannot replace a {marker:?} known-hosts entry through host-key acceptance"
+                    ),
+                });
+            }
+        }
+
         if let Some(existing) = self.find_trusted_entry(host, port) {
             let canonical_key = entry_key(&existing.host, existing.port);
-            let entry = self.entries.get_mut(&canonical_key).ok_or_else(|| {
+
+            // The presented key is already trusted for this exact (host, port).
+            if fingerprints_match(&existing.fingerprint_sha256, &fingerprint) {
+                return Ok(());
+            }
+
+            let host_is_canonical = existing.host == host && existing.port == port;
+            let has_remaining_alias = existing
+                .aliases
+                .iter()
+                .any(|alias| !(alias.host == host && alias.port == port));
+            let has_remaining_exclusion = existing
+                .excluded_aliases
+                .iter()
+                .any(|alias| !(alias.host == host && alias.port == port));
+
+            // With no positive alias to promote, retaining exclusions for the
+            // old key would require two canonical rows for the same host, which
+            // the current on-disk schema cannot represent. Fail closed instead
+            // of silently dropping a negative trust rule.
+            if host_is_canonical && !has_remaining_alias && has_remaining_exclusion {
+                return Err(SecurityError::KnownHostsWriteFailed {
+                    path: self.path.display().to_string(),
+                    message: "cannot replace this host key without losing excluded host patterns"
+                        .to_string(),
+                });
+            }
+
+            // The user accepted a CHANGED key for (host, port). Only that
+            // (host, port) may trust the new key; the other hosts attached to
+            // this entry (aliases) keep the old key. Detach (host, port) into a
+            // dedicated entry with the new key instead of rewriting the shared
+            // fingerprint for every alias.
+            let mut old_entry = self.entries.remove(&canonical_key).ok_or_else(|| {
                 SecurityError::KnownHostsWriteFailed {
                     path: self.path.display().to_string(),
                     message: "internal known hosts index inconsistency".to_string(),
                 }
             })?;
 
-            entry.fingerprint_sha256 = fingerprint.clone();
-            entry.algorithm = format!("{:?}", key.algorithm());
-            entry.public_key_openssh = public_key_openssh;
-            entry.marker = None;
+            let mut remaining_aliases: Vec<HostAlias> = old_entry
+                .aliases
+                .drain(..)
+                .filter(|alias| !(alias.host == host && alias.port == port))
+                .collect();
+
+            // The detached (host, port) is now explicitly trusted with the new
+            // key, so drop any exclusion that previously carved it out of this
+            // entry. Every other exclusion keeps applying to the hosts that
+            // still trust the old key.
+            let remaining_excluded: Vec<HostAlias> = old_entry
+                .excluded_aliases
+                .drain(..)
+                .filter(|alias| !(alias.host == host && alias.port == port))
+                .collect();
+
+            if host_is_canonical {
+                // Promote the first remaining alias to canonical so the old key
+                // stays trusted for the other hosts of this entry. When no
+                // aliases remain the old entry covered only (host, port) and is
+                // dropped entirely.
+                if !remaining_aliases.is_empty() {
+                    let promoted = remaining_aliases.remove(0);
+                    old_entry.host = promoted.host;
+                    old_entry.port = promoted.port;
+                    old_entry.aliases = remaining_aliases;
+                    old_entry.excluded_aliases = remaining_excluded;
+                    self.entries
+                        .insert(entry_key(&old_entry.host, old_entry.port), old_entry);
+                }
+            } else {
+                // The detached host is an alias of the old entry, so the old
+                // entry keeps its original canonical host/port unchanged; the
+                // re-insertion key and the stored host/port therefore stay
+                // consistent (host_is_canonical was false above).
+                old_entry.aliases = remaining_aliases;
+                old_entry.excluded_aliases = remaining_excluded;
+                self.entries.insert(canonical_key, old_entry);
+            }
+
+            let entry = KnownHostEntry {
+                host: host.to_string(),
+                port,
+                fingerprint_sha256: fingerprint,
+                algorithm: format!("{:?}", key.algorithm()),
+                aliases: Vec::new(),
+                excluded_aliases: Vec::new(),
+                // The new key is a different key than the old entry's; keeping
+                // the old entry's OpenSSH representation here would pair the
+                // wrong key bytes with the new fingerprint, so when the new key
+                // cannot be serialized we store None (such entries are omitted
+                // from OpenSSH export but still trusted in the JSON store).
+                public_key_openssh,
+                marker: None,
+            };
+            self.entries.insert(entry_key(host, port), entry);
 
             return self.persist();
         }
@@ -273,7 +350,7 @@ impl KnownHostsManager {
 
             if !entry_matches_host(entry, host, port) {
                 entry.aliases.push(HostAlias {
-                    host: host.to_string(),
+                    host: host.to_ascii_lowercase(),
                     port,
                 });
             }
@@ -286,7 +363,7 @@ impl KnownHostsManager {
         }
 
         let entry = KnownHostEntry {
-            host: host.to_string(),
+            host: host.to_ascii_lowercase(),
             port,
             fingerprint_sha256: fingerprint,
             algorithm: format!("{:?}", key.algorithm()),
@@ -302,22 +379,25 @@ impl KnownHostsManager {
 
     /// Merges the configured OpenSSH `known_hosts` file into this store before connecting.
     ///
-    /// When merging is disabled, returns `0` without reading the file.
-    /// When the file does not exist, returns `0` without error.
+    /// When merging is disabled, returns an empty summary without reading the file.
+    /// When the file does not exist, returns an empty summary without error.
     /// Read failures are logged and return `0` so connection is not blocked unless
     /// [`AppConfig::fail_connect_on_openssh_merge_error`] is enabled.
-    pub fn merge_openssh_on_connect(&mut self, config: &AppConfig) -> Result<usize, SecurityError> {
+    pub fn merge_openssh_on_connect(
+        &mut self,
+        config: &AppConfig,
+    ) -> Result<ImportSummary, SecurityError> {
         if !config.merge_openssh_known_hosts_on_connect {
-            return Ok(0);
+            return Ok(ImportSummary::default());
         }
 
         let path = &config.openssh_known_hosts_path;
         if !path.exists() {
-            return Ok(0);
+            return Ok(ImportSummary::default());
         }
 
         match self.import_openssh(path) {
-            Ok(count) => Ok(count),
+            Ok(summary) => Ok(summary),
             Err(err) => {
                 tracing::warn!(
                     path = %path.display(),
@@ -327,7 +407,7 @@ impl KnownHostsManager {
                 if config.fail_connect_on_openssh_merge_error {
                     Err(err)
                 } else {
-                    Ok(0)
+                    Ok(ImportSummary::default())
                 }
             }
         }
@@ -336,17 +416,35 @@ impl KnownHostsManager {
     /// Merges trusted keys from an OpenSSH `known_hosts` file into this store.
     ///
     /// Imports plain and hashed entries, including `@revoked` and `@cert-authority` markers.
-    /// Returns the number of newly merged entries.
-    pub fn import_openssh(&mut self, path: &Path) -> Result<usize, SecurityError> {
-        self.reload_if_changed();
+    /// Returns an [`ImportSummary`] with the number of newly merged entries and the number of
+    /// lines skipped because they could not be parsed.
+    ///
+    /// Line-level parse errors are tolerated: the offending line is logged and skipped while
+    /// the remaining lines are still imported. Errors returned are file-level failures only
+    /// (unreadable file, insecure permissions, or persistence failure).
+    pub fn import_openssh(&mut self, path: &Path) -> Result<ImportSummary, SecurityError> {
         let contents = read_secure_known_hosts_file(path, KnownHostsReadPolicy::OpenSshImport)?;
+        let _store_lock = acquire_store_lock(&self.path)?;
+        self.reload_for_update()?;
 
         let mut merged = 0;
+        let mut changed = false;
+        let mut skipped = 0;
         for line_result in OpenSshKnownHosts::new(&contents) {
-            let entry = line_result.map_err(|err| SecurityError::KnownHostsReadFailed {
-                path: path.display().to_string(),
-                message: err.to_string(),
-            })?;
+            let entry = match line_result {
+                Ok(entry) => entry,
+                Err(err) => {
+                    // Log only the file path and error kind, never the raw line
+                    // contents (a known_hosts line embeds the public key).
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %err,
+                        "skipping unparseable known_hosts line"
+                    );
+                    skipped += 1;
+                    continue;
+                }
+            };
 
             let marker = entry.marker().map(openssh_marker_to_known_host_marker);
             let fingerprint = entry.public_key().fingerprint(HashAlg::Sha256).to_string();
@@ -367,7 +465,10 @@ impl KnownHostsManager {
                     }
                 }
                 HostPatterns::Patterns(_) => {
-                    let (hosts, excluded_aliases) = openssh_host_patterns(entry.host_patterns());
+                    let (hosts, excluded_aliases) = openssh_host_patterns(
+                        entry.host_patterns(),
+                        marker == Some(KnownHostMarker::CertAuthority),
+                    );
                     if hosts.is_empty() {
                         continue;
                     }
@@ -381,7 +482,7 @@ impl KnownHostsManager {
                         })
                         .collect();
 
-                    if self.merge_imported_entry(ImportedPlainEntry {
+                    let outcome = self.merge_imported_entry(ImportedPlainEntry {
                         host: primary_host,
                         port: primary_port,
                         fingerprint_sha256: fingerprint,
@@ -390,18 +491,25 @@ impl KnownHostsManager {
                         aliases,
                         excluded_aliases,
                         marker,
-                    }) {
+                    })?;
+                    if outcome.added {
                         merged += 1;
                     }
+                    changed |= outcome.changed;
                 }
             }
         }
 
-        if merged > 0 {
+        let summary = ImportSummary { merged, skipped };
+        // Persist when anything changed OR lines were skipped. Skipped lines
+        // don't currently mutate the store, but persisting ensures a future
+        // side effect on the skipped path cannot be missed (e.g. if a parse
+        // failure were recorded in the store).
+        if summary.has_merged_entries() || changed || summary.skipped > 0 {
             self.persist()?;
         }
 
-        Ok(merged)
+        Ok(summary)
     }
 
     /// Writes trusted keys to an OpenSSH `known_hosts` file with mode `0600`.
@@ -459,7 +567,7 @@ impl KnownHostsManager {
 
     fn find_trusted_entry(&self, host: &str, port: u16) -> Option<&KnownHostEntry> {
         self.entries.values().find(|entry| {
-            entry_matches_host(entry, host, port) && !entry_is_non_trusting_marker(entry.marker)
+            entry_matches_host(entry, host, port) && !entry_has_non_trusting_marker(entry.marker)
         })
     }
 
@@ -472,7 +580,7 @@ impl KnownHostsManager {
         self.entries.values().find(|entry| {
             entry.port == port
                 && fingerprints_match(&entry.fingerprint_sha256, fingerprint)
-                && !entry_is_non_trusting_marker(entry.marker)
+                && !entry_has_non_trusting_marker(entry.marker)
                 && !entry_is_excluded_for_host(entry, host, port)
         })
     }
@@ -509,7 +617,10 @@ impl KnownHostsManager {
 
     fn find_canonical_key_by_fingerprint(&self, port: u16, fingerprint: &str) -> Option<String> {
         self.entries.iter().find_map(|(key, entry)| {
-            if entry.port == port && fingerprints_match(&entry.fingerprint_sha256, fingerprint) {
+            if entry.port == port
+                && fingerprints_match(&entry.fingerprint_sha256, fingerprint)
+                && !entry_has_non_trusting_marker(entry.marker)
+            {
                 Some(key.clone())
             } else {
                 None
@@ -531,7 +642,10 @@ impl KnownHostsManager {
         true
     }
 
-    fn merge_imported_entry(&mut self, imported: ImportedPlainEntry) -> bool {
+    fn merge_imported_entry(
+        &mut self,
+        imported: ImportedPlainEntry,
+    ) -> Result<MergeOutcome, SecurityError> {
         let ImportedPlainEntry {
             host,
             port,
@@ -549,7 +663,7 @@ impl KnownHostsManager {
                     && entry_matches_host(entry, &host, port)
                     && fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256)
             }) {
-                return false;
+                return Ok(MergeOutcome::default());
             }
 
             self.entries.insert(
@@ -565,7 +679,10 @@ impl KnownHostsManager {
                     marker: Some(KnownHostMarker::Revoked),
                 },
             );
-            return true;
+            return Ok(MergeOutcome {
+                added: true,
+                changed: false,
+            });
         }
 
         if marker == Some(KnownHostMarker::CertAuthority) {
@@ -574,7 +691,7 @@ impl KnownHostsManager {
                     && entry_matches_host(entry, &host, port)
                     && fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256)
             }) {
-                return false;
+                return Ok(MergeOutcome::default());
             }
 
             self.entries.insert(
@@ -590,61 +707,99 @@ impl KnownHostsManager {
                     marker: Some(KnownHostMarker::CertAuthority),
                 },
             );
-            return true;
+            return Ok(MergeOutcome {
+                added: true,
+                changed: false,
+            });
         }
 
         if let Some(canonical_key) =
             self.find_canonical_key_by_fingerprint(port, &fingerprint_sha256)
         {
-            let entry = self
-                .entries
-                .get_mut(&canonical_key)
-                .expect("canonical key must exist");
+            let entry = self.entries.get_mut(&canonical_key).ok_or_else(|| {
+                SecurityError::KnownHostsWriteFailed {
+                    path: self.path.display().to_string(),
+                    message: format!(
+                        "internal known hosts index inconsistency: canonical key {canonical_key} missing"
+                    ),
+                }
+            })?;
 
-            if !entry_matches_host(entry, &host, port) {
-                entry.aliases.push(HostAlias { host, port });
-            }
+            let mut changed = false;
+            changed |= merge_trusted_alias(entry, &host, port);
 
             for alias in aliases {
-                if !entry_matches_host(entry, &alias.host, alias.port) {
-                    entry.aliases.push(alias);
-                }
+                changed |= merge_trusted_alias(entry, &alias.host, alias.port);
             }
-            merge_excluded_aliases(entry, &excluded_aliases);
+            changed |= merge_excluded_aliases(entry, &excluded_aliases);
 
+            // The fingerprint of this entry is guaranteed to match the imported
+            // key (find_canonical_key_by_fingerprint matched on port +
+            // fingerprint), so backfilling the OpenSSH representation cannot
+            // replace a trusted key with an untrusted one.
             if entry.public_key_openssh.is_none() {
                 entry.public_key_openssh = public_key_openssh;
+                changed = true;
             }
 
-            return false;
+            return Ok(MergeOutcome {
+                added: false,
+                changed,
+            });
         }
 
         if let Some(existing) = self.find_entry(&host, port) {
-            if existing.marker == Some(KnownHostMarker::Revoked)
-                || existing.marker == Some(KnownHostMarker::CertAuthority)
-            {
-                return false;
-            }
-
             let canonical_key = entry_key(&existing.host, existing.port);
-            let entry = self.entries.get_mut(&canonical_key).expect("entry exists");
+            let entry = self.entries.get_mut(&canonical_key).ok_or_else(|| {
+                SecurityError::KnownHostsWriteFailed {
+                    path: self.path.display().to_string(),
+                    message: format!(
+                        "internal known hosts index inconsistency: canonical key {canonical_key} missing"
+                    ),
+                }
+            })?;
 
             if !fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256) {
-                return false;
+                return Ok(MergeOutcome::default());
             }
 
-            for alias in aliases {
-                if !entry_matches_host(entry, &alias.host, alias.port) {
-                    entry.aliases.push(alias);
+            // Marked (revoked / cert-authority) entries keep their marker — it
+            // is never changed by an import — but aliases, exclusions, and a
+            // missing OpenSSH public key are still merged so revocation scope
+            // and export completeness stay in sync with the source file.
+            if entry_has_non_trusting_marker(entry.marker) {
+                let mut changed = false;
+                for alias in aliases {
+                    changed |= merge_trusted_alias(entry, &alias.host, alias.port);
                 }
+                changed |= merge_excluded_aliases(entry, &excluded_aliases);
+                if entry.public_key_openssh.is_none() {
+                    entry.public_key_openssh = public_key_openssh;
+                    changed = true;
+                }
+                return Ok(MergeOutcome {
+                    added: false,
+                    changed,
+                });
             }
-            merge_excluded_aliases(entry, &excluded_aliases);
 
+            let mut changed = false;
+            for alias in aliases {
+                changed |= merge_trusted_alias(entry, &alias.host, alias.port);
+            }
+            changed |= merge_excluded_aliases(entry, &excluded_aliases);
+
+            // Fingerprints must match here (checked above), so backfilling the
+            // OpenSSH representation cannot swap in an untrusted key.
             if entry.public_key_openssh.is_none() {
                 entry.public_key_openssh = public_key_openssh;
+                changed = true;
             }
 
-            return false;
+            return Ok(MergeOutcome {
+                added: false,
+                changed,
+            });
         }
 
         self.entries.insert(
@@ -661,10 +816,13 @@ impl KnownHostsManager {
             },
         );
 
-        true
+        Ok(MergeOutcome {
+            added: true,
+            changed: false,
+        })
     }
 
-    fn persist(&mut self) -> Result<(), SecurityError> {
+    fn persist(&self) -> Result<(), SecurityError> {
         ensure_known_hosts_parent(&self.path)?;
 
         let mut entries: Vec<KnownHostEntry> = self.entries.values().cloned().collect();
@@ -693,40 +851,109 @@ impl KnownHostsManager {
         })?;
 
         write_file_mode_0600(&self.path, format!("{json}\n").as_bytes())?;
-        self.disk_state = compute_disk_state(&self.path);
         Ok(())
     }
 }
 
-/// Computes the current on-disk signature for a store path. Returns `None`
-/// when the file does not exist or its metadata cannot be read, in which case
-/// callers keep their in-memory state.
-fn compute_disk_state(path: &Path) -> Option<DiskFileState> {
-    let metadata = fs::metadata(path).ok()?;
+fn load_store_contents(
+    path: &Path,
+) -> Result<(HashMap<String, KnownHostEntry>, Vec<HashedHostEntry>), SecurityError> {
+    match fs::symlink_metadata(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((HashMap::new(), Vec::new()));
+        }
+        Err(err) => {
+            return Err(SecurityError::KnownHostsReadFailed {
+                path: path.display().to_string(),
+                message: err.to_string(),
+            });
+        }
+        Ok(_) => {}
+    }
+
+    let contents = read_secure_known_hosts_file(path, KnownHostsReadPolicy::DockBridgeStore)?;
+    let file: KnownHostsFile =
+        serde_json::from_str(&contents).map_err(|err| SecurityError::KnownHostsReadFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        })?;
+    let entries = file
+        .entries
+        .into_iter()
+        .map(normalize_entry_case)
+        .map(|entry| (entry_key(&entry.host, entry.port), entry))
+        .collect();
+    Ok((entries, file.hashed_entries))
+}
+
+fn store_lock_path(path: &Path) -> PathBuf {
+    let mut lock_path = path.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    PathBuf::from(lock_path)
+}
+
+/// Acquires an exclusive advisory lock on a stable sidecar file. The JSON
+/// store itself is atomically replaced on save, so locking that inode would not
+/// coordinate later writers.
+fn acquire_store_lock(path: &Path) -> Result<File, SecurityError> {
+    ensure_known_hosts_parent(path)?;
+    let lock_path = store_lock_path(path);
+    let path_string = lock_path.display().to_string();
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
-        Some(DiskFileState {
-            inode: metadata.ino(),
-            modified_secs: metadata.mtime(),
-            modified_nsecs: metadata.mtime_nsec(),
-            len: metadata.len(),
-        })
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
-    #[cfg(not(unix))]
+
+    let file = options
+        .open(&lock_path)
+        .map_err(|err| SecurityError::KnownHostsWriteFailed {
+            path: path_string.clone(),
+            message: format!("failed to open known hosts lock file: {err}"),
+        })?;
+
+    let metadata = file
+        .metadata()
+        .map_err(|err| SecurityError::KnownHostsWriteFailed {
+            path: path_string.clone(),
+            message: format!("failed to inspect known hosts lock file: {err}"),
+        })?;
+    if !metadata.is_file() {
+        return Err(SecurityError::KnownHostsWriteFailed {
+            path: path_string,
+            message: "known hosts lock path is not a regular file".to_string(),
+        });
+    }
+
+    #[cfg(unix)]
     {
-        use std::time::UNIX_EPOCH;
-        let secs = metadata
-            .modified()
-            .ok()?
-            .duration_since(UNIX_EPOCH)
-            .ok()?
-            .as_secs() as i64;
-        Some(DiskFileState {
-            modified_secs: secs,
-            len: metadata.len(),
-        })
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let effective_uid = unsafe { libc::geteuid() };
+        if metadata.uid() != effective_uid {
+            return Err(SecurityError::KnownHostsWriteFailed {
+                path: path_string.clone(),
+                message: format!(
+                    "lock owner uid {} does not match effective uid {effective_uid}",
+                    metadata.uid()
+                ),
+            });
+        }
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|err| SecurityError::KnownHostsWriteFailed {
+                path: path_string.clone(),
+                message: format!("failed to secure known hosts lock file: {err}"),
+            })?;
     }
+
+    file.lock()
+        .map_err(|err| SecurityError::KnownHostsWriteFailed {
+            path: path_string,
+            message: format!("failed to lock known hosts store: {err}"),
+        })?;
+    Ok(file)
 }
 
 fn fingerprint_check(entry: &KnownHostEntry, actual: &str) -> HostKeyCheckResult {
@@ -745,21 +972,40 @@ fn entry_matches_host(entry: &KnownHostEntry, host: &str, port: u16) -> bool {
         return false;
     }
 
-    entry.host == host && entry.port == port
+    entry.host.eq_ignore_ascii_case(host) && entry.port == port
         || entry
             .aliases
             .iter()
-            .any(|alias| alias.host == host && alias.port == port)
+            .any(|alias| alias.host.eq_ignore_ascii_case(host) && alias.port == port)
 }
 
 fn entry_is_excluded_for_host(entry: &KnownHostEntry, host: &str, port: u16) -> bool {
     entry
         .excluded_aliases
         .iter()
-        .any(|alias| alias.host == host && alias.port == port)
+        .any(|alias| alias.host.eq_ignore_ascii_case(host) && alias.port == port)
 }
 
-fn merge_excluded_aliases(entry: &mut KnownHostEntry, excluded: &[HostAlias]) {
+/// Appends `alias` to `entry.aliases` unless the host is already covered
+/// (as canonical host, an existing alias, or an exclusion). Returns `true`
+/// when the alias list changed.
+///
+/// A host in `excluded_aliases` must never also become a trusted alias:
+/// `entry_matches_host` treats exclusions as taking precedence, so a host in
+/// both lists would be silently untrusted while still looking like an alias.
+fn merge_trusted_alias(entry: &mut KnownHostEntry, host: &str, port: u16) -> bool {
+    if entry_matches_host(entry, host, port) || entry_is_excluded_for_host(entry, host, port) {
+        return false;
+    }
+    entry.aliases.push(HostAlias {
+        host: host.to_string(),
+        port,
+    });
+    true
+}
+
+fn merge_excluded_aliases(entry: &mut KnownHostEntry, excluded: &[HostAlias]) -> bool {
+    let mut changed = false;
     for alias in excluded {
         if !entry
             .excluded_aliases
@@ -767,15 +1013,35 @@ fn merge_excluded_aliases(entry: &mut KnownHostEntry, excluded: &[HostAlias]) {
             .any(|existing| existing.host == alias.host && existing.port == alias.port)
         {
             entry.excluded_aliases.push(alias.clone());
+            changed = true;
         }
     }
+    changed
 }
 
 fn entry_key(host: &str, port: u16) -> String {
-    format!("{host}:{port}")
+    format!("{}:{port}", host.to_ascii_lowercase())
 }
 
-fn entry_is_non_trusting_marker(marker: Option<KnownHostMarker>) -> bool {
+/// Lowercases a stored entry's host identifiers so lookups are case-insensitive,
+/// matching OpenSSH behaviour. Used when loading existing stores to migrate
+/// entries written by older versions.
+fn normalize_entry_case(mut entry: KnownHostEntry) -> KnownHostEntry {
+    entry.host = entry.host.to_ascii_lowercase();
+    for alias in &mut entry.aliases {
+        alias.host = alias.host.to_ascii_lowercase();
+    }
+    for alias in &mut entry.excluded_aliases {
+        alias.host = alias.host.to_ascii_lowercase();
+    }
+    entry
+}
+
+/// Returns `true` when the entry's marker means the key must NOT be trusted
+/// for ordinary host verification: `@revoked` (always reject) or
+/// `@cert-authority` (CA keys are out of scope for direct host trust). Such
+/// entries must not be used for fingerprint alias matching or as merge targets.
+fn entry_has_non_trusting_marker(marker: Option<KnownHostMarker>) -> bool {
     matches!(
         marker,
         Some(KnownHostMarker::Revoked) | Some(KnownHostMarker::CertAuthority)
@@ -823,7 +1089,10 @@ fn openssh_host_pattern(host: &str, port: u16) -> String {
     }
 }
 
-fn openssh_host_patterns(patterns: &HostPatterns) -> (Vec<(String, u16)>, Vec<HostAlias>) {
+fn openssh_host_patterns(
+    patterns: &HostPatterns,
+    allow_wildcards: bool,
+) -> (Vec<(String, u16)>, Vec<HostAlias>) {
     match patterns {
         HostPatterns::HashedName { .. } => (Vec::new(), Vec::new()),
         HostPatterns::Patterns(items) => {
@@ -833,6 +1102,13 @@ fn openssh_host_patterns(patterns: &HostPatterns) -> (Vec<(String, u16)>, Vec<Ho
                 let Some(parsed) = parse_openssh_host_pattern(pattern) else {
                     continue;
                 };
+                if !allow_wildcards && (parsed.host.contains('*') || parsed.host.contains('?')) {
+                    tracing::warn!(
+                        pattern = %pattern,
+                        "unsupported wildcard pattern in known_hosts line skipped"
+                    );
+                    continue;
+                }
                 if parsed.negated {
                     excluded.push(HostAlias {
                         host: parsed.host,
@@ -890,17 +1166,25 @@ pub fn fingerprint_sha256(key: &PublicKey) -> String {
 const KNOWN_HOSTS_PARTIAL_SUFFIX_BYTES: usize = 16;
 const MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS: usize = 5;
 
-fn random_known_hosts_partial_suffix() -> String {
+/// Maximum byte size accepted when reading a known hosts file (16 MiB).
+/// Guards the store/import readers against accidentally pointing at a huge
+/// file; owner-only permission checks already limit exposure.
+const MAX_KNOWN_HOSTS_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+fn random_known_hosts_partial_suffix(path: &Path) -> Result<String, SecurityError> {
     use rand::TryRng;
 
     let mut bytes = [0_u8; KNOWN_HOSTS_PARTIAL_SUFFIX_BYTES];
     rand::rng()
         .try_fill_bytes(&mut bytes)
-        .expect("failed to generate random partial suffix");
-    bytes
+        .map_err(|err| SecurityError::KnownHostsWriteFailed {
+            path: path.display().to_string(),
+            message: format!("failed to generate random partial suffix: {err}"),
+        })?;
+    Ok(bytes
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
+        .collect::<String>())
 }
 
 fn known_hosts_partial_file_name(suffix: &str) -> String {
@@ -926,6 +1210,16 @@ fn read_secure_known_hosts_file(
     #[cfg(not(unix))]
     {
         let _ = policy;
+        let metadata = fs::metadata(path).map_err(|err| SecurityError::KnownHostsReadFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        })?;
+        if metadata.len() > MAX_KNOWN_HOSTS_FILE_BYTES {
+            return Err(SecurityError::KnownHostsReadFailed {
+                path: path.display().to_string(),
+                message: "known hosts file is too large".to_string(),
+            });
+        }
         fs::read_to_string(path).map_err(|err| SecurityError::KnownHostsReadFailed {
             path: path.display().to_string(),
             message: err.to_string(),
@@ -952,6 +1246,22 @@ fn read_secure_known_hosts_file_unix(
         })?;
 
     validate_known_hosts_fd_metadata(&file, &path_str, policy)?;
+
+    let size = file
+        .metadata()
+        .map_err(|err| SecurityError::KnownHostsReadFailed {
+            path: path_str.clone(),
+            message: err.to_string(),
+        })?
+        .len();
+    if size > MAX_KNOWN_HOSTS_FILE_BYTES {
+        return Err(SecurityError::KnownHostsReadFailed {
+            path: path_str,
+            message: format!(
+                "known hosts file is too large ({size} bytes, limit {MAX_KNOWN_HOSTS_FILE_BYTES})"
+            ),
+        });
+    }
 
     let mut contents = String::new();
     file.read_to_string(&mut contents)
@@ -1038,7 +1348,7 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
 
     for _ in 0..MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS {
         let candidate = parent.join(known_hosts_partial_file_name(
-            &random_known_hosts_partial_suffix(),
+            &random_known_hosts_partial_suffix(path)?,
         ));
         match open_exclusive_local_file_sync(&candidate) {
             Ok(opened) => {
@@ -1062,7 +1372,10 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
             "failed to create exclusive partial file after {MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS} attempts"
         ),
     })?;
-    let mut file = file.expect("partial file handle must exist when temp path was created");
+    let mut file = file.ok_or_else(|| SecurityError::KnownHostsWriteFailed {
+        path: path.display().to_string(),
+        message: "partial file handle missing after exclusive create".to_string(),
+    })?;
 
     if let Err(err) = file.write_all(data) {
         let _ = fs::remove_file(&temp_path);
@@ -1256,8 +1569,9 @@ mod tests {
         );
 
         let mut manager = KnownHostsManager::load(&json_path).unwrap();
-        let merged = manager.import_openssh(&openssh_path).unwrap();
-        assert_eq!(merged, 1);
+        let summary = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(summary.merged, 1);
+        assert_eq!(summary.skipped, 0);
 
         assert_eq!(
             manager.check_host_key("example.com", 22, &key, false),
@@ -1362,6 +1676,185 @@ mod tests {
             manager.check_host_key("bad.example.com", 22, &key, false),
             HostKeyCheckResult::Unknown
         );
+    }
+
+    #[test]
+    fn import_openssh_persists_excluded_alias_added_to_existing_entry() {
+        // Given: an existing trusted entry for example.com, and an OpenSSH file
+        //        referencing only that host with a negation for bad.example.com
+        // When: the file is imported (no NEW entries)
+        // Then: the excluded alias is persisted to disk
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+
+        // Seed the store with only example.com.
+        {
+            let mut manager = KnownHostsManager::load(&json_path).unwrap();
+            let seed = dir.path().join("seed_known_hosts");
+            write_test_file_mode_0600(&seed, format!("example.com {openssh_key}\n"));
+            manager.import_openssh(&seed).unwrap();
+        }
+
+        // Import a file whose only effect is adding bad.example.com as excluded.
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("example.com,!bad.example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        let summary = manager.import_openssh(&openssh_path).unwrap();
+        // No new entry — the change is a modification of the existing entry.
+        assert_eq!(summary.merged, 0);
+        assert_eq!(summary.skipped, 0);
+
+        // The modification must have been persisted: reload and verify.
+        let reloaded = KnownHostsManager::load(&json_path).unwrap();
+        let entry = reloaded.find_entry("example.com", 22).unwrap();
+        assert_eq!(
+            entry.excluded_aliases,
+            vec![HostAlias {
+                host: "bad.example.com".to_string(),
+                port: 22,
+            }]
+        );
+    }
+
+    #[test]
+    fn import_openssh_persists_public_key_added_to_existing_entry() {
+        // Given: an existing trusted entry whose store row lacks a stored OpenSSH key
+        //        (e.g. written by an older version), and an OpenSSH file with the plain key
+        // When: the file is imported (no NEW entries)
+        // Then: public_key_openssh is backfilled and persisted to disk
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+
+        // Build a store row without public_key_openssh for example.com.
+        {
+            let mut manager = KnownHostsManager::load(&json_path).unwrap();
+            manager.accept_host_key("example.com", 22, &key).unwrap();
+        }
+        // Strip the public_key_openssh field from the entry.
+        let inner = {
+            let raw = fs::read_to_string(&json_path).unwrap();
+            let mut value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            for entry in value["entries"]
+                .as_array_mut()
+                .expect("entries array exists")
+            {
+                if let serde_json::Value::Object(map) = entry {
+                    map.remove("public_key_openssh");
+                }
+            }
+            value
+        };
+        write_test_file_mode_0600(&json_path, serde_json::to_string_pretty(&inner).unwrap());
+        {
+            let manager = KnownHostsManager::load(&json_path).unwrap();
+            let entry = manager.find_entry("example.com", 22).unwrap();
+            assert!(entry.public_key_openssh.is_none());
+        }
+
+        write_test_file_mode_0600(&openssh_path, format!("example.com {openssh_key}\n"));
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        let summary = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(summary.merged, 0);
+        assert_eq!(summary.skipped, 0);
+
+        // The public key backfill must have been persisted.
+        let reloaded = KnownHostsManager::load(&json_path).unwrap();
+        let entry = reloaded.find_entry("example.com", 22).unwrap();
+        assert_eq!(
+            entry.public_key_openssh.as_deref(),
+            Some(openssh_key.as_str())
+        );
+    }
+
+    #[test]
+    fn import_openssh_does_not_alias_a_host_that_is_excluded() {
+        // Given: an entry that excludes bad.example.com
+        // When: a later import lists bad.example.com as a plain alias
+        // Then: it is not added as a trusted alias (exclusion takes precedence)
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+
+        // Seed with the exclusion first.
+        {
+            let mut manager = KnownHostsManager::load(&json_path).unwrap();
+            let seed = dir.path().join("seed_known_hosts");
+            write_test_file_mode_0600(
+                &seed,
+                format!("example.com,!bad.example.com {openssh_key}\n"),
+            );
+            manager.import_openssh(&seed).unwrap();
+        }
+
+        // Now import a file that adds bad.example.com as a plain alias.
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("example.com,bad.example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert!(
+            !entry.aliases.iter().any(|a| a.host == "bad.example.com"),
+            "excluded host must not become a trusted alias"
+        );
+        assert!(
+            entry
+                .excluded_aliases
+                .iter()
+                .any(|a| a.host == "bad.example.com"),
+            "exclusion must be preserved"
+        );
+    }
+
+    #[test]
+    fn import_openssh_revoked_entry_merges_aliases_and_keeps_marker() {
+        // Given: a @revoked entry for example.com
+        // When: a later import lists the same host with an additional alias
+        // Then: the marker is preserved and the alias ships the revocation scope
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("@revoked example.com,revoked-alias.example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.marker, Some(KnownHostMarker::Revoked));
+        assert!(
+            entry
+                .aliases
+                .iter()
+                .any(|a| a.host == "revoked-alias.example.com"),
+            "revocation scope alias should be merged"
+        );
+
+        let reloaded = KnownHostsManager::load(&json_path).unwrap();
+        let entry = reloaded
+            .find_entry("revoked-alias.example.com", 22)
+            .unwrap();
+        assert_eq!(entry.marker, Some(KnownHostMarker::Revoked));
     }
 
     #[test]
@@ -1476,6 +1969,199 @@ mod tests {
     }
 
     #[test]
+    fn accept_host_key_with_revoked_same_key_creates_new_trusted_entry() {
+        // Given: a revoked entry for hostA with key K
+        // When: hostB (same key, same port) is accepted
+        // Then: a new trusted entry for hostB is created, and hostB is Trusted
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(&openssh_path, format!("@revoked hostA {openssh_key}\n"));
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        // Revoked for hostA, but hostB is Unknown (host names do not match)
+        assert_eq!(
+            manager.check_host_key("hostB", 22, &key, false),
+            HostKeyCheckResult::Unknown
+        );
+
+        manager.accept_host_key("hostB", 22, &key).unwrap();
+
+        // The revoked entry must be untouched and hostB must be trusted,
+        // NOT attached as an alias of the revoked entry.
+        let revoked = manager.find_entry("hostA", 22).unwrap();
+        assert_eq!(revoked.marker, Some(KnownHostMarker::Revoked));
+        assert!(revoked.aliases.is_empty());
+
+        assert_eq!(
+            manager.check_host_key("hostB", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("hostB", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn import_openssh_plain_host_after_revoked_same_key_is_trusted() {
+        // Given: OpenSSH file with `@revoked hostA KEY` followed by `hostB KEY` (same key)
+        // When: the file is imported
+        // Then: hostA rejects the key but hostB remains trusted (order-independent)
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("@revoked hostA {openssh_key}\nhostB {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        let merged = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(merged.merged, 2);
+
+        assert_eq!(
+            manager.check_host_key("hostA", 22, &key, false),
+            HostKeyCheckResult::Reject
+        );
+        assert_eq!(
+            manager.check_host_key("hostB", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn accept_host_key_with_cert_authority_same_key_does_not_merge_into_ca_entry() {
+        // Given: a cert-authority entry for *.example.com with key K
+        // When: a plain host with the same key is accepted
+        // Then: a new trusted entry is created and the CA entry stays unchanged
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("@cert-authority *.example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        manager
+            .accept_host_key("server.example.com", 22, &key)
+            .unwrap();
+
+        let ca_entry = manager
+            .entries
+            .get(&entry_key("*.example.com", 22))
+            .unwrap();
+        assert_eq!(ca_entry.marker, Some(KnownHostMarker::CertAuthority));
+        assert!(ca_entry.aliases.is_empty());
+
+        // Trust is persisted for the accepted host, not lost to the CA entry.
+        assert_eq!(
+            manager.check_host_key("server.example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("server.example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn check_host_key_revoked_entry_does_not_trust_other_host_via_fingerprint_alias() {
+        // Given: `@revoked hostA KEY` (hostB is not an alias, same key)
+        // When: check_host_key is called for hostB in non-strict mode
+        // Then: it must NOT be trusted via the revoked entry's fingerprint
+        //       (fingerprint alias lookup excludes non-trusting markers)
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(&openssh_path, format!("@revoked hostA {openssh_key}\n"));
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        assert_eq!(
+            manager.check_host_key("hostB", 22, &key, false),
+            HostKeyCheckResult::Unknown
+        );
+    }
+
+    #[test]
+    fn check_host_key_cert_authority_does_not_trust_other_host_via_fingerprint_alias() {
+        // Given: `@cert-authority *.example.com KEY` (server.example.com is not
+        //        stored as a plain host alias, same key)
+        // When: check_host_key is called for server.example.com in non-strict mode
+        // Then: it must NOT be trusted via the CA entry's fingerprint
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("@cert-authority *.example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        assert_eq!(
+            manager.check_host_key("server.example.com", 22, &key, false),
+            HostKeyCheckResult::Unknown
+        );
+    }
+
+    #[test]
+    fn import_openssh_plain_host_not_attached_to_cert_authority_alias() {
+        // Given: `@cert-authority *.example.com KEY` + `host1.example.com KEY`
+        // When: the file is imported
+        // Then: host1.example.com is a trusted plain entry, not an alias of the
+        //       CA entry (so strict-mode checks still trust it)
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!(
+                "@cert-authority *.example.com {openssh_key}\nhost1.example.com {openssh_key}\n"
+            ),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        let ca_entry = manager
+            .entries
+            .get(&entry_key("*.example.com", 22))
+            .unwrap();
+        assert_eq!(ca_entry.marker, Some(KnownHostMarker::CertAuthority));
+        assert!(ca_entry.aliases.is_empty());
+
+        assert_eq!(
+            manager.check_host_key("host1.example.com", 22, &key, true),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
     fn merge_openssh_on_connect_missing_file_is_noop() {
         // Given: merge enabled and a missing OpenSSH file
         // When: merge_openssh_on_connect is called
@@ -1490,7 +2176,8 @@ mod tests {
         };
 
         let merged = manager.merge_openssh_on_connect(&config).unwrap();
-        assert_eq!(merged, 0);
+        assert_eq!(merged.merged, 0);
+        assert_eq!(merged.skipped, 0);
     }
 
     #[test]
@@ -1514,7 +2201,7 @@ mod tests {
         };
 
         let merged = manager.merge_openssh_on_connect(&config).unwrap();
-        assert_eq!(merged, 0);
+        assert_eq!(merged.merged, 0);
         assert_eq!(
             manager.check_host_key("example.com", 22, &key, false),
             HostKeyCheckResult::Unknown
@@ -1571,7 +2258,7 @@ mod tests {
         };
 
         let merged = manager.merge_openssh_on_connect(&config).unwrap();
-        assert_eq!(merged, 1);
+        assert_eq!(merged.merged, 1);
         assert_eq!(
             manager.check_host_key("example.com", 22, &key, false),
             HostKeyCheckResult::Trust
@@ -1603,6 +2290,472 @@ mod tests {
     }
 
     #[test]
+    fn accept_changed_key_detaches_only_accepted_host_from_aliases() {
+        // Given: example.com and 203.0.113.1 share one entry (same old key)
+        // When: the user accepts a NEW key for example.com
+        // Then: only example.com trusts the new key; 203.0.113.1 keeps the old
+        //       key (Mismatch with new key, Trust with old key)
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("203.0.113.1", 22, &old_key)
+            .unwrap();
+
+        // Sanity: both share one entry as an alias pair.
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.aliases.len(), 1);
+
+        manager
+            .accept_host_key("example.com", 22, &new_key)
+            .unwrap();
+
+        // example.com now trusts the new key only.
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key("example.com", 22, &old_key, false) {
+            HostKeyCheckResult::Mismatch { .. } => {}
+            other => panic!("expected mismatch, got {other:?}"),
+        }
+
+        // 203.0.113.1 still trusts the old key, and warns on the new key.
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key("203.0.113.1", 22, &new_key, false) {
+            HostKeyCheckResult::Mismatch { .. } => {}
+            other => panic!("expected mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_changed_key_on_alias_preserves_canonical_entry() {
+        // Given: example.com (canonical) and 203.0.113.1 (alias) share old key
+        // When: the user accepts a NEW key for the ALIAS 203.0.113.1
+        // Then: 203.0.113.1 gets a dedicated new-key entry; example.com keeps old key
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("203.0.113.1", 22, &old_key)
+            .unwrap();
+
+        manager
+            .accept_host_key("203.0.113.1", 22, &new_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key("203.0.113.1", 22, &old_key, false) {
+            HostKeyCheckResult::Mismatch { .. } => {}
+            other => panic!("expected mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_changed_key_with_no_remaining_aliases_drops_old_entry() {
+        // Given: a single-host entry with the old key (no aliases)
+        // When: a new key is accepted for it
+        // Then: only the new-key entry remains and is trusted after reload
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("example.com", 22, &new_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        // The old entry covered only example.com and must be gone.
+        assert!(manager.find_entry("example.com", 22).is_some());
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn accept_same_key_is_idempotent_and_keeps_aliases() {
+        // Given: example.com + 203.0.113.1 share one entry (same key)
+        // When: the same key is accepted again for example.com
+        // Then: nothing changes; both hosts keep trusting the key
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+        manager.accept_host_key("203.0.113.1", 22, &key).unwrap();
+
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.aliases.len(), 1);
+    }
+
+    #[test]
+    fn accept_changed_key_on_canonical_keeps_multiple_aliases() {
+        // Given: example.com (canonical) with aliases 203.0.113.1 and
+        //        example.internal, all sharing the old key
+        // When: the user accepts a NEW key for the canonical example.com
+        // Then: example.com alone trusts the new key; both aliases keep the
+        //       old key and are not silently removed
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("203.0.113.1", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("example.internal", 22, &old_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.find_entry("example.com", 22).unwrap().aliases.len(),
+            2
+        );
+
+        manager
+            .accept_host_key("example.com", 22, &new_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        for alias in ["203.0.113.1", "example.internal"] {
+            assert_eq!(
+                manager.check_host_key(alias, 22, &old_key, false),
+                HostKeyCheckResult::Trust,
+                "{alias} should keep trusting the old key"
+            );
+            match manager.check_host_key(alias, 22, &new_key, false) {
+                HostKeyCheckResult::Mismatch { .. } => {}
+                other => panic!("expected mismatch for {alias}, got {other:?}"),
+            }
+        }
+
+        // Both aliases are still attached to one old-key entry after reload.
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded
+                .find_entry("203.0.113.1", 22)
+                .unwrap()
+                .aliases
+                .len(),
+            1
+        );
+        assert_eq!(
+            reloaded
+                .find_entry("example.internal", 22)
+                .unwrap()
+                .aliases
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn accept_changed_key_on_alias_keeps_other_aliases() {
+        // Given: example.com (canonical) with aliases 203.0.113.1 and
+        //        example.internal, all sharing the old key
+        // When: the user accepts a NEW key for the alias 203.0.113.1
+        // Then: example.com and example.internal keep the old key as one entry
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("203.0.113.1", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("example.internal", 22, &old_key)
+            .unwrap();
+
+        manager
+            .accept_host_key("203.0.113.1", 22, &new_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        for host in ["example.com", "example.internal"] {
+            assert_eq!(
+                manager.check_host_key(host, 22, &old_key, false),
+                HostKeyCheckResult::Trust,
+                "{host} should keep trusting the old key"
+            );
+            match manager.check_host_key(host, 22, &new_key, false) {
+                HostKeyCheckResult::Mismatch { .. } => {}
+                other => panic!("expected mismatch for {host}, got {other:?}"),
+            }
+        }
+
+        // example.com (promoted or kept canonical) still carries example.internal.
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert!(entry
+            .aliases
+            .iter()
+            .any(|alias| alias.host == "example.internal" && alias.port == 22));
+    }
+
+    #[test]
+    fn accept_changed_key_preserves_excluded_aliases() {
+        // Given: an entry with a trusted alias and an excluded host, and the
+        //        key for the canonical host changes
+        // When: the user accepts the NEW key for the canonical host
+        // Then: the accepted host is not left excluded, and the remaining
+        //       exclusions stay attached to the old-key entry that the other
+        //       hosts still trust
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+        let openssh_key = old_key.to_openssh().unwrap();
+
+        // @cert-authority would prevent find_trusted_entry; build the entry via
+        // import of a pattern with a negated exclusion instead.
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("example.com,old.example.com,!203.0.113.1 {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        // Sanity: the excluded alias is not trusted even though it shares the
+        // same fingerprint (same key as example.com).
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &old_key, false),
+            HostKeyCheckResult::Unknown
+        );
+
+        manager
+            .accept_host_key("example.com", 22, &new_key)
+            .unwrap();
+
+        // The accepted host trusts the new key and is not excluded.
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("old.example.com", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        // The remaining exclusion still applies to the old key (203.0.113.1 is
+        // not trusted via the old-key entry).
+        match manager.check_host_key("203.0.113.1", 22, &old_key, false) {
+            HostKeyCheckResult::Unknown => {}
+            other => panic!("expected unknown for excluded alias, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_changed_key_fails_closed_when_only_exclusions_would_remain() {
+        // Given: a canonical host with an exclusion but no trusted alias that
+        // can carry the old key and its negative rule after a split.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+        let openssh_key = old_key.to_openssh().unwrap();
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("example.com,!203.0.113.1 {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        // When: replacing the canonical key would otherwise discard the only
+        // stored copy of the exclusion.
+        let err = manager
+            .accept_host_key("example.com", 22, &new_key)
+            .expect_err("the exclusion must not be silently dropped");
+
+        // Then: the operation is rejected and the original policy is intact.
+        assert!(matches!(err, SecurityError::KnownHostsWriteFailed { .. }));
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Mismatch {
+                expected_fingerprint: fingerprint_sha256(&old_key),
+                actual_fingerprint: fingerprint_sha256(&new_key),
+            }
+        );
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded
+                .find_entry("example.com", 22)
+                .unwrap()
+                .excluded_aliases,
+            vec![HostAlias {
+                host: "203.0.113.1".to_string(),
+                port: 22,
+            }]
+        );
+    }
+
+    #[test]
+    fn accept_host_key_does_not_drop_revoked_marker() {
+        // Given: a @revoked entry for a host
+        // When: the same key is (re)accepted for that host
+        // Then: the marker survives accept_host_key and the key stays rejected
+        //       (fail-closed: the store never silently loses @revoked semantics)
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("@revoked example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.marker, Some(KnownHostMarker::Revoked));
+
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.marker, Some(KnownHostMarker::Revoked));
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Reject
+        );
+    }
+
+    #[test]
+    fn accept_different_key_cannot_overwrite_revoked_entry() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let revoked_key = test_public_key();
+        let replacement_key = test_public_key();
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!(
+                "@revoked example.com {}\n",
+                revoked_key.to_openssh().unwrap()
+            ),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        let err = manager
+            .accept_host_key("example.com", 22, &replacement_key)
+            .expect_err("a revoked policy row must not be overwritten");
+
+        assert!(matches!(err, SecurityError::KnownHostsWriteFailed { .. }));
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &revoked_key, false),
+            HostKeyCheckResult::Reject
+        );
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &replacement_key, false),
+            HostKeyCheckResult::Unknown
+        );
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        let entry = reloaded.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.marker, Some(KnownHostMarker::Revoked));
+        assert!(fingerprints_match(
+            &entry.fingerprint_sha256,
+            &fingerprint_sha256(&revoked_key)
+        ));
+    }
+
+    #[test]
+    fn accept_different_key_cannot_overwrite_cert_authority_entry() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let ca_key = test_public_key();
+        let replacement_key = test_public_key();
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!(
+                "@cert-authority example.com {}\n",
+                ca_key.to_openssh().unwrap()
+            ),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        manager
+            .accept_host_key("example.com", 22, &replacement_key)
+            .expect_err("a certificate-authority row must not be overwritten");
+
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.marker, Some(KnownHostMarker::CertAuthority));
+        assert!(fingerprints_match(
+            &entry.fingerprint_sha256,
+            &fingerprint_sha256(&ca_key)
+        ));
+    }
+
+    #[test]
     fn strict_mode_rejects_fingerprint_alias_without_exact_host() {
         // Given: a trusted host and strict mode enabled
         // When: the same key is presented under a different hostname
@@ -1625,10 +2778,46 @@ mod tests {
     }
 
     #[test]
-    fn merge_openssh_on_connect_failure_aborts_when_configured() {
-        // Given: merge enabled, invalid OpenSSH file, and abort-on-failure config
+    fn merge_openssh_on_connect_skips_unparseable_lines_and_continues() {
+        // Given: merge enabled, an OpenSSH file with one unparseable line
+        //        (tab-separated, which ssh-key rejects) plus one valid line
         // When: merge_openssh_on_connect is called
-        // Then: the merge error is returned
+        // Then: the valid line is imported, the bad line is counted as skipped,
+        //       and no error is returned
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("bad.line\t{openssh_key}\nexample.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        let config = AppConfig {
+            openssh_known_hosts_path: openssh_path.clone(),
+            merge_openssh_known_hosts_on_connect: true,
+            fail_connect_on_openssh_merge_error: true,
+            ..AppConfig::default()
+        };
+
+        let summary = manager.merge_openssh_on_connect(&config).unwrap();
+        assert_eq!(summary.merged, 1);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        // The skipped line must not have created an entry for the unparseable host.
+        assert!(manager.find_entry("bad.line", 22).is_none());
+    }
+
+    #[test]
+    fn merge_openssh_on_connect_unparseable_only_file_skips_all_but_succeeds() {
+        // Given: merge enabled and a file whose only line is unparseable
+        // When: merge_openssh_on_connect is called with abort-on-failure enabled
+        // Then: the line is skipped and no error is returned (line-level tolerance)
         let dir = tempdir().unwrap();
         let path = dir.path().join("known_hosts.json");
         let openssh_path = dir.path().join("known_hosts");
@@ -1642,8 +2831,113 @@ mod tests {
             ..AppConfig::default()
         };
 
+        let summary = manager.merge_openssh_on_connect(&config).unwrap();
+        assert_eq!(summary.merged, 0);
+        assert_eq!(summary.skipped, 1);
+    }
+
+    #[test]
+    fn import_openssh_empty_file_imports_nothing() {
+        // Given: an empty OpenSSH known_hosts file
+        // When: it is imported
+        // Then: the summary is empty (merged == 0, skipped == 0)
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(&openssh_path, "");
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        let summary = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(summary.merged, 0);
+        assert_eq!(summary.skipped, 0);
+        assert!(summary.is_empty());
+    }
+
+    #[test]
+    fn import_openssh_comment_only_file_is_not_skipped() {
+        // Given: a known_hosts file with only comment lines
+        // When: it is imported
+        // Then: comments are not counted as skipped or merged
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(&openssh_path, "# comment line 1\n# another comment\n");
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        let summary = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(summary.merged, 0);
+        assert_eq!(summary.skipped, 0);
+        assert!(summary.is_empty());
+    }
+
+    #[test]
+    fn import_openssh_blank_line_file_is_not_skipped() {
+        // Given: a known_hosts file with only blank lines
+        // When: it is imported
+        // Then: blank lines are not counted as skipped or merged
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(&openssh_path, "\n\n\n");
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        let summary = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(summary.merged, 0);
+        assert_eq!(summary.skipped, 0);
+        assert!(summary.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn merge_openssh_on_connect_file_level_failure_aborts_when_configured() {
+        // Given: merge enabled, a file with insecure (world-writable) permissions,
+        //        and abort-on-failure config
+        // When: merge_openssh_on_connect is called
+        // Then: the file-level read error is returned (fail_connect applies at file level)
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        fs::write(&openssh_path, format!("example.com {openssh_key}\n")).unwrap();
+        set_test_file_mode(&openssh_path, 0o666);
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        let config = AppConfig {
+            openssh_known_hosts_path: openssh_path,
+            merge_openssh_known_hosts_on_connect: true,
+            fail_connect_on_openssh_merge_error: true,
+            ..AppConfig::default()
+        };
+
         let err = manager.merge_openssh_on_connect(&config).unwrap_err();
         assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn merge_openssh_on_connect_file_level_failure_skips_when_not_configured() {
+        // Given: merge enabled, a file with insecure permissions, and abort disabled
+        // When: merge_openssh_on_connect is called
+        // Then: no error is returned (the empty summary) so connection can continue
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        fs::write(&openssh_path, format!("example.com {openssh_key}\n")).unwrap();
+        set_test_file_mode(&openssh_path, 0o666);
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        let config = AppConfig {
+            openssh_known_hosts_path: openssh_path,
+            merge_openssh_known_hosts_on_connect: true,
+            fail_connect_on_openssh_merge_error: false,
+            ..AppConfig::default()
+        };
+
+        let summary = manager.merge_openssh_on_connect(&config).unwrap();
+        assert_eq!(summary.merged, 0);
     }
 
     #[cfg(unix)]
@@ -1769,8 +3063,8 @@ mod tests {
         set_test_file_mode(&openssh_path, 0o644);
 
         let mut manager = KnownHostsManager::load(&json_path).unwrap();
-        let merged = manager.import_openssh(&openssh_path).unwrap();
-        assert_eq!(merged, 1);
+        let summary = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(summary.merged, 1);
         assert_eq!(
             manager.check_host_key("example.com", 22, &key, false),
             HostKeyCheckResult::Trust
@@ -1893,11 +3187,12 @@ mod tests {
         assert!(!fingerprints_match("SHA256:abc", "SHA256:ab"));
         assert!(fingerprints_match("", ""));
     }
+
     #[test]
-    fn reload_if_changed_merges_entries_written_by_another_instance() {
+    fn locked_updates_preserve_entries_written_by_another_instance() {
         // Given: two KnownHostsManager instances sharing one store path
         // When: they accept keys for different hosts
-        // Then: a later instance re-reads the file and keeps the other host
+        // Then: every update reloads under the sidecar lock and keeps both hosts
         let dir = tempdir().unwrap();
         let path = dir.path().join("known_hosts.json");
         let key_a = test_public_key();
@@ -1916,12 +3211,12 @@ mod tests {
             .accept_host_key("beta.example.com", 22, &key_b)
             .unwrap();
 
-        // Process A accepts another host: reload_if_changed picks up B's entry.
+        // Process A accepts another host and picks up B's entry under the lock.
         manager_a
             .accept_host_key("gamma.example.com", 22, &key_a)
             .unwrap();
 
-        // Both hosts must be trusted after the interleaving.
+        // All hosts must be trusted after the interleaving.
         let reloaded = KnownHostsManager::load(&path).unwrap();
         assert_eq!(
             reloaded.check_host_key("alpha.example.com", 22, &key_a, false),
@@ -1938,10 +3233,45 @@ mod tests {
     }
 
     #[test]
-    fn reload_if_changed_is_noop_when_store_unchanged() {
-        // Given: a single manager whose store is untouched on disk
-        // When: reload_if_changed is called
-        // Then: in-memory entries are preserved
+    fn locked_import_preserves_entries_written_by_another_instance() {
+        // Given: a stale manager and an entry persisted by another manager
+        // When: the stale manager imports an OpenSSH entry
+        // Then: the import reloads under the lock and preserves both entries
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let accepted_key = test_public_key();
+        let imported_key = test_public_key();
+        let imported_openssh = imported_key.to_openssh().unwrap();
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("imported.example.com {imported_openssh}\n"),
+        );
+
+        let mut stale_manager = KnownHostsManager::load(&path).unwrap();
+        let mut writer = KnownHostsManager::load(&path).unwrap();
+        writer
+            .accept_host_key("accepted.example.com", 22, &accepted_key)
+            .unwrap();
+
+        stale_manager.import_openssh(&openssh_path).unwrap();
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("accepted.example.com", 22, &accepted_key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            reloaded.check_host_key("imported.example.com", 22, &imported_key, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn corrupted_external_update_is_not_overwritten() {
+        // Given: a manager with stale state and a store corrupted externally
+        // When: the manager attempts another mutation
+        // Then: the update fails closed and leaves the external bytes untouched
         let dir = tempdir().unwrap();
         let path = dir.path().join("known_hosts.json");
         let key = test_public_key();
@@ -1950,13 +3280,113 @@ mod tests {
         manager
             .accept_host_key("alpha.example.com", 22, &key)
             .unwrap();
-        let in_memory_len = manager.entries.len();
+        let corrupt_contents = b"{not valid json";
+        fs::write(&path, corrupt_contents).unwrap();
 
-        manager.reload_if_changed();
-        assert_eq!(manager.entries.len(), in_memory_len);
+        let err = manager
+            .accept_host_key("beta.example.com", 22, &key)
+            .unwrap_err();
+        assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
+        assert_eq!(fs::read(&path).unwrap(), corrupt_contents);
+    }
+
+    #[test]
+    fn host_matching_is_case_insensitive() {
+        // Given: a trusted host stored in mixed case
+        // When: checked with different casing
+        // Then: the same entry matches regardless of case
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.accept_host_key("Example.COM", 22, &key).unwrap();
+
         assert_eq!(
-            manager.check_host_key("alpha.example.com", 22, &key, false),
+            manager.check_host_key("example.com", 22, &key, false),
             HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("EXAMPLE.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("Example.Com", 22, &key, true),
+            HostKeyCheckResult::Trust
+        );
+
+        // The stored entry is normalized to lowercase.
+        let entry = manager.find_entry("EXAMPLE.com", 22).unwrap();
+        assert_eq!(entry.host, "example.com");
+    }
+
+    #[test]
+    fn loaded_store_migrates_mixed_case_entries() {
+        // Given: a store file written with a mixed-case host
+        // When: loaded
+        // Then: the entry is normalized to lowercase and still matches
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let fingerprint = fingerprint_sha256(&key);
+        let openssh_key = key.to_openssh().unwrap();
+
+        write_test_file_mode_0600(
+            &path,
+            format!(
+                r#"{{"entries":[{{"host":"Example.COM","port":22,"fingerprint_sha256":"{fingerprint}","algorithm":"Ed25519","aliases":[],"excluded_aliases":[],"public_key_openssh":"{openssh_key}"}}],"hashed_entries":[]}}"#
+            ),
+        );
+
+        let manager = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("EXAMPLE.COM", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn import_openssh_skips_wildcard_plain_patterns() {
+        // Given: an OpenSSH line with a non-CA wildcard pattern
+        // When: imported
+        // Then: the wildcard host is skipped (no dead entry) without aborting
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+
+        write_test_file_mode_0600(&openssh_path, format!("*.example.com {openssh_key}\n"));
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        let merged = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(merged.merged, 0);
+
+        assert_eq!(
+            manager.check_host_key("host.example.com", 22, &key, false),
+            HostKeyCheckResult::Unknown
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_known_hosts_rejects_oversized_file() {
+        // Given: an OpenSSH known_hosts file larger than the size limit
+        // When: read_secure_known_hosts_file is called
+        // Then: a "file too large" error is returned instead of reading it all
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(&path, vec![b' '; (MAX_KNOWN_HOSTS_FILE_BYTES as usize) + 1]);
+
+        let err =
+            read_secure_known_hosts_file(&path, KnownHostsReadPolicy::OpenSshImport).unwrap_err();
+        assert!(
+            matches!(err, SecurityError::KnownHostsReadFailed { ref message, .. } if message.contains("too large")),
+            "unexpected error: {err:?}"
         );
     }
 }
