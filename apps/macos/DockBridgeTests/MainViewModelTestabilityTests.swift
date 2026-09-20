@@ -234,7 +234,10 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: destinationURL, encoding: .utf8), "existing")
         XCTAssertEqual(
             viewModel.errorMessage,
-            "A file or folder named 'existing.txt' already exists."
+            String(
+                format: String(localized: "A file or folder named '%@' already exists."),
+                "existing.txt"
+            )
         )
         XCTAssertNotNil(viewModel.localRenameTarget)
     }
@@ -284,7 +287,10 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: existingURL, encoding: .utf8), "contents")
         XCTAssertEqual(
             viewModel.errorMessage,
-            "A file or folder named 'existing' already exists."
+            String(
+                format: String(localized: "A file or folder named '%@' already exists."),
+                "existing"
+            )
         )
         XCTAssertTrue(viewModel.showLocalMkdirPrompt)
     }
@@ -321,7 +327,13 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: trashedURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: failedURL.path))
         XCTAssertEqual(viewModel.selectedLocalItemIDs, [failedItem.id])
-        XCTAssertEqual(viewModel.errorMessage, "Failed to move to Trash: failed.txt")
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            String(
+                format: String(localized: "Failed to move to Trash: %@"),
+                "failed.txt"
+            )
+        )
     }
 
     // MARK: - Destination resolution
@@ -371,7 +383,10 @@ final class MainViewModelTestabilityTests: XCTestCase {
         )
 
         XCTAssertFalse(accepted)
-        XCTAssertEqual(viewModel.errorMessage, "Not connected to a remote host.")
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            String(localized: "Not connected to a remote host.")
+        )
     }
 
     // MARK: - Overwrite ask
@@ -628,7 +643,14 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: cleanDirectory.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: dirtyDirectory.path))
-        XCTAssertTrue(recoveryViewModel.errorMessage?.contains("Preserved 1 unsynced external edit") == true)
+        XCTAssertEqual(
+            recoveryViewModel.errorMessage,
+            String(
+                format: String(localized: "Preserved %lld unsynced external edit(s) in %@."),
+                Int64(1),
+                remoteEditTempRoot.path
+            )
+        )
     }
 
     // MARK: - Path saving on disconnect

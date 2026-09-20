@@ -116,6 +116,7 @@
 		E84DB800005C00D4BE9203C3 /* FileDropValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91B90A80C053344BE981AA99 /* FileDropValidationTests.swift */; };
 		E8DB80EA30D7839B86B21D1B /* ProfileEncryptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E919019F81DFF4080137271C /* ProfileEncryptionService.swift */; };
 		EB91E70B19B87C004C3E54F7 /* TransferNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55AC5A302F3FFFFC7D225332 /* TransferNotificationService.swift */; };
+		EFA6AE149DBDA0C6E6BE82E3 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = F0ABCF5CC2BA115EB556CE0B /* Localizable.xcstrings */; };
 		F34446C73E64ABFE7DF02B74 /* ConnectionListViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E31BC28636C9C4001C524C5B /* ConnectionListViewModelTests.swift */; };
 		F6A0B9C232BFE7E24FA6243A /* PathBookmarkStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F2DC715F0EDB27E693B1415 /* PathBookmarkStoreTests.swift */; };
 		F895BC47AD111DEC0EFEADE3 /* RemotePaneSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5735931B021F61A1D203DAE0 /* RemotePaneSheets.swift */; };
@@ -249,6 +250,7 @@
 		EA7BE89750800CFF89F48B96 /* dockbridge_uniffiFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = dockbridge_uniffiFFI.h; sourceTree = "<group>"; };
 		EE643F14DF2F712780D2C681 /* MainViewCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewCommands.swift; sourceTree = "<group>"; };
 		EF57C041023CC35AB886B10E /* ProfileTrustStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTrustStore.swift; sourceTree = "<group>"; };
+		F0ABCF5CC2BA115EB556CE0B /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		F5A5424AE602D11D22FD52C5 /* AppUpdateInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateInfo.swift; sourceTree = "<group>"; };
 		F9553D45066D00074CB562D9 /* RemoteSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSession.swift; sourceTree = "<group>"; };
 		FC0FCF506A791A622DCEFDED /* PathBookmarkStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathBookmarkStore.swift; sourceTree = "<group>"; };
@@ -332,6 +334,7 @@
 				74367E09A9260C6DAA67A818 /* Assets.xcassets */,
 				444932E0C01D4169E996E6F9 /* DockBridge.entitlements */,
 				2036227144D88E4F42B5992E /* Info.plist */,
+				F0ABCF5CC2BA115EB556CE0B /* Localizable.xcstrings */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -593,6 +596,7 @@
 			knownRegions = (
 				Base,
 				en,
+				ja,
 			);
 			mainGroup = C16EE91B0B0E3DCD28067FC6;
 			minimizedProjectReferenceProxies = 1;
@@ -613,6 +617,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				146B86A2897D61D788614A68 /* Assets.xcassets in Resources */,
+				EFA6AE149DBDA0C6E6BE82E3 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -866,6 +871,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.dockbridge.app;
 				PRODUCT_NAME = DockBridge;
 				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 			};
 			name = Release;
 		};
@@ -1017,6 +1023,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.dockbridge.app;
 				PRODUCT_NAME = DockBridge;
 				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 			};
 			name = Debug;
 		};

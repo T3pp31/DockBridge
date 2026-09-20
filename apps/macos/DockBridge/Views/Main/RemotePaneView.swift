@@ -12,7 +12,7 @@ struct RemotePaneView: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Filter files", text: $viewModel.remoteFilter)
+                TextField(String(localized: "Filter files"), text: $viewModel.remoteFilter)
                     .textFieldStyle(.plain)
                 if !viewModel.remoteFilter.isEmpty {
                     Button {
@@ -33,9 +33,9 @@ struct RemotePaneView: View {
                     Group {
                         if viewModel.remoteItems.allSatisfy(\.isParentDirectory), !viewModel.isLoadingRemote {
                             ContentUnavailableView(
-                                "Folder is Empty",
+                                String(localized: "Folder is Empty"),
                                 systemImage: "folder",
-                                description: Text("No items in this directory.")
+                                description: Text(String(localized: "No items in this directory."))
                             )
                         } else {
                             RemoteFileTable(viewModel: viewModel)
@@ -48,27 +48,33 @@ struct RemotePaneView: View {
                             let items = transferableRemoteItems(from: ids)
                             if !items.isEmpty {
                                 if items.count == 1, let item = items.first {
-                                    Button("Copy Path") {
+                                    Button(String(localized: "Copy Path")) {
                                         ClipboardHelper.copy(item.path)
                                     }
-                                    Button("Open") {
+                                    Button(String(localized: "Open")) {
                                         Task { await viewModel.openRemoteFile(item) }
                                     }
                                 }
 
-                                Button(items.count == 1 ? "Download" : "Download \(items.count) Items") {
+                                let downloadTitle = items.count == 1
+                                    ? String(localized: "Download")
+                                    : String(
+                                        format: String(localized: "Download %lld Items"),
+                                        Int64(items.count)
+                                    )
+                                Button(downloadTitle) {
                                     viewModel.selectedRemoteItemIDs = Set(items.map(\.id))
                                     Task { await viewModel.downloadSelected() }
                                 }
 
                                 if items.count == 1, let item = items.first {
-                                    Button("Get Info") {
+                                    Button(String(localized: "Get Info")) {
                                         viewModel.showRemoteInfo(item)
                                     }
-                                    Button("Rename") {
+                                    Button(String(localized: "Rename")) {
                                         viewModel.beginRename(item: item)
                                     }
-                                    Button("Delete", role: .destructive) {
+                                    Button(String(localized: "Delete"), role: .destructive) {
                                         viewModel.requestDeleteRemote(item: item)
                                     }
                                 }
@@ -88,7 +94,7 @@ struct RemotePaneView: View {
                         .overlay {
                             if isDropTargeted {
                                 DropTargetOverlay(
-                                    title: "Drop to upload",
+                                    title: String(localized: "Drop to upload"),
                                     systemImage: "arrow.up.doc"
                                 )
                                 .padding(4)
@@ -100,9 +106,9 @@ struct RemotePaneView: View {
                 .layoutPriority(0)
             } else {
                 ContentUnavailableView(
-                    "Not connected to a remote host",
+                    String(localized: "Not connected to a remote host"),
                     systemImage: "network.slash",
-                    description: Text("Select a connection profile and press Connect.")
+                    description: Text(String(localized: "Select a connection profile and press Connect."))
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -145,23 +151,33 @@ struct RemotePaneView: View {
             RemoteNewFolderSheet(viewModel: viewModel)
         }
         .sheet(item: $viewModel.remoteInfoItem) { item in
+            let title = String(
+                format: String(localized: "Info — %@"),
+                item.name
+            )
             GetInfoSheet(
-                title: "Info — \(item.name)",
+                title: title,
                 rows: [
-                    ("Path", item.path),
-                    ("Kind", item.isDirectory ? "Folder" : "File"),
-                    ("Size", ByteCountFormatter.string(
+                    (String(localized: "Path"), item.path),
+                    (
+                        String(localized: "Kind"),
+                        item.isDirectory ? String(localized: "Folder") : String(localized: "File")
+                    ),
+                    (String(localized: "Size"), ByteCountFormatter.string(
                         fromByteCount: Int64(clamping: item.size),
                         countStyle: .file
                     )),
-                    ("Modified", item.modifiedAtSecs.map { secs in
+                    (String(localized: "Modified"), item.modifiedAtSecs.map { secs in
                         DateFormatter.localizedString(
                             from: Date(timeIntervalSince1970: TimeInterval(secs)),
                             dateStyle: .medium,
                             timeStyle: .medium
                         )
                     } ?? "—"),
-                    ("Permissions", item.permissions.map(PermissionFormatter.string(from:)) ?? "—"),
+                    (
+                        String(localized: "Permissions"),
+                        item.permissions.map(PermissionFormatter.string(from:)) ?? "—"
+                    ),
                 ]
             )
         }

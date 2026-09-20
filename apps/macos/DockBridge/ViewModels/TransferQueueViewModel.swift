@@ -204,13 +204,21 @@ final class TransferQueueViewModel: ObservableObject {
         guard config.notifyWhenTransfersFinish, !NSApp.isActive else { return }
 
         for task in finished {
-            let direction = task.direction == .upload ? "Upload" : "Download"
+            let direction = task.direction == .upload
+                ? String(localized: "Upload")
+                : String(localized: "Download")
             let title: String
             switch task.status {
             case .completed:
-                title = "\(direction) finished"
+                title = String(
+                    format: String(localized: "%@ finished"),
+                    direction
+                )
             case .failed:
-                title = "\(direction) failed"
+                title = String(
+                    format: String(localized: "%@ failed"),
+                    direction
+                )
             case .cancelled, .pending, .inProgress:
                 continue
             }

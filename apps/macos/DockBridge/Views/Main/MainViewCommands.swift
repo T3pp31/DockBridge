@@ -11,20 +11,20 @@ struct MainViewCommands: Commands {
     @Binding var showSettings: Bool
 
     var body: some Commands {
-        CommandMenu("Go") {
-            Button("Back") {
+        CommandMenu(String(localized: "Go")) {
+            Button(String(localized: "Back")) {
                 Task { await viewModel.navigateRemoteBack() }
             }
             .keyboardShortcut("[", modifiers: [.command])
             .disabled(!viewModel.bridge.isConnected)
 
-            Button("Forward") {
+            Button(String(localized: "Forward")) {
                 Task { await viewModel.navigateRemoteForward() }
             }
             .keyboardShortcut("]", modifiers: [.command])
             .disabled(!viewModel.bridge.isConnected)
 
-            Button("Enclosing Folder") {
+            Button(String(localized: "Enclosing Folder")) {
                 Task { await viewModel.navigateRemoteUp() }
             }
             .keyboardShortcut(.upArrow, modifiers: [.command])
@@ -32,18 +32,18 @@ struct MainViewCommands: Commands {
 
             Divider()
 
-            Button("Go to Folder…") {
+            Button(String(localized: "Go to Folder…")) {
                 viewModel.beginGoToPathForFocusedPane()
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(!viewModel.bridge.isConnected)
         }
 
-        CommandMenu("Transfer") {
+        CommandMenu(String(localized: "Transfer")) {
             Button {
                 Task { await viewModel.uploadSelected() }
             } label: {
-                Label("Upload", systemImage: "square.and.arrow.up")
+                Label(String(localized: "Upload"), systemImage: "square.and.arrow.up")
             }
             .keyboardShortcut("u", modifiers: [.command])
             .disabled(viewModel.selectedLocalItems.isEmpty || !viewModel.bridge.isConnected)
@@ -51,7 +51,7 @@ struct MainViewCommands: Commands {
             Button {
                 Task { await viewModel.downloadSelected() }
             } label: {
-                Label("Download", systemImage: "square.and.arrow.down")
+                Label(String(localized: "Download"), systemImage: "square.and.arrow.down")
             }
             .keyboardShortcut("d", modifiers: [.command, .shift])
             .disabled(viewModel.selectedRemoteItems.isEmpty || !viewModel.bridge.isConnected)
@@ -59,7 +59,7 @@ struct MainViewCommands: Commands {
 
         // New Folder uses ⇧⌘N (like Finder) so ⌘N stays as New Window.
         CommandGroup(after: .newItem) {
-            Button("New Folder") {
+            Button(String(localized: "New Folder")) {
                 viewModel.showMkdirPrompt = true
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
@@ -67,20 +67,20 @@ struct MainViewCommands: Commands {
         }
 
         CommandGroup(after: .saveItem) {
-            Button("Get Info") {
+            Button(String(localized: "Get Info")) {
                 Task { await viewModel.showInfoForFocusedPane() }
             }
             .keyboardShortcut("i", modifiers: [.command])
             .disabled(!viewModel.canShowInfoForFocusedPane)
 
-            Button("Refresh") {
+            Button(String(localized: "Refresh")) {
                 viewModel.reloadLocal()
                 Task { await viewModel.reloadRemote() }
             }
             .keyboardShortcut("r", modifiers: [.command])
 
             Toggle(
-                "Show Hidden Files",
+                String(localized: "Show Hidden Files"),
                 isOn: Binding(
                     get: { viewModel.showHiddenFiles },
                     set: { viewModel.setShowHiddenFiles($0) }
@@ -88,7 +88,7 @@ struct MainViewCommands: Commands {
             )
             .keyboardShortcut(".", modifiers: [.command, .shift])
 
-            Button("Delete") {
+            Button(String(localized: "Delete")) {
                 // Destructive: require exactly one selection (never Set.first under multi-select).
                 guard viewModel.selectedRemoteItemIDs.count == 1,
                       let item = viewModel.selectedRemoteTableItem,
@@ -107,12 +107,12 @@ struct MainViewCommands: Commands {
         CommandGroup(after: .toolbar) {
             if let selected = connectionList.profiles.first(where: { $0.id == connectionList.selectedProfileID }) {
                 if connectionList.connectionStatus.isConnected {
-                    Button("Disconnect") {
+                    Button(String(localized: "Disconnect")) {
                         Task { await connectionList.disconnect() }
                     }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
                 } else {
-                    Button("Connect") {
+                    Button(String(localized: "Connect")) {
                         connectionList.requestConnect(profile: selected)
                     }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
@@ -122,7 +122,7 @@ struct MainViewCommands: Commands {
         }
 
         CommandGroup(replacing: .appSettings) {
-            Button("Settings") {
+            Button(String(localized: "Settings")) {
                 showSettings = true
             }
             .keyboardShortcut(",", modifiers: [.command])

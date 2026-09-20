@@ -13,11 +13,11 @@ struct ConnectionListView: View {
                 profileList
             }
         }
-        .alert("SSH Config Import", isPresented: Binding(
+        .alert(String(localized: "SSH Config Import"), isPresented: Binding(
             get: { viewModel.importResultMessage != nil },
             set: { if !$0 { viewModel.importResultMessage = nil } }
         )) {
-            Button("OK", role: .cancel) {}
+            Button(String(localized: "OK"), role: .cancel) {}
         } message: {
             Text(viewModel.importResultMessage ?? "")
         }
@@ -27,29 +27,29 @@ struct ConnectionListView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup {
             Menu {
-                Button("New Connection…") {
+                Button(String(localized: "New Connection…")) {
                     showNewConnection = true
                 }
-                Button("Import from SSH Config…") {
+                Button(String(localized: "Import from SSH Config…")) {
                     Task { await viewModel.importFromSSHConfig() }
                 }
             } label: {
-                Label("Add", systemImage: "plus")
+                Label(String(localized: "Add"), systemImage: "plus")
             }
 
             if let selected = viewModel.profiles.first(where: { $0.id == viewModel.selectedProfileID }) {
-                Button("Connect") {
+                Button(String(localized: "Connect")) {
                     viewModel.requestConnect(profile: selected)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting)
 
-                Button("Disconnect") {
+                Button(String(localized: "Disconnect")) {
                     Task { await viewModel.disconnect() }
                 }
                 .disabled(!viewModel.connectionStatus.isConnected)
 
-                Button("Reconnect") {
+                Button(String(localized: "Reconnect")) {
                     viewModel.reconnect()
                 }
                 .disabled(viewModel.connectionStatus.isConnecting)
@@ -59,85 +59,69 @@ struct ConnectionListView: View {
 
     var body: some View {
         content
-            .navigationTitle("Connections")
+            .navigationTitle(String(localized: "Connections"))
             .toolbar {
                 toolbarContent
             }
             .alert(
-            "Connection endpoint changed",
-            isPresented: $viewModel.showEndpointChangeWarning,
-            presenting: viewModel.pendingEndpointChange
-        ) { change in
-            Button("Restore Previous", role: .cancel) {
-                viewModel.restoreTrustedEndpoint()
+                String(localized: "Connection endpoint changed"),
+                isPresented: $viewModel.showEndpointChangeWarning,
+                presenting: viewModel.pendingEndpointChange
+            ) { change in
+                Button(String(localized: "Restore Previous"), role: .cancel) {
+                    viewModel.restoreTrustedEndpoint()
+                }
+                Button(String(localized: "Keep New Endpoint"), role: .destructive) {
+                    viewModel.acceptEndpointChange()
+                }
+            } message: { change in
+                let format = String(localized: "The profile \"%@\" now points to %@. It previously used %@. If you did not make this change, restore the previous endpoint.")
+                Text(String(
+                    format: format,
+                    change.profileName,
+                    change.currentEndpointLabel,
+                    change.trustedEndpointLabel
+                ))
             }
-            Button("Keep New Endpoint", role: .destructive) {
-                viewModel.acceptEndpointChange()
-            }
-        } message: { change in
-            Text(
-                """
-                The profile "\(change.profileName)" now points to \(change.currentEndpointLabel). \
-                It previously used \(change.trustedEndpointLabel). \
-                If you did not make this change, restore the previous endpoint.
-                """
-            )
-        }
-        .alert("Connect as root?", isPresented: $viewModel.showRootWarning) {
-            Button("Cancel", role: .cancel) {
+            .alert(String(localized: "Connect as root?"), isPresented: $viewModel.showRootWarning) {
+            Button(String(localized: "Cancel"), role: .cancel) {
                 viewModel.cancelPendingConnect()
             }
-            Button("Connect Anyway", role: .destructive) {
+            Button(String(localized: "Connect Anyway"), role: .destructive) {
                 viewModel.confirmRootConnect()
             }
         } message: {
-            Text("Connecting as root is discouraged. Continue only if you understand the risks.")
+            Text(String(localized: "Connecting as root is discouraged. Continue only if you understand the risks."))
         }
-        .alert("RSA private key warning", isPresented: $viewModel.showRsaKeyWarning) {
-            Button("Cancel", role: .cancel) {
+        .alert(String(localized: "RSA private key warning"), isPresented: $viewModel.showRsaKeyWarning) {
+            Button(String(localized: "Cancel"), role: .cancel) {
                 viewModel.cancelPendingConnect()
             }
-            Button("Connect Anyway", role: .destructive) {
+            Button(String(localized: "Connect Anyway"), role: .destructive) {
                 viewModel.confirmRsaConnect()
             }
         } message: {
-            Text(
-                """
-                This connection uses an RSA private key. RSA key authentication may be \
-                vulnerable to timing attacks (Marvin Attack). Prefer Ed25519 or ECDSA keys \
-                when possible.
-                """
-            )
+            Text(String(localized: "This connection uses an RSA private key. RSA key authentication may be vulnerable to timing attacks (Marvin Attack). Prefer Ed25519 or ECDSA keys when possible."))
         }
-        .alert("Trust connection endpoints?", isPresented: $viewModel.showInitialTrustConfirmation) {
-            Button("Not Now", role: .cancel) {
+        .alert(String(localized: "Trust connection endpoints?"), isPresented: $viewModel.showInitialTrustConfirmation) {
+            Button(String(localized: "Not Now"), role: .cancel) {
                 viewModel.declineInitialTrust()
             }
-            Button("Trust Endpoints") {
+            Button(String(localized: "Trust Endpoints")) {
                 viewModel.confirmInitialTrust()
             }
         } message: {
-            Text(
-                """
-                DockBridge will remember the host, port, and username for your saved connections \
-                to detect unauthorized changes. Confirm only if these profiles belong to you.
-                """
-            )
+            Text(String(localized: "DockBridge will remember the host, port, and username for your saved connections to detect unauthorized changes. Confirm only if these profiles belong to you."))
         }
-        .alert("Trust new connection endpoints?", isPresented: $viewModel.showNewProfileTrustConfirmation) {
-            Button("Not Now", role: .cancel) {
+        .alert(String(localized: "Trust new connection endpoints?"), isPresented: $viewModel.showNewProfileTrustConfirmation) {
+            Button(String(localized: "Not Now"), role: .cancel) {
                 viewModel.declineNewProfileTrust()
             }
-            Button("Trust Endpoints") {
+            Button(String(localized: "Trust Endpoints")) {
                 viewModel.confirmNewProfileTrust()
             }
         } message: {
-            Text(
-                """
-                DockBridge found new saved connections without trusted endpoints. \
-                Trust only profiles you added yourself.
-                """
-            )
+            Text(String(localized: "DockBridge found new saved connections without trusted endpoints. Trust only profiles you added yourself."))
         }
         .errorAlert(message: $viewModel.errorMessage)
         .sheet(item: Binding(
@@ -162,7 +146,7 @@ struct ConnectionListView: View {
             )
         }
         .confirmationDialog(
-            "Delete Profile?",
+            String(localized: "Delete Profile?"),
             isPresented: Binding(
                 get: { viewModel.confirmDeleteProfile != nil },
                 set: { if !$0 { viewModel.confirmDeleteProfile = nil } }
@@ -170,14 +154,15 @@ struct ConnectionListView: View {
             titleVisibility: .visible,
             presenting: viewModel.confirmDeleteProfile
         ) { profile in
-            Button("Delete", role: .destructive) {
+            Button(String(localized: "Delete"), role: .destructive) {
                 viewModel.delete(profile: profile)
             }
-            Button("Cancel", role: .cancel) {
+            Button(String(localized: "Cancel"), role: .cancel) {
                 viewModel.confirmDeleteProfile = nil
             }
         } message: { profile in
-            Text("Delete \"\(profile.name)\"? The saved password/passphrase for this profile will also be removed from the Keychain.")
+            let format = String(localized: "Delete \"%@\"? The saved password/passphrase for this profile will also be removed from the Keychain.")
+            Text(String(format: format, profile.name))
         }
     }
 
@@ -207,16 +192,16 @@ struct ConnectionListView: View {
             else { return }
             viewModel.requestConnect(profile: profile)
         }
-        .searchable(text: $viewModel.searchText, prompt: "Search connections")
+        .searchable(text: $viewModel.searchText, prompt: String(localized: "Search connections"))
     }
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label("No connections", systemImage: "server.rack")
+            Label(String(localized: "No connections"), systemImage: "server.rack")
         } description: {
-            Text("Add a connection profile to connect to a remote host.")
+            Text(String(localized: "Add a connection profile to connect to a remote host."))
         } actions: {
-            Button("Add Connection") {
+            Button(String(localized: "Add Connection")) {
                 showNewConnection = true
             }
             .buttonStyle(.borderedProminent)
@@ -251,21 +236,21 @@ struct ConnectionListView: View {
     private func profileContextMenu(for ids: Set<UUID>) -> some View {
         if let profile = singleSelectedProfile(from: ids) {
             if isConnectedProfile(profile) {
-                Button("Disconnect") {
+                Button(String(localized: "Disconnect")) {
                     Task { await viewModel.disconnect() }
                 }
             } else {
-                Button("Connect") {
+                Button(String(localized: "Connect")) {
                     viewModel.requestConnect(profile: profile)
                 }
                 .disabled(viewModel.connectionStatus.isConnecting)
             }
 
-            Button("Edit") {
+            Button(String(localized: "Edit")) {
                 editingProfile = profile
             }
 
-            Button("Delete", role: .destructive) {
+            Button(String(localized: "Delete"), role: .destructive) {
                 viewModel.requestDelete(profile: profile)
             }
             .disabled(isConnectedProfile(profile))

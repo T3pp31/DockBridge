@@ -9,9 +9,11 @@ enum ProfileTrustSigningKeyStoreError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .randomGenerationFailed(let status):
-            return "Failed to generate profile trust signing key (status \(status))."
+            let format = String(localized: "Failed to generate profile trust signing key (status %lld).")
+            return String(format: format, Int64(status))
         case .unexpectedStatus(let status):
-            return "Profile trust signing key Keychain operation failed with status \(status)."
+            let format = String(localized: "Profile trust signing key Keychain operation failed with status %lld.")
+            return String(format: format, Int64(status))
         }
     }
 }

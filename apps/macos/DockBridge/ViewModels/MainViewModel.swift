@@ -33,11 +33,11 @@ final class MainViewModel: ObservableObject {
 
             var title: String {
                 switch self {
-                case .watching: "Watching"
-                case .uploading: "Uploading"
-                case .uploadFailed: "Upload failed"
-                case .fileMissing: "Waiting for file"
-                case .waitingForConnection: "Waiting for connection"
+                case .watching: String(localized: "Watching")
+                case .uploading: String(localized: "Uploading")
+                case .uploadFailed: String(localized: "Upload failed")
+                case .fileMissing: String(localized: "Waiting for file")
+                case .waitingForConnection: String(localized: "Waiting for connection")
                 }
             }
 
@@ -234,7 +234,8 @@ final class MainViewModel: ObservableObject {
         if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
             navigateLocal(to: url.path)
         } else {
-            errorMessage = "No such local folder: \(url.path)"
+            let format = String(localized: "No such local folder: %@")
+            errorMessage = String(format: format, url.path)
         }
     }
 
@@ -244,7 +245,8 @@ final class MainViewModel: ObservableObject {
         if let directory = try? RemotePath.directoryPath(normalized) {
             navigateRemote(to: directory)
         } else {
-            errorMessage = "Invalid remote path: \(normalized)"
+            let format = String(localized: "Invalid remote path: %@")
+            errorMessage = String(format: format, normalized)
         }
     }
 
@@ -802,7 +804,7 @@ final class MainViewModel: ObservableObject {
         }
 
         guard let connectionIdentity = currentRemoteEditConnectionIdentity else {
-            errorMessage = "Not connected to a remote host."
+            errorMessage = String(localized: "Not connected to a remote host.")
             return
         }
 
@@ -837,7 +839,8 @@ final class MainViewModel: ObservableObject {
 
         let localFile = sessionDirectory.appendingPathComponent(item.name, isDirectory: false)
         guard FileManager.default.fileExists(atPath: localFile.path) else {
-            errorMessage = "Downloaded file was not found at \(localFile.path)."
+            let format = String(localized: "Downloaded file was not found at %@.")
+            errorMessage = String(format: format, localFile.path)
             try? FileManager.default.removeItem(at: sessionDirectory)
             return
         }
@@ -855,7 +858,10 @@ final class MainViewModel: ObservableObject {
             if let session = remoteEditSessions.first(where: { $0.localURL == localFile }) {
                 stopRemoteEditSession(session)
             }
-            errorMessage = "Could not open \(localFile.lastPathComponent) in its default application."
+            errorMessage = String(
+                format: String(localized: "Could not open %@ in its default application."),
+                localFile.lastPathComponent
+            )
             return
         }
         startRemoteEditMonitoring()
@@ -868,15 +874,21 @@ final class MainViewModel: ObservableObject {
         connectionIdentity: String? = nil
     ) -> RemoteEditSession? {
         guard let identity = connectionIdentity ?? currentRemoteEditConnectionIdentity else {
-            errorMessage = "Not connected to a remote host."
+            errorMessage = String(localized: "Not connected to a remote host.")
             return nil
         }
         guard let snapshot = remoteEditFileSnapshot(at: localURL) else {
-            errorMessage = "Could not inspect the downloaded file at \(localURL.path)."
+            errorMessage = String(
+                format: String(localized: "Could not inspect the downloaded file at %@."),
+                localURL.path
+            )
             return nil
         }
         guard let remoteDirectory = try? RemotePath.parent(of: remotePath) else {
-            errorMessage = "Invalid remote path: \(remotePath)"
+            errorMessage = String(
+                format: String(localized: "Invalid remote path: %@"),
+                remotePath
+            )
             return nil
         }
 
@@ -890,8 +902,11 @@ final class MainViewModel: ObservableObject {
         do {
             try writeRecoveryMetadata(for: session)
         } catch {
-            errorMessage = "Could not create recovery metadata for \(localURL.path): "
-                + error.dockBridgeUserMessage
+            errorMessage = String(
+                format: String(localized: "Could not create recovery metadata for %@: %@"),
+                localURL.path,
+                error.dockBridgeUserMessage
+            )
             return nil
         }
         remoteEditSessions.append(session)
@@ -932,8 +947,11 @@ final class MainViewModel: ObservableObject {
         }
         remoteEditSessions.removeAll { $0.id == session.id }
         if isDirty {
-            errorMessage = "Stopped watching \(session.localURL.lastPathComponent). "
-                + "The unsynced local copy was preserved at \(session.localURL.path)."
+            errorMessage = String(
+                format: String(localized: "Stopped watching %@. The unsynced local copy was preserved at %@."),
+                session.localURL.lastPathComponent,
+                session.localURL.path
+            )
         } else {
             try? FileManager.default.removeItem(at: directory)
         }
@@ -953,7 +971,10 @@ final class MainViewModel: ObservableObject {
               session.state.canRetry else { return }
         guard let snapshot = remoteEditFileSnapshot(at: session.localURL) else {
             updateRemoteEditSession(id: id) { $0.state = .fileMissing }
-            errorMessage = "The edited local file is temporarily unavailable at \(session.localURL.path)."
+            errorMessage = String(
+                format: String(localized: "The edited local file is temporarily unavailable at %@."),
+                session.localURL.path
+            )
             return
         }
         errorMessage = nil
@@ -1031,8 +1052,11 @@ final class MainViewModel: ObservableObject {
         }
 
         if !preserved.isEmpty, errorMessage == nil {
-            errorMessage = "Preserved \(preserved.count) unsynced external edit(s) in "
-                + "\(remoteEditTempRoot.path)."
+            errorMessage = String(
+                format: String(localized: "Preserved %lld unsynced external edit(s) in %@."),
+                Int64(preserved.count),
+                remoteEditTempRoot.path
+            )
         }
     }
 
@@ -1109,7 +1133,10 @@ final class MainViewModel: ObservableObject {
         } catch {
             let message = error.dockBridgeUserMessage
             updateRemoteEditSession(id: id) { $0.state = .uploadFailed(message) }
-            errorMessage = "Could not protect the edited local copy before upload: \(message)"
+            errorMessage = String(
+                format: String(localized: "Could not protect the edited local copy before upload: %@"),
+                message
+            )
             return
         }
 
@@ -1134,8 +1161,11 @@ final class MainViewModel: ObservableObject {
             } catch {
                 let message = error.dockBridgeUserMessage
                 updateRemoteEditSession(id: id) { $0.state = .uploadFailed(message) }
-                errorMessage = "The edit was uploaded, but its recovery metadata could not be saved. "
-                    + "The local copy remains at \(session.localURL.path). \(message)"
+                errorMessage = String(
+                    format: String(localized: "The edit was uploaded, but its recovery metadata could not be saved. The local copy remains at %@. %@"),
+                    session.localURL.path,
+                    message
+                )
                 return
             }
 
@@ -1149,8 +1179,12 @@ final class MainViewModel: ObservableObject {
         } catch {
             let message = error.dockBridgeUserMessage
             updateRemoteEditSession(id: id) { $0.state = .uploadFailed(message) }
-            errorMessage = "Failed to upload edited file to \(session.remotePath). "
-                + "The local copy was preserved at \(session.localURL.path). \(message)"
+            errorMessage = String(
+                format: String(localized: "Failed to upload edited file to %@. The local copy was preserved at %@. %@"),
+                session.remotePath,
+                session.localURL.path,
+                message
+            )
         }
     }
 
@@ -1181,7 +1215,7 @@ final class MainViewModel: ObservableObject {
     @discardableResult
     func upload(localURL: URL, toRemoteDirectory: String?) async -> Bool {
         guard bridge.isConnected else {
-            errorMessage = "Not connected to a remote host."
+            errorMessage = String(localized: "Not connected to a remote host.")
             return false
         }
 
@@ -1227,7 +1261,7 @@ final class MainViewModel: ObservableObject {
     @discardableResult
     func download(remotePath: String, toLocalDirectory: URL) async -> Bool {
         guard bridge.isConnected else {
-            errorMessage = "Not connected to a remote host."
+            errorMessage = String(localized: "Not connected to a remote host.")
             return false
         }
 
@@ -1291,7 +1325,7 @@ final class MainViewModel: ObservableObject {
 
         case .failIfExists:
             if await destinationExists(at: destinationPath, side: destinationSide) {
-                errorMessage = "A file already exists at the destination."
+                errorMessage = String(localized: "A file already exists at the destination.")
                 return false
             }
             errorMessage = nil
@@ -1347,7 +1381,7 @@ final class MainViewModel: ObservableObject {
     @discardableResult
     func moveRemoteItem(from source: String, toDirectory directory: String) async -> Bool {
         guard bridge.isConnected else {
-            errorMessage = "Not connected to a remote host."
+            errorMessage = String(localized: "Not connected to a remote host.")
             return false
         }
 
@@ -1464,7 +1498,10 @@ final class MainViewModel: ObservableObject {
 
         selectedLocalItemIDs.subtract(trashedIDs)
         if !failedNames.isEmpty {
-            errorMessage = "Failed to move to Trash: \(failedNames.joined(separator: ", "))"
+            errorMessage = String(
+                format: String(localized: "Failed to move to Trash: %@"),
+                failedNames.joined(separator: ", ")
+            )
         }
         reloadLocal()
     }
@@ -1492,7 +1529,10 @@ final class MainViewModel: ObservableObject {
         // destination collision would otherwise surface only as a generic
         // move error.
         if FileManager.default.fileExists(atPath: newURL.path) {
-            errorMessage = "A file or folder named '\(name)' already exists."
+            errorMessage = String(
+                format: String(localized: "A file or folder named '%@' already exists."),
+                name
+            )
             return
         }
         do {
@@ -1541,7 +1581,10 @@ final class MainViewModel: ObservableObject {
         let cocoaError = error as NSError
         if cocoaError.domain == NSCocoaErrorDomain,
            cocoaError.code == NSFileWriteFileExistsError {
-            return "A file or folder named '\(name)' already exists."
+            return String(
+                format: String(localized: "A file or folder named '%@' already exists."),
+                name
+            )
         }
         return error.localizedDescription
     }
@@ -1572,6 +1615,14 @@ final class MainViewModel: ObservableObject {
 
     static func recoveryKind(for message: String, isDisconnected: Bool) -> ErrorRecoveryKind {
         let lowered = message.lowercased()
+        let localizedAuthenticationMessages = [
+            String(localized: "Check the username and password."),
+            String(localized: "Select the private key with Browse…. A security-scoped bookmark is required."),
+            String(localized: "Access to the private key was denied. Open the connection settings and use Browse… to select the key again."),
+        ]
+        if localizedAuthenticationMessages.contains(message) {
+            return .editConnection
+        }
         // Auth / credential failures only — not filesystem "permission denied".
         if lowered.contains("authentication")
             || lowered.contains("auth failed")
@@ -1581,6 +1632,14 @@ final class MainViewModel: ObservableObject {
             || lowered.contains("private key")
             || (lowered.contains("password") && !lowered.contains("write permission")) {
             return .editConnection
+        }
+        let localizedTransferMessages = [
+            String(localized: "You do not have write permission on the remote side. Check the remote working directory."),
+            String(localized: "Unable to create the remote working directory. Check the path and write permissions."),
+            String(localized: "The remote destination directory does not exist. Open a valid directory in the remote pane and try again."),
+        ]
+        if localizedTransferMessages.contains(message) {
+            return .showInQueue
         }
         // Transfer-oriented failures → reveal the queue (Retry lives there).
         if lowered.contains("upload")

@@ -9,13 +9,13 @@ enum SecurityScopedBookmarkError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .creationFailed:
-            return "Failed to create a security-scoped bookmark for the selected file."
+            return String(localized: "Failed to create a security-scoped bookmark for the selected file.")
         case .resolutionFailed:
-            return "Failed to restore access to a previously selected file."
+            return String(localized: "Failed to restore access to a previously selected file.")
         case .staleBookmark:
-            return "Access to the selected file has expired. Please select it again."
+            return String(localized: "Access to the selected file has expired. Please select it again.")
         case .accessDenied:
-            return "The app does not have permission to access the selected file."
+            return String(localized: "The app does not have permission to access the selected file.")
         }
     }
 }

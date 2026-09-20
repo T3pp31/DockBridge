@@ -23,7 +23,7 @@ struct GetInfoSheet: View {
                 }
             }
         } footer: {
-            Button("Close") {
+            Button(String(localized: "Close")) {
                 dismiss()
             }
             .keyboardShortcut(.cancelAction)

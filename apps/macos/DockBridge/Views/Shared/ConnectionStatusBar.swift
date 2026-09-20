@@ -24,7 +24,7 @@ struct ConnectionStatusBar: View {
                     .font(DesignTokens.Fonts.monospacedDigit)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                    .accessibilityLabel("Transfer activity: \(transferSummary)")
+                    .accessibilityLabel(String(format: String(localized: "Transfer activity: %@"), transferSummary))
             }
 
             if !remoteEditSessions.isEmpty {
@@ -37,12 +37,12 @@ struct ConnectionStatusBar: View {
                             Label(session.state.title, systemImage: session.state.systemImage)
 
                             if session.state.canRetry {
-                                Button("Retry Upload") {
+                                Button(String(localized: "Retry Upload")) {
                                     onRetryRemoteEditSession(session.id)
                                 }
                             }
 
-                            Button("Stop Watching", role: .destructive) {
+                            Button(String(localized: "Stop Watching"), role: .destructive) {
                                 onStopRemoteEditSession(session)
                             }
                         }
@@ -50,7 +50,7 @@ struct ConnectionStatusBar: View {
 
                     Divider()
 
-                    Button("Stop All Watching", role: .destructive) {
+                    Button(String(localized: "Stop All Watching"), role: .destructive) {
                         onStopAllRemoteEditSessions()
                     }
                 } label: {
@@ -71,9 +71,15 @@ struct ConnectionStatusBar: View {
     private var remoteEditSummary: String {
         let failures = remoteEditSessions.filter { $0.state.canRetry }.count
         if failures > 0 {
-            return "\(failures) edit upload(s) need attention"
+            return String(
+                format: String(localized: "%lld edit upload(s) need attention"),
+                Int64(failures)
+            )
         }
-        return "Watching \(remoteEditSessions.count) external edit(s)"
+        return String(
+            format: String(localized: "Watching %lld external edit(s)"),
+            Int64(remoteEditSessions.count)
+        )
     }
 
     private var remoteEditSummaryImage: String {

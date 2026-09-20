@@ -12,20 +12,20 @@ struct UpdateAvailableView: View {
     let onSkipVersion: () -> Void
 
     var body: some View {
-        DialogCard(title: "Update Available") {
-            Text("A newer version of DockBridge is available.")
+        DialogCard(title: String(localized: "Update Available")) {
+            Text(String(localized: "A newer version of DockBridge is available."))
                 .fixedSize(horizontal: false, vertical: true)
 
-            DialogDetailSection("Version") {
+            DialogDetailSection(String(localized: "Version")) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Current: \(currentVersion)")
-                    Text("Latest: \(update.version)")
+                    Text(String(format: String(localized: "Current: %@"), currentVersion))
+                    Text(String(format: String(localized: "Latest: %@"), update.version))
                         .bold()
                 }
             }
 
             if let releaseNotes, !releaseNotes.isEmpty {
-                DialogDetailSection("Release Notes") {
+                DialogDetailSection(String(localized: "Release Notes")) {
                     ScrollView {
                         Text(releaseNotes)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -37,14 +37,11 @@ struct UpdateAvailableView: View {
 
             if inAppUpdateInstallationEnabled {
                 DialogFootnote(
-                    text: "Download the latest DMG, verify its signature, then replace the app in Applications."
+                    text: String(localized: "Download the latest DMG, verify its signature, then replace the app in Applications.")
                 )
             } else {
                 DialogFootnote(
-                    text: """
-                    In-app installation is disabled until signed and notarized releases are available. \
-                    Open the release page to download the DMG manually and verify it before installing.
-                    """
+                    text: String(localized: "In-app installation is disabled until signed and notarized releases are available. Open the release page to download the DMG manually and verify it before installing.")
                 )
             }
 
@@ -59,17 +56,22 @@ struct UpdateAvailableView: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text("Downloading and verifying update...")
+                    Text(String(localized: "Downloading and verifying update..."))
                         .foregroundStyle(.secondary)
                         .font(.callout)
                 }
             }
         } footer: {
-            Button("Later", role: .cancel, action: onLater)
+            Button(String(localized: "Later"), role: .cancel, action: onLater)
                 .disabled(isDownloading)
-            Button("Skip This Version", action: onSkipVersion)
+            Button(String(localized: "Skip This Version"), action: onSkipVersion)
                 .disabled(isDownloading)
-            Button(inAppUpdateInstallationEnabled ? "Download" : "Open Release Page", action: onDownload)
+            Button(
+                inAppUpdateInstallationEnabled
+                    ? String(localized: "Download")
+                    : String(localized: "Open Release Page"),
+                action: onDownload
+            )
                 .keyboardShortcut(.defaultAction)
                 .disabled(isDownloading)
         }

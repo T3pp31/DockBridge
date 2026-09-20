@@ -8,25 +8,21 @@ enum KeychainServiceError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .encodingFailed:
-            return "Failed to encode secret for Keychain storage."
+            return String(localized: "Failed to encode secret for Keychain storage.")
         case .unexpectedStatus(let status):
             if status == errSecAuthFailed {
-                return """
-                Keychain access was denied. This often happens after rebuilding with a different code signature. \
-                Delete the connection and save credentials again, or remove stale DockBridge entries in Keychain Access.
-                """
+                return String(localized: "Keychain access was denied. This often happens after rebuilding with a different code signature. Delete the connection and save credentials again, or remove stale DockBridge entries in Keychain Access.")
             }
             if status == errSecMissingEntitlement {
-                return """
-                Keychain is not available in the current app context. Rebuild from Xcode with your Development Team selected, \
-                or remove stale DockBridge entries in Keychain Access and save credentials again.
-                """
+                return String(localized: "Keychain is not available in the current app context. Rebuild from Xcode with your Development Team selected, or remove stale DockBridge entries in Keychain Access and save credentials again.")
             }
             if status >= 100_000, status < 200_000 {
                 let errno = status - 100_000
-                return "Keychain operation failed (errno \(errno)). Ensure the app is signed with your Development Team in Xcode (Signing & Capabilities), then rebuild."
+                let format = String(localized: "Keychain operation failed (errno %lld). Ensure the app is signed with your Development Team in Xcode (Signing & Capabilities), then rebuild.")
+                return String(format: format, Int64(errno))
             }
-            return "Keychain operation failed with status \(status). Ensure the app is signed with your Development Team in Xcode, then rebuild."
+            let format = String(localized: "Keychain operation failed with status %lld. Ensure the app is signed with your Development Team in Xcode, then rebuild.")
+            return String(format: format, Int64(status))
         }
     }
 }

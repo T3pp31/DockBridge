@@ -27,7 +27,7 @@ struct LocalPanePathBar: View {
 
     var body: some View {
         PathSummaryRow(
-            label: "Local",
+            label: String(localized: "Local"),
             path: viewModel.localPath.path,
             breadcrumbSegments: PathBreadcrumb.segments(forLocalPath: viewModel.localPath.path),
             onBreadcrumbSelect: { viewModel.navigateLocal(to: $0) },
@@ -42,32 +42,37 @@ struct LocalPanePathBar: View {
                 )
 
                 Button(action: viewModel.navigateLocalBack) {
-                    Label("Back", systemImage: "chevron.left")
+                    Label(String(localized: "Back"), systemImage: "chevron.left")
                         .labelStyle(.iconOnly)
                 }
+                .help(String(localized: "Back"))
                 .disabled(!viewModel.canNavigateLocalBack)
 
                 Button(action: viewModel.navigateLocalForward) {
-                    Label("Forward", systemImage: "chevron.right")
+                    Label(String(localized: "Forward"), systemImage: "chevron.right")
                         .labelStyle(.iconOnly)
                 }
+                .help(String(localized: "Forward"))
                 .disabled(!viewModel.canNavigateLocalForward)
 
                 Button(action: viewModel.navigateLocalUp) {
-                    Label("Parent Directory", systemImage: "arrow.up.circle")
+                    Label(String(localized: "Parent directory"), systemImage: "arrow.up.circle")
                         .labelStyle(.iconOnly)
                 }
+                .help(String(localized: "Parent directory"))
                 .disabled(!viewModel.canNavigateLocalUp)
 
                 Button(action: viewModel.reloadLocal) {
-                    Label("Refresh", systemImage: "arrow.clockwise")
+                    Label(String(localized: "Refresh"), systemImage: "arrow.clockwise")
                         .labelStyle(.iconOnly)
                 }
+                .help(String(localized: "Refresh"))
 
                 Button(action: { viewModel.beginGoToPath(.local) }) {
-                    Label("Go to Path", systemImage: "line.3.horizontal")
+                    Label(String(localized: "Go to Path"), systemImage: "line.3.horizontal")
                         .labelStyle(.iconOnly)
                 }
+                .help(String(localized: "Go to Path"))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -85,12 +90,12 @@ struct RemotePanePathBar: View {
     @ObservedObject var viewModel: MainViewModel
 
     private var path: String {
-        viewModel.bridge.isConnected ? viewModel.remotePath : "Not connected"
+        viewModel.bridge.isConnected ? viewModel.remotePath : String(localized: "Not connected")
     }
 
     var body: some View {
         PathSummaryRow(
-            label: "Remote",
+            label: String(localized: "Remote"),
             path: path,
             breadcrumbSegments: viewModel.bridge.isConnected
                 ? PathBreadcrumb.segments(forRemotePath: viewModel.remotePath)
@@ -109,35 +114,40 @@ struct RemotePanePathBar: View {
                 .disabled(!viewModel.bridge.isConnected)
 
                 Button(action: viewModel.navigateRemoteBack) {
-                    Label("Back", systemImage: "chevron.left")
+                    Label(String(localized: "Back"), systemImage: "chevron.left")
                         .labelStyle(.iconOnly)
                 }
+                .help(String(localized: "Back"))
                 .disabled(!viewModel.bridge.isConnected || !viewModel.canNavigateRemoteBack)
 
                 Button(action: viewModel.navigateRemoteForward) {
-                    Label("Forward", systemImage: "chevron.right")
+                    Label(String(localized: "Forward"), systemImage: "chevron.right")
                         .labelStyle(.iconOnly)
                 }
+                .help(String(localized: "Forward"))
                 .disabled(!viewModel.bridge.isConnected || !viewModel.canNavigateRemoteForward)
 
                 Button(action: viewModel.navigateRemoteUp) {
-                    Label("Parent Directory", systemImage: "arrow.up.circle")
+                    Label(String(localized: "Parent directory"), systemImage: "arrow.up.circle")
                         .labelStyle(.iconOnly)
                 }
+                .help(String(localized: "Parent directory"))
                 .disabled(!viewModel.bridge.isConnected || !viewModel.canNavigateRemoteUp)
 
                 Button {
                     Task { await viewModel.reloadRemote() }
                 } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
+                    Label(String(localized: "Refresh"), systemImage: "arrow.clockwise")
                         .labelStyle(.iconOnly)
                 }
+                .help(String(localized: "Refresh"))
                 .disabled(!viewModel.bridge.isConnected)
 
                 Button(action: { viewModel.beginGoToPath(.remote) }) {
-                    Label("Go to Path", systemImage: "line.3.horizontal")
+                    Label(String(localized: "Go to Path"), systemImage: "line.3.horizontal")
                         .labelStyle(.iconOnly)
                 }
+                .help(String(localized: "Go to Path"))
                 .disabled(!viewModel.bridge.isConnected)
             }
         }

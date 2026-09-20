@@ -15,13 +15,13 @@ enum ProfileEncryptionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .encryptionFailed(let message):
-            "Failed to encrypt connection profiles: \(message)"
+            return String(format: String(localized: "Failed to encrypt connection profiles: %@"), message)
         case .decryptionFailed(let message):
-            "Failed to decrypt connection profiles: \(message)"
+            return String(format: String(localized: "Failed to decrypt connection profiles: %@"), message)
         case .decodeFailed(let message):
-            "Connection profiles could not be decoded: \(message)"
+            return String(format: String(localized: "Connection profiles could not be decoded: %@"), message)
         case .invalidEnvelope:
-            "Connection profile store has an unsupported or corrupt encrypted format."
+            return String(localized: "Connection profile store has an unsupported or corrupt encrypted format.")
         }
     }
 }
@@ -61,7 +61,9 @@ final class ProfileEncryptionService: @unchecked Sendable {
             let key = try loadOrCreateMasterKey()
             let sealed = try AES.GCM.seal(plaintext, using: key)
             guard let combined = sealed.combined else {
-                throw ProfileEncryptionError.encryptionFailed("AES-GCM seal returned no combined payload.")
+                throw ProfileEncryptionError.encryptionFailed(
+                    String(localized: "AES-GCM seal returned no combined payload.")
+                )
             }
             return EncryptedProfilesEnvelope(payload: combined)
         } catch let error as ProfileEncryptionError {
@@ -111,7 +113,7 @@ final class ProfileEncryptionService: @unchecked Sendable {
     private func requireMasterKey() throws -> SymmetricKey {
         guard let existing = try keychain.loadKeyData(account: Self.masterKeyAccount) else {
             throw ProfileEncryptionError.decryptionFailed(
-                "Master encryption key is missing from Keychain."
+                String(localized: "Master encryption key is missing from Keychain.")
             )
         }
         return SymmetricKey(data: existing)

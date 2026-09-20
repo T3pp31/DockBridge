@@ -11,20 +11,23 @@ enum ConnectionStoreError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .readFailed(let message): "Failed to read connection profiles: \(message)"
-        case .writeFailed(let message): "Failed to save connection profiles: \(message)"
+        case .readFailed(let message):
+            return String(
+                format: String(localized: "Failed to read connection profiles: %@"),
+                message
+            )
+        case .writeFailed(let message):
+            return String(
+                format: String(localized: "Failed to save connection profiles: %@"),
+                message
+            )
         case .corruptEncryptedStore:
-            """
-            Connection profiles could not be decrypted. The encrypted store or its Keychain \
-            master key may be corrupt. Remove ~/Library/Application Support/DockBridge/profiles.json \
-            and recreate profiles, or restore both profiles.json and Keychain items from backup.
-            """
+            return String(localized: "Connection profiles could not be decrypted. The encrypted store or its Keychain master key may be corrupt. Remove ~/Library/Application Support/DockBridge/profiles.json and recreate profiles, or restore both profiles.json and Keychain items from backup.")
         case .incompatibleSchema(let message):
-            """
-            Connection profiles were created by a newer version of DockBridge and \
-            cannot be read by this build. Update the app instead of deleting profiles.json.
-            (\(message))
-            """
+            return String(
+                format: String(localized: "Connection profiles were created by a newer version of DockBridge and cannot be read by this build. Update the app instead of deleting profiles.json. (%@)"),
+                message
+            )
         }
     }
 }
@@ -206,7 +209,9 @@ final class ConnectionStore: @unchecked Sendable {
             }
         }
 
-        throw ConnectionStoreError.readFailed("Unsupported profiles.json format.")
+        throw ConnectionStoreError.readFailed(
+            String(localized: "Unsupported profiles.json format.")
+        )
     }
 
     /// Copies `profiles.json` to `profiles.json.bak-<timestamp>` when the file

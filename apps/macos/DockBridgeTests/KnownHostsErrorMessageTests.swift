@@ -4,7 +4,10 @@ import XCTest
 final class KnownHostsErrorMessageTests: XCTestCase {
     func testSessionClosedErrorMessageIsUserFriendly() {
         let message = DockBridgeError.friendlyMessage(for: "failed to upload: session closed")
-        XCTAssertTrue(message.contains("closed"))
+        XCTAssertEqual(
+            message,
+            String(localized: "The connection was closed. Reconnect and try again.")
+        )
     }
 
     func testConnectionLostMessageDetection() {
@@ -36,25 +39,29 @@ final class KnownHostsErrorMessageTests: XCTestCase {
     }
 
     func testConnectionStatusTitles() {
-        XCTAssertEqual(ConnectionStatus.disconnected.statusTitle, "Disconnected")
-        XCTAssertEqual(
-            ConnectionStatus.connected(endpoint: "user@host:22").statusTitle,
-            "Connected: user@host:22"
-        )
+        // The title is localized; assert the state transition is reflected
+        // rather than a specific language string.
+        XCTAssertFalse(ConnectionStatus.disconnected.statusTitle.isEmpty)
+        let connectedTitle = ConnectionStatus.connected(endpoint: "user@host:22").statusTitle
+        XCTAssertFalse(connectedTitle.isEmpty)
+        XCTAssertTrue(connectedTitle.contains("user@host:22"))
     }
 
     func testPermissionDeniedErrorMessageMentionsRemoteDirectory() {
         let message = DockBridgeError.friendlyMessage(for: "failed to upload: permission denied")
-        XCTAssertTrue(message.lowercased().contains("remote"))
+        XCTAssertEqual(
+            message,
+            String(localized: "You do not have write permission on the remote side. Check the remote working directory.")
+        )
     }
 
     func testCorruptedKnownHostsErrorMessageIsUserFriendly() {
         let raw = "failed to read known hosts store at /tmp/known_hosts.json: missing field `entries`"
-        let message = DockBridgeError.friendlyMessage(for: raw).lowercased()
+        let message = DockBridgeError.friendlyMessage(for: raw)
 
-        XCTAssertTrue(
-            message.contains("known hosts") || message.contains("host key"),
-            "Expected known hosts guidance, got: \(message)"
+        XCTAssertEqual(
+            message,
+            String(localized: "Unable to load the host key store. Quit the app, back up or remove known_hosts.json, then reconnect.")
         )
     }
 
@@ -62,31 +69,41 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         let message = DockBridgeError.friendlyMessage(
             for: "failed to create directory '/home/demo': Permission denied"
         )
-        XCTAssertTrue(message.lowercased().contains("remote"))
-        XCTAssertTrue(message.lowercased().contains("working directory"))
+        XCTAssertEqual(
+            message,
+            String(localized: "You do not have write permission on the remote side. Check the remote working directory.")
+        )
     }
 
     func testUploadNoSuchFileErrorMessageMentionsRemoteDirectory() {
         let message = DockBridgeError.friendlyMessage(
             for: "failed to upload '/tmp/file.pdf' to '/home/demo/file.pdf': No such file: No such file"
         )
-        XCTAssertTrue(message.lowercased().contains("remote"))
-        XCTAssertTrue(message.lowercased().contains("destination"))
+        XCTAssertEqual(
+            message,
+            String(localized: "The remote destination directory does not exist. Open a valid directory in the remote pane and try again.")
+        )
     }
 
     func testHostKeyRejectedErrorMessageIsUserFriendly() {
         let message = DockBridgeError.friendlyMessage(
             for: "host key rejected by user for example.com:22"
         )
-        XCTAssertEqual(message, "Connection aborted because the host key was not approved.")
+        XCTAssertEqual(
+            message,
+            String(localized: "Connection aborted because the host key was not approved.")
+        )
     }
 
     func testAuthenticationRejectedErrorIsNotMappedToHostKeyMessage() {
         let message = DockBridgeError.friendlyMessage(
             for: "connection rejected: authentication failed for user 'demo'"
         )
-        XCTAssertTrue(message.lowercased().contains("username") || message.lowercased().contains("password"))
-        XCTAssertFalse(message.lowercased().contains("host key"))
+        XCTAssertEqual(message, String(localized: "Check the username and password."))
+        XCTAssertNotEqual(
+            message,
+            String(localized: "Connection aborted because the host key was not approved.")
+        )
     }
 
     func testAuthenticationMessageDetectionUsesRawBridgeTokens() {
@@ -121,7 +138,10 @@ final class KnownHostsErrorMessageTests: XCTestCase {
             message: "authentication failed for user 'demo'"
         )
         XCTAssertTrue(error.isAuthenticationFailure)
-        XCTAssertEqual(error.dockBridgeUserMessage, "Check the username and password.")
+        XCTAssertEqual(
+            error.dockBridgeUserMessage,
+            String(localized: "Check the username and password.")
+        )
 
         let keyError = DockBridgeError.Generic(
             message: "failed to load private key from /tmp/key: decrypt failed"
@@ -134,7 +154,10 @@ final class KnownHostsErrorMessageTests: XCTestCase {
 final class ErrorRecoveryKindTests: XCTestCase {
     func testAuthMessagesMapToEditConnection() {
         XCTAssertEqual(
-            MainViewModel.recoveryKind(for: "Check the username and password.", isDisconnected: false),
+            MainViewModel.recoveryKind(
+                for: String(localized: "Check the username and password."),
+                isDisconnected: false
+            ),
             .editConnection
         )
         XCTAssertEqual(
@@ -175,7 +198,10 @@ final class ErrorRecoveryKindTests: XCTestCase {
 
     func testDisconnectedMapsToReconnect() {
         XCTAssertEqual(
-            MainViewModel.recoveryKind(for: "The connection was closed. Reconnect and try again.", isDisconnected: true),
+            MainViewModel.recoveryKind(
+                for: String(localized: "The connection was closed. Reconnect and try again."),
+                isDisconnected: true
+            ),
             .reconnect
         )
     }

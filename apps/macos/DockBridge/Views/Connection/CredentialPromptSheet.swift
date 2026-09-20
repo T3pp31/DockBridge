@@ -16,14 +16,14 @@ struct CredentialPromptSheet: View {
 
             SecureField(fieldLabel, text: $credential.text)
 
-            Toggle("Save in Keychain", isOn: $saveToKeychain)
+            Toggle(String(localized: "Save in Keychain"), isOn: $saveToKeychain)
         } footer: {
-            Button("Cancel", role: .cancel) {
+            Button(String(localized: "Cancel"), role: .cancel) {
                 credential.clear()
                 onCancel()
             }
             .keyboardShortcut(.cancelAction)
-            Button("Connect") {
+            Button(String(localized: "Connect")) {
                 let text = credential.text
                 credential.clear()
                 onConfirm(text, saveToKeychain)
@@ -36,27 +36,29 @@ struct CredentialPromptSheet: View {
     private var title: String {
         switch kind {
         case .password:
-            return "Enter Password"
+            return String(localized: "Enter Password")
         case .passphrase:
-            return "Enter Passphrase"
+            return String(localized: "Enter Passphrase")
         }
     }
 
     private var fieldLabel: String {
         switch kind {
         case .password:
-            return "Password"
+            return String(localized: "Password")
         case .passphrase:
-            return "Passphrase"
+            return String(localized: "Passphrase")
         }
     }
 
     private var message: String {
         switch kind {
         case .password:
-            return "Enter the password for \"\(profileName)\"."
+            let format = String(localized: "Enter the password for \"%@\".")
+            return String(format: format, profileName)
         case .passphrase:
-            return "Enter the passphrase for the private key on \"\(profileName)\"."
+            let format = String(localized: "Enter the passphrase for the private key on \"%@\".")
+            return String(format: format, profileName)
         }
     }
 }

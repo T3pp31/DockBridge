@@ -185,6 +185,9 @@ jobs:
       - name: Generate UniFFI bindings
         run: ./scripts/generate-uniffi.sh
 
+      - name: Verify localization catalog (en + ja)
+        run: ./scripts/verify-localization.sh
+
       - name: Build x86_64 (Intel) Rust static library
         run: |
           rustup target add x86_64-apple-darwin

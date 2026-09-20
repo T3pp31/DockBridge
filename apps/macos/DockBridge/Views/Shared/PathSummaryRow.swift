@@ -27,7 +27,7 @@ struct PathSummaryRow<Actions: View>: View {
                 } label: {
                     Image(systemName: "doc.on.doc")
                 }
-                .help("Copy path")
+                .help(String(localized: "Copy path"))
 
                 if showRevealInFinder {
                     Button {
@@ -35,7 +35,7 @@ struct PathSummaryRow<Actions: View>: View {
                     } label: {
                         Image(systemName: "folder")
                     }
-                    .help("Reveal in Finder")
+                    .help(String(localized: "Reveal in Finder"))
                 }
             }
         }

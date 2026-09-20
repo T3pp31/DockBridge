@@ -104,7 +104,7 @@ final class ConnectionListViewModel: ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.prompt = "Import"
+        panel.prompt = String(localized: "Import")
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         let readResult = await Task.detached(priority: .userInitiated) {
@@ -117,7 +117,11 @@ final class ConnectionListViewModel: ObservableObject {
         }.value
 
         guard let contents = readResult.contents else {
-            errorMessage = "Could not read SSH config file: \(readResult.error ?? "Unknown error")"
+            let format = String(localized: "Could not read SSH config file: %@")
+            errorMessage = String(
+                format: format,
+                readResult.error ?? String(localized: "Unknown error")
+            )
             return
         }
         importSSHConfig(contents: contents)
@@ -131,7 +135,7 @@ final class ConnectionListViewModel: ObservableObject {
 
         let hosts = SSHConfigParser.parse(contents)
         guard !hosts.isEmpty else {
-            errorMessage = "No importable Host blocks found. Match and Include sections are not expanded."
+            errorMessage = String(localized: "No importable Host blocks found. Match and Include sections are not expanded.")
             return
         }
 
@@ -155,7 +159,8 @@ final class ConnectionListViewModel: ObservableObject {
         }
 
         guard !added.isEmpty else {
-            importResultMessage = "No profiles were imported; all \(skipped.count) host alias(es) already exist."
+            let format = String(localized: "No profiles were imported; all %lld host alias(es) already exist.")
+            importResultMessage = String(format: format, Int64(skipped.count))
             return
         }
 
@@ -164,15 +169,27 @@ final class ConnectionListViewModel: ObservableObject {
             profiles = updated
             selectedProfileID = added.first?.id
 
-            var result = "Imported \(added.count) profile(s)."
+            var resultParts = [
+                String(
+                    format: String(localized: "Imported %lld profile(s)."),
+                    Int64(added.count)
+                ),
+            ]
             if let firstSkipped = skipped.first {
-                result += " Skipped \(skipped.count) existing alias(es), including \(firstSkipped)."
+                resultParts.append(String(
+                    format: String(localized: "Skipped %lld existing alias(es), including %@."),
+                    Int64(skipped.count),
+                    firstSkipped
+                ))
             }
             let privateKeyCount = added.filter { $0.authType == .privateKey }.count
             if privateKeyCount > 0 {
-                result += " Open each of the \(privateKeyCount) private-key profile(s) and use Browse… to grant file access."
+                resultParts.append(String(
+                    format: String(localized: "Open each of the %lld private-key profile(s) and use Browse… to grant file access."),
+                    Int64(privateKeyCount)
+                ))
             }
-            importResultMessage = result
+            importResultMessage = resultParts.joined(separator: " ")
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -184,9 +201,7 @@ final class ConnectionListViewModel: ObservableObject {
 
     func save(_ profile: ConnectionProfile, password: String?, passphrase: String?) {
         if profile.requiresPrivateKeyBookmark, !profile.hasPrivateKeyBookmark {
-            errorMessage = """
-            Select the private key with Browse…. A security-scoped bookmark is required.
-            """
+            errorMessage = String(localized: "Select the private key with Browse…. A security-scoped bookmark is required.")
             return
         }
 
@@ -501,9 +516,7 @@ final class ConnectionListViewModel: ObservableObject {
         do {
             if profile.authType == .privateKey {
                 guard let bookmark = profile.privateKeyBookmark else {
-                    errorMessage = """
-                    Access to the private key was denied. Open the connection settings and use Browse… to select the key again.
-                    """
+                    errorMessage = String(localized: "Access to the private key was denied. Open the connection settings and use Browse… to select the key again.")
                     return
                 }
 

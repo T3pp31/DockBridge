@@ -8,13 +8,18 @@ enum ProfileTrustStoreError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .readFailed(let message): "Failed to read trusted profile endpoints: \(message)"
-        case .writeFailed(let message): "Failed to save trusted profile endpoints: \(message)"
+        case .readFailed(let message):
+            return String(
+                format: String(localized: "Failed to read trusted profile endpoints: %@"),
+                message
+            )
+        case .writeFailed(let message):
+            return String(
+                format: String(localized: "Failed to save trusted profile endpoints: %@"),
+                message
+            )
         case .verificationFailed:
-            """
-            Trusted profile endpoints failed integrity verification. \
-            Re-confirm trust for your connection profiles.
-            """
+            return String(localized: "Trusted profile endpoints failed integrity verification. Re-confirm trust for your connection profiles.")
         }
     }
 }
@@ -201,7 +206,9 @@ final class ProfileTrustStore: @unchecked Sendable {
             return endpoints
         }
 
-        throw ProfileTrustStoreError.readFailed("Unrecognized trusted endpoints file format.")
+        throw ProfileTrustStoreError.readFailed(
+            String(localized: "Unrecognized trusted endpoints file format.")
+        )
     }
 
     private func parseEndpointRecords(

@@ -12,9 +12,9 @@ enum TransferOverwritePolicy: String, Codable, CaseIterable, Sendable {
 
     var label: String {
         switch self {
-        case .replace: return "Replace"
-        case .failIfExists: return "Fail if exists"
-        case .ask: return "Ask"
+        case .replace: return String(localized: "Replace")
+        case .failIfExists: return String(localized: "Fail if exists")
+        case .ask: return String(localized: "Ask")
         }
     }
 }

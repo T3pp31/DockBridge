@@ -67,7 +67,13 @@ final class ConnectionListViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.profiles.count, 2)
         XCTAssertEqual(try store.loadProfiles().count, 2)
-        XCTAssertTrue(viewModel.importResultMessage?.contains("No profiles were imported") == true)
+        XCTAssertEqual(
+            viewModel.importResultMessage,
+            String(
+                format: String(localized: "No profiles were imported; all %lld host alias(es) already exist."),
+                Int64(1)
+            )
+        )
         XCTAssertNil(viewModel.errorMessage)
     }
 
@@ -82,7 +88,17 @@ final class ConnectionListViewModelTests: XCTestCase {
         XCTAssertEqual(imported.authType, .privateKey)
         XCTAssertEqual(imported.privateKeyPath, NSHomeDirectory() + "/.ssh/id_ed25519")
         XCTAssertNil(imported.privateKeyBookmark)
-        XCTAssertTrue(viewModel.importResultMessage?.contains("Browse…") == true)
+        let expectedImportResult = [
+            String(
+                format: String(localized: "Imported %lld profile(s)."),
+                Int64(1)
+            ),
+            String(
+                format: String(localized: "Open each of the %lld private-key profile(s) and use Browse… to grant file access."),
+                Int64(1)
+            ),
+        ].joined(separator: " ")
+        XCTAssertEqual(viewModel.importResultMessage, expectedImportResult)
 
         let persisted = try XCTUnwrap(store.loadProfiles().first)
         XCTAssertEqual(persisted.authType, .privateKey)
