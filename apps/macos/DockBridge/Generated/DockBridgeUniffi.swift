@@ -606,15 +606,34 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
     
     func delete(sessionId: UInt64, remotePath: String) throws 
     
+    /**
+     * Deletes a remote entry, optionally recursing into directories.
+     *
+     * Returns the number of entries removed. Distinguishes between files,
+     * symlinks (removed as links) and directories (recursively removed when
+     * `recursive` is true, otherwise rejected when not empty).
+     */
+    func deleteEntry(sessionId: UInt64, remotePath: String, recursive: Bool) throws  -> UInt64
+    
     func disconnect(sessionId: UInt64) throws 
     
-    func download(sessionId: UInt64, remotePath: String, localPath: String) throws 
+    func download(sessionId: UInt64, remotePath: String, localPath: String, overwritePolicy: TransferOverwritePolicyRecord) throws 
     
-    func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String) throws 
+    func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws 
     
     func getInitialDirectory(sessionId: UInt64) throws  -> String
     
     func getTransferQueue()  -> [TransferTaskRecord]
+    
+    func knownHostsEntries()  -> [KnownHostEntryRecord]
+    
+    func knownHostsRemove(host: String, port: UInt16) throws  -> Bool
+    
+    func knownHostsRepairPermissions() throws 
+    
+    func knownHostsReset(backup: Bool) throws 
+    
+    func knownHostsStatus()  -> KnownHostsStatusRecord
     
     func listDirectory(sessionId: UInt64, path: String) throws  -> [RemoteFileRecord]
     
@@ -641,9 +660,9 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
      */
     func stat(sessionId: UInt64, path: String, followSymlinks: Bool) throws  -> RemoteFileRecord
     
-    func upload(sessionId: UInt64, localPath: String, remotePath: String) throws 
+    func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord) throws 
     
-    func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String) throws 
+    func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws 
     
 }
 /**
@@ -768,6 +787,25 @@ open func delete(sessionId: UInt64, remotePath: String)throws   {try rustCallWit
 }
 }
     
+    /**
+     * Deletes a remote entry, optionally recursing into directories.
+     *
+     * Returns the number of entries removed. Distinguishes between files,
+     * symlinks (removed as links) and directories (recursively removed when
+     * `recursive` is true, otherwise rejected when not empty).
+     */
+open func deleteEntry(sessionId: UInt64, remotePath: String, recursive: Bool)throws  -> UInt64  {
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_delete_entry(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterString.lower(remotePath),
+        FfiConverterBool.lower(recursive),uniffiCallStatus
+    )
+})
+}
+    
 open func disconnect(sessionId: UInt64)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_disconnect(
@@ -777,24 +815,26 @@ open func disconnect(sessionId: UInt64)throws   {try rustCallWithError(FfiConver
 }
 }
     
-open func download(sessionId: UInt64, remotePath: String, localPath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+open func download(sessionId: UInt64, remotePath: String, localPath: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(remotePath),
-        FfiConverterString.lower(localPath),uniffiCallStatus
+        FfiConverterString.lower(localPath),
+        FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
 }
 }
     
-open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download_entry(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(remotePath),
-        FfiConverterString.lower(localDirectory),uniffiCallStatus
+        FfiConverterString.lower(localDirectory),
+        FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
 }
 }
@@ -813,6 +853,52 @@ open func getTransferQueue() -> [TransferTaskRecord]  {
     return try!  FfiConverterSequenceTypeTransferTaskRecord.lift(try! rustCall() {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_get_transfer_queue(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func knownHostsEntries() -> [KnownHostEntryRecord]  {
+    return try!  FfiConverterSequenceTypeKnownHostEntryRecord.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_known_hosts_entries(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func knownHostsRemove(host: String, port: UInt16)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_known_hosts_remove(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(host),
+        FfiConverterUInt16.lower(port),uniffiCallStatus
+    )
+})
+}
+    
+open func knownHostsRepairPermissions()throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_known_hosts_repair_permissions(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+    
+open func knownHostsReset(backup: Bool)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_known_hosts_reset(
+            self.uniffiCloneHandle(),
+        FfiConverterBool.lower(backup),uniffiCallStatus
+    )
+}
+}
+    
+open func knownHostsStatus() -> KnownHostsStatusRecord  {
+    return try!  FfiConverterTypeKnownHostsStatusRecord_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_known_hosts_status(
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
@@ -897,24 +983,26 @@ open func stat(sessionId: UInt64, path: String, followSymlinks: Bool)throws  -> 
 })
 }
     
-open func upload(sessionId: UInt64, localPath: String, remotePath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+open func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(localPath),
-        FfiConverterString.lower(remotePath),uniffiCallStatus
+        FfiConverterString.lower(remotePath),
+        FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
 }
 }
     
-open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload_entry(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(localPath),
-        FfiConverterString.lower(remoteDirectory),uniffiCallStatus
+        FfiConverterString.lower(remoteDirectory),
+        FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
 }
 }
@@ -975,6 +1063,9 @@ public struct AppConfigRecord: Equatable, Hashable {
     public var sessionHealthCheckIntervalSecs: UInt64
     public var transferRetryCount: UInt32
     public var transferChunkSizeBytes: UInt64
+    public var transferDownloadPipelineDepth: UInt64
+    public var sshInactivityTimeoutSecs: UInt64?
+    public var sshKeepaliveIntervalSecs: UInt64
     public var knownHostsPath: String
     public var opensshKnownHostsPath: String
     public var mergeOpensshKnownHostsOnConnect: Bool
@@ -986,11 +1077,14 @@ public struct AppConfigRecord: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool, knownHostsStrictMode: Bool, failConnectOnOpensshMergeError: Bool, directoryWalkMaxFiles: UInt64, directoryWalkMaxDepth: UInt32, directoryWalkMaxTotalBytes: UInt64) {
+    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, transferDownloadPipelineDepth: UInt64, sshInactivityTimeoutSecs: UInt64?, sshKeepaliveIntervalSecs: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool, knownHostsStrictMode: Bool, failConnectOnOpensshMergeError: Bool, directoryWalkMaxFiles: UInt64, directoryWalkMaxDepth: UInt32, directoryWalkMaxTotalBytes: UInt64) {
         self.connectionTimeoutSecs = connectionTimeoutSecs
         self.sessionHealthCheckIntervalSecs = sessionHealthCheckIntervalSecs
         self.transferRetryCount = transferRetryCount
         self.transferChunkSizeBytes = transferChunkSizeBytes
+        self.transferDownloadPipelineDepth = transferDownloadPipelineDepth
+        self.sshInactivityTimeoutSecs = sshInactivityTimeoutSecs
+        self.sshKeepaliveIntervalSecs = sshKeepaliveIntervalSecs
         self.knownHostsPath = knownHostsPath
         self.opensshKnownHostsPath = opensshKnownHostsPath
         self.mergeOpensshKnownHostsOnConnect = mergeOpensshKnownHostsOnConnect
@@ -1021,6 +1115,9 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
                 sessionHealthCheckIntervalSecs: FfiConverterUInt64.read(from: &buf), 
                 transferRetryCount: FfiConverterUInt32.read(from: &buf), 
                 transferChunkSizeBytes: FfiConverterUInt64.read(from: &buf), 
+                transferDownloadPipelineDepth: FfiConverterUInt64.read(from: &buf), 
+                sshInactivityTimeoutSecs: FfiConverterOptionUInt64.read(from: &buf), 
+                sshKeepaliveIntervalSecs: FfiConverterUInt64.read(from: &buf), 
                 knownHostsPath: FfiConverterString.read(from: &buf), 
                 opensshKnownHostsPath: FfiConverterString.read(from: &buf), 
                 mergeOpensshKnownHostsOnConnect: FfiConverterBool.read(from: &buf), 
@@ -1037,6 +1134,9 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.sessionHealthCheckIntervalSecs, into: &buf)
         FfiConverterUInt32.write(value.transferRetryCount, into: &buf)
         FfiConverterUInt64.write(value.transferChunkSizeBytes, into: &buf)
+        FfiConverterUInt64.write(value.transferDownloadPipelineDepth, into: &buf)
+        FfiConverterOptionUInt64.write(value.sshInactivityTimeoutSecs, into: &buf)
+        FfiConverterUInt64.write(value.sshKeepaliveIntervalSecs, into: &buf)
         FfiConverterString.write(value.knownHostsPath, into: &buf)
         FfiConverterString.write(value.opensshKnownHostsPath, into: &buf)
         FfiConverterBool.write(value.mergeOpensshKnownHostsOnConnect, into: &buf)
@@ -1191,6 +1291,140 @@ public func FfiConverterTypeHostKeyChallenge_lift(_ buf: RustBuffer) throws -> H
 #endif
 public func FfiConverterTypeHostKeyChallenge_lower(_ value: HostKeyChallenge) -> RustBuffer {
     return FfiConverterTypeHostKeyChallenge.lower(value)
+}
+
+
+/**
+ * A host identifier attached to a trusted key entry.
+ */
+public struct KnownHostAliasRecord: Equatable, Hashable {
+    public var host: String
+    public var port: UInt16
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(host: String, port: UInt16) {
+        self.host = host
+        self.port = port
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension KnownHostAliasRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeKnownHostAliasRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KnownHostAliasRecord {
+        return
+            try KnownHostAliasRecord(
+                host: FfiConverterString.read(from: &buf), 
+                port: FfiConverterUInt16.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: KnownHostAliasRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.host, into: &buf)
+        FfiConverterUInt16.write(value.port, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKnownHostAliasRecord_lift(_ buf: RustBuffer) throws -> KnownHostAliasRecord {
+    return try FfiConverterTypeKnownHostAliasRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKnownHostAliasRecord_lower(_ value: KnownHostAliasRecord) -> RustBuffer {
+    return FfiConverterTypeKnownHostAliasRecord.lower(value)
+}
+
+
+/**
+ * Snapshot of a stored host key entry exposed to Swift.
+ */
+public struct KnownHostEntryRecord: Equatable, Hashable {
+    public var host: String
+    public var port: UInt16
+    public var fingerprintSha256: String
+    public var algorithm: String
+    public var aliases: [KnownHostAliasRecord]
+    public var excludedAliases: [KnownHostAliasRecord]
+    public var publicKeyOpenssh: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(host: String, port: UInt16, fingerprintSha256: String, algorithm: String, aliases: [KnownHostAliasRecord], excludedAliases: [KnownHostAliasRecord], publicKeyOpenssh: String?) {
+        self.host = host
+        self.port = port
+        self.fingerprintSha256 = fingerprintSha256
+        self.algorithm = algorithm
+        self.aliases = aliases
+        self.excludedAliases = excludedAliases
+        self.publicKeyOpenssh = publicKeyOpenssh
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension KnownHostEntryRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeKnownHostEntryRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KnownHostEntryRecord {
+        return
+            try KnownHostEntryRecord(
+                host: FfiConverterString.read(from: &buf), 
+                port: FfiConverterUInt16.read(from: &buf), 
+                fingerprintSha256: FfiConverterString.read(from: &buf), 
+                algorithm: FfiConverterString.read(from: &buf), 
+                aliases: FfiConverterSequenceTypeKnownHostAliasRecord.read(from: &buf), 
+                excludedAliases: FfiConverterSequenceTypeKnownHostAliasRecord.read(from: &buf), 
+                publicKeyOpenssh: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: KnownHostEntryRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.host, into: &buf)
+        FfiConverterUInt16.write(value.port, into: &buf)
+        FfiConverterString.write(value.fingerprintSha256, into: &buf)
+        FfiConverterString.write(value.algorithm, into: &buf)
+        FfiConverterSequenceTypeKnownHostAliasRecord.write(value.aliases, into: &buf)
+        FfiConverterSequenceTypeKnownHostAliasRecord.write(value.excludedAliases, into: &buf)
+        FfiConverterOptionString.write(value.publicKeyOpenssh, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKnownHostEntryRecord_lift(_ buf: RustBuffer) throws -> KnownHostEntryRecord {
+    return try FfiConverterTypeKnownHostEntryRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKnownHostEntryRecord_lower(_ value: KnownHostEntryRecord) -> RustBuffer {
+    return FfiConverterTypeKnownHostEntryRecord.lower(value)
 }
 
 
@@ -1549,6 +1783,78 @@ public func FfiConverterTypeDockBridgeError_lower(_ value: DockBridgeError) -> R
 
 
 /**
+ * Health of the known hosts trust store exposed to Swift.
+ */
+
+public enum KnownHostsStatusRecord: Equatable, Hashable {
+    
+    case available
+    case unavailable(reason: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension KnownHostsStatusRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeKnownHostsStatusRecord: FfiConverterRustBuffer {
+    typealias SwiftType = KnownHostsStatusRecord
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KnownHostsStatusRecord {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .available
+        
+        case 2: return .unavailable(reason: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: KnownHostsStatusRecord, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .available:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .unavailable(reason):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(reason, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKnownHostsStatusRecord_lift(_ buf: RustBuffer) throws -> KnownHostsStatusRecord {
+    return try FfiConverterTypeKnownHostsStatusRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKnownHostsStatusRecord_lower(_ value: KnownHostsStatusRecord) -> RustBuffer {
+    return FfiConverterTypeKnownHostsStatusRecord.lower(value)
+}
+
+
+
+/**
  * Private key algorithm classification exposed to Swift.
  */
 
@@ -1699,6 +2005,75 @@ public func FfiConverterTypeTransferDirectionRecord_lift(_ buf: RustBuffer) thro
 #endif
 public func FfiConverterTypeTransferDirectionRecord_lower(_ value: TransferDirectionRecord) -> RustBuffer {
     return FfiConverterTypeTransferDirectionRecord.lower(value)
+}
+
+
+
+/**
+ * Policy applied when the transfer destination already exists.
+ */
+
+public enum TransferOverwritePolicyRecord: Equatable, Hashable {
+    
+    case replace
+    case failIfExists
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension TransferOverwritePolicyRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTransferOverwritePolicyRecord: FfiConverterRustBuffer {
+    typealias SwiftType = TransferOverwritePolicyRecord
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TransferOverwritePolicyRecord {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .replace
+        
+        case 2: return .failIfExists
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: TransferOverwritePolicyRecord, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .replace:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .failIfExists:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTransferOverwritePolicyRecord_lift(_ buf: RustBuffer) throws -> TransferOverwritePolicyRecord {
+    return try FfiConverterTypeTransferOverwritePolicyRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTransferOverwritePolicyRecord_lower(_ value: TransferOverwritePolicyRecord) -> RustBuffer {
+    return FfiConverterTypeTransferOverwritePolicyRecord.lower(value)
 }
 
 
@@ -2196,6 +2571,56 @@ fileprivate struct FfiConverterOptionTypeSecretCredential: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeKnownHostAliasRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [KnownHostAliasRecord]
+
+    public static func write(_ value: [KnownHostAliasRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeKnownHostAliasRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [KnownHostAliasRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [KnownHostAliasRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeKnownHostAliasRecord.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeKnownHostEntryRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [KnownHostEntryRecord]
+
+    public static func write(_ value: [KnownHostEntryRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeKnownHostEntryRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [KnownHostEntryRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [KnownHostEntryRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeKnownHostEntryRecord.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeRemoteFileRecord: FfiConverterRustBuffer {
     typealias SwiftType = [RemoteFileRecord]
 
@@ -2328,19 +2753,37 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_delete() != 12825) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_delete_entry() != 1346) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_disconnect() != 49600) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download() != 30887) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download() != 36615) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download_entry() != 26836) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download_entry() != 18406) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_initial_directory() != 50950) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_transfer_queue() != 37741) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_known_hosts_entries() != 39105) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_known_hosts_remove() != 14958) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_known_hosts_repair_permissions() != 32218) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_known_hosts_reset() != 47583) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_known_hosts_status() != 51941) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_list_directory() != 32015) {
@@ -2361,10 +2804,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_stat() != 5879) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload() != 61017) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload() != 4786) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload_entry() != 59035) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload_entry() != 4078) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_constructor_dockbridgeclient_new() != 38617) {
