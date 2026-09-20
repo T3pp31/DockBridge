@@ -185,6 +185,13 @@ pub enum ConfigError {
         min: usize,
         max: usize,
     },
+
+    #[error("invalid value for {field} ({value}): {reason}")]
+    InvalidValue {
+        field: &'static str,
+        value: u64,
+        reason: &'static str,
+    },
 }
 
 impl AppError {
