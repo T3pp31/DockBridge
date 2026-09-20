@@ -53,7 +53,7 @@ resolve_sign_identity() {
 
 verify_signature() {
   echo "Verifying code signature..."
-  codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+  codesign --verify --strict --verbose=2 "$APP_PATH"
 }
 
 verify_gatekeeper() {
@@ -61,10 +61,35 @@ verify_gatekeeper() {
   spctl -a -vv -t execute "$APP_PATH"
 }
 
+sign_dmg() {
+  # Optional: sign and notarize the DMG as well so Gatekeeper accepts it when
+  # the user mounts the image. This is idempotent for local dev when the
+  # .app itself was already signed.
+  if [[ -n "${DMG_PATH:-}" && -f "$DMG_PATH" ]]; then
+    echo "Signing DMG ${DMG_PATH}..."
+    codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
+    codesign --verify --strict --verbose=2 "$DMG_PATH"
+    if [[ "$SKIP_NOTARIZATION" == "true" ]]; then
+      echo "SKIP_NOTARIZATION=true — verifying signature only; notarization and Gatekeeper validation skipped."
+      return
+    fi
+    echo "Notarizing DMG ${DMG_PATH}..."
+    xcrun notarytool submit "$DMG_PATH" \
+      --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" \
+      --wait
+    echo "Stapling DMG ${DMG_PATH}..."
+    xcrun stapler staple "$DMG_PATH"
+    spctl -a -vv -t open --context context:primary-signature "$DMG_PATH"
+  fi
+}
+
 SIGN_IDENTITY="$(resolve_sign_identity)"
 echo "Signing ${APP_PATH} with identity: ${SIGN_IDENTITY}"
 
-codesign --force --deep --options runtime \
+# --deep is deprecated by Apple; sign nested code (frameworks / helper
+# bundles) from the inside out when it is added. --timestamp is required by
+# notarization and keeps the signature valid after certificate expiry.
+codesign --force --timestamp --options runtime \
   --entitlements "$ENTITLEMENTS_PATH" \
   --sign "$SIGN_IDENTITY" \
   "$APP_PATH"
@@ -73,6 +98,7 @@ verify_signature
 
 if [[ "$SKIP_NOTARIZATION" == "true" ]]; then
   echo "SKIP_NOTARIZATION=true — skipping notarization."
+  sign_dmg
   exit 0
 fi
 
@@ -98,6 +124,8 @@ echo "Stapling notarization ticket..."
 xcrun stapler staple "$APP_PATH"
 
 verify_signature
+
+sign_dmg
 verify_gatekeeper
 
 echo "Sign and notarization complete: ${APP_PATH}"

@@ -606,6 +606,15 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
     
     func delete(sessionId: UInt64, remotePath: String) throws 
     
+    /**
+     * Deletes a remote entry, optionally recursing into directories.
+     *
+     * Returns the number of entries removed. Distinguishes between files,
+     * symlinks (removed as links) and directories (recursively removed when
+     * `recursive` is true, otherwise rejected when not empty).
+     */
+    func deleteEntry(sessionId: UInt64, remotePath: String, recursive: Bool) throws  -> UInt64
+    
     func disconnect(sessionId: UInt64) throws 
     
     func download(sessionId: UInt64, remotePath: String, localPath: String) throws 
@@ -747,6 +756,25 @@ open func delete(sessionId: UInt64, remotePath: String)throws   {try rustCallWit
         FfiConverterString.lower(remotePath),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * Deletes a remote entry, optionally recursing into directories.
+     *
+     * Returns the number of entries removed. Distinguishes between files,
+     * symlinks (removed as links) and directories (recursively removed when
+     * `recursive` is true, otherwise rejected when not empty).
+     */
+open func deleteEntry(sessionId: UInt64, remotePath: String, recursive: Bool)throws  -> UInt64  {
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_delete_entry(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterString.lower(remotePath),
+        FfiConverterBool.lower(recursive),uniffiCallStatus
+    )
+})
 }
     
 open func disconnect(sessionId: UInt64)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
@@ -2158,6 +2186,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_delete() != 12825) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_delete_entry() != 1346) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_disconnect() != 49600) {
