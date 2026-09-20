@@ -36,18 +36,22 @@ printf 'Port 2222\nListenAddress 127.0.0.1\nHostKey /tmp/sftpdemo/ssh_host_ed255
 sudo /usr/sbin/sshd -f /tmp/sftpdemo/sshd_config
 ```
 
-Then drive the CLI (it reads the password, then `yes` to trust the host key on first connect):
+Then drive the CLI. Host-key prompts are read from `/dev/tty` (never stdin), so use
+`--host-key-policy accept-new` to make the first connection non-interactive and keep
+stdin exclusively for the password:
 
 ```bash
-# password auth
-{ printf '%s\n' password yes; } | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
+# First connect: trust the new host key automatically; stdin carries only the password
+printf '%s\n' password | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
   upload --host 127.0.0.1 --port 2222 --user ubuntu --password-stdin \
+  --host-key-policy accept-new \
   --local ./file.txt --remote /home/ubuntu/upload/hello.txt
 
 # private-key auth (key-only servers): --identity expands ~; --passphrase-stdin unlocks encrypted keys
-{ printf '%s\n' "$KEY_PASSPHRASE" yes; } | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
+printf '%s\n' "$KEY_PASSPHRASE" | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
   list --host 127.0.0.1 --port 2222 --user ubuntu \
   --identity ~/.ssh/id_ed25519 --passphrase-stdin \
+  --host-key-policy accept-new \
   --path /home/ubuntu
 ```
 

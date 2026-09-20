@@ -709,6 +709,8 @@ dependencies = [
  "anyhow",
  "clap",
  "dockbridge-core",
+ "serde",
+ "serde_json",
  "serial_test",
  "tempfile",
  "tokio",

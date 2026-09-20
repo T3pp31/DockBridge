@@ -89,15 +89,24 @@ ensure_container() {
 
 host_key_reject() {
   prepare_config
-  { printf '%s\n' "$PASSWORD" "no"; } | "${CLI[@]}" list \
-    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin
+  # strict: an unknown host key must be rejected non-interactively, before any
+  # credential is consumed, and with the documented host-key exit code (3).
+  set +e
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy strict --path upload
+  local status=$?
+  set -e
+  [[ "$status" -eq 3 ]]
   test ! -s "$KNOWN_HOSTS"
 }
 
 host_key_accept() {
   prepare_config
-  { printf '%s\n' "$PASSWORD" "yes"; } | "${CLI[@]}" list \
-    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin
+  # accept-new: trust the unknown key non-interactively; stdin carries only $PASSWORD
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --path upload
   test -s "$KNOWN_HOSTS"
   grep -q '"entries"' "$KNOWN_HOSTS"
 }
@@ -108,15 +117,55 @@ host_key_no_reprompt() {
     --path upload >/dev/null
 }
 
+json_output() {
+  prepare_config
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --output json --path upload | \
+    python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d, list); assert d'
+}
+
+pwd_command() {
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" pwd \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new | grep -q '/'
+}
+
+mkdir_rename_delete() {
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" mkdir \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --remote "upload/rename-test"
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" rename \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --from "upload/rename-test" --to "upload/rename-test-2"
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" delete \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --remote "upload/rename-test-2"
+}
+
+recursive_upload_download() {
+  local tree="$WORKDIR/tree"
+  mkdir -p "$tree/sub"
+  echo one >"$tree/a.txt"
+  echo two >"$tree/sub/b.txt"
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" upload \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --local "$tree" --remote "upload" --recursive
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" download \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --remote "upload/tree" --local "$WORKDIR/dl" --recursive
+  cmp -s "$tree/a.txt" "$WORKDIR/dl/a.txt"
+  cmp -s "$tree/sub/b.txt" "$WORKDIR/dl/sub/b.txt"
+}
+
 private_key_auth_plain() {
   ensure_key
   prepare_config
   # Seed the store with the host key first so the actual key-only run below
-  # never needs an interactive host-key prompt. In this non-TTY CI pipe the
-  # "yes" answer to the host-key confirmation is supplied before the password.
-  { printf '%s\n' "$PASSWORD" "yes"; } | "${CLI[@]}" list \
+  # never needs an interactive host-key prompt.
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --path upload >/dev/null
+    --host-key-policy accept-new --path upload >/dev/null
   # Now authenticate with the key (host key already trusted)
   "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" \
@@ -134,6 +183,7 @@ private_key_auth_encrypted() {
 upload_file() {
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" upload \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new \
     --local "$LOCAL_FILE" --remote "$REMOTE_FILE"
 }
 
@@ -141,6 +191,7 @@ download_file() {
   rm -f "$DOWNLOAD_FILE"
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" download \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new \
     --remote "$REMOTE_FILE" --local "$DOWNLOAD_FILE"
   cmp -s "$LOCAL_FILE" "$DOWNLOAD_FILE"
 }
@@ -151,13 +202,18 @@ transfer_queue_states() {
 
 corrupted_known_hosts_errors() {
   prepare_config
-  { printf '%s\n' "$PASSWORD" "yes"; } | "${CLI[@]}" list \
-    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin >/dev/null
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new >/dev/null
   echo '{}' >"$KNOWN_HOSTS"
   local output
+  set +e
   output=$(printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    2>&1) && return 1
+    --host-key-policy accept-new 2>&1)
+  local status=$?
+  set -e
+  [[ "$status" -ne 0 ]]
   echo "$output" | grep -qi 'known hosts'
 }
 
@@ -184,9 +240,13 @@ main() {
   ensure_container
   prepare_config
 
-  check "host key reject does not persist trust" host_key_reject
+  check "host key reject does not persist trust (exit 3)" host_key_reject
   check "host key accept persists trusted entry" host_key_accept
   check "second connection skips host key prompt" host_key_no_reprompt
+  check "list --output json is parseable" json_output
+  check "pwd prints a remote path" pwd_command
+  check "mkdir/rename/delete round-trip" mkdir_rename_delete
+  check "recursive upload/download round-trip" recursive_upload_download
   check "private-key auth (plain key)" private_key_auth_plain
   check "private-key auth (encrypted key, --passphrase-stdin)" private_key_auth_encrypted
   check "upload succeeds" upload_file
