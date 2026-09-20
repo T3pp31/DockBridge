@@ -20,6 +20,8 @@ final class MainViewModel: ObservableObject {
         }
     }
     @Published private(set) var remoteItems: [RemoteFileRecord] = []
+    @Published var localFilter = ""
+    @Published var remoteFilter = ""
     @Published var selectedLocalItemIDs: Set<String> = []
     @Published var selectedRemoteItemIDs: Set<String> = []
 
@@ -155,12 +157,16 @@ final class MainViewModel: ObservableObject {
     @Published var renameText = ""
     @Published var showMkdirPrompt = false
     @Published var mkdirName = ""
-@Published var showOverwriteAsk = false
+    @Published var showOverwriteAsk = false
     @Published var overwriteAskDestination = ""
-    private var pendingTransferAction: (() async -> Bool)?
+    /// Continuation resumed when the user answers the overwrite sheet.
+    /// Replaces the previous single-slot `pendingTransferAction` so that a
+    /// batch loop pauses until the user decides, instead of overwriting the
+    /// pending action with the next colliding item.
+    private var overwriteAskContinuation: CheckedContinuation<Bool, Never>?
     @Published private(set) var pathBookmarks: [PathBookmark] = []
 
-    let bridge: RustBridgeService
+    let bridge: any RemoteBridging
     let connectionList: ConnectionListViewModel
     let transferQueue: TransferQueueViewModel
 
@@ -170,6 +176,7 @@ final class MainViewModel: ObservableObject {
     private var defaultLocalAccessURL: URL?
     private var pathBookmarkAccessURL: URL?
     private var localLoadGeneration = 0
+    @Published private(set) var isLoadingRemote = false
     private var remoteLoadGeneration = 0
     private var localHistory: PathNavigationHistory
     private var remoteHistory = PathNavigationHistory(current: "/")
@@ -190,7 +197,7 @@ final class MainViewModel: ObservableObject {
         settings: AppSettingsService = .shared,
         bookmarkService: SecurityScopedBookmarkService = .shared,
         pathBookmarkStore: PathBookmarkStore = .shared,
-        bridge: RustBridgeService,
+        bridge: any RemoteBridging,
         connectionList: ConnectionListViewModel,
         transferQueue: TransferQueueViewModel
     ) {
@@ -489,22 +496,32 @@ final class MainViewModel: ObservableObject {
     func reloadRemote() async {
         guard bridge.isConnected else {
             remoteItems = []
+            isLoadingRemote = false
             return
         }
 
         remoteLoadGeneration += 1
         let generation = remoteLoadGeneration
         let path = remotePath
+        isLoadingRemote = true
 
         do {
             let items = try await bridge.listDirectory(path: path)
             let filtered = items.filter { item in
                 RemotePath.pathMatchesEntry(parent: path, entryPath: item.path, name: item.name)
             }
-            guard generation == remoteLoadGeneration, path == remotePath else { return }
+            guard generation == remoteLoadGeneration, path == remotePath else {
+                isLoadingRemote = false
+                return
+            }
             remoteItems = filtered
+            isLoadingRemote = false
         } catch {
-            guard generation == remoteLoadGeneration else { return }
+            guard generation == remoteLoadGeneration else {
+                isLoadingRemote = false
+                return
+            }
+            isLoadingRemote = false
             errorMessage = error.dockBridgeUserMessage
             if error.isConnectionLost {
                 remoteItems = []
@@ -548,12 +565,22 @@ final class MainViewModel: ObservableObject {
         isApplyingNavigationHistory = !recordHistory
         remotePath = path
         isApplyingNavigationHistory = false
+        // Clear the previous directory's listing immediately so a user cannot
+        // act on stale rows while the new directory loads.
+        remoteItems = []
+        isLoadingRemote = true
     }
 
     var localTableItems: [LocalFileItem] {
         var items = localItems
         if canNavigateLocalUp {
             items.insert(LocalFileItem(parentOf: localPath), at: 0)
+        }
+        if !localFilter.isEmpty {
+            items = items.filter { item in
+                item.isParentDirectory
+                    || item.name.localizedCaseInsensitiveContains(localFilter)
+            }
         }
         return items
     }
@@ -562,6 +589,12 @@ final class MainViewModel: ObservableObject {
         var items = remoteItems
         if canNavigateRemoteUp, let parent = RemoteFileRecord.parentEntry(for: remotePath) {
             items.insert(parent, at: 0)
+        }
+        if !remoteFilter.isEmpty {
+            items = items.filter { item in
+                item.isParentDirectory
+                    || item.name.localizedCaseInsensitiveContains(remoteFilter)
+            }
         }
         return items
     }
@@ -670,17 +703,23 @@ final class MainViewModel: ObservableObject {
     }
 
     @discardableResult
-    func upload(localURL: URL, toRemoteDirectory: String) async -> Bool {
+    func upload(localURL: URL, toRemoteDirectory: String?) async -> Bool {
         guard bridge.isConnected else {
             errorMessage = "Not connected to a remote host."
             return false
         }
 
         let fileName = localURL.lastPathComponent
+        // Resolve the destination ONCE, before the transfer. `nil` means the
+        // currently displayed remote folder; `"/"` always means the root — it
+        // is NOT rewritten to the current folder (that caused `..`-row drops
+        // to land in the wrong directory). The resolved value is captured by
+        // the transfer closure, so a concurrent upload cannot overwrite it.
+        let normalizedDirectory: String
         let destinationPath: String
         do {
-            let directory = toRemoteDirectory == "/" ? remotePath : toRemoteDirectory
-            let normalizedDirectory = try RemotePath.normalize(directory)
+            let directory = toRemoteDirectory ?? remotePath
+            normalizedDirectory = try RemotePath.normalize(directory)
             destinationPath = RemotePath.join(normalizedDirectory, fileName)
         } catch {
             errorMessage = error.dockBridgeUserMessage
@@ -690,12 +729,15 @@ final class MainViewModel: ObservableObject {
         return await runTransferOrAsk(
             destinationPath: destinationPath,
             destinationSide: .remote
-        ) {
+        ) { overwritePolicy in
+            // do NOT call prepareRemoteWorkingDirectory() here: it rewrites
+            // `remotePath` (when browsing "/") and would change the target.
             do {
-                try await self.prepareRemoteWorkingDirectory()
-                let directory = toRemoteDirectory == "/" ? self.remotePath : toRemoteDirectory
-                let normalizedDirectory = try RemotePath.normalize(directory)
-                try await self.bridge.upload(localPath: localURL.path, remoteDirectory: normalizedDirectory)
+                try await self.bridge.upload(
+                    localPath: localURL.path,
+                    remoteDirectory: normalizedDirectory,
+                    overwritePolicy: overwritePolicy
+                )
                 await self.transferQueue.refresh()
                 await self.reloadRemote()
                 return true
@@ -719,12 +761,13 @@ final class MainViewModel: ObservableObject {
         return await runTransferOrAsk(
             destinationPath: destinationPath,
             destinationSide: .local
-        ) {
+        ) { overwritePolicy in
             do {
                 let normalizedRemotePath = try RemotePath.normalize(remotePath)
                 try await self.bridge.download(
                     remotePath: normalizedRemotePath,
-                    localDirectory: toLocalDirectory.path
+                    localDirectory: toLocalDirectory.path,
+                    overwritePolicy: overwritePolicy
                 )
                 await self.transferQueue.refresh()
                 self.reloadLocal()
@@ -738,18 +781,18 @@ final class MainViewModel: ObservableObject {
 
     func confirmOverwriteAsk() {
         showOverwriteAsk = false
-        let action = pendingTransferAction
-        pendingTransferAction = nil
+        let continuation = overwriteAskContinuation
+        overwriteAskContinuation = nil
         overwriteAskDestination = ""
-        if let action {
-            Task { _ = await action() }
-        }
+        continuation?.resume(returning: true)
     }
 
     func cancelOverwriteAsk() {
         showOverwriteAsk = false
-        pendingTransferAction = nil
+        let continuation = overwriteAskContinuation
+        overwriteAskContinuation = nil
         overwriteAskDestination = ""
+        continuation?.resume(returning: false)
     }
 
     /// Whether the transfer destination lives on the remote host or the local filesystem.
@@ -761,34 +804,36 @@ final class MainViewModel: ObservableObject {
     private func runTransferOrAsk(
         destinationPath: String,
         destinationSide: TransferDestinationSide,
-        perform: @escaping () async -> Bool
+        perform: @escaping (TransferOverwritePolicy) async -> Bool
     ) async -> Bool {
         let policy = settings.loadConfig().transferOverwritePolicy
 
         switch policy {
         case .replace:
             errorMessage = nil
-            return await perform()
+            return await perform(.replace)
 
         case .failIfExists:
-            // Pre-check only: UniFFI AppConfigRecord does not yet carry overwrite policy,
-            // so the Rust engine still uses Replace after the transfer starts.
             if await destinationExists(at: destinationPath, side: destinationSide) {
                 errorMessage = "A file already exists at the destination."
                 return false
             }
             errorMessage = nil
-            return await perform()
+            return await perform(.failIfExists)
 
         case .ask:
             if await destinationExists(at: destinationPath, side: destinationSide) {
                 overwriteAskDestination = destinationPath
-                pendingTransferAction = perform
                 showOverwriteAsk = true
-                return false
+                let replace = await withCheckedContinuation { continuation in
+                    overwriteAskContinuation = continuation
+                }
+                return replace ? await perform(.replace) : false
             }
             errorMessage = nil
-            return await perform()
+            // If a destination appears after the UI pre-check, fail safely
+            // instead of overwriting a file the user was never asked about.
+            return await perform(.failIfExists)
         }
     }
 
@@ -1015,5 +1060,14 @@ final class MainViewModel: ObservableObject {
     func revealTransferQueue() {
         shouldRevealTransferQueue = true
         errorMessage = nil
+    }
+
+    /// Resumes any pending overwrite confirmation so a batch transfer awaiting
+    /// user input does not hang when the view model is torn down.
+    deinit {
+        if let continuation = overwriteAskContinuation {
+            overwriteAskContinuation = nil
+            continuation.resume(returning: false)
+        }
     }
 }

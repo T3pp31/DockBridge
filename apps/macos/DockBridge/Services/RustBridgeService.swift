@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, ConnectionEventHandler {
+final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostKeyHandler, ConnectionEventHandler {
     @Published private(set) var connectionStatus: ConnectionStatus = .disconnected
     @Published private(set) var connectedProfileID: UUID?
     @Published private(set) var lastDisconnectReason: String?
@@ -67,14 +67,24 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
         password: String?,
         passphrase: String?
     ) async throws {
+        // Serialize connect attempts: if a connection is already in progress,
+        // reject the second call instead of letting two sessions race (the
+        // second one would orphan the first session id). The check and the
+        // status flip below are both synchronous on the main actor, so no
+        // interleaving can occur between them.
+        if connectionStatus.isConnecting {
+            throw DockBridgeError.Generic(message: "A connection is already in progress.")
+        }
+        connectionStatus = .connecting(endpoint: profile.endpointLabel)
+        lastDisconnectReason = nil
+
         try prepareClient()
         guard let client else {
+            connectionStatus = .disconnected
             throw DockBridgeError.Generic(message: "Rust client is not initialized.")
         }
 
         connectedProfileID = profile.id
-        connectionStatus = .connecting(endpoint: profile.endpointLabel)
-        lastDisconnectReason = nil
 
         var password = password
         var passphrase = passphrase
@@ -83,6 +93,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
             SensitiveString.clear(&passphrase)
         }
 
+        var newSessionIdForCatch: UInt64?
         do {
             var record = profile.toRecord(password: password, passphrase: passphrase)
             defer { record.clearCredentials() }
@@ -90,6 +101,7 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
             let newSessionId = try await Task.detached(priority: .userInitiated) {
                 try client.connect(profile: record)
             }.value
+            newSessionIdForCatch = newSessionId
 
             let rawInitialDirectory = try await Task.detached(priority: .userInitiated) {
                 try client.getInitialDirectory(sessionId: newSessionId)
@@ -103,11 +115,28 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
                 sessionId: newSessionId
             )
 
+            // If another connect() replaced `self.client` while we were
+            // awaiting (shouldn't happen with the in-progress guard above, but
+            // keep the invariant), tear down this session so it does not leak.
+            guard self.client === client else {
+                try? client.disconnect(sessionId: newSessionId)
+                return
+            }
+
             sessionId = newSessionId
+            newSessionIdForCatch = nil
             connectedUsername = profile.username
             initialRemoteDirectory = resolvedDirectory
             connectionStatus = .connected(endpoint: profile.endpointLabel)
         } catch {
+            // Best-effort teardown of the Rust session created by this connect
+            // attempt so its health-monitor task does not keep running. Only
+            // use `newSessionIdForCatch`: `sessionId` still refers to a
+            // previously established session, which must not be torn down here.
+            if let pendingSessionId = newSessionIdForCatch {
+                try? client.disconnect(sessionId: pendingSessionId)
+            }
+            sessionId = nil
             clearConnectionState()
             throw error
         }
@@ -146,25 +175,35 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
         return nil
     }
 
-    func upload(localPath: String, remoteDirectory: String) async throws {
+    func upload(
+        localPath: String,
+        remoteDirectory: String,
+        overwritePolicy: TransferOverwritePolicy
+    ) async throws {
+        let rustOverwritePolicy = overwritePolicy.rustRecord
         try await runOnBridge { client, sessionId in
             try client.uploadEntry(
                 sessionId: sessionId,
                 localPath: localPath,
                 remoteDirectory: remoteDirectory,
-                overwritePolicy: .replace
+                overwritePolicy: rustOverwritePolicy
             )
         }
         await refreshTransferQueue()
     }
 
-    func download(remotePath: String, localDirectory: String) async throws {
+    func download(
+        remotePath: String,
+        localDirectory: String,
+        overwritePolicy: TransferOverwritePolicy
+    ) async throws {
+        let rustOverwritePolicy = overwritePolicy.rustRecord
         try await runOnBridge { client, sessionId in
             try client.downloadEntry(
                 sessionId: sessionId,
                 remotePath: remotePath,
                 localDirectory: localDirectory,
-                overwritePolicy: .replace
+                overwritePolicy: rustOverwritePolicy
             )
         }
         await refreshTransferQueue()
@@ -368,6 +407,17 @@ final class RustBridgeService: NSObject, ObservableObject, HostKeyHandler, Conne
                 }
             }
             throw error
+        }
+    }
+}
+
+private extension TransferOverwritePolicy {
+    var rustRecord: TransferOverwritePolicyRecord {
+        switch self {
+        case .replace, .ask:
+            return .replace
+        case .failIfExists:
+            return .failIfExists
         }
     }
 }
