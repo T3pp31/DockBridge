@@ -674,17 +674,23 @@ final class MainViewModel: ObservableObject {
     }
 
     @discardableResult
-    func upload(localURL: URL, toRemoteDirectory: String) async -> Bool {
+    func upload(localURL: URL, toRemoteDirectory: String?) async -> Bool {
         guard bridge.isConnected else {
             errorMessage = "Not connected to a remote host."
             return false
         }
 
         let fileName = localURL.lastPathComponent
+        // Resolve the destination ONCE, before the transfer. `nil` means the
+        // currently displayed remote folder; `"/"` always means the root — it
+        // is NOT rewritten to the current folder (that caused `..`-row drops
+        // to land in the wrong directory). The resolved value is captured by
+        // the transfer closure, so a concurrent upload cannot overwrite it.
+        let normalizedDirectory: String
         let destinationPath: String
         do {
-            let directory = toRemoteDirectory == "/" ? remotePath : toRemoteDirectory
-            let normalizedDirectory = try RemotePath.normalize(directory)
+            let directory = toRemoteDirectory ?? remotePath
+            normalizedDirectory = try RemotePath.normalize(directory)
             destinationPath = RemotePath.join(normalizedDirectory, fileName)
         } catch {
             errorMessage = error.dockBridgeUserMessage
@@ -695,10 +701,9 @@ final class MainViewModel: ObservableObject {
             destinationPath: destinationPath,
             destinationSide: .remote
         ) {
+            // do NOT call prepareRemoteWorkingDirectory() here: it rewrites
+            // `remotePath` (when browsing "/") and would change the target.
             do {
-                try await self.prepareRemoteWorkingDirectory()
-                let directory = toRemoteDirectory == "/" ? self.remotePath : toRemoteDirectory
-                let normalizedDirectory = try RemotePath.normalize(directory)
                 try await self.bridge.upload(localPath: localURL.path, remoteDirectory: normalizedDirectory)
                 await self.transferQueue.refresh()
                 await self.reloadRemote()
