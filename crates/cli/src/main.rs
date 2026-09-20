@@ -300,6 +300,17 @@ fn home_dir_path() -> Option<PathBuf> {
     home.map(PathBuf::from).filter(|p| p.is_absolute())
 }
 
+async fn connect(
+    profile: ConnectionProfile,
+    config: &AppConfig,
+    known_hosts: Arc<Mutex<KnownHostsManager>>,
+    prompt: Arc<dyn HostKeyPrompt>,
+) -> anyhow::Result<SshSession> {
+    SshSession::connect(profile, config, known_hosts, prompt)
+        .await
+        .map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,15 +470,4 @@ mod tests {
         });
         drop(dir);
     }
-}
-
-async fn connect(
-    profile: ConnectionProfile,
-    config: &AppConfig,
-    known_hosts: Arc<Mutex<KnownHostsManager>>,
-    prompt: Arc<dyn HostKeyPrompt>,
-) -> anyhow::Result<SshSession> {
-    SshSession::connect(profile, config, known_hosts, prompt)
-        .await
-        .map_err(Into::into)
 }
