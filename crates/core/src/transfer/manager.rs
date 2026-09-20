@@ -7,11 +7,11 @@ use std::time::Duration;
 use rand::RngExt as _;
 
 use crate::config::{AppConfig, DirectoryWalkLimits};
-use crate::error::{SftpError, TransferError};
+use crate::error::{RemoteStatusCode, SftpError, TransferError};
 use crate::sftp::{
     ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
-    normalize_remote_path, walk_local_directory_with_options, walk_remote_directory_with_limits,
-    SftpClient, WalkLocalDirectoryOptions,
+    normalize_remote_path, parent_remote_path, walk_local_directory_with_options,
+    walk_remote_directory_with_limits, SftpClient, WalkLocalDirectoryOptions,
 };
 use crate::ssh::SshSession;
 use crate::transfer::TransferOverwritePolicy;
@@ -563,7 +563,7 @@ impl TransferManager {
         // attempt (issue #310): `transfer_retry_count = 3` performs 3
         // retries, i.e. up to 4 attempts total.
         let attempts = self.retry_count.saturating_add(1).max(1);
-        let mut last_error = String::from("unknown transfer error");
+        let mut last_error: Option<SftpError> = None;
         let mut attempt = 0;
 
         let mut retry_index = 0_u32;
@@ -588,16 +588,11 @@ impl TransferManager {
                 Ok(()) => return Ok(()),
                 Err(SftpError::Cancelled) => return Err(TransferError::Cancelled),
                 Err(SftpError::CleanupFailed { message, .. }) if self.is_cancelled(task_id) => {
-                    return Err(TransferError::RetriesExhausted {
-                        attempts: 1,
-                        message: format!(
-                            "転送はキャンセルされましたが、部分ファイルの削除に失敗しました: {message}"
-                        ),
-                    });
+                    return Err(cancelled_cleanup_failed(message));
                 }
                 Err(err) => {
-                    last_error = err.to_string();
-                    if is_non_retryable_transfer_error(&last_error) {
+                    last_error = Some(err);
+                    if is_non_retryable_error(last_error.as_ref().unwrap()) {
                         break;
                     }
                     if current < attempts {
@@ -620,7 +615,9 @@ impl TransferManager {
 
         Err(TransferError::RetriesExhausted {
             attempts: attempt.max(1),
-            message: last_error,
+            message: last_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "unknown transfer error".to_string()),
         })
     }
 
@@ -668,7 +665,7 @@ impl TransferManager {
         // `retry_count` config means the number of RETRIES after the first
         // attempt (issue #310).
         let attempts = self.retry_count.saturating_add(1).max(1);
-        let mut last_error = String::from("unknown transfer error");
+        let mut last_error: Option<SftpError> = None;
         let mut attempt = 0;
 
         let mut retry_index = 0_u32;
@@ -694,16 +691,11 @@ impl TransferManager {
                 Ok(()) => return Ok(()),
                 Err(SftpError::Cancelled) => return Err(TransferError::Cancelled),
                 Err(SftpError::CleanupFailed { message, .. }) if self.is_cancelled(task_id) => {
-                    return Err(TransferError::RetriesExhausted {
-                        attempts: 1,
-                        message: format!(
-                            "転送はキャンセルされましたが、部分ファイルの削除に失敗しました: {message}"
-                        ),
-                    });
+                    return Err(cancelled_cleanup_failed(message));
                 }
                 Err(err) => {
-                    last_error = err.to_string();
-                    if is_non_retryable_transfer_error(&last_error) {
+                    last_error = Some(err);
+                    if is_non_retryable_error(last_error.as_ref().unwrap()) {
                         break;
                     }
                     if current < attempts {
@@ -726,26 +718,22 @@ impl TransferManager {
 
         Err(TransferError::RetriesExhausted {
             attempts: attempt.max(1),
-            message: last_error,
+            message: last_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "unknown transfer error".to_string()),
         })
     }
 }
 
-fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
-    let normalized = normalize_remote_path(remote_path)?;
-    if normalized == "/" {
-        return Ok(None);
+/// Builds the "transfer was cancelled but cleanup failed" error used when a
+/// cancel races with a partial-file cleanup failure. English to stay
+/// consistent with the rest of the core error messages; localization happens
+/// in the UI layer (issue #319).
+fn cancelled_cleanup_failed(message: String) -> TransferError {
+    TransferError::RetriesExhausted {
+        attempts: 1,
+        message: format!("transfer was cancelled, but deleting the partial file failed: {message}"),
     }
-
-    let trimmed = normalized.trim_end_matches('/');
-    let Some((parent, _)) = trimmed.rsplit_once('/') else {
-        return Ok(None);
-    };
-    Ok(Some(if parent.is_empty() {
-        "/".to_string()
-    } else {
-        parent.to_string()
-    }))
 }
 
 /// Returns the exponential-backoff delay in milliseconds for retry
@@ -763,12 +751,46 @@ fn backoff_delay_ms(retry_index: u32) -> u64 {
 }
 
 /// Returns `true` when retrying the same transfer is unlikely to succeed.
+///
+/// Decided from the typed [`SftpError`] variant, not the formatted message
+/// string. String matching on "failure" / "no such file" misfires for paths
+/// like `~/Documents/failure-report.txt` (issue #308).
+pub(crate) fn is_non_retryable_error(error: &SftpError) -> bool {
+    match error {
+        SftpError::RemoteStatus { code, .. } => {
+            // SSH_FX_* codes that a retry cannot recover from.
+            matches!(
+                code,
+                RemoteStatusCode::NoSuchFile
+                    | RemoteStatusCode::PermissionDenied
+                    | RemoteStatusCode::BadMessage
+                    | RemoteStatusCode::OpUnsupported
+            )
+        }
+        // A generic upload/download/cleanup failure may wrap a typed server
+        // status; only the explicit "permission denied" / "overwrite disabled"
+        // messages are deemed non-retryable from text.
+        SftpError::UploadFailed { message, .. }
+        | SftpError::DownloadFailed { message, .. }
+        | SftpError::RenameFailed { message, .. }
+        | SftpError::MkdirFailed { message, .. }
+        | SftpError::DeleteFailed { message, .. }
+        | SftpError::StatFailed { message, .. }
+        | SftpError::WalkFailed { message, .. } => {
+            let lower = message.to_lowercase();
+            lower.contains("permission denied")
+                || lower.contains("already exists and overwrite is disabled")
+        }
+        _ => false,
+    }
+}
+
+/// Legacy string-based classifier kept for messaging-only call sites.
+#[cfg(test)]
 pub(crate) fn is_non_retryable_transfer_error(message: &str) -> bool {
     let lower = message.to_lowercase();
     crate::ssh::is_connection_lost_message(message)
         || lower.contains("permission denied")
-        || lower.contains("failure")
-        || lower.contains("no such file")
         || lower.contains("already exists and overwrite is disabled")
         || lower.contains("failed to create directory")
 }
@@ -955,17 +977,50 @@ mod tests {
         assert!(is_non_retryable_transfer_error(
             "failed to upload '/a' to '/b': Permission denied"
         ));
-        assert!(is_non_retryable_transfer_error("SFTP failure"));
         assert!(is_non_retryable_transfer_error("connection reset"));
-        assert!(is_non_retryable_transfer_error(
-            "failed to upload '/a' to '/b': No such file: No such file"
-        ));
         assert!(is_non_retryable_transfer_error(
             "failed to create directory '/home/demo': Permission denied"
         ));
         assert!(is_non_retryable_transfer_error(
             "failed to upload '/a' to '/b': destination '/b' already exists and overwrite is disabled"
         ));
+
+        // A path containing the word "failure" must NOT be mistaken for a
+        // retryable-status failure (issue #308): the typed classifier uses
+        // status codes only, and the legacy message classifier no longer
+        // matches the bare word "failure" or "no such file".
+        assert!(!is_non_retryable_transfer_error(
+            "failed to upload '/home/Documents/failure-report.txt': timed out"
+        ));
+        assert!(!is_non_retryable_transfer_error("SFTP Failure"));
+    }
+
+    #[test]
+    fn typed_retryability_is_decided_by_status_code_not_message() {
+        // A generic SSH_FX_FAILURE (OpenSSH's "Failure") IS retryable.
+        assert!(!is_non_retryable_error(&SftpError::RemoteStatus {
+            code: RemoteStatusCode::Failure,
+            path: "/upload/file.txt".to_string(),
+        }));
+        // Typed non-retryable codes short-circuit regardless of message text.
+        assert!(is_non_retryable_error(&SftpError::RemoteStatus {
+            code: RemoteStatusCode::PermissionDenied,
+            path: "/upload/file.txt".to_string(),
+        }));
+        assert!(is_non_retryable_error(&SftpError::RemoteStatus {
+            code: RemoteStatusCode::NoSuchFile,
+            path: "/upload/missing.txt".to_string(),
+        }));
+        assert!(!is_non_retryable_error(&SftpError::RemoteStatus {
+            code: RemoteStatusCode::Failure,
+            path: "/Documents/failure.txt".to_string(),
+        }));
+        // UploadFailed wrapping a permission text remains non-retryable.
+        assert!(is_non_retryable_error(&SftpError::UploadFailed {
+            local: "/a".to_string(),
+            remote: "/b".to_string(),
+            message: "permission denied".to_string(),
+        }));
     }
 
     #[test]
