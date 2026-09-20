@@ -12,23 +12,28 @@
 
 ## v0.2
 
-- OpenSSH known_hosts compatibility
-- External editor integration
-- Auto-upload on save
-- Drag and drop
-- chmod, hidden files, symlinks
-- Encrypted connection-profile storage (AES-GCM envelope + Keychain master key) — implemented; see [security.md](security.md#connection-profiles-profilesjson)
-- [ ] Developer ID signing and notarization for release DMGs — planned; tracked in [#391](https://github.com/T3pp31/DockBridge/issues/391)
+- [x] OpenSSH known_hosts compatibility (import/export/merge; see #302, #303)
+- [x] Drag and drop (see #153, #337)
+- [x] Encrypted connection-profile storage (AES-GCM envelope + Keychain master key); see [security.md](security.md#connection-profiles-profilesjson)
+- [ ] Security: Enable Developer ID signing and notarization for release DMGs; see [security.md](security.md#code-signing-and-distribution)
+- [ ] External editor integration (#361)
+- [ ] Auto-upload on save (part of #361)
+- [ ] chmod / permissions UI (#363)
+- [ ] Symbolic link display & navigation (#300)
 
 ## v0.3
 
-- Directory sync with preview
-- Workspaces
+- [ ] Directory sync with preview
+- [ ] Workspaces
 
 ## 1.0
 
-- Stable SFTP feature set
+- [x] Stable SFTP feature set (list/upload/download/delete/rename/mkdir, host keys, transfer queue)
+- [x] Remote recursive delete (#315)
+- [ ] Resume interrupted transfers (#313)
+- [ ] Preserve file times/permissions on transfer (#314)
 
 ## After 1.0
 
-- SCP support may be considered
+- [ ] SCP support may be considered
+- [ ] Multi-connection / tabs (#359)

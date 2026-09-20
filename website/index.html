@@ -100,7 +100,7 @@
               <li>Download the latest <code>DockBridge-*-macOS.dmg</code> from the button above.</li>
               <li>Double-click the DMG file to mount it.</li>
               <li>Drag <code>DockBridge.app</code> into the <code>Applications</code> folder shortcut.</li>
-              <li>Open DockBridge from Applications. Because releases are not yet Developer ID signed (tracked in #391), macOS may block the first launch — right-click the app, choose <strong>Open</strong>, then confirm. You can also allow it under <strong>System Settings → Privacy & Security</strong>.</li>
+              <li>Open DockBridge from Applications. Because releases are not yet Developer ID signed, macOS may block the first launch — right-click the app, choose <strong>Open</strong>, then confirm. You can also allow it under <strong>System Settings → Privacy & Security</strong>.</li>
             </ol>
           </div>
         </div>
@@ -121,8 +121,6 @@
     <script>
       (function () {
         const GITHUB_REPO = "T3pp31/DockBridge";
-        const FALLBACK_VERSION = "0.1.6";
-        const FALLBACK_ASSET = `DockBridge-${FALLBACK_VERSION}-macOS.dmg`;
 
         const button = document.getElementById("download-button");
         const meta = document.getElementById("download-meta");
@@ -135,9 +133,13 @@
           meta.textContent = label;
         }
 
+        // Fallback points at the Releases page rather than guessing an asset
+        // name: `releases/latest/download/<asset>` only resolves when the name
+        // exactly matches the latest release, so a hardcoded version 404s as
+        // soon as a new release ships.
         function setFallback(message) {
           setDownload(
-            `https://github.com/${GITHUB_REPO}/releases/latest/download/${FALLBACK_ASSET}`,
+            `https://github.com/${GITHUB_REPO}/releases/latest`,
             message
           );
         }
@@ -170,7 +172,7 @@
           })
           .catch(function () {
             setFallback(
-              `Expected ${FALLBACK_ASSET} · see Releases if the download fails`
+              "Could not reach the GitHub API · open the Releases page to download"
             );
           });
       })();
