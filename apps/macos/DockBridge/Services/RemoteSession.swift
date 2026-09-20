@@ -4,7 +4,7 @@ import Foundation
 ///
 /// `RustBridgeService` shares one `DockBridgeClient` (which already supports
 /// multiple sessions) and manages a map of `RemoteSession` objects keyed by
-/// the Rust-side `sessionId`. Each window/tab can bind to its own session so
+/// their stable Swift-side UUID. Each window/tab can bind to its own session so
 /// multiple servers can be used at the same time.
 @MainActor
 final class RemoteSession: ObservableObject, Identifiable {

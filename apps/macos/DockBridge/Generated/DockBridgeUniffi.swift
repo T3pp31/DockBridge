@@ -398,7 +398,7 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
 }
-// Initial value and increment amount for handles. 
+// Initial value and increment amount for handles.
 // These ensure that SWIFT handles always have the lowest bit set
 fileprivate let UNIFFI_HANDLEMAP_INITIAL: UInt64 = 1
 fileprivate let UNIFFI_HANDLEMAP_DELTA: UInt64 = 2
@@ -593,39 +593,77 @@ fileprivate struct FfiConverterString: FfiConverter {
  * Main DockBridge client exposed to Swift.
  */
 public protocol DockBridgeClientProtocol: AnyObject, Sendable {
-    
-    func cancelTransfer(taskId: UInt64) throws 
-    
-    func clearAllTransfers() throws 
-    
-    func clearCompletedTransfers() 
-    
+
+    func cancelTransfer(taskId: UInt64) throws
+
+    func clearAllTransfers() throws
+
+    func clearCompletedTransfers()
+
     func connect(profile: ConnectionProfileRecord) throws  -> UInt64
-    
-    func createDirectory(sessionId: UInt64, remotePath: String) throws 
-    
-    func delete(sessionId: UInt64, remotePath: String) throws 
-    
-    func disconnect(sessionId: UInt64) throws 
-    
-    func download(sessionId: UInt64, remotePath: String, localPath: String) throws 
-    
-    func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String) throws 
-    
+
+    func createDirectory(sessionId: UInt64, remotePath: String) throws
+
+    func delete(sessionId: UInt64, remotePath: String) throws
+
+    /**
+     * Deletes a remote entry, optionally recursing into directories.
+     *
+     * Returns the number of entries removed. Distinguishes between files,
+     * symlinks (removed as links) and directories (recursively removed when
+     * `recursive` is true, otherwise rejected when not empty).
+     */
+    func deleteEntry(sessionId: UInt64, remotePath: String, recursive: Bool) throws  -> UInt64
+
+    func disconnect(sessionId: UInt64) throws
+
+    func download(sessionId: UInt64, remotePath: String, localPath: String, overwritePolicy: TransferOverwritePolicyRecord) throws
+
+    func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws
+
     func getInitialDirectory(sessionId: UInt64) throws  -> String
-    
+
     func getTransferQueue()  -> [TransferTaskRecord]
-    
+
+    func knownHostsEntries()  -> [KnownHostEntryRecord]
+
+    func knownHostsRemove(host: String, port: UInt16) throws  -> Bool
+
+    func knownHostsRepairPermissions() throws
+
+    func knownHostsReset(backup: Bool) throws
+
+    func knownHostsStatus()  -> KnownHostsStatusRecord
+
     func listDirectory(sessionId: UInt64, path: String) throws  -> [RemoteFileRecord]
-    
-    func rename(sessionId: UInt64, from: String, to: String) throws 
-    
-    func retryTransfer(sessionId: UInt64, taskId: UInt64) throws 
-    
-    func upload(sessionId: UInt64, localPath: String, remotePath: String) throws 
-    
-    func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String) throws 
-    
+
+    /**
+     * Resolves the target of a remote symlink (SFTP READLINK).
+     */
+    func readLink(sessionId: UInt64, path: String) throws  -> String
+
+    func rename(sessionId: UInt64, from: String, to: String) throws
+
+    func retryTransfer(sessionId: UInt64, taskId: UInt64) throws
+
+    /**
+     * Sets POSIX permission mode bits on a remote entry.
+     */
+    func setPermissions(sessionId: UInt64, path: String, mode: UInt32) throws
+
+    /**
+     * Returns metadata for a single remote path.
+     *
+     * When `follow_symlinks` is `false`, symlinks are reported as symlinks
+     * with their target resolved via READLINK. When `true`, the target's
+     * metadata is returned instead.
+     */
+    func stat(sessionId: UInt64, path: String, followSymlinks: Bool) throws  -> RemoteFileRecord
+
+    func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord) throws
+
+    func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws
+
 }
 /**
  * Main DockBridge client exposed to Swift.
@@ -691,9 +729,9 @@ public convenience init(appConfig: AppConfigRecord, hostKeyHandler: HostKeyHandl
         try! rustCall { uniffi_dockbridge_uniffi_fn_free_dockbridgeclient(handle, $0) }
     }
 
-    
 
-    
+
+
 open func cancelTransfer(taskId: UInt64)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_cancel_transfer(
@@ -702,7 +740,7 @@ open func cancelTransfer(taskId: UInt64)throws   {try rustCallWithError(FfiConve
     )
 }
 }
-    
+
 open func clearAllTransfers()throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_clear_all_transfers(
@@ -710,7 +748,7 @@ open func clearAllTransfers()throws   {try rustCallWithError(FfiConverterTypeDoc
     )
 }
 }
-    
+
 open func clearCompletedTransfers()  {try! rustCall() {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_clear_completed_transfers(
@@ -718,7 +756,7 @@ open func clearCompletedTransfers()  {try! rustCall() {
     )
 }
 }
-    
+
 open func connect(profile: ConnectionProfileRecord)throws  -> UInt64  {
     return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
@@ -728,7 +766,7 @@ open func connect(profile: ConnectionProfileRecord)throws  -> UInt64  {
     )
 })
 }
-    
+
 open func createDirectory(sessionId: UInt64, remotePath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_create_directory(
@@ -738,7 +776,7 @@ open func createDirectory(sessionId: UInt64, remotePath: String)throws   {try ru
     )
 }
 }
-    
+
 open func delete(sessionId: UInt64, remotePath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_delete(
@@ -748,7 +786,26 @@ open func delete(sessionId: UInt64, remotePath: String)throws   {try rustCallWit
     )
 }
 }
-    
+
+    /**
+     * Deletes a remote entry, optionally recursing into directories.
+     *
+     * Returns the number of entries removed. Distinguishes between files,
+     * symlinks (removed as links) and directories (recursively removed when
+     * `recursive` is true, otherwise rejected when not empty).
+     */
+open func deleteEntry(sessionId: UInt64, remotePath: String, recursive: Bool)throws  -> UInt64  {
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_delete_entry(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterString.lower(remotePath),
+        FfiConverterBool.lower(recursive),uniffiCallStatus
+    )
+})
+}
+
 open func disconnect(sessionId: UInt64)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_disconnect(
@@ -757,29 +814,31 @@ open func disconnect(sessionId: UInt64)throws   {try rustCallWithError(FfiConver
     )
 }
 }
-    
-open func download(sessionId: UInt64, remotePath: String, localPath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+
+open func download(sessionId: UInt64, remotePath: String, localPath: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(remotePath),
-        FfiConverterString.lower(localPath),uniffiCallStatus
+        FfiConverterString.lower(localPath),
+        FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
 }
 }
-    
-open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+
+open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download_entry(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(remotePath),
-        FfiConverterString.lower(localDirectory),uniffiCallStatus
+        FfiConverterString.lower(localDirectory),
+        FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
 }
 }
-    
+
 open func getInitialDirectory(sessionId: UInt64)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
@@ -789,7 +848,7 @@ open func getInitialDirectory(sessionId: UInt64)throws  -> String  {
     )
 })
 }
-    
+
 open func getTransferQueue() -> [TransferTaskRecord]  {
     return try!  FfiConverterSequenceTypeTransferTaskRecord.lift(try! rustCall() {
         uniffiCallStatus in
@@ -798,7 +857,53 @@ open func getTransferQueue() -> [TransferTaskRecord]  {
     )
 })
 }
-    
+
+open func knownHostsEntries() -> [KnownHostEntryRecord]  {
+    return try!  FfiConverterSequenceTypeKnownHostEntryRecord.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_known_hosts_entries(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func knownHostsRemove(host: String, port: UInt16)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_known_hosts_remove(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(host),
+        FfiConverterUInt16.lower(port),uniffiCallStatus
+    )
+})
+}
+
+open func knownHostsRepairPermissions()throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_known_hosts_repair_permissions(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+
+open func knownHostsReset(backup: Bool)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_known_hosts_reset(
+            self.uniffiCloneHandle(),
+        FfiConverterBool.lower(backup),uniffiCallStatus
+    )
+}
+}
+
+open func knownHostsStatus() -> KnownHostsStatusRecord  {
+    return try!  FfiConverterTypeKnownHostsStatusRecord_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_known_hosts_status(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
 open func listDirectory(sessionId: UInt64, path: String)throws  -> [RemoteFileRecord]  {
     return try  FfiConverterSequenceTypeRemoteFileRecord.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
@@ -809,7 +914,21 @@ open func listDirectory(sessionId: UInt64, path: String)throws  -> [RemoteFileRe
     )
 })
 }
-    
+
+    /**
+     * Resolves the target of a remote symlink (SFTP READLINK).
+     */
+open func readLink(sessionId: UInt64, path: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_read_link(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterString.lower(path),uniffiCallStatus
+    )
+})
+}
+
 open func rename(sessionId: UInt64, from: String, to: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_rename(
@@ -820,7 +939,7 @@ open func rename(sessionId: UInt64, from: String, to: String)throws   {try rustC
     )
 }
 }
-    
+
 open func retryTransfer(sessionId: UInt64, taskId: UInt64)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_retry_transfer(
@@ -830,31 +949,66 @@ open func retryTransfer(sessionId: UInt64, taskId: UInt64)throws   {try rustCall
     )
 }
 }
-    
-open func upload(sessionId: UInt64, localPath: String, remotePath: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+
+    /**
+     * Sets POSIX permission mode bits on a remote entry.
+     */
+open func setPermissions(sessionId: UInt64, path: String, mode: UInt32)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_set_permissions(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterString.lower(path),
+        FfiConverterUInt32.lower(mode),uniffiCallStatus
+    )
+}
+}
+
+    /**
+     * Returns metadata for a single remote path.
+     *
+     * When `follow_symlinks` is `false`, symlinks are reported as symlinks
+     * with their target resolved via READLINK. When `true`, the target's
+     * metadata is returned instead.
+     */
+open func stat(sessionId: UInt64, path: String, followSymlinks: Bool)throws  -> RemoteFileRecord  {
+    return try  FfiConverterTypeRemoteFileRecord_lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_stat(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterString.lower(path),
+        FfiConverterBool.lower(followSymlinks),uniffiCallStatus
+    )
+})
+}
+
+open func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(localPath),
-        FfiConverterString.lower(remotePath),uniffiCallStatus
+        FfiConverterString.lower(remotePath),
+        FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
 }
 }
-    
-open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+
+open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload_entry(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(localPath),
-        FfiConverterString.lower(remoteDirectory),uniffiCallStatus
+        FfiConverterString.lower(remoteDirectory),
+        FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
 }
 }
-    
 
-    
+
+
 }
 
 
@@ -909,6 +1063,10 @@ public struct AppConfigRecord: Equatable, Hashable {
     public var sessionHealthCheckIntervalSecs: UInt64
     public var transferRetryCount: UInt32
     public var transferChunkSizeBytes: UInt64
+    public var transferDownloadPipelineDepth: UInt64
+    public var transferUploadPipelineDepth: UInt64
+    public var sshInactivityTimeoutSecs: UInt64?
+    public var sshKeepaliveIntervalSecs: UInt64
     public var knownHostsPath: String
     public var opensshKnownHostsPath: String
     public var mergeOpensshKnownHostsOnConnect: Bool
@@ -920,11 +1078,15 @@ public struct AppConfigRecord: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool, knownHostsStrictMode: Bool, failConnectOnOpensshMergeError: Bool, directoryWalkMaxFiles: UInt64, directoryWalkMaxDepth: UInt32, directoryWalkMaxTotalBytes: UInt64) {
+    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, transferDownloadPipelineDepth: UInt64, transferUploadPipelineDepth: UInt64, sshInactivityTimeoutSecs: UInt64?, sshKeepaliveIntervalSecs: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool, knownHostsStrictMode: Bool, failConnectOnOpensshMergeError: Bool, directoryWalkMaxFiles: UInt64, directoryWalkMaxDepth: UInt32, directoryWalkMaxTotalBytes: UInt64) {
         self.connectionTimeoutSecs = connectionTimeoutSecs
         self.sessionHealthCheckIntervalSecs = sessionHealthCheckIntervalSecs
         self.transferRetryCount = transferRetryCount
         self.transferChunkSizeBytes = transferChunkSizeBytes
+        self.transferDownloadPipelineDepth = transferDownloadPipelineDepth
+        self.transferUploadPipelineDepth = transferUploadPipelineDepth
+        self.sshInactivityTimeoutSecs = sshInactivityTimeoutSecs
+        self.sshKeepaliveIntervalSecs = sshKeepaliveIntervalSecs
         self.knownHostsPath = knownHostsPath
         self.opensshKnownHostsPath = opensshKnownHostsPath
         self.mergeOpensshKnownHostsOnConnect = mergeOpensshKnownHostsOnConnect
@@ -935,9 +1097,9 @@ public struct AppConfigRecord: Equatable, Hashable {
         self.directoryWalkMaxTotalBytes = directoryWalkMaxTotalBytes
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -951,17 +1113,21 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AppConfigRecord {
         return
             try AppConfigRecord(
-                connectionTimeoutSecs: FfiConverterUInt64.read(from: &buf), 
-                sessionHealthCheckIntervalSecs: FfiConverterUInt64.read(from: &buf), 
-                transferRetryCount: FfiConverterUInt32.read(from: &buf), 
-                transferChunkSizeBytes: FfiConverterUInt64.read(from: &buf), 
-                knownHostsPath: FfiConverterString.read(from: &buf), 
-                opensshKnownHostsPath: FfiConverterString.read(from: &buf), 
-                mergeOpensshKnownHostsOnConnect: FfiConverterBool.read(from: &buf), 
-                knownHostsStrictMode: FfiConverterBool.read(from: &buf), 
-                failConnectOnOpensshMergeError: FfiConverterBool.read(from: &buf), 
-                directoryWalkMaxFiles: FfiConverterUInt64.read(from: &buf), 
-                directoryWalkMaxDepth: FfiConverterUInt32.read(from: &buf), 
+                connectionTimeoutSecs: FfiConverterUInt64.read(from: &buf),
+                sessionHealthCheckIntervalSecs: FfiConverterUInt64.read(from: &buf),
+                transferRetryCount: FfiConverterUInt32.read(from: &buf),
+                transferChunkSizeBytes: FfiConverterUInt64.read(from: &buf),
+                transferDownloadPipelineDepth: FfiConverterUInt64.read(from: &buf),
+                transferUploadPipelineDepth: FfiConverterUInt64.read(from: &buf),
+                sshInactivityTimeoutSecs: FfiConverterOptionUInt64.read(from: &buf),
+                sshKeepaliveIntervalSecs: FfiConverterUInt64.read(from: &buf),
+                knownHostsPath: FfiConverterString.read(from: &buf),
+                opensshKnownHostsPath: FfiConverterString.read(from: &buf),
+                mergeOpensshKnownHostsOnConnect: FfiConverterBool.read(from: &buf),
+                knownHostsStrictMode: FfiConverterBool.read(from: &buf),
+                failConnectOnOpensshMergeError: FfiConverterBool.read(from: &buf),
+                directoryWalkMaxFiles: FfiConverterUInt64.read(from: &buf),
+                directoryWalkMaxDepth: FfiConverterUInt32.read(from: &buf),
                 directoryWalkMaxTotalBytes: FfiConverterUInt64.read(from: &buf)
         )
     }
@@ -971,6 +1137,10 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.sessionHealthCheckIntervalSecs, into: &buf)
         FfiConverterUInt32.write(value.transferRetryCount, into: &buf)
         FfiConverterUInt64.write(value.transferChunkSizeBytes, into: &buf)
+        FfiConverterUInt64.write(value.transferDownloadPipelineDepth, into: &buf)
+        FfiConverterUInt64.write(value.transferUploadPipelineDepth, into: &buf)
+        FfiConverterOptionUInt64.write(value.sshInactivityTimeoutSecs, into: &buf)
+        FfiConverterUInt64.write(value.sshKeepaliveIntervalSecs, into: &buf)
         FfiConverterString.write(value.knownHostsPath, into: &buf)
         FfiConverterString.write(value.opensshKnownHostsPath, into: &buf)
         FfiConverterBool.write(value.mergeOpensshKnownHostsOnConnect, into: &buf)
@@ -1016,9 +1186,9 @@ public struct ConnectionProfileRecord: Equatable, Hashable {
         self.authType = authType
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -1032,9 +1202,9 @@ public struct FfiConverterTypeConnectionProfileRecord: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ConnectionProfileRecord {
         return
             try ConnectionProfileRecord(
-                host: FfiConverterString.read(from: &buf), 
-                port: FfiConverterUInt16.read(from: &buf), 
-                username: FfiConverterString.read(from: &buf), 
+                host: FfiConverterString.read(from: &buf),
+                port: FfiConverterUInt16.read(from: &buf),
+                username: FfiConverterString.read(from: &buf),
                 authType: FfiConverterTypeAuthTypeRecord.read(from: &buf)
         )
     }
@@ -1081,9 +1251,9 @@ public struct HostKeyChallenge: Equatable, Hashable {
         self.expectedFingerprintSha256 = expectedFingerprintSha256
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -1097,9 +1267,9 @@ public struct FfiConverterTypeHostKeyChallenge: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> HostKeyChallenge {
         return
             try HostKeyChallenge(
-                host: FfiConverterString.read(from: &buf), 
-                port: FfiConverterUInt16.read(from: &buf), 
-                fingerprintSha256: FfiConverterString.read(from: &buf), 
+                host: FfiConverterString.read(from: &buf),
+                port: FfiConverterUInt16.read(from: &buf),
+                fingerprintSha256: FfiConverterString.read(from: &buf),
                 expectedFingerprintSha256: FfiConverterOptionString.read(from: &buf)
         )
     }
@@ -1129,28 +1299,204 @@ public func FfiConverterTypeHostKeyChallenge_lower(_ value: HostKeyChallenge) ->
 
 
 /**
+ * A host identifier attached to a trusted key entry.
+ */
+public struct KnownHostAliasRecord: Equatable, Hashable {
+    public var host: String
+    public var port: UInt16
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(host: String, port: UInt16) {
+        self.host = host
+        self.port = port
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension KnownHostAliasRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeKnownHostAliasRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KnownHostAliasRecord {
+        return
+            try KnownHostAliasRecord(
+                host: FfiConverterString.read(from: &buf),
+                port: FfiConverterUInt16.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: KnownHostAliasRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.host, into: &buf)
+        FfiConverterUInt16.write(value.port, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKnownHostAliasRecord_lift(_ buf: RustBuffer) throws -> KnownHostAliasRecord {
+    return try FfiConverterTypeKnownHostAliasRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKnownHostAliasRecord_lower(_ value: KnownHostAliasRecord) -> RustBuffer {
+    return FfiConverterTypeKnownHostAliasRecord.lower(value)
+}
+
+
+/**
+ * Snapshot of a stored host key entry exposed to Swift.
+ */
+public struct KnownHostEntryRecord: Equatable, Hashable {
+    public var host: String
+    public var port: UInt16
+    public var fingerprintSha256: String
+    public var algorithm: String
+    public var aliases: [KnownHostAliasRecord]
+    public var excludedAliases: [KnownHostAliasRecord]
+    public var publicKeyOpenssh: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(host: String, port: UInt16, fingerprintSha256: String, algorithm: String, aliases: [KnownHostAliasRecord], excludedAliases: [KnownHostAliasRecord], publicKeyOpenssh: String?) {
+        self.host = host
+        self.port = port
+        self.fingerprintSha256 = fingerprintSha256
+        self.algorithm = algorithm
+        self.aliases = aliases
+        self.excludedAliases = excludedAliases
+        self.publicKeyOpenssh = publicKeyOpenssh
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension KnownHostEntryRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeKnownHostEntryRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KnownHostEntryRecord {
+        return
+            try KnownHostEntryRecord(
+                host: FfiConverterString.read(from: &buf),
+                port: FfiConverterUInt16.read(from: &buf),
+                fingerprintSha256: FfiConverterString.read(from: &buf),
+                algorithm: FfiConverterString.read(from: &buf),
+                aliases: FfiConverterSequenceTypeKnownHostAliasRecord.read(from: &buf),
+                excludedAliases: FfiConverterSequenceTypeKnownHostAliasRecord.read(from: &buf),
+                publicKeyOpenssh: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: KnownHostEntryRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.host, into: &buf)
+        FfiConverterUInt16.write(value.port, into: &buf)
+        FfiConverterString.write(value.fingerprintSha256, into: &buf)
+        FfiConverterString.write(value.algorithm, into: &buf)
+        FfiConverterSequenceTypeKnownHostAliasRecord.write(value.aliases, into: &buf)
+        FfiConverterSequenceTypeKnownHostAliasRecord.write(value.excludedAliases, into: &buf)
+        FfiConverterOptionString.write(value.publicKeyOpenssh, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKnownHostEntryRecord_lift(_ buf: RustBuffer) throws -> KnownHostEntryRecord {
+    return try FfiConverterTypeKnownHostEntryRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKnownHostEntryRecord_lower(_ value: KnownHostEntryRecord) -> RustBuffer {
+    return FfiConverterTypeKnownHostEntryRecord.lower(value)
+}
+
+
+/**
  * Remote file metadata returned to Swift.
  */
 public struct RemoteFileRecord: Equatable, Hashable {
     public var name: String
     public var path: String
     public var isDirectory: Bool
+    public var isSymlink: Bool
     public var size: UInt64
     public var modifiedAtSecs: UInt64?
+    /**
+     * POSIX permission bits (e.g. `0o755`) when reported by the server.
+     */
+    public var permissions: UInt32?
+    /**
+     * Numeric owner id when reported by the server.
+     */
+    public var uid: UInt32?
+    /**
+     * Numeric group id when reported by the server.
+     */
+    public var gid: UInt32?
+    /**
+     * Resolved symlink target (only set for single-path `stat`).
+     */
+    public var symlinkTarget: String?
+    /**
+     * Whether the symlink target resolves to a directory.
+     */
+    public var symlinkTargetIsDir: Bool?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(name: String, path: String, isDirectory: Bool, size: UInt64, modifiedAtSecs: UInt64?) {
+    public init(name: String, path: String, isDirectory: Bool, isSymlink: Bool, size: UInt64, modifiedAtSecs: UInt64?,
+        /**
+         * POSIX permission bits (e.g. `0o755`) when reported by the server.
+         */permissions: UInt32?,
+        /**
+         * Numeric owner id when reported by the server.
+         */uid: UInt32?,
+        /**
+         * Numeric group id when reported by the server.
+         */gid: UInt32?,
+        /**
+         * Resolved symlink target (only set for single-path `stat`).
+         */symlinkTarget: String?,
+        /**
+         * Whether the symlink target resolves to a directory.
+         */symlinkTargetIsDir: Bool?) {
         self.name = name
         self.path = path
         self.isDirectory = isDirectory
+        self.isSymlink = isSymlink
         self.size = size
         self.modifiedAtSecs = modifiedAtSecs
+        self.permissions = permissions
+        self.uid = uid
+        self.gid = gid
+        self.symlinkTarget = symlinkTarget
+        self.symlinkTargetIsDir = symlinkTargetIsDir
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -1164,11 +1510,17 @@ public struct FfiConverterTypeRemoteFileRecord: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RemoteFileRecord {
         return
             try RemoteFileRecord(
-                name: FfiConverterString.read(from: &buf), 
-                path: FfiConverterString.read(from: &buf), 
-                isDirectory: FfiConverterBool.read(from: &buf), 
-                size: FfiConverterUInt64.read(from: &buf), 
-                modifiedAtSecs: FfiConverterOptionUInt64.read(from: &buf)
+                name: FfiConverterString.read(from: &buf),
+                path: FfiConverterString.read(from: &buf),
+                isDirectory: FfiConverterBool.read(from: &buf),
+                isSymlink: FfiConverterBool.read(from: &buf),
+                size: FfiConverterUInt64.read(from: &buf),
+                modifiedAtSecs: FfiConverterOptionUInt64.read(from: &buf),
+                permissions: FfiConverterOptionUInt32.read(from: &buf),
+                uid: FfiConverterOptionUInt32.read(from: &buf),
+                gid: FfiConverterOptionUInt32.read(from: &buf),
+                symlinkTarget: FfiConverterOptionString.read(from: &buf),
+                symlinkTargetIsDir: FfiConverterOptionBool.read(from: &buf)
         )
     }
 
@@ -1176,8 +1528,14 @@ public struct FfiConverterTypeRemoteFileRecord: FfiConverterRustBuffer {
         FfiConverterString.write(value.name, into: &buf)
         FfiConverterString.write(value.path, into: &buf)
         FfiConverterBool.write(value.isDirectory, into: &buf)
+        FfiConverterBool.write(value.isSymlink, into: &buf)
         FfiConverterUInt64.write(value.size, into: &buf)
         FfiConverterOptionUInt64.write(value.modifiedAtSecs, into: &buf)
+        FfiConverterOptionUInt32.write(value.permissions, into: &buf)
+        FfiConverterOptionUInt32.write(value.uid, into: &buf)
+        FfiConverterOptionUInt32.write(value.gid, into: &buf)
+        FfiConverterOptionString.write(value.symlinkTarget, into: &buf)
+        FfiConverterOptionBool.write(value.symlinkTargetIsDir, into: &buf)
     }
 }
 
@@ -1215,7 +1573,7 @@ public struct TransferTaskRecord: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: UInt64, 
+    public init(id: UInt64,
         /**
          * ID of the SSH session that enqueued this transfer.
          */sessionId: UInt64, direction: TransferDirectionRecord, localPath: String, remotePath: String, status: TransferStatusRecord, bytesTransferred: UInt64, totalBytes: UInt64) {
@@ -1229,9 +1587,9 @@ public struct TransferTaskRecord: Equatable, Hashable {
         self.totalBytes = totalBytes
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -1245,13 +1603,13 @@ public struct FfiConverterTypeTransferTaskRecord: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TransferTaskRecord {
         return
             try TransferTaskRecord(
-                id: FfiConverterUInt64.read(from: &buf), 
-                sessionId: FfiConverterUInt64.read(from: &buf), 
-                direction: FfiConverterTypeTransferDirectionRecord.read(from: &buf), 
-                localPath: FfiConverterString.read(from: &buf), 
-                remotePath: FfiConverterString.read(from: &buf), 
-                status: FfiConverterTypeTransferStatusRecord.read(from: &buf), 
-                bytesTransferred: FfiConverterUInt64.read(from: &buf), 
+                id: FfiConverterUInt64.read(from: &buf),
+                sessionId: FfiConverterUInt64.read(from: &buf),
+                direction: FfiConverterTypeTransferDirectionRecord.read(from: &buf),
+                localPath: FfiConverterString.read(from: &buf),
+                remotePath: FfiConverterString.read(from: &buf),
+                status: FfiConverterTypeTransferStatusRecord.read(from: &buf),
+                bytesTransferred: FfiConverterUInt64.read(from: &buf),
                 totalBytes: FfiConverterUInt64.read(from: &buf)
         )
     }
@@ -1289,7 +1647,7 @@ public func FfiConverterTypeTransferTaskRecord_lower(_ value: TransferTaskRecord
  */
 
 public enum AuthTypeRecord: Equatable, Hashable {
-    
+
     case password(password: SecretCredential
     )
     case privateKey(keyPath: String, passphrase: SecretCredential?
@@ -1314,31 +1672,31 @@ public struct FfiConverterTypeAuthTypeRecord: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AuthTypeRecord {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .password(password: try FfiConverterTypeSecretCredential.read(from: &buf)
         )
-        
+
         case 2: return .privateKey(keyPath: try FfiConverterString.read(from: &buf), passphrase: try FfiConverterOptionTypeSecretCredential.read(from: &buf)
         )
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: AuthTypeRecord, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case let .password(password):
             writeInt(&buf, Int32(1))
             FfiConverterTypeSecretCredential.write(password, into: &buf)
-            
-        
+
+
         case let .privateKey(keyPath,passphrase):
             writeInt(&buf, Int32(2))
             FfiConverterString.write(keyPath, into: &buf)
             FfiConverterOptionTypeSecretCredential.write(passphrase, into: &buf)
-            
+
         }
     }
 }
@@ -1363,23 +1721,23 @@ public func FfiConverterTypeAuthTypeRecord_lower(_ value: AuthTypeRecord) -> Rus
 /**
  * Flat error type exposed to Swift.
  */
-public 
+public
 enum DockBridgeError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
-    
-    
+
+
     case Generic(message: String)
-    
 
-    
 
-    
 
-    
+
+
+
+
     public var errorDescription: String? {
         String(reflecting: self)
     }
-    
+
 }
 
 #if compiler(>=6)
@@ -1396,13 +1754,13 @@ public struct FfiConverterTypeDockBridgeError: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
-        
 
-        
+
+
         case 1: return .Generic(
             message: try FfiConverterString.read(from: &buf)
         )
-        
+
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -1411,13 +1769,13 @@ public struct FfiConverterTypeDockBridgeError: FfiConverterRustBuffer {
     public static func write(_ value: DockBridgeError, into buf: inout [UInt8]) {
         switch value {
 
-        
 
-        
+
+
         case .Generic(_ /* message is ignored*/):
             writeInt(&buf, Int32(1))
 
-        
+
         }
     }
 }
@@ -1439,11 +1797,83 @@ public func FfiConverterTypeDockBridgeError_lower(_ value: DockBridgeError) -> R
 
 
 /**
+ * Health of the known hosts trust store exposed to Swift.
+ */
+
+public enum KnownHostsStatusRecord: Equatable, Hashable {
+
+    case available
+    case unavailable(reason: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension KnownHostsStatusRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeKnownHostsStatusRecord: FfiConverterRustBuffer {
+    typealias SwiftType = KnownHostsStatusRecord
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KnownHostsStatusRecord {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .available
+
+        case 2: return .unavailable(reason: try FfiConverterString.read(from: &buf)
+        )
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: KnownHostsStatusRecord, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .available:
+            writeInt(&buf, Int32(1))
+
+
+        case let .unavailable(reason):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(reason, into: &buf)
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKnownHostsStatusRecord_lift(_ buf: RustBuffer) throws -> KnownHostsStatusRecord {
+    return try FfiConverterTypeKnownHostsStatusRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKnownHostsStatusRecord_lower(_ value: KnownHostsStatusRecord) -> RustBuffer {
+    return FfiConverterTypeKnownHostsStatusRecord.lower(value)
+}
+
+
+
+/**
  * Private key algorithm classification exposed to Swift.
  */
 
 public enum PrivateKeyAlgorithmRecord: Equatable, Hashable {
-    
+
     case ed25519
     case ecdsa
     case rsa
@@ -1469,40 +1899,40 @@ public struct FfiConverterTypePrivateKeyAlgorithmRecord: FfiConverterRustBuffer 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PrivateKeyAlgorithmRecord {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .ed25519
-        
+
         case 2: return .ecdsa
-        
+
         case 3: return .rsa
-        
+
         case 4: return .other(label: try FfiConverterString.read(from: &buf)
         )
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: PrivateKeyAlgorithmRecord, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .ed25519:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .ecdsa:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case .rsa:
             writeInt(&buf, Int32(3))
-        
-        
+
+
         case let .other(label):
             writeInt(&buf, Int32(4))
             FfiConverterString.write(label, into: &buf)
-            
+
         }
     }
 }
@@ -1529,7 +1959,7 @@ public func FfiConverterTypePrivateKeyAlgorithmRecord_lower(_ value: PrivateKeyA
  */
 
 public enum TransferDirectionRecord: Equatable, Hashable {
-    
+
     case upload
     case download
 
@@ -1552,26 +1982,26 @@ public struct FfiConverterTypeTransferDirectionRecord: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TransferDirectionRecord {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .upload
-        
+
         case 2: return .download
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: TransferDirectionRecord, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .upload:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .download:
             writeInt(&buf, Int32(2))
-        
+
         }
     }
 }
@@ -1594,11 +2024,80 @@ public func FfiConverterTypeTransferDirectionRecord_lower(_ value: TransferDirec
 
 
 /**
+ * Policy applied when the transfer destination already exists.
+ */
+
+public enum TransferOverwritePolicyRecord: Equatable, Hashable {
+
+    case replace
+    case failIfExists
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension TransferOverwritePolicyRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTransferOverwritePolicyRecord: FfiConverterRustBuffer {
+    typealias SwiftType = TransferOverwritePolicyRecord
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TransferOverwritePolicyRecord {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+
+        case 1: return .replace
+
+        case 2: return .failIfExists
+
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: TransferOverwritePolicyRecord, into buf: inout [UInt8]) {
+        switch value {
+
+
+        case .replace:
+            writeInt(&buf, Int32(1))
+
+
+        case .failIfExists:
+            writeInt(&buf, Int32(2))
+
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTransferOverwritePolicyRecord_lift(_ buf: RustBuffer) throws -> TransferOverwritePolicyRecord {
+    return try FfiConverterTypeTransferOverwritePolicyRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTransferOverwritePolicyRecord_lower(_ value: TransferOverwritePolicyRecord) -> RustBuffer {
+    return FfiConverterTypeTransferOverwritePolicyRecord.lower(value)
+}
+
+
+
+/**
  * Lifecycle status of a transfer task.
  */
 
 public enum TransferStatusRecord: Equatable, Hashable {
-    
+
     case pending
     case inProgress
     case completed
@@ -1625,46 +2124,46 @@ public struct FfiConverterTypeTransferStatusRecord: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TransferStatusRecord {
         let variant: Int32 = try readInt(&buf)
         switch variant {
-        
+
         case 1: return .pending
-        
+
         case 2: return .inProgress
-        
+
         case 3: return .completed
-        
+
         case 4: return .failed(message: try FfiConverterString.read(from: &buf)
         )
-        
+
         case 5: return .cancelled
-        
+
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
     public static func write(_ value: TransferStatusRecord, into buf: inout [UInt8]) {
         switch value {
-        
-        
+
+
         case .pending:
             writeInt(&buf, Int32(1))
-        
-        
+
+
         case .inProgress:
             writeInt(&buf, Int32(2))
-        
-        
+
+
         case .completed:
             writeInt(&buf, Int32(3))
-        
-        
+
+
         case let .failed(message):
             writeInt(&buf, Int32(4))
             FfiConverterString.write(message, into: &buf)
-            
-        
+
+
         case .cancelled:
             writeInt(&buf, Int32(5))
-        
+
         }
     }
 }
@@ -1692,9 +2191,9 @@ public func FfiConverterTypeTransferStatusRecord_lower(_ value: TransferStatusRe
  * Callback invoked when an active SSH/SFTP session is lost.
  */
 public protocol ConnectionEventHandler: AnyObject, Sendable {
-    
-    func onSessionDisconnected(sessionId: UInt64, reason: String) 
-    
+
+    func onSessionDisconnected(sessionId: UInt64, reason: String)
+
 }
 
 
@@ -1738,7 +2237,7 @@ fileprivate struct UniffiCallbackInterfaceConnectionEventHandler {
                 )
             }
 
-            
+
             let writeReturn = { () }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -1832,9 +2331,9 @@ public func FfiConverterCallbackInterfaceConnectionEventHandler_lower(_ v: Conne
  * Callback invoked when a host key is not yet trusted.
  */
 public protocol HostKeyHandler: AnyObject, Sendable {
-    
+
     func promptUnknownHost(challenge: HostKeyChallenge)  -> Bool
-    
+
 }
 
 
@@ -1876,7 +2375,7 @@ fileprivate struct UniffiCallbackInterfaceHostKeyHandler {
                 )
             }
 
-            
+
             let writeReturn = { uniffiOutReturn.pointee = FfiConverterBool.lower($0) }
             uniffiTraitInterfaceCall(
                 callStatus: uniffiCallStatus,
@@ -1966,6 +2465,30 @@ public func FfiConverterCallbackInterfaceHostKeyHandler_lower(_ v: HostKeyHandle
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
     typealias SwiftType = UInt64?
 
@@ -1982,6 +2505,30 @@ fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
+    typealias SwiftType = Bool?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterBool.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterBool.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -2032,6 +2579,56 @@ fileprivate struct FfiConverterOptionTypeSecretCredential: FfiConverterRustBuffe
         case 1: return try FfiConverterTypeSecretCredential.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeKnownHostAliasRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [KnownHostAliasRecord]
+
+    public static func write(_ value: [KnownHostAliasRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeKnownHostAliasRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [KnownHostAliasRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [KnownHostAliasRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeKnownHostAliasRecord.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeKnownHostEntryRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [KnownHostEntryRecord]
+
+    public static func write(_ value: [KnownHostEntryRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeKnownHostEntryRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [KnownHostEntryRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [KnownHostEntryRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeKnownHostEntryRecord.read(from: &buf))
+        }
+        return seq
     }
 }
 
@@ -2170,13 +2767,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_delete() != 12825) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_delete_entry() != 1346) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_disconnect() != 49600) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download() != 30887) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download() != 36615) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download_entry() != 26836) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download_entry() != 18406) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_initial_directory() != 50950) {
@@ -2185,7 +2785,25 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_transfer_queue() != 37741) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_known_hosts_entries() != 39105) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_known_hosts_remove() != 14958) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_known_hosts_repair_permissions() != 32218) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_known_hosts_reset() != 47583) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_known_hosts_status() != 51941) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_list_directory() != 32015) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_read_link() != 48067) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_rename() != 64839) {
@@ -2194,10 +2812,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_retry_transfer() != 32174) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload() != 61017) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_set_permissions() != 9825) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload_entry() != 59035) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_stat() != 5879) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload() != 4786) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload_entry() != 4078) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_constructor_dockbridgeclient_new() != 38617) {

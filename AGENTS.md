@@ -36,18 +36,32 @@ printf 'Port 2222\nListenAddress 127.0.0.1\nHostKey /tmp/sftpdemo/ssh_host_ed255
 sudo /usr/sbin/sshd -f /tmp/sftpdemo/sshd_config
 ```
 
-Then drive the CLI (it reads the password, then `yes` to trust the host key on first connect):
+Then drive the CLI. Host-key prompts are read from `/dev/tty` (never stdin), so use
+`--host-key-policy accept-new` to make the first connection non-interactive and keep
+stdin exclusively for the password:
 
 ```bash
-{ printf '%s\n' password yes; } | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
+# First connect: trust the new host key automatically; stdin carries only the password
+printf '%s\n' password | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
   upload --host 127.0.0.1 --port 2222 --user ubuntu --password-stdin \
+  --host-key-policy accept-new \
   --local ./file.txt --remote /home/ubuntu/upload/hello.txt
+
+# private-key auth (key-only servers): --identity expands ~; --passphrase-stdin unlocks encrypted keys
+printf '%s\n' "$KEY_PASSPHRASE" | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
+  list --host 127.0.0.1 --port 2222 --user ubuntu \
+  --identity ~/.ssh/id_ed25519 --passphrase-stdin \
+  --host-key-policy accept-new \
+  --path /home/ubuntu
 ```
 
 Non-obvious gotchas discovered during setup:
 
-- The CLI config TOML has **no serde defaults**: a partial config fails with `missing field ...`.
-  Provide all `AppConfig` fields (see `config/default.toml`), e.g. `transfer_chunk_size_bytes`.
+- The CLI config TOML uses `#[serde(default, deny_unknown_fields)]` on `AppConfig`, so a partial
+  config (with only the keys you want to set) loads with defaults for the rest, and a typo'd key
+  name fails loudly instead of being silently ignored. When a field is omitted, the default comes
+  from `AppConfig::default()` (including `known_hosts_path` → `~/.dockbridge/known_hosts.json`),
+  never an empty path.
   Point `known_hosts_path` at a writable temp file and set
   `merge_openssh_known_hosts_on_connect = false` to avoid touching `~/.ssh/known_hosts`.
 - Remote paths resolve **absolute from `/`**, not the login home. Use full paths like
