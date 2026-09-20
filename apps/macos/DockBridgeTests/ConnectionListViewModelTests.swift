@@ -6,6 +6,8 @@ import XCTest
 final class ConnectionListViewModelTests: XCTestCase {
     private var baseDirectory: URL!
     private var store: ConnectionStore!
+    private var signingKeyStore: ProfileTrustSigningKeyStore!
+    private var trustStore: ProfileTrustStore!
     private var keychain: KeychainService!
     private var viewModel: ConnectionListViewModel!
 
@@ -15,7 +17,18 @@ final class ConnectionListViewModelTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         keychain = KeychainService(serviceName: "com.dockbridge.tests.\(UUID().uuidString)")
         let encryptionService = ProfileEncryptionService(keychain: keychain)
-        store = ConnectionStore(baseDirectory: baseDirectory, encryptionService: encryptionService)
+        signingKeyStore = ProfileTrustSigningKeyStore(
+            serviceName: "com.dockbridge.tests.\(UUID().uuidString)"
+        )
+        trustStore = ProfileTrustStore(
+            baseDirectory: baseDirectory,
+            signingKeyStore: signingKeyStore
+        )
+        store = ConnectionStore(
+            baseDirectory: baseDirectory,
+            trustStore: trustStore,
+            encryptionService: encryptionService
+        )
         viewModel = ConnectionListViewModel(
             store: store,
             keychain: keychain,
@@ -29,6 +42,7 @@ final class ConnectionListViewModelTests: XCTestCase {
             try? keychain.deletePassword(account: account)
             try? keychain.deletePassphrase(account: account)
         }
+        try? signingKeyStore.deleteKey()
         try? keychain.deleteKeyData(account: ProfileEncryptionService.masterKeyAccount)
         try? FileManager.default.removeItem(at: baseDirectory)
         super.tearDown()
@@ -224,7 +238,7 @@ final class ConnectionListViewModelTests: XCTestCase {
         viewModel.load()
         viewModel.confirmNewProfileTrust()
 
-        let trusted = try ProfileTrustStore(baseDirectory: baseDirectory).loadTrustedEndpoints()
+        let trusted = try trustStore.loadTrustedEndpoints()
         XCTAssertEqual(trusted[existingProfile.id], TrustedProfileEndpoint(profile: existingProfile))
         XCTAssertEqual(trusted[newProfile.id], TrustedProfileEndpoint(profile: newProfile))
         XCTAssertFalse(viewModel.showNewProfileTrustConfirmation)
@@ -248,7 +262,7 @@ final class ConnectionListViewModelTests: XCTestCase {
         viewModel.load()
         viewModel.declineNewProfileTrust()
 
-        let trusted = try ProfileTrustStore(baseDirectory: baseDirectory).loadTrustedEndpoints()
+        let trusted = try trustStore.loadTrustedEndpoints()
         XCTAssertEqual(trusted.count, 1)
         XCTAssertNil(trusted[newProfile.id])
         XCTAssertFalse(viewModel.showNewProfileTrustConfirmation)
@@ -278,7 +292,7 @@ final class ConnectionListViewModelTests: XCTestCase {
 
         viewModel.save(profile, password: nil, passphrase: nil)
 
-        XCTAssertTrue(try ProfileTrustStore(baseDirectory: baseDirectory).loadTrustedEndpoints().isEmpty)
+        XCTAssertTrue(try trustStore.loadTrustedEndpoints().isEmpty)
     }
 
     func testAcceptEndpointChangeUpdatesTrustAndClearsWarning() throws {
