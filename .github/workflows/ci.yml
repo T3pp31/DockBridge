@@ -52,6 +52,16 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Check version consistency (Cargo.toml == release.toml)
+        run: |
+          cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          release_version="$(awk -F'"' '/^version = / { print $2; exit }' config/release.toml)"
+          if [[ "$cargo_version" != "$release_version" ]]; then
+            echo "error: Cargo.toml version ($cargo_version) != config/release.toml version ($release_version)" >&2
+            exit 1
+          fi
+          echo "version=$cargo_version"
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 

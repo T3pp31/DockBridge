@@ -9,7 +9,6 @@ on:
       version:
         description: Version to release (e.g. 0.1.0)
         required: true
-        default: "0.1.0"
 
 concurrency:
   group: release-${{ github.ref }}
@@ -43,6 +42,21 @@ jobs:
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Release version: ${VERSION}"
+
+      - name: Verify release.toml / Cargo.toml match the tag version
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          release_version="$(awk -F'"' '/^version = / { print $2; exit }' config/release.toml)"
+          cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          if [[ "$release_version" != "$VERSION" ]]; then
+            echo "error: config/release.toml ($release_version) != tag version ($VERSION)" >&2
+            exit 1
+          fi
+          if [[ "$cargo_version" != "$VERSION" ]]; then
+            echo "error: Cargo.toml ($cargo_version) != tag version ($VERSION)" >&2
+            exit 1
+          fi
+          echo "release.toml and Cargo.toml match tag $VERSION"
 
       - name: Extract release notes
         id: notes

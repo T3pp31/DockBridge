@@ -36,6 +36,7 @@ command line may appear in argv, shell history, and process listings (CWE-214)."
 #[derive(Parser, Debug)]
 #[command(
     name = "dockbridge",
+    version = env!("CARGO_PKG_VERSION"),
     about = "DockBridge SFTP CLI",
     after_help = PASSWORD_AFTER_HELP
 )]
