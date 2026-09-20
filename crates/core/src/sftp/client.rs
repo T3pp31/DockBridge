@@ -552,7 +552,9 @@ impl<'a> SftpClient<'a> {
                         // there, and treating it as an empty PathBuf would
                         // otherwise call create_dir_all("") forever.
                         match ancestor.parent() {
-                            Some(next) if !next.as_os_str().is_empty() => ancestor = next.to_path_buf(),
+                            Some(next) if !next.as_os_str().is_empty() => {
+                                ancestor = next.to_path_buf()
+                            }
                             _ => break,
                         }
                     }
