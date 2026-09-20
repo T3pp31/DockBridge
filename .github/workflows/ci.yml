@@ -148,7 +148,12 @@ jobs:
   # .github/workflows/release.yml — see docs/security.md#release-signing-pipeline.
   macos:
     name: macOS
-    runs-on: macos-latest
+    # Pin the runner so Xcode/SDK changes cannot break CI silently
+    # (macos-latest jumped to Xcode 26 and repeatedly hung testmanagerd).
+    # macOS 15 + Xcode 16.4 matches project.yml / README requirements.
+    runs-on: macos-15
+    permissions:
+      contents: read
     # Guard against xcodebuild test hangs (observed: no test output for 6h until
     # the default job timeout in run 34044968127). Normal duration is ~13 min.
     timeout-minutes: 45
@@ -157,6 +162,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Pin Xcode 16.4
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90  # v1.7.0
+        with:
+          xcode-version: '16.4'
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable (tag via rust-toolchain.toml)
@@ -174,6 +184,13 @@ jobs:
 
       - name: Generate UniFFI bindings
         run: ./scripts/generate-uniffi.sh
+
+      - name: Build x86_64 (Intel) Rust static library
+        run: |
+          rustup target add x86_64-apple-darwin
+          ./scripts/build-rust.sh x86_64-apple-darwin release
+          lipo target/x86_64-apple-darwin/release/libdockbridge_uniffi.a \
+            -verify_arch x86_64
 
       - name: Install pinned XcodeGen
         run: |
