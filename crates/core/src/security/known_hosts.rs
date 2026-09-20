@@ -604,7 +604,7 @@ impl KnownHostsManager {
             // is never changed by an import — but aliases, exclusions, and a
             // missing OpenSSH public key are still merged so revocation scope
             // and export completeness stay in sync with the source file.
-            if entry_is_non_trusting_marker(entry.marker) {
+            if entry_has_non_trusting_marker(entry.marker) {
                 let mut changed = false;
                 for alias in aliases {
                     changed |= merge_trusted_alias(entry, &alias.host, alias.port);
@@ -1485,7 +1485,10 @@ mod tests {
             "excluded host must not become a trusted alias"
         );
         assert!(
-            entry.excluded_aliases.iter().any(|a| a.host == "bad.example.com"),
+            entry
+                .excluded_aliases
+                .iter()
+                .any(|a| a.host == "bad.example.com"),
             "exclusion must be preserved"
         );
     }
@@ -1512,12 +1515,17 @@ mod tests {
         let entry = manager.find_entry("example.com", 22).unwrap();
         assert_eq!(entry.marker, Some(KnownHostMarker::Revoked));
         assert!(
-            entry.aliases.iter().any(|a| a.host == "revoked-alias.example.com"),
+            entry
+                .aliases
+                .iter()
+                .any(|a| a.host == "revoked-alias.example.com"),
             "revocation scope alias should be merged"
         );
 
         let reloaded = KnownHostsManager::load(&json_path).unwrap();
-        let entry = reloaded.find_entry("revoked-alias.example.com", 22).unwrap();
+        let entry = reloaded
+            .find_entry("revoked-alias.example.com", 22)
+            .unwrap();
         assert_eq!(entry.marker, Some(KnownHostMarker::Revoked));
     }
 
