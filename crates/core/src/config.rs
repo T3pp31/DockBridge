@@ -87,6 +87,16 @@ pub struct AppConfig {
     pub directory_walk_max_depth: u32,
     /// Maximum combined file bytes collected during recursive directory walks.
     pub directory_walk_max_total_bytes: u64,
+    /// Time without any SSH traffic after which the client considers the
+    /// session dead. Independent of [`connection_timeout_secs`] (the TCP/SSH
+    /// handshake budget). `None` disables idle-based expiry.
+    #[serde(default = "default_ssh_inactivity_timeout_secs")]
+    pub ssh_inactivity_timeout_secs: Option<u64>,
+    /// Interval between SSH keepalive packets. When set, russh sends a
+    /// keepalive/ping at this cadence so idle sessions survive NAT/firewall
+    /// timeouts without relying on the SFTP health checker.
+    #[serde(default = "default_ssh_keepalive_interval_secs")]
+    pub ssh_keepalive_interval_secs: u64,
 }
 
 impl Default for AppConfig {
@@ -105,6 +115,8 @@ impl Default for AppConfig {
             directory_walk_max_files: DEFAULT_DIRECTORY_WALK_MAX_FILES,
             directory_walk_max_depth: DEFAULT_DIRECTORY_WALK_MAX_DEPTH,
             directory_walk_max_total_bytes: DEFAULT_DIRECTORY_WALK_MAX_TOTAL_BYTES,
+            ssh_inactivity_timeout_secs: default_ssh_inactivity_timeout_secs(),
+            ssh_keepalive_interval_secs: default_ssh_keepalive_interval_secs(),
         }
     }
 }
@@ -155,6 +167,20 @@ impl AppConfig {
             self.session_health_check_interval_secs,
             1..=3600,
             "must be between 1 and 3600 seconds",
+        )?;
+        if let Some(inactivity_timeout_secs) = self.ssh_inactivity_timeout_secs {
+            ensure_range(
+                "ssh_inactivity_timeout_secs",
+                inactivity_timeout_secs,
+                1..=86_400,
+                "must be between 1 and 86400 seconds when enabled",
+            )?;
+        }
+        ensure_range(
+            "ssh_keepalive_interval_secs",
+            self.ssh_keepalive_interval_secs,
+            0..=3600,
+            "must be between 0 and 3600 seconds",
         )?;
         ensure_range(
             "transfer_retry_count",
@@ -328,6 +354,13 @@ fn default_openssh_known_hosts_path() -> PathBuf {
     expand_tilde(Path::new("~/.ssh/known_hosts"))
 }
 
+fn default_ssh_inactivity_timeout_secs() -> Option<u64> {
+    Some(600)
+}
+
+fn default_ssh_keepalive_interval_secs() -> u64 {
+    30
+}
 /// Ensures the parent directory for the known hosts file exists.
 pub fn ensure_known_hosts_parent(path: &Path) -> Result<(), SecurityError> {
     let Some(parent) = path.parent() else {
@@ -674,6 +707,37 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn validate_rejects_zero_enabled_inactivity_timeout() {
+        let config = AppConfig {
+            ssh_inactivity_timeout_secs: Some(0),
+            ..AppConfig::default()
+        };
+
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue {
+                field: "ssh_inactivity_timeout_secs",
+                value: 0,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_disabled_ssh_timers() {
+        let config = AppConfig {
+            ssh_inactivity_timeout_secs: None,
+            ssh_keepalive_interval_secs: 0,
+            ..AppConfig::default()
+        };
+
+        let validated = config.validate().unwrap();
+        assert_eq!(validated.ssh_inactivity_timeout_secs, None);
+        assert_eq!(validated.ssh_keepalive_interval_secs, 0);
     }
 
     #[test]

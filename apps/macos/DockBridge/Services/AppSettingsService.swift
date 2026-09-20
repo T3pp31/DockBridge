@@ -21,6 +21,8 @@ enum AppSettingsKeys {
     static let transferRetryCount = "transferRetryCount"
     static let transferChunkSizeBytes = "transferChunkSizeBytes"
     static let transferDownloadPipelineDepth = "transferDownloadPipelineDepth"
+    static let sshInactivityTimeoutSecs = "sshInactivityTimeoutSecs"
+    static let sshKeepaliveIntervalSecs = "sshKeepaliveIntervalSecs"
     static let defaultLocalPath = "defaultLocalPath"
     static let defaultLocalBookmark = "defaultLocalBookmark"
     static let confirmBeforeDelete = "confirmBeforeDelete"
@@ -39,6 +41,21 @@ enum AppSettingsKeys {
 
 extension Notification.Name {
     static let appConfigDidChange = Notification.Name("DockBridgeAppConfigDidChange")
+}
+
+/// Returns the value only when it is non-negative so a corrupt/negative
+/// UserDefaults entry cannot trap on `UInt64(...)` conversion.
+private func nonNegative(_ value: Int?) -> Int? {
+    guard let value, value >= 0 else { return nil }
+    return value
+}
+
+/// Loads an optional positive timeout. A stored zero is the explicit
+/// disabled sentinel; missing or corrupt negative values fall back to the
+/// registered application default.
+private func loadOptionalPositiveTimeout(_ value: Int?, defaultValue: UInt64?) -> UInt64? {
+    guard let value, value >= 0 else { return defaultValue }
+    return value == 0 ? nil : UInt64(value)
 }
 
 final class AppSettingsService: @unchecked Sendable {
@@ -63,6 +80,8 @@ final class AppSettingsService: @unchecked Sendable {
             AppSettingsKeys.transferRetryCount: Int(AppConfig.default.transferRetryCount),
             AppSettingsKeys.transferChunkSizeBytes: Int(AppConfig.default.transferChunkSizeBytes),
             AppSettingsKeys.transferDownloadPipelineDepth: Int(AppConfig.default.transferDownloadPipelineDepth),
+            AppSettingsKeys.sshInactivityTimeoutSecs: AppConfig.default.sshInactivityTimeoutSecs,
+            AppSettingsKeys.sshKeepaliveIntervalSecs: Int(AppConfig.default.sshKeepaliveIntervalSecs),
             AppSettingsKeys.defaultLocalPath: AppConfig.default.defaultLocalPath,
             AppSettingsKeys.confirmBeforeDelete: AppConfig.default.confirmBeforeDelete,
             AppSettingsKeys.showHiddenFiles: AppConfig.default.showHiddenFiles,
@@ -121,6 +140,15 @@ final class AppSettingsService: @unchecked Sendable {
                 defaults.object(forKey: AppSettingsKeys.transferDownloadPipelineDepth) as? Int
                     ?? Int(AppConfig.default.transferDownloadPipelineDepth)
             ),
+            sshInactivityTimeoutSecs: loadOptionalPositiveTimeout(
+                defaults.object(forKey: AppSettingsKeys.sshInactivityTimeoutSecs) as? Int,
+                defaultValue: AppConfig.default.sshInactivityTimeoutSecs
+            ),
+            sshKeepaliveIntervalSecs: UInt64(
+                nonNegative(
+                    defaults.object(forKey: AppSettingsKeys.sshKeepaliveIntervalSecs) as? Int
+                ) ?? Int(AppConfig.default.sshKeepaliveIntervalSecs)
+            ),
             defaultLocalPath: defaults.string(forKey: AppSettingsKeys.defaultLocalPath)
                 ?? AppConfig.default.defaultLocalPath,
             defaultLocalBookmark: defaults.data(forKey: AppSettingsKeys.defaultLocalBookmark),
@@ -172,6 +200,15 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(
             Int(config.transferDownloadPipelineDepth),
             forKey: AppSettingsKeys.transferDownloadPipelineDepth
+        )
+        if let inactivity = config.sshInactivityTimeoutSecs {
+            defaults.set(Int(inactivity), forKey: AppSettingsKeys.sshInactivityTimeoutSecs)
+        } else {
+            defaults.set(0, forKey: AppSettingsKeys.sshInactivityTimeoutSecs)
+        }
+        defaults.set(
+            Int(config.sshKeepaliveIntervalSecs),
+            forKey: AppSettingsKeys.sshKeepaliveIntervalSecs
         )
         defaults.set(config.defaultLocalPath, forKey: AppSettingsKeys.defaultLocalPath)
         defaults.set(config.defaultLocalBookmark, forKey: AppSettingsKeys.defaultLocalBookmark)

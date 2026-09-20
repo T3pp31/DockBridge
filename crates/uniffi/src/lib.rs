@@ -70,6 +70,8 @@ pub struct AppConfigRecord {
     pub transfer_retry_count: u32,
     pub transfer_chunk_size_bytes: u64,
     pub transfer_download_pipeline_depth: u64,
+    pub ssh_inactivity_timeout_secs: Option<u64>,
+    pub ssh_keepalive_interval_secs: u64,
     pub known_hosts_path: String,
     pub openssh_known_hosts_path: String,
     pub merge_openssh_known_hosts_on_connect: bool,
@@ -262,6 +264,8 @@ impl DockBridgeClient {
                 app_config.transfer_download_pipeline_depth,
             )
             .map_err(map_error)?,
+            ssh_inactivity_timeout_secs: app_config.ssh_inactivity_timeout_secs,
+            ssh_keepalive_interval_secs: app_config.ssh_keepalive_interval_secs,
         }
         .validate()
         .map_err(map_error)?;

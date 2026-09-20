@@ -80,6 +80,7 @@
 		R3M0T3P4N3SH33T3ST5 /* RemotePaneSheetsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3M0T3P4N3SH33T3ST1 /* RemotePaneSheetsTests.swift */; };
 		F4K3BR1DG3F1L3BF1 /* FakeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4K3BR1DG3F1L3R3F /* FakeBridge.swift */; };
 		MA1NVM4V14B1L1T4C1BF1 /* MainViewModelTestabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MA1NVM4V14B1L1T4C1R3F /* MainViewModelTestabilityTests.swift */; };
+		A553771A0000000000000001 /* AppSettingsServiceRobustnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A553771A0000000000000002 /* AppSettingsServiceRobustnessTests.swift */; };
 		D5R0P0P3R4T10N5Y5N0C1N5RC /* DropOperationSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */; };
 		T7R4N5F3R0P4R0G3F0RM4T3RC /* TransferProgressFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = T7R4N5F3R0P4R0G3F0RM4T3RD /* TransferProgressFormatter.swift */; };
 		T7R4N5F3R0P4R0G3F0RM4T3TS /* TransferProgressFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T7R4N5F3R0P4R0G3F0RM4T3TS5 /* TransferProgressFormatterTests.swift */; };
@@ -200,6 +201,7 @@
 		R3M0T3P4N3SH33T3ST1 /* RemotePaneSheetsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePaneSheetsTests.swift; sourceTree = "<group>"; };
 		F4K3BR1DG3F1L3R3F /* FakeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeBridge.swift; sourceTree = "<group>"; };
 		MA1NVM4V14B1L1T4C1R3F /* MainViewModelTestabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewModelTestabilityTests.swift; sourceTree = "<group>"; };
+		A553771A0000000000000002 /* AppSettingsServiceRobustnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsServiceRobustnessTests.swift; sourceTree = "<group>"; };
 		D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropOperationSync.swift; sourceTree = "<group>"; };
 		T7R4N5F3R0P4R0G3F0RM4T3RD /* TransferProgressFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferProgressFormatter.swift; sourceTree = "<group>"; };
 		T7R4N5F3R0P4R0G3F0RM4T3TS5 /* TransferProgressFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferProgressFormatterTests.swift; sourceTree = "<group>"; };
@@ -498,6 +500,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				R3M0T3P4N3SH33T3ST1 /* RemotePaneSheetsTests.swift */,
 				F4K3BR1DG3F1L3R3F /* FakeBridge.swift */,
 				MA1NVM4V14B1L1T4C1R3F /* MainViewModelTestabilityTests.swift */,
+				A553771A0000000000000002 /* AppSettingsServiceRobustnessTests.swift */,
 				S3C8K0P3B00KM4RKS3RV1C3T2 /* SecurityScopedBookmarkServiceTests.swift */,
 				S3NS1T1V3STR1NGT3ST5RC2 /* SensitiveStringTests.swift */,
 				UPD4T3CH3CKV13WT3ST5RC1 /* UpdateCheckViewModelTests.swift */,
@@ -742,6 +745,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				R3M0T3P4N3SH33T3ST5 /* RemotePaneSheetsTests.swift in Sources */,
 				F4K3BR1DG3F1L3BF1 /* FakeBridge.swift in Sources */,
 				MA1NVM4V14B1L1T4C1BF1 /* MainViewModelTestabilityTests.swift in Sources */,
+				A553771A0000000000000001 /* AppSettingsServiceRobustnessTests.swift in Sources */,
 				S3C8K0P3B00KM4RKS3RV1C3T1 /* SecurityScopedBookmarkServiceTests.swift in Sources */,
 				S3NS1T1V3STR1NGT3ST5RC1 /* SensitiveStringTests.swift in Sources */,
 				UPD4T3CH3CKV13WT3ST5BF1 /* UpdateCheckViewModelTests.swift in Sources */,

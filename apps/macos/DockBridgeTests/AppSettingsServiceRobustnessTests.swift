@@ -65,4 +65,17 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
         // Then: it clamps up to the supported minimum
         XCTAssertGreaterThanOrEqual(config.transferChunkSizeBytes, 4_096)
     }
+
+    func testSaveConfigPreservesDisabledInactivityTimeout() {
+        // Given: idle-based expiry is explicitly disabled
+        var config = service.loadConfig()
+        config.sshInactivityTimeoutSecs = nil
+
+        // When: the config is saved and loaded again
+        service.saveConfig(config)
+        let reloaded = service.loadConfig()
+
+        // Then: the registered default does not re-enable the timeout
+        XCTAssertNil(reloaded.sshInactivityTimeoutSecs)
+    }
 }

@@ -11,6 +11,8 @@ use russh::mac;
 use russh::Preferred;
 use ssh_key::{Algorithm, EcdsaCurve, HashAlg};
 
+use crate::config::AppConfig;
+
 const ALLOWED_KEX: &[kex::Name] = &[
     // Post-quantum hybrid (ML-KEM-768 + X25519), preferred first so servers
     // that support it (OpenSSH 9.9+) gain harvest-now-decrypt-later resistance.
@@ -72,11 +74,26 @@ pub fn secure_client_preferred() -> Preferred {
     }
 }
 
-/// Builds a russh client configuration with secure algorithm preferences.
-pub fn build_client_config(inactivity_timeout_secs: u64) -> client::Config {
+/// Builds a russh client configuration with secure algorithm preferences,
+/// a SSH-level keepalive, and an idle (`inactivity`) timeout that is
+/// independent of the TCP/SSH connect timeout.
+///
+/// A keepalive interval of `0` explicitly disables SSH keep-alive packets
+/// (russh would otherwise spin on a zero-length interval).
+pub fn build_client_config(config: &AppConfig) -> client::Config {
+    let keepalive_interval = (config.ssh_keepalive_interval_secs != 0)
+        .then(|| Duration::from_secs(config.ssh_keepalive_interval_secs));
+    // A 0-second inactivity timeout would disconnect immediately; treat it
+    // like "disabled" (None) just as a 0 keepalive interval does.
+    let inactivity_timeout = config
+        .ssh_inactivity_timeout_secs
+        .filter(|&secs| secs > 0)
+        .map(Duration::from_secs);
     client::Config {
         preferred: secure_client_preferred(),
-        inactivity_timeout: Some(Duration::from_secs(inactivity_timeout_secs)),
+        inactivity_timeout,
+        keepalive_interval,
+        keepalive_max: 3,
         ..Default::default()
     }
 }
@@ -293,14 +310,69 @@ mod tests {
 
     #[test]
     fn build_client_config_sets_preferred_and_timeout() {
-        // Given: a connection timeout
-        let config = build_client_config(42);
+        // Given: a config with distinct connect and idle timeouts
+        let app_config = AppConfig {
+            ssh_inactivity_timeout_secs: Some(600),
+            ssh_keepalive_interval_secs: 30,
+            ..AppConfig::default()
+        };
+        let config = build_client_config(&app_config);
 
         // When: inspecting the russh client config
-        // Then: secure preferences and inactivity timeout are applied
-        assert_eq!(config.inactivity_timeout, Some(Duration::from_secs(42)));
+        // Then: secure preferences, idle timeout, and keepalive are applied
+        assert_eq!(config.inactivity_timeout, Some(Duration::from_secs(600)));
+        assert_eq!(config.keepalive_interval, Some(Duration::from_secs(30)));
+        assert!(config.keepalive_max > 0);
         assert_eq!(config.preferred.kex.as_ref(), ALLOWED_KEX);
         assert_eq!(config.preferred.cipher.as_ref(), ALLOWED_CIPHER);
         assert_eq!(config.preferred.mac.as_ref(), ALLOWED_MAC);
+    }
+
+    #[test]
+    fn build_client_config_disables_idle_timeout_when_unset() {
+        // Given: a config with the idle timeout disabled
+        let app_config = AppConfig {
+            ssh_inactivity_timeout_secs: None,
+            ..AppConfig::default()
+        };
+        let config = build_client_config(&app_config);
+
+        // Then: inactivity_timeout is None and keepalive is still set
+        assert_eq!(config.inactivity_timeout, None);
+        assert!(config.keepalive_interval.is_some());
+    }
+
+    #[test]
+    fn build_client_config_disables_keepalive_at_zero_interval() {
+        // Given: a config with keepalive interval explicitly set to 0
+        let app_config = AppConfig {
+            ssh_keepalive_interval_secs: 0,
+            ..AppConfig::default()
+        };
+        let config = build_client_config(&app_config);
+
+        // Then: keepalive is disabled rather than spinning on a 0-length timer
+        assert_eq!(config.keepalive_interval, None);
+        assert_eq!(
+            config.inactivity_timeout,
+            Some(Duration::from_secs(
+                app_config.ssh_inactivity_timeout_secs.unwrap_or_default()
+            ))
+        );
+    }
+
+    #[test]
+    fn build_client_config_zero_keepalive_and_no_idle_timeout() {
+        // Given: keepalive disabled and idle timeout unset
+        let app_config = AppConfig {
+            ssh_inactivity_timeout_secs: None,
+            ssh_keepalive_interval_secs: 0,
+            ..AppConfig::default()
+        };
+        let config = build_client_config(&app_config);
+
+        // Then: both timers are off
+        assert_eq!(config.keepalive_interval, None);
+        assert_eq!(config.inactivity_timeout, None);
     }
 }
