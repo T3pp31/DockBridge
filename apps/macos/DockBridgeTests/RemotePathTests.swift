@@ -52,7 +52,10 @@ final class RemotePathTests: XCTestCase {
     func testIsValidEntryNameAcceptsSimpleNames() {
         XCTAssertTrue(RemotePath.isValidEntryName("file.txt"))
         XCTAssertTrue(RemotePath.isValidEntryName("my-folder"))
-        XCTAssertTrue(RemotePath.isValidEntryName("."))
+        XCTAssertTrue(RemotePath.isValidEntryName("a..b"))
+        XCTAssertTrue(RemotePath.isValidEntryName("v1..v2.diff"))
+        XCTAssertTrue(RemotePath.isValidEntryName("report..final.txt"))
+        XCTAssertTrue(RemotePath.isValidEntryName("..hidden"))
     }
 
     func testIsValidEntryNameRejectsEmptyName() {
@@ -65,9 +68,9 @@ final class RemotePathTests: XCTestCase {
         XCTAssertFalse(RemotePath.isValidEntryName("../../sensitive"))
     }
 
-    func testIsValidEntryNameRejectsParentReference() {
+    func testIsValidEntryNameRejectsCurrentAndParentDirectory() {
+        XCTAssertFalse(RemotePath.isValidEntryName("."))
         XCTAssertFalse(RemotePath.isValidEntryName(".."))
-        XCTAssertFalse(RemotePath.isValidEntryName("foo..bar"))
     }
 
     func testIsValidEntryNameRejectsNullCharacter() {
