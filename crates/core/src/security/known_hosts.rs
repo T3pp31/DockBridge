@@ -141,7 +141,11 @@ impl KnownHostsManager {
             let entries = file
                 .entries
                 .into_iter()
-                .map(|entry| (entry_key(&entry.host, entry.port), entry))
+                .map(normalize_entry_case)
+                .map(|entry| {
+                    let key = entry_key(&entry.host, entry.port);
+                    (key, entry)
+                })
                 .collect();
             (entries, hashed_entries)
         } else {
@@ -243,7 +247,7 @@ impl KnownHostsManager {
 
             if !entry_matches_host(entry, host, port) {
                 entry.aliases.push(HostAlias {
-                    host: host.to_string(),
+                    host: host.to_ascii_lowercase(),
                     port,
                 });
             }
@@ -256,7 +260,7 @@ impl KnownHostsManager {
         }
 
         let entry = KnownHostEntry {
-            host: host.to_string(),
+            host: host.to_ascii_lowercase(),
             port,
             fingerprint_sha256: fingerprint,
             algorithm: format!("{:?}", key.algorithm()),
@@ -709,18 +713,18 @@ fn entry_matches_host(entry: &KnownHostEntry, host: &str, port: u16) -> bool {
         return false;
     }
 
-    entry.host == host && entry.port == port
+    entry.host.eq_ignore_ascii_case(host) && entry.port == port
         || entry
             .aliases
             .iter()
-            .any(|alias| alias.host == host && alias.port == port)
+            .any(|alias| alias.host.eq_ignore_ascii_case(host) && alias.port == port)
 }
 
 fn entry_is_excluded_for_host(entry: &KnownHostEntry, host: &str, port: u16) -> bool {
     entry
         .excluded_aliases
         .iter()
-        .any(|alias| alias.host == host && alias.port == port)
+        .any(|alias| alias.host.eq_ignore_ascii_case(host) && alias.port == port)
 }
 
 fn merge_excluded_aliases(entry: &mut KnownHostEntry, excluded: &[HostAlias]) {
@@ -736,7 +740,21 @@ fn merge_excluded_aliases(entry: &mut KnownHostEntry, excluded: &[HostAlias]) {
 }
 
 fn entry_key(host: &str, port: u16) -> String {
-    format!("{host}:{port}")
+    format!("{}:{port}", host.to_ascii_lowercase())
+}
+
+/// Lowercases a stored entry's host identifiers so lookups are case-insensitive,
+/// matching OpenSSH behaviour. Used when loading existing stores to migrate
+/// entries written by older versions.
+fn normalize_entry_case(mut entry: KnownHostEntry) -> KnownHostEntry {
+    entry.host = entry.host.to_ascii_lowercase();
+    for alias in &mut entry.aliases {
+        alias.host = alias.host.to_ascii_lowercase();
+    }
+    for alias in &mut entry.excluded_aliases {
+        alias.host = alias.host.to_ascii_lowercase();
+    }
+    entry
 }
 
 /// Returns `true` when the entry's marker means the key must NOT be trusted
@@ -801,6 +819,13 @@ fn openssh_host_patterns(patterns: &HostPatterns) -> (Vec<(String, u16)>, Vec<Ho
                 let Some(parsed) = parse_openssh_host_pattern(pattern) else {
                     continue;
                 };
+                if parsed.host.contains('*') || parsed.host.contains('?') {
+                    tracing::warn!(
+                        pattern = %pattern,
+                        "unsupported wildcard pattern in known_hosts line skipped"
+                    );
+                    continue;
+                }
                 if parsed.negated {
                     excluded.push(HostAlias {
                         host: parsed.host,
@@ -858,6 +883,11 @@ pub fn fingerprint_sha256(key: &PublicKey) -> String {
 const KNOWN_HOSTS_PARTIAL_SUFFIX_BYTES: usize = 16;
 const MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS: usize = 5;
 
+/// Maximum byte size accepted when reading a known hosts file (16 MiB).
+/// Guards the store/import readers against accidentally pointing at a huge
+/// file; owner-only permission checks already limit exposure.
+const MAX_KNOWN_HOSTS_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
 fn random_known_hosts_partial_suffix() -> String {
     use rand::TryRng;
 
@@ -894,6 +924,16 @@ fn read_secure_known_hosts_file(
     #[cfg(not(unix))]
     {
         let _ = policy;
+        let metadata = fs::metadata(path).map_err(|err| SecurityError::KnownHostsReadFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        })?;
+        if metadata.len() > MAX_KNOWN_HOSTS_FILE_BYTES {
+            return Err(SecurityError::KnownHostsReadFailed {
+                path: path.display().to_string(),
+                message: "known hosts file is too large".to_string(),
+            });
+        }
         fs::read_to_string(path).map_err(|err| SecurityError::KnownHostsReadFailed {
             path: path.display().to_string(),
             message: err.to_string(),
@@ -920,6 +960,22 @@ fn read_secure_known_hosts_file_unix(
         })?;
 
     validate_known_hosts_fd_metadata(&file, &path_str, policy)?;
+
+    let size = file
+        .metadata()
+        .map_err(|err| SecurityError::KnownHostsReadFailed {
+            path: path_str.clone(),
+            message: err.to_string(),
+        })?
+        .len();
+    if size > MAX_KNOWN_HOSTS_FILE_BYTES {
+        return Err(SecurityError::KnownHostsReadFailed {
+            path: path_str,
+            message: format!(
+                "known hosts file is too large ({size} bytes, limit {MAX_KNOWN_HOSTS_FILE_BYTES})"
+            ),
+        });
+    }
 
     let mut contents = String::new();
     file.read_to_string(&mut contents)
@@ -2196,5 +2252,104 @@ mod tests {
         assert!(!fingerprints_match("SHA256:abc", "SHA256:abd"));
         assert!(!fingerprints_match("SHA256:abc", "SHA256:ab"));
         assert!(fingerprints_match("", ""));
+    }
+    #[test]
+    fn host_matching_is_case_insensitive() {
+        // Given: a trusted host stored in mixed case
+        // When: checked with different casing
+        // Then: the same entry matches regardless of case
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.accept_host_key("Example.COM", 22, &key).unwrap();
+
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("EXAMPLE.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("Example.Com", 22, &key, true),
+            HostKeyCheckResult::Trust
+        );
+
+        // The stored entry is normalized to lowercase.
+        let entry = manager.find_entry("EXAMPLE.com", 22).unwrap();
+        assert_eq!(entry.host, "example.com");
+    }
+
+    #[test]
+    fn loaded_store_migrates_mixed_case_entries() {
+        // Given: a store file written with a mixed-case host
+        // When: loaded
+        // Then: the entry is normalized to lowercase and still matches
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let fingerprint = fingerprint_sha256(&key);
+        let openssh_key = key.to_openssh().unwrap();
+
+        write_test_file_mode_0600(
+            &path,
+            format!(
+                r#"{{"entries":[{{"host":"Example.COM","port":22,"fingerprint_sha256":"{fingerprint}","algorithm":"Ed25519","aliases":[],"excluded_aliases":[],"public_key_openssh":"{openssh_key}"}}],"hashed_entries":[]}}"#
+            ),
+        );
+
+        let manager = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("EXAMPLE.COM", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn import_openssh_skips_wildcard_plain_patterns() {
+        // Given: an OpenSSH line with a non-CA wildcard pattern
+        // When: imported
+        // Then: the wildcard host is skipped (no dead entry) without aborting
+        let dir = tempdir().unwrap();
+        let json_path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+
+        write_test_file_mode_0600(&openssh_path, format!("*.example.com {openssh_key}\n"));
+
+        let mut manager = KnownHostsManager::load(&json_path).unwrap();
+        let merged = manager.import_openssh(&openssh_path).unwrap();
+        assert_eq!(merged, 0);
+
+        assert_eq!(
+            manager.check_host_key("host.example.com", 22, &key, false),
+            HostKeyCheckResult::Unknown
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_known_hosts_rejects_oversized_file() {
+        // Given: an OpenSSH known_hosts file larger than the size limit
+        // When: read_secure_known_hosts_file is called
+        // Then: a "file too large" error is returned instead of reading it all
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(&path, vec![b' '; (MAX_KNOWN_HOSTS_FILE_BYTES as usize) + 1]);
+
+        let err =
+            read_secure_known_hosts_file(&path, KnownHostsReadPolicy::OpenSshImport).unwrap_err();
+        assert!(
+            matches!(err, SecurityError::KnownHostsReadFailed { ref message, .. } if message.contains("too large")),
+            "unexpected error: {err:?}"
+        );
     }
 }

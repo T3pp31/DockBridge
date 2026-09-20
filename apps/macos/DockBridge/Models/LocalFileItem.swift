@@ -55,8 +55,15 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
             options: showHiddenFiles ? [] : [.skipsHiddenFiles]
         )
 
-        let items = try urls.map { url -> LocalFileItem in
-            let values = try url.resourceValues(forKeys: keys)
+        // Per-entry resilience: a single unreadable / disappearing entry must
+        // not blank the whole local pane. Fall back to the minimal initializer
+        // (size/date unknown) when resourceValues fails, e.g. a file deleted
+        // between the directory listing and this call, or an unreadable
+        // protected directory.
+        let items = urls.compactMap { url -> LocalFileItem? in
+            guard let values = try? url.resourceValues(forKeys: keys) else {
+                return nil
+            }
             return LocalFileItem(url: url, resourceValues: values)
         }
 
