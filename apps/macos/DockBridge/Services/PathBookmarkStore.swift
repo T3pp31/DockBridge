@@ -12,12 +12,21 @@ final class PathBookmarkStore: @unchecked Sendable {
 
     func load() -> [PathBookmark] {
         guard let data = defaults.data(forKey: storageKey) else { return [] }
-        return (try? JSONDecoder().decode([PathBookmark].self, from: data)) ?? []
+        do {
+            return try JSONDecoder().decode([PathBookmark].self, from: data)
+        } catch {
+            AppLogging.ui.error("failed to decode path bookmarks: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
     }
 
     func save(_ bookmarks: [PathBookmark]) {
-        guard let data = try? JSONEncoder().encode(bookmarks) else { return }
-        defaults.set(data, forKey: storageKey)
+        do {
+            let data = try JSONEncoder().encode(bookmarks)
+            defaults.set(data, forKey: storageKey)
+        } catch {
+            AppLogging.ui.error("failed to encode path bookmarks: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     func add(_ bookmark: PathBookmark) {

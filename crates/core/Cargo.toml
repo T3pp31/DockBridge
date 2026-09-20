@@ -9,15 +9,15 @@ description = "DockBridge SSH/SFTP core library"
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-base64.workspace = true
 libc = "0.2"
+# rand 0.10 is the current stable series on crates.io (as of 2026-09); the
+# range keeps us on non-breaking 0.10 minor updates.
 rand = { version = "0.10", features = ["thread_rng"] }
 russh.workspace = true
 russh-sftp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true
-sha2.workspace = true
 subtle.workspace = true
 ssh-key.workspace = true
 thiserror.workspace = true
@@ -27,7 +27,7 @@ tracing.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 rand = "0.10"
-rand_core = { version = "0.6", features = ["getrandom"] }
 ssh-key.workspace = true
 tempfile = "3"
