@@ -228,10 +228,7 @@ fn ensure_range(
 /// targets a value above `usize::MAX` would otherwise be truncated before
 /// `validate()` sees it. Rejecting the value here (rather than wrapping)
 /// keeps the "single source of truth" validation meaningful.
-pub fn u64_to_usize_or_invalid(
-    field: &'static str,
-    value: u64,
-) -> Result<usize, ConfigError> {
+pub fn u64_to_usize_or_invalid(field: &'static str, value: u64) -> Result<usize, ConfigError> {
     usize::try_from(value).map_err(|_| ConfigError::InvalidValue {
         field,
         value,
