@@ -637,9 +637,28 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
     
     func listDirectory(sessionId: UInt64, path: String) throws  -> [RemoteFileRecord]
     
+    /**
+     * Resolves the target of a remote symlink (SFTP READLINK).
+     */
+    func readLink(sessionId: UInt64, path: String) throws  -> String
+    
     func rename(sessionId: UInt64, from: String, to: String) throws 
     
     func retryTransfer(sessionId: UInt64, taskId: UInt64) throws 
+    
+    /**
+     * Sets POSIX permission mode bits on a remote entry.
+     */
+    func setPermissions(sessionId: UInt64, path: String, mode: UInt32) throws 
+    
+    /**
+     * Returns metadata for a single remote path.
+     *
+     * When `follow_symlinks` is `false`, symlinks are reported as symlinks
+     * with their target resolved via READLINK. When `true`, the target's
+     * metadata is returned instead.
+     */
+    func stat(sessionId: UInt64, path: String, followSymlinks: Bool) throws  -> RemoteFileRecord
     
     func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord) throws 
     
@@ -896,6 +915,20 @@ open func listDirectory(sessionId: UInt64, path: String)throws  -> [RemoteFileRe
 })
 }
     
+    /**
+     * Resolves the target of a remote symlink (SFTP READLINK).
+     */
+open func readLink(sessionId: UInt64, path: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_read_link(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterString.lower(path),uniffiCallStatus
+    )
+})
+}
+    
 open func rename(sessionId: UInt64, from: String, to: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_rename(
@@ -915,6 +948,39 @@ open func retryTransfer(sessionId: UInt64, taskId: UInt64)throws   {try rustCall
         FfiConverterUInt64.lower(taskId),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * Sets POSIX permission mode bits on a remote entry.
+     */
+open func setPermissions(sessionId: UInt64, path: String, mode: UInt32)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_set_permissions(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterString.lower(path),
+        FfiConverterUInt32.lower(mode),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Returns metadata for a single remote path.
+     *
+     * When `follow_symlinks` is `false`, symlinks are reported as symlinks
+     * with their target resolved via READLINK. When `true`, the target's
+     * metadata is returned instead.
+     */
+open func stat(sessionId: UInt64, path: String, followSymlinks: Bool)throws  -> RemoteFileRecord  {
+    return try  FfiConverterTypeRemoteFileRecord_lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_stat(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterString.lower(path),
+        FfiConverterBool.lower(followSymlinks),uniffiCallStatus
+    )
+})
 }
     
 open func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
@@ -1369,17 +1435,59 @@ public struct RemoteFileRecord: Equatable, Hashable {
     public var name: String
     public var path: String
     public var isDirectory: Bool
+    public var isSymlink: Bool
     public var size: UInt64
     public var modifiedAtSecs: UInt64?
+    /**
+     * POSIX permission bits (e.g. `0o755`) when reported by the server.
+     */
+    public var permissions: UInt32?
+    /**
+     * Numeric owner id when reported by the server.
+     */
+    public var uid: UInt32?
+    /**
+     * Numeric group id when reported by the server.
+     */
+    public var gid: UInt32?
+    /**
+     * Resolved symlink target (only set for single-path `stat`).
+     */
+    public var symlinkTarget: String?
+    /**
+     * Whether the symlink target resolves to a directory.
+     */
+    public var symlinkTargetIsDir: Bool?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(name: String, path: String, isDirectory: Bool, size: UInt64, modifiedAtSecs: UInt64?) {
+    public init(name: String, path: String, isDirectory: Bool, isSymlink: Bool, size: UInt64, modifiedAtSecs: UInt64?, 
+        /**
+         * POSIX permission bits (e.g. `0o755`) when reported by the server.
+         */permissions: UInt32?, 
+        /**
+         * Numeric owner id when reported by the server.
+         */uid: UInt32?, 
+        /**
+         * Numeric group id when reported by the server.
+         */gid: UInt32?, 
+        /**
+         * Resolved symlink target (only set for single-path `stat`).
+         */symlinkTarget: String?, 
+        /**
+         * Whether the symlink target resolves to a directory.
+         */symlinkTargetIsDir: Bool?) {
         self.name = name
         self.path = path
         self.isDirectory = isDirectory
+        self.isSymlink = isSymlink
         self.size = size
         self.modifiedAtSecs = modifiedAtSecs
+        self.permissions = permissions
+        self.uid = uid
+        self.gid = gid
+        self.symlinkTarget = symlinkTarget
+        self.symlinkTargetIsDir = symlinkTargetIsDir
     }
 
     
@@ -1401,8 +1509,14 @@ public struct FfiConverterTypeRemoteFileRecord: FfiConverterRustBuffer {
                 name: FfiConverterString.read(from: &buf), 
                 path: FfiConverterString.read(from: &buf), 
                 isDirectory: FfiConverterBool.read(from: &buf), 
+                isSymlink: FfiConverterBool.read(from: &buf), 
                 size: FfiConverterUInt64.read(from: &buf), 
-                modifiedAtSecs: FfiConverterOptionUInt64.read(from: &buf)
+                modifiedAtSecs: FfiConverterOptionUInt64.read(from: &buf), 
+                permissions: FfiConverterOptionUInt32.read(from: &buf), 
+                uid: FfiConverterOptionUInt32.read(from: &buf), 
+                gid: FfiConverterOptionUInt32.read(from: &buf), 
+                symlinkTarget: FfiConverterOptionString.read(from: &buf), 
+                symlinkTargetIsDir: FfiConverterOptionBool.read(from: &buf)
         )
     }
 
@@ -1410,8 +1524,14 @@ public struct FfiConverterTypeRemoteFileRecord: FfiConverterRustBuffer {
         FfiConverterString.write(value.name, into: &buf)
         FfiConverterString.write(value.path, into: &buf)
         FfiConverterBool.write(value.isDirectory, into: &buf)
+        FfiConverterBool.write(value.isSymlink, into: &buf)
         FfiConverterUInt64.write(value.size, into: &buf)
         FfiConverterOptionUInt64.write(value.modifiedAtSecs, into: &buf)
+        FfiConverterOptionUInt32.write(value.permissions, into: &buf)
+        FfiConverterOptionUInt32.write(value.uid, into: &buf)
+        FfiConverterOptionUInt32.write(value.gid, into: &buf)
+        FfiConverterOptionString.write(value.symlinkTarget, into: &buf)
+        FfiConverterOptionBool.write(value.symlinkTargetIsDir, into: &buf)
     }
 }
 
@@ -2331,6 +2451,30 @@ public func FfiConverterCallbackInterfaceHostKeyHandler_lower(_ v: HostKeyHandle
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
+    typealias SwiftType = UInt32?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt32.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt32.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
     typealias SwiftType = UInt64?
 
@@ -2347,6 +2491,30 @@ fileprivate struct FfiConverterOptionUInt64: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterUInt64.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionBool: FfiConverterRustBuffer {
+    typealias SwiftType = Bool?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterBool.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterBool.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -2621,10 +2789,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_list_directory() != 32015) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_read_link() != 48067) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_rename() != 64839) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_retry_transfer() != 32174) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_set_permissions() != 9825) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_stat() != 5879) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload() != 4786) {

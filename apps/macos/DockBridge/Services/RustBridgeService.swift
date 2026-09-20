@@ -165,10 +165,14 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     func firstExistingHomeDirectoryCandidate(for username: String) async -> String? {
         guard let client, let sessionId, isConnected else { return nil }
         for candidate in Self.homeDirectoryCandidates(for: username) {
-            let exists = await Task.detached(priority: .userInitiated) {
-                (try? client.listDirectory(sessionId: sessionId, path: candidate)) != nil
+            let isDirectory = await Task.detached(priority: .userInitiated) {
+                (try? client.stat(
+                    sessionId: sessionId,
+                    path: candidate,
+                    followSymlinks: true
+                ))?.isDirectory == true
             }.value
-            if exists {
+            if isDirectory {
                 return candidate
             }
         }
@@ -370,10 +374,14 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         }
 
         for candidate in Self.homeDirectoryCandidates(for: username) {
-            let exists = try await Task.detached(priority: .userInitiated) {
-                (try? client.listDirectory(sessionId: sessionId, path: candidate)) != nil
+            let isDirectory = await Task.detached(priority: .userInitiated) {
+                (try? client.stat(
+                    sessionId: sessionId,
+                    path: candidate,
+                    followSymlinks: true
+                ))?.isDirectory == true
             }.value
-            if exists {
+            if isDirectory {
                 return candidate
             }
         }

@@ -140,7 +140,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         settings.saveConfig(config)
 
         bridge.directoryListings["/srv/files"] = [
-            RemoteFileRecord(name: "existing.txt", path: "/srv/files/existing.txt", isDirectory: false, size: 1, modifiedAtSecs: nil)
+            RemoteFileRecord(name: "existing.txt", path: "/srv/files/existing.txt", isDirectory: false, isSymlink: false, size: 1, modifiedAtSecs: nil, permissions: nil, uid: nil, gid: nil, symlinkTarget: nil, symlinkTargetIsDir: nil)
         ]
 
         let localFile = baseDirectory.appendingPathComponent("existing.txt")
@@ -170,7 +170,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         config.transferOverwritePolicy = .ask
         settings.saveConfig(config)
         bridge.directoryListings["/srv/files"] = [
-            RemoteFileRecord(name: "other.txt", path: "/srv/files/other.txt", isDirectory: false, size: 1, modifiedAtSecs: nil)
+            RemoteFileRecord(name: "other.txt", path: "/srv/files/other.txt", isDirectory: false, isSymlink: false, size: 1, modifiedAtSecs: nil, permissions: nil, uid: nil, gid: nil, symlinkTarget: nil, symlinkTargetIsDir: nil)
         ]
 
         let localFile = baseDirectory.appendingPathComponent("new.txt")
@@ -194,7 +194,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         config.transferOverwritePolicy = .ask
         settings.saveConfig(config)
         bridge.directoryListings["/srv/files"] = [
-            RemoteFileRecord(name: "existing.txt", path: "/srv/files/existing.txt", isDirectory: false, size: 1, modifiedAtSecs: nil)
+            RemoteFileRecord(name: "existing.txt", path: "/srv/files/existing.txt", isDirectory: false, isSymlink: false, size: 1, modifiedAtSecs: nil, permissions: nil, uid: nil, gid: nil, symlinkTarget: nil, symlinkTargetIsDir: nil)
         ]
 
         let localFile = baseDirectory.appendingPathComponent("existing.txt")

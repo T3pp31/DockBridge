@@ -746,6 +746,11 @@ mod tests {
                 is_symlink: false,
                 size: 12,
                 modified_at_secs: Some(1_700_000_000),
+                permissions: Some(0o644),
+                uid: Some(501),
+                gid: Some(20),
+                symlink_target: None,
+                symlink_target_is_dir: None,
             },
             RemoteFile {
                 name: "dir".to_string(),
@@ -754,6 +759,11 @@ mod tests {
                 is_symlink: false,
                 size: 0,
                 modified_at_secs: None,
+                permissions: Some(0o755),
+                uid: Some(501),
+                gid: Some(20),
+                symlink_target: None,
+                symlink_target_is_dir: None,
             },
         ];
 

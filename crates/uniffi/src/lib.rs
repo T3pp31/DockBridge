@@ -115,8 +115,19 @@ pub struct RemoteFileRecord {
     pub name: String,
     pub path: String,
     pub is_directory: bool,
+    pub is_symlink: bool,
     pub size: u64,
     pub modified_at_secs: Option<u64>,
+    /// POSIX permission bits (e.g. `0o755`) when reported by the server.
+    pub permissions: Option<u32>,
+    /// Numeric owner id when reported by the server.
+    pub uid: Option<u32>,
+    /// Numeric group id when reported by the server.
+    pub gid: Option<u32>,
+    /// Resolved symlink target (only set for single-path `stat`).
+    pub symlink_target: Option<String>,
+    /// Whether the symlink target resolves to a directory.
+    pub symlink_target_is_dir: Option<bool>,
 }
 
 /// Direction of a file transfer task.
@@ -435,6 +446,77 @@ impl DockBridgeClient {
             })?,
         )?;
         Ok(files.into_iter().map(to_remote_file_record).collect())
+    }
+
+    /// Returns metadata for a single remote path.
+    ///
+    /// When `follow_symlinks` is `false`, symlinks are reported as symlinks
+    /// with their target resolved via READLINK. When `true`, the target's
+    /// metadata is returned instead.
+    fn stat(
+        &self,
+        session_id: u64,
+        path: String,
+        follow_symlinks: bool,
+    ) -> Result<RemoteFileRecord, DockBridgeError> {
+        let sessions = Arc::clone(&self.sessions);
+        let file = self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let sessions = sessions.lock().await;
+                let session = sessions
+                    .get(&session_id)
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                SftpClient::new(session.as_ref())
+                    .stat(&path, follow_symlinks)
+                    .await
+                    .map_err(map_error)
+            })?,
+        )?;
+        Ok(to_remote_file_record(file))
+    }
+
+    /// Resolves the target of a remote symlink (SFTP READLINK).
+    fn read_link(&self, session_id: u64, path: String) -> Result<String, DockBridgeError> {
+        let sessions = Arc::clone(&self.sessions);
+        let target = self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let sessions = sessions.lock().await;
+                let session = sessions
+                    .get(&session_id)
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                SftpClient::new(session.as_ref())
+                    .read_link(&path)
+                    .await
+                    .map_err(map_error)
+            })?,
+        )?;
+        Ok(target)
+    }
+
+    /// Sets POSIX permission mode bits on a remote entry.
+    fn set_permissions(
+        &self,
+        session_id: u64,
+        path: String,
+        mode: u32,
+    ) -> Result<(), DockBridgeError> {
+        let sessions = Arc::clone(&self.sessions);
+        self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let sessions = sessions.lock().await;
+                let session = sessions
+                    .get(&session_id)
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                SftpClient::new(session.as_ref())
+                    .set_permissions(&path, mode)
+                    .await
+                    .map_err(map_error)
+            })?,
+        )?;
+        Ok(())
     }
 
     fn upload(
@@ -791,8 +873,14 @@ fn to_remote_file_record(file: RemoteFile) -> RemoteFileRecord {
         name: file.name,
         path: file.path,
         is_directory: file.is_directory,
+        is_symlink: file.is_symlink,
         size: file.size,
         modified_at_secs: file.modified_at_secs,
+        permissions: file.permissions,
+        uid: file.uid,
+        gid: file.gid,
+        symlink_target: file.symlink_target,
+        symlink_target_is_dir: file.symlink_target_is_dir,
     }
 }
 

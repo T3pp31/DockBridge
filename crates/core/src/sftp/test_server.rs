@@ -167,20 +167,58 @@ impl SftpHandler {
     fn attrs_for(path: &Path) -> FileAttributes {
         let mut attrs = FileAttributes::empty();
         #[cfg(unix)]
-        if path.is_symlink() {
-            attrs.set_symlink(true);
-            return attrs;
+        {
+            use std::os::unix::fs::MetadataExt;
+
+            let metadata = match std::fs::symlink_metadata(path) {
+                Ok(metadata) => metadata,
+                Err(_) => return attrs,
+            };
+            attrs.uid = Some(metadata.uid());
+            attrs.gid = Some(metadata.gid());
+            attrs.permissions = Some(metadata.mode());
+            attrs.mtime = metadata.mtime().try_into().ok();
+            if metadata.is_file() {
+                attrs.size = Some(metadata.len());
+            }
+            attrs
         }
-        if path.is_dir() {
-            attrs.set_dir(true);
-        } else if path.is_file() {
-            attrs.set_regular(true);
-            attrs.size = std::fs::symlink_metadata(path)
-                .ok()
-                .or_else(|| std::fs::metadata(path).ok())
-                .map(|meta| meta.len());
+        #[cfg(not(unix))]
+        {
+            if path.is_dir() {
+                attrs.set_dir(true);
+            } else if path.is_file() {
+                attrs.set_regular(true);
+                attrs.size = std::fs::metadata(path).ok().map(|meta| meta.len());
+            }
+            attrs
         }
-        attrs
+    }
+
+    /// Like `attrs_for`, but follows symlinks (matching SFTP `STAT`, which
+    /// resolves the target for the attributes).
+    fn attrs_for_follow(path: &Path) -> FileAttributes {
+        let mut attrs = FileAttributes::empty();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = match std::fs::metadata(path) {
+                Ok(meta) => meta,
+                Err(_) => return Self::attrs_for(path),
+            };
+            attrs.uid = Some(metadata.uid());
+            attrs.gid = Some(metadata.gid());
+            attrs.permissions = Some(metadata.mode());
+            if metadata.is_file() {
+                attrs.size = Some(metadata.len());
+            }
+            attrs.mtime = metadata.mtime().try_into().ok();
+            attrs
+        }
+        #[cfg(not(unix))]
+        {
+            Self::attrs_for(path)
+        }
     }
 
     async fn read_directory_entries(&self, path: &str) -> Result<Vec<File>, StatusCode> {
@@ -262,23 +300,19 @@ impl russh_sftp::server::Handler for SftpHandler {
         }
         Ok(Attrs {
             id,
-            attrs: Self::attrs_for(&local),
+            attrs: Self::attrs_for_follow(&local),
         })
     }
 
     async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
         let local = self.resolve(&path);
-        if !local.exists() {
+        if std::fs::symlink_metadata(&local).is_err() {
             return Err(StatusCode::NoSuchFile);
         }
-        #[cfg(unix)]
-        if local.is_symlink() {
-            return Ok(Attrs {
-                id,
-                attrs: Self::attrs_for(&local),
-            });
-        }
-        self.stat(id, path).await
+        Ok(Attrs {
+            id,
+            attrs: Self::attrs_for(&local),
+        })
     }
 
     async fn open(
@@ -516,9 +550,15 @@ impl russh_sftp::server::Handler for SftpHandler {
                     return Ok(Self::err_status(id, StatusCode::Failure, "symlink failed"));
                 }
             }
-            // Resolve the virtual remote target to the server's local root so
-            // the created link stays inside the sandbox and can be lstat'ed.
-            let target_local = self.resolve(&targetpath);
+            // Absolute remote targets need translating into the test server's
+            // local root. Relative targets must be stored verbatim because
+            // READLINK returns the original value and resolution is relative
+            // to the link's parent directory.
+            let target_local = if targetpath.starts_with('/') {
+                self.resolve(&targetpath)
+            } else {
+                PathBuf::from(&targetpath)
+            };
             if std::os::unix::fs::symlink(&target_local, &link).is_err() {
                 return Ok(Self::err_status(id, StatusCode::Failure, "symlink failed"));
             }
@@ -555,6 +595,51 @@ impl russh_sftp::server::Handler for SftpHandler {
             .await
             .map_err(|_| StatusCode::Failure)?;
         Ok(Self::ok_status(id))
+    }
+
+    async fn setstat(
+        &mut self,
+        id: u32,
+        path: String,
+        attrs: FileAttributes,
+    ) -> Result<Status, Self::Error> {
+        let local = self.resolve(&path);
+        if let Some(mode) = attrs.permissions {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&local, std::fs::Permissions::from_mode(mode))
+                    .await
+                    .map_err(|_| StatusCode::Failure)?;
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = &local;
+            }
+        }
+        Ok(Self::ok_status(id))
+    }
+
+    async fn readlink(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
+        #[cfg(unix)]
+        {
+            let local = self.resolve(&path);
+            let target = std::fs::read_link(&local).map_err(|_| StatusCode::Failure)?;
+            // Return the link target as the remote-relative path.
+            let remote_target = target
+                .strip_prefix(&self.root)
+                .map(|t| format!("/{}", t.display()))
+                .unwrap_or_else(|_| target.display().to_string());
+            Ok(Name {
+                id,
+                files: vec![File::dummy(remote_target)],
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (id, path);
+            Err(self.unimplemented())
+        }
     }
 }
 

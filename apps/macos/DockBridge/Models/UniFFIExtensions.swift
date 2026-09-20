@@ -18,8 +18,14 @@ extension RemoteFileRecord: Identifiable {
             name: "..",
             path: parent,
             isDirectory: true,
+            isSymlink: false,
             size: 0,
-            modifiedAtSecs: nil
+            modifiedAtSecs: nil,
+            permissions: nil,
+            uid: nil,
+            gid: nil,
+            symlinkTarget: nil,
+            symlinkTargetIsDir: nil
         )
     }
 }
