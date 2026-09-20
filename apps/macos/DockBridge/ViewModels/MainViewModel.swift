@@ -174,6 +174,7 @@ final class MainViewModel: ObservableObject {
     private var defaultLocalAccessURL: URL?
     private var pathBookmarkAccessURL: URL?
     private var localLoadGeneration = 0
+    @Published private(set) var isLoadingRemote = false
     private var remoteLoadGeneration = 0
     private var localHistory: PathNavigationHistory
     private var remoteHistory = PathNavigationHistory(current: "/")
@@ -493,22 +494,32 @@ final class MainViewModel: ObservableObject {
     func reloadRemote() async {
         guard bridge.isConnected else {
             remoteItems = []
+            isLoadingRemote = false
             return
         }
 
         remoteLoadGeneration += 1
         let generation = remoteLoadGeneration
         let path = remotePath
+        isLoadingRemote = true
 
         do {
             let items = try await bridge.listDirectory(path: path)
             let filtered = items.filter { item in
                 RemotePath.pathMatchesEntry(parent: path, entryPath: item.path, name: item.name)
             }
-            guard generation == remoteLoadGeneration, path == remotePath else { return }
+            guard generation == remoteLoadGeneration, path == remotePath else {
+                isLoadingRemote = false
+                return
+            }
             remoteItems = filtered
+            isLoadingRemote = false
         } catch {
-            guard generation == remoteLoadGeneration else { return }
+            guard generation == remoteLoadGeneration else {
+                isLoadingRemote = false
+                return
+            }
+            isLoadingRemote = false
             errorMessage = error.dockBridgeUserMessage
             if error.isConnectionLost {
                 remoteItems = []
@@ -552,6 +563,10 @@ final class MainViewModel: ObservableObject {
         isApplyingNavigationHistory = !recordHistory
         remotePath = path
         isApplyingNavigationHistory = false
+        // Clear the previous directory's listing immediately so a user cannot
+        // act on stale rows while the new directory loads.
+        remoteItems = []
+        isLoadingRemote = true
     }
 
     var localTableItems: [LocalFileItem] {
