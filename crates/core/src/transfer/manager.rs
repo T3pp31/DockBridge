@@ -2088,4 +2088,79 @@ mod tests {
             .count();
         assert_eq!(local_found, 2, "two local files should be downloaded");
     }
+
+    #[tokio::test]
+    async fn retry_transfer_re_enqueues_failed_upload_and_completes() {
+        // Given: a manager configured for no retries (so the first attempt
+        // fails permanently) and a server whose first WRITE fails one-shot.
+        let config = AppConfig {
+            transfer_retry_count: 0,
+            ..AppConfig::default()
+        };
+        let manager = TransferManager::new(&config);
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("retry.txt");
+        tokio::fs::write(&local_path, b"retry me").await.unwrap();
+
+        server
+            .failures
+            .fail_remote_write
+            .store(true, Ordering::SeqCst);
+        manager
+            .enqueue_upload(&session, &local_path, "/upload/retry.txt")
+            .await
+            .expect_err("the first upload should fail");
+        let failed_task = manager
+            .get_transfer_queue()
+            .into_iter()
+            .find(|task| task.remote_path == "/upload/retry.txt")
+            .expect("failed task must remain in the queue");
+        assert!(
+            matches!(failed_task.status, TransferStatus::Failed { .. }),
+            "first attempt should fail: {:?}",
+            failed_task.status
+        );
+
+        // When: the failed task is retried after its future has settled.
+        let retried = manager
+            .retry_transfer(&session, failed_task.id)
+            .await
+            .expect("retry of a finished task should succeed");
+
+        // Then: the retry uses a fresh task id and completes.
+        assert_ne!(retried.id, failed_task.id, "retry must create a fresh task");
+        assert!(matches!(retried.status, TransferStatus::Completed));
+        assert!(server.remote_file_exists("/upload/retry.txt"));
+    }
+
+    #[tokio::test]
+    async fn retry_transfer_rejects_in_progress_task() {
+        // Given: a task that is currently InProgress and already in the queue.
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let manager = TransferManager::new(&AppConfig::default());
+        manager.insert_task(TransferTask {
+            id: 44,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/x.txt"),
+            remote_path: "/upload/x.txt".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 0,
+        });
+
+        // When: retry is requested for a non-terminal task.
+        let err = manager
+            .retry_transfer(&session, 44)
+            .await
+            .expect_err("retry of an in-progress task must be rejected");
+
+        // Then: the public contract reports that no retryable task exists.
+        assert!(
+            matches!(err, TransferError::TaskNotFound { task_id: 44 }),
+            "in-progress tasks are not retryable: {err:?}"
+        );
+    }
 }
