@@ -17,7 +17,9 @@ use dockbridge_core::{
     SshSession, TransferDirection, TransferManager, TransferStatus, TransferTask,
 };
 #[cfg(test)]
-use dockbridge_core::{MAX_TRANSFER_CHUNK_SIZE_BYTES, MIN_TRANSFER_CHUNK_SIZE_BYTES};
+use dockbridge_core::{
+    validate_transfer_chunk_size, MAX_TRANSFER_CHUNK_SIZE_BYTES, MIN_TRANSFER_CHUNK_SIZE_BYTES,
+};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
 use zeroize::{Zeroize, ZeroizeOnDrop};

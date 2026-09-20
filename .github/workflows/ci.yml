@@ -61,6 +61,16 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Shellcheck scripts
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck scripts/*.sh
+          else
+            echo 'shellcheck not installed; installing...'
+            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null
+            shellcheck scripts/*.sh
+          fi
+
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
           cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
