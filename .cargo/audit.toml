@@ -1,7 +1,13 @@
 # Tracked exceptions for known advisories with no immediate fix.
 # See docs/security.md for remediation plans and the response workflow.
+#
+# Conventions:
+# - Every ignore entry MUST carry a `# expires: YYYY-MM-DD` comment.
+# - The scheduled `security-audit.yml` job fails once an expiry passes, forcing
+#   a re-review (the advisory may have gained a fix by then).
+# - Remove the entry once the advisory is resolved.
 
 [advisories]
 ignore = [
-    "RUSTSEC-2023-0071", # rsa Marvin Attack — no upstream fix; see docs/security.md (#77)
+    "RUSTSEC-2023-0071", # rsa Marvin Attack — no upstream fix; see docs/security.md (#77) # expires: 2026-12-31
 ]

@@ -5,10 +5,28 @@ struct LocalPaneView: View {
     @ObservedObject var viewModel: MainViewModel
     @State private var isDropTargeted = false
     @State private var dropKind: DropKind = .none
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
             LocalPanePathBar(viewModel: viewModel)
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Filter files", text: $viewModel.localFilter)
+                    .textFieldStyle(.plain)
+                if !viewModel.localFilter.isEmpty {
+                    Button {
+                        viewModel.localFilter = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 6)
 
             Divider()
 
@@ -62,7 +80,7 @@ struct LocalPaneView: View {
                             .transition(.opacity.combined(with: .scale(scale: 0.98)))
                         }
                     }
-                    .animation(.easeInOut(duration: 0.2), value: isDropTargeted)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isDropTargeted)
                     .modifier(LocalPaneDropModifier(viewModel: viewModel, isTargeted: $isDropTargeted, dropKind: $dropKind))
             }
             .layoutPriority(0)

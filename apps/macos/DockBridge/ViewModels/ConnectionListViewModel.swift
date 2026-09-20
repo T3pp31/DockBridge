@@ -4,6 +4,8 @@ import Foundation
 @MainActor
 final class ConnectionListViewModel: ObservableObject {
     @Published private(set) var profiles: [ConnectionProfile] = []
+    /// Profile awaiting delete confirmation (non-nil while the dialog is shown).
+    @Published var confirmDeleteProfile: ConnectionProfile? = nil
     @Published var selectedProfileID: UUID?
     @Published var searchText = ""
     @Published var errorMessage: String?
@@ -19,11 +21,17 @@ final class ConnectionListViewModel: ObservableObject {
     private let keychain: KeychainService
     private let bridge: RustBridgeService
     private let bookmarkService: SecurityScopedBookmarkService
+    private let rsaKeyInspector: @Sendable (
+        ConnectionProfile,
+        KeychainService,
+        SecurityScopedBookmarkService
+    ) -> Bool?
     private var pendingEndpointChanges: [ProfileEndpointChange] = []
     private var pendingInitialTrustProfiles: [ConnectionProfile] = []
     private var pendingNewProfileTrustProfiles: [ConnectionProfile] = []
     private var rootWarningAcknowledged = false
     private var rsaWarningAcknowledged = false
+    private var connectRequestGeneration = 0
     private var cancellables = Set<AnyCancellable>()
 
     var isConnected: Bool { bridge.isConnected }
@@ -44,12 +52,18 @@ final class ConnectionListViewModel: ObservableObject {
         store: ConnectionStore = .shared,
         keychain: KeychainService = .shared,
         bookmarkService: SecurityScopedBookmarkService = .shared,
-        bridge: RustBridgeService
+        bridge: RustBridgeService,
+        rsaKeyInspector: @escaping @Sendable (
+            ConnectionProfile,
+            KeychainService,
+            SecurityScopedBookmarkService
+        ) -> Bool? = ConnectionListViewModel.inspectRsa
     ) {
         self.store = store
         self.keychain = keychain
         self.bookmarkService = bookmarkService
         self.bridge = bridge
+        self.rsaKeyInspector = rsaKeyInspector
 
         bridge.objectWillChange
             .sink { [weak self] _ in
@@ -118,12 +132,36 @@ final class ConnectionListViewModel: ObservableObject {
         }
     }
 
+    /// Asks the user to confirm before deleting a profile (and its Keychain
+    /// credentials). The actual `delete(profile:)` runs only after approval.
+    func requestDelete(profile: ConnectionProfile) {
+        confirmDeleteProfile = profile
+    }
+
     func delete(profile: ConnectionProfile) {
+        defer { confirmDeleteProfile = nil }
         do {
             profiles = try store.delete(id: profile.id)
             let account = keychain.keychainAccount(for: profile.id, kind: "profile")
-            try? keychain.deletePassword(account: account)
-            try? keychain.deletePassphrase(account: account)
+            do {
+
+                try keychain.deletePassword(account: account)
+
+            } catch {
+
+                AppLogging.keychain.error("failed to delete keychain password: \(error.localizedDescription, privacy: .public)")
+
+            }
+
+            do {
+
+                try keychain.deletePassphrase(account: account)
+
+            } catch {
+
+                AppLogging.keychain.error("failed to delete keychain passphrase: \(error.localizedDescription, privacy: .public)")
+
+            }
             if selectedProfileID == profile.id {
                 selectedProfileID = profiles.first?.id
             }
@@ -133,6 +171,12 @@ final class ConnectionListViewModel: ObservableObject {
     }
 
     func requestConnect(profile: ConnectionProfile) {
+        connectRequestGeneration &+= 1
+        pendingConnectProfile = nil
+        showRootWarning = false
+        showRsaKeyWarning = false
+        rootWarningAcknowledged = false
+        rsaWarningAcknowledged = false
         do {
             if let change = try store.endpointChange(for: profile) {
                 pendingConnectProfile = profile
@@ -146,12 +190,16 @@ final class ConnectionListViewModel: ObservableObject {
         }
 
         pendingConnectProfile = profile
-        rootWarningAcknowledged = false
-        rsaWarningAcknowledged = false
-        Task { await continueConnectAfterWarnings() }
+        resumePendingConnect()
     }
 
-    private func continueConnectAfterWarnings() async {
+    private func resumePendingConnect() {
+        let generation = connectRequestGeneration
+        Task { await continueConnectAfterWarnings(generation: generation) }
+    }
+
+    private func continueConnectAfterWarnings(generation: Int) async {
+        guard generation == connectRequestGeneration else { return }
         guard let profile = pendingConnectProfile else { return }
 
         if profile.isRootUser, !rootWarningAcknowledged {
@@ -163,13 +211,14 @@ final class ConnectionListViewModel: ObservableObject {
             // The private-key pre-check decrypts the key (bcrypt KDF) and reads
             // the Keychain; run it off the main actor so Connect does not
             // freeze the UI (beachball) while inspecting an encrypted key.
+            let inspector = rsaKeyInspector
+            let keychain = keychain
+            let bookmarkService = bookmarkService
             let usesRsa = await Task.detached(priority: .userInitiated) {
-                Self.inspectRsa(
-                    profile: profile,
-                    keychain: self.keychain,
-                    bookmarkService: self.bookmarkService
-                )
+                inspector(profile, keychain, bookmarkService)
             }.value
+            guard generation == connectRequestGeneration,
+                  pendingConnectProfile?.id == profile.id else { return }
             switch usesRsa {
             case .some(true):
                 showRsaKeyWarning = true
@@ -177,18 +226,17 @@ final class ConnectionListViewModel: ObservableObject {
             case .some(false):
                 break
             case .none:
-                // The key could not be inspected (missing bookmark or
-                // undecryptable key): tell the user instead of silently
-                // aborting the connect attempt. The pending profile is kept
-                // so the user can re-invoke connect after fixing the issue.
-                errorMessage = """
-                Access to the private key was denied. Open the connection settings and use Browse… to select the key again.
-                """
-                return
+                // Cannot determine the algorithm (e.g. an encrypted key with no
+                // saved passphrase). Skip the RSA warning and proceed to
+                // connect; authentication failure surfaces the passphrase
+                // prompt instead of blocking the flow here.
+                break
             }
         }
 
-        guard let profileToConnect = pendingConnectProfile else { return }
+        guard generation == connectRequestGeneration,
+              let profileToConnect = pendingConnectProfile,
+              profileToConnect.id == profile.id else { return }
         clearPendingConnectState()
         Task { await connect(profile: profileToConnect) }
     }
@@ -198,6 +246,7 @@ final class ConnectionListViewModel: ObservableObject {
     }
 
     private func clearPendingConnectState() {
+        connectRequestGeneration &+= 1
         pendingConnectProfile = nil
         showRootWarning = false
         showRsaKeyWarning = false
@@ -287,13 +336,13 @@ final class ConnectionListViewModel: ObservableObject {
     func confirmRootConnect() {
         showRootWarning = false
         rootWarningAcknowledged = true
-        Task { await continueConnectAfterWarnings() }
+        resumePendingConnect()
     }
 
     func confirmRsaConnect() {
         showRsaKeyWarning = false
         rsaWarningAcknowledged = true
-        Task { await continueConnectAfterWarnings() }
+        resumePendingConnect()
     }
 
     // MARK: - Interactive credential prompt (Issue #213)
@@ -319,10 +368,11 @@ final class ConnectionListViewModel: ObservableObject {
 
     func confirmCredentialPrompt(text: String, saveToKeychain: Bool) {
         guard let prompt = pendingCredentialPrompt else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Empty confirm must not dismiss the sheet or reconnect without credentials.
-        guard !trimmed.isEmpty else { return }
+        // Only the empty check trims: SSH passwords/passphrases may legitimately
+        // contain leading/trailing whitespace, which must be preserved both in
+        // the Keychain and in the override used for the connection.
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         let account = keychain.keychainAccount(for: prompt.profile.id, kind: "profile")
         let profile = prompt.profile
@@ -332,9 +382,9 @@ final class ConnectionListViewModel: ObservableObject {
             do {
                 switch kind {
                 case .password:
-                    try keychain.savePassword(trimmed, account: account)
+                    try keychain.savePassword(text, account: account)
                 case .passphrase:
-                    try keychain.savePassphrase(trimmed, account: account)
+                    try keychain.savePassphrase(text, account: account)
                 }
             } catch {
                 errorMessage = error.localizedDescription
@@ -344,9 +394,9 @@ final class ConnectionListViewModel: ObservableObject {
 
         switch kind {
         case .password:
-            promptPasswordOverride = trimmed
+            promptPasswordOverride = text
         case .passphrase:
-            promptPassphraseOverride = trimmed
+            promptPassphraseOverride = text
         }
 
         pendingCredentialPrompt = nil
@@ -453,6 +503,8 @@ final class ConnectionListViewModel: ObservableObject {
         bookmarkService: SecurityScopedBookmarkService
     ) -> Bool? {
         guard let bookmark = profile.privateKeyBookmark else {
+            // Pre-check only: without a bookmark we cannot inspect the key.
+            // Treat as unknown and let the real connection flow produce the error.
             return nil
         }
 
@@ -468,6 +520,9 @@ final class ConnectionListViewModel: ObservableObject {
                 return algorithm == .rsa
             }
         } catch {
+            // Pre-check only: an undecryptable key (e.g. encrypted key with no
+            // saved passphrase) returns "unknown" so the connection proceeds to
+            // the passphrase prompt. No user-facing error is raised here.
             return nil
         }
     }

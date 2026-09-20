@@ -444,12 +444,100 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertNotNil(viewModel.pendingConnectProfile)
     }
 
-    func testRequestConnectDoesNotShowRsaKeyWarningForEd25519PrivateKey() throws {
+    func testRequestConnectDoesNotShowRsaKeyWarningForEd25519PrivateKey() async throws {
         let profile = try makeGeneratedPrivateKeyProfile(keyFilename: "id_ed25519", keyType: "ed25519")
 
         viewModel.requestConnect(profile: profile)
+        for _ in 0..<50 where viewModel.pendingConnectProfile != nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
 
         XCTAssertFalse(viewModel.showRsaKeyWarning)
+        XCTAssertNil(viewModel.pendingConnectProfile)
+    }
+
+    func testCancelPendingConnectDiscardsInFlightRsaInspectionResult() async {
+        let inspectionStarted = DispatchSemaphore(value: 0)
+        let finishInspection = DispatchSemaphore(value: 0)
+        let viewModel = makeViewModel { _, _, _ in
+            inspectionStarted.signal()
+            finishInspection.wait()
+            return true
+        }
+        let profile = ConnectionProfile(
+            name: "RSA",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey
+        )
+
+        viewModel.requestConnect(profile: profile)
+        let didStartInspection = await waitForSignal(inspectionStarted)
+        XCTAssertTrue(didStartInspection)
+        viewModel.cancelPendingConnect()
+        finishInspection.signal()
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertFalse(viewModel.showRsaKeyWarning)
+    }
+
+    func testNewConnectRequestDiscardsPreviousRsaInspectionResult() async {
+        let inspectionStarted = DispatchSemaphore(value: 0)
+        let finishInspection = DispatchSemaphore(value: 0)
+        let viewModel = makeViewModel { _, _, _ in
+            inspectionStarted.signal()
+            finishInspection.wait()
+            return true
+        }
+        let firstProfile = ConnectionProfile(
+            name: "RSA",
+            host: "first.example.com",
+            username: "user",
+            authType: .privateKey
+        )
+        let rootProfile = ConnectionProfile(
+            name: "Root",
+            host: "second.example.com",
+            username: "root"
+        )
+
+        viewModel.requestConnect(profile: firstProfile)
+        let didStartInspection = await waitForSignal(inspectionStarted)
+        XCTAssertTrue(didStartInspection)
+        viewModel.requestConnect(profile: rootProfile)
+        for _ in 0..<20 where !viewModel.showRootWarning {
+            await Task.yield()
+        }
+        finishInspection.signal()
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        XCTAssertTrue(viewModel.showRootWarning)
+        XCTAssertFalse(viewModel.showRsaKeyWarning)
+        XCTAssertEqual(viewModel.pendingConnectProfile?.id, rootProfile.id)
+    }
+
+    func testUnknownRsaInspectionContinuesToConnectionError() async {
+        let viewModel = makeViewModel { _, _, _ in nil }
+        let profile = ConnectionProfile(
+            name: "Unknown key",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey
+        )
+
+        viewModel.requestConnect(profile: profile)
+        for _ in 0..<50 where viewModel.errorMessage == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertFalse(viewModel.showRsaKeyWarning)
+        XCTAssertNotNil(viewModel.errorMessage)
     }
 
     func testConnectReleasesPrivateKeyBookmarkAccessAfterCompletion() async throws {
@@ -540,5 +628,31 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
             privateKeyPath: keyURL.path,
             privateKeyBookmark: bookmark
         )
+    }
+
+    private func makeViewModel(
+        rsaKeyInspector: @escaping @Sendable (
+            ConnectionProfile,
+            KeychainService,
+            SecurityScopedBookmarkService
+        ) -> Bool?
+    ) -> ConnectionListViewModel {
+        ConnectionListViewModel(
+            store: store,
+            keychain: keychain,
+            bookmarkService: .shared,
+            bridge: RustBridgeService(),
+            rsaKeyInspector: rsaKeyInspector
+        )
+    }
+
+    private func waitForSignal(_ semaphore: DispatchSemaphore) async -> Bool {
+        for _ in 0..<100 {
+            if semaphore.wait(timeout: .now()) == .success {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
     }
 }
