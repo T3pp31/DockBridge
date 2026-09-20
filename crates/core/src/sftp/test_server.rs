@@ -26,11 +26,29 @@ pub struct FailureConfig {
     pub fail_remote_read: AtomicBool,
     pub fail_remote_close: AtomicBool,
     pub fail_remote_rename: AtomicBool,
+    pub fail_setstat: AtomicBool,
     pub fail_mkdir: AtomicBool,
     pub opendir_count: AtomicU64,
+    /// Number of SSH_FXP_MKDIR requests handled, used to assert that
+    /// directory mirrors issue at most one mkdir per directory (issue #312).
+    pub mkdir_count: AtomicU64,
+    /// When set, a single OPENDIR for exactly this path fails (one-shot),
+    /// letting tests simulate an unreadable remote subdirectory during a walk
+    /// (issue #316).
+    pub fail_opendir_path: Mutex<Option<String>>,
     /// Artificial delay applied to every SSH_FXP_READ reply, used by benchmarks
     /// to emulate a high-latency link (milliseconds).
     pub read_delay_ms: AtomicU64,
+    /// When `true`, `open` with `SSH_FX_EXCLUDE` reports `SSH_FX_PERMISSION_DENIED`
+    /// for an already-existing exclusive path (some servers' EEXIST).
+    pub exclude_exists_permission_denied: AtomicBool,
+    /// When `true`, the server receives WRITEs but does not acknowledge them
+    /// until [`write_unhang`](Self::write_unhang) is notified, simulating a
+    /// stalled link (issue #306). Clients must break out via timeout or
+    /// cancellation.
+    pub hang_write: AtomicBool,
+    /// Notifies a single blocked WRITE handler to stop hanging and reply.
+    pub write_unhang: tokio::sync::Notify,
 }
 
 pub struct TestSftpServer {
@@ -151,27 +169,57 @@ impl SftpHandler {
         let mut attrs = FileAttributes::empty();
         #[cfg(unix)]
         {
-            use std::os::unix::fs::{MetadataExt, PermissionsExt};
-            if let Ok(meta) = std::fs::symlink_metadata(path) {
-                if meta.file_type().is_symlink() {
-                    attrs.set_symlink(true);
-                    return attrs;
-                }
-                // Include the real permission bits so clients can round-trip
-                // them (the file-type bits are OR-ed on top by set_*).
-                attrs.permissions = Some(meta.permissions().mode() & 0o7777);
-                attrs.mtime = meta.mtime().try_into().ok();
-                attrs.uid = Some(meta.uid());
-                attrs.gid = Some(meta.gid());
+            use std::os::unix::fs::MetadataExt;
+
+            let metadata = match std::fs::symlink_metadata(path) {
+                Ok(metadata) => metadata,
+                Err(_) => return attrs,
+            };
+            attrs.uid = Some(metadata.uid());
+            attrs.gid = Some(metadata.gid());
+            attrs.permissions = Some(metadata.mode());
+            attrs.mtime = metadata.mtime().try_into().ok();
+            if metadata.is_file() {
+                attrs.size = Some(metadata.len());
             }
+            attrs
         }
-        if path.is_dir() {
-            attrs.set_dir(true);
-        } else if path.is_file() {
-            attrs.set_regular(true);
-            attrs.size = std::fs::metadata(path).ok().map(|meta| meta.len());
+        #[cfg(not(unix))]
+        {
+            if path.is_dir() {
+                attrs.set_dir(true);
+            } else if path.is_file() {
+                attrs.set_regular(true);
+                attrs.size = std::fs::metadata(path).ok().map(|meta| meta.len());
+            }
+            attrs
         }
-        attrs
+    }
+
+    /// Like `attrs_for`, but follows symlinks (matching SFTP `STAT`, which
+    /// resolves the target for the attributes).
+    fn attrs_for_follow(path: &Path) -> FileAttributes {
+        let mut attrs = FileAttributes::empty();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = match std::fs::metadata(path) {
+                Ok(meta) => meta,
+                Err(_) => return Self::attrs_for(path),
+            };
+            attrs.uid = Some(metadata.uid());
+            attrs.gid = Some(metadata.gid());
+            attrs.permissions = Some(metadata.mode());
+            if metadata.is_file() {
+                attrs.size = Some(metadata.len());
+            }
+            attrs.mtime = metadata.mtime().try_into().ok();
+            attrs
+        }
+        #[cfg(not(unix))]
+        {
+            Self::attrs_for(path)
+        }
     }
 
     async fn read_directory_entries(&self, path: &str) -> Result<Vec<File>, StatusCode> {
@@ -253,23 +301,19 @@ impl russh_sftp::server::Handler for SftpHandler {
         }
         Ok(Attrs {
             id,
-            attrs: Self::attrs_for(&local),
+            attrs: Self::attrs_for_follow(&local),
         })
     }
 
     async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
         let local = self.resolve(&path);
-        if !local.exists() {
+        if std::fs::symlink_metadata(&local).is_err() {
             return Err(StatusCode::NoSuchFile);
         }
-        #[cfg(unix)]
-        if local.is_symlink() {
-            return Ok(Attrs {
-                id,
-                attrs: Self::attrs_for(&local),
-            });
-        }
-        self.stat(id, path).await
+        Ok(Attrs {
+            id,
+            attrs: Self::attrs_for(&local),
+        })
     }
 
     async fn open(
@@ -305,7 +349,16 @@ impl russh_sftp::server::Handler for SftpHandler {
 
         let file = options.open(&local).await.map_err(|err| {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
-                StatusCode::Failure
+                if self
+                    .failures
+                    .exclude_exists_permission_denied
+                    .load(Ordering::Relaxed)
+                {
+                    // Some servers report EEXIST as permission denied.
+                    StatusCode::PermissionDenied
+                } else {
+                    StatusCode::Failure
+                }
             } else if err.kind() == std::io::ErrorKind::NotFound {
                 StatusCode::NoSuchFile
             } else {
@@ -369,6 +422,13 @@ impl russh_sftp::server::Handler for SftpHandler {
             return Ok(Self::err_status(id, StatusCode::Failure, "write failed"));
         }
 
+        // Simulate a server that stalls on a WRITE ack (issue #306): block
+        // this handler until `write_unhang` is notified. The client must time
+        // out or cancel out of the write rather than hang forever.
+        if self.failures.hang_write.load(Ordering::Relaxed) {
+            self.failures.write_unhang.notified().await;
+        }
+
         let open = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;
         open.file
             .seek(std::io::SeekFrom::Start(offset))
@@ -398,6 +458,19 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn opendir(&mut self, id: u32, path: String) -> Result<Handle, Self::Error> {
         self.failures.opendir_count.fetch_add(1, Ordering::Relaxed);
+        let should_fail = {
+            let mut target = self.failures.fail_opendir_path.lock().unwrap();
+            match target.as_ref() {
+                Some(candidate) if *candidate == path => {
+                    *target = None;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if should_fail {
+            return Err(StatusCode::Failure);
+        }
         let entries = self.read_directory_entries(&path).await?;
         let handle_id = self.next_handle;
         self.next_handle += 1;
@@ -434,6 +507,7 @@ impl russh_sftp::server::Handler for SftpHandler {
         if self.failures.fail_mkdir.swap(false, Ordering::SeqCst) {
             return Ok(Self::err_status(id, StatusCode::Failure, "Failure"));
         }
+        self.failures.mkdir_count.fetch_add(1, Ordering::Relaxed);
 
         let local = self.resolve(&path);
         if local.exists() {
@@ -452,6 +526,50 @@ impl russh_sftp::server::Handler for SftpHandler {
             return Ok(Self::err_status(id, StatusCode::NoSuchFile, "no such file"));
         }
         Ok(Self::ok_status(id))
+    }
+
+    async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
+        let local = self.resolve(&path);
+        if fs::remove_dir(&local).await.is_err() {
+            return Ok(Self::err_status(id, StatusCode::Failure, "rmdir failed"));
+        }
+        Ok(Self::ok_status(id))
+    }
+
+    async fn symlink(
+        &mut self,
+        id: u32,
+        linkpath: String,
+        targetpath: String,
+    ) -> Result<Status, Self::Error> {
+        #[cfg(unix)]
+        {
+            let link = self.resolve(&linkpath);
+            if let Some(parent) = link.parent() {
+                if let Err(err) = fs::create_dir_all(parent).await {
+                    tracing::warn!(path = %parent.display(), error = %err, "symlink parent mkdir failed");
+                    return Ok(Self::err_status(id, StatusCode::Failure, "symlink failed"));
+                }
+            }
+            // Absolute remote targets need translating into the test server's
+            // local root. Relative targets must be stored verbatim because
+            // READLINK returns the original value and resolution is relative
+            // to the link's parent directory.
+            let target_local = if targetpath.starts_with('/') {
+                self.resolve(&targetpath)
+            } else {
+                PathBuf::from(&targetpath)
+            };
+            if std::os::unix::fs::symlink(&target_local, &link).is_err() {
+                return Ok(Self::err_status(id, StatusCode::Failure, "symlink failed"));
+            }
+            Ok(Self::ok_status(id))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (linkpath, targetpath);
+            Err(self.unimplemented())
+        }
     }
 
     async fn rename(
@@ -487,11 +605,32 @@ impl russh_sftp::server::Handler for SftpHandler {
         attrs: FileAttributes,
     ) -> Result<Status, Self::Error> {
         let local = self.resolve(&path);
-        if let Some(permissions) = attrs.permissions {
+        if self.failures.fail_setstat.swap(false, Ordering::SeqCst) {
+            return Err(StatusCode::Failure);
+        }
+
+        if attrs.atime.is_some() || attrs.mtime.is_some() {
+            let mut times = std::fs::FileTimes::new();
+            if let Some(atime) = attrs.atime {
+                times = times.set_accessed(
+                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(atime as u64),
+                );
+            }
+            if let Some(mtime) = attrs.mtime {
+                times = times.set_modified(
+                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64),
+                );
+            }
+            std::fs::File::open(&local)
+                .and_then(|file| file.set_times(times))
+                .map_err(|_| StatusCode::Failure)?;
+        }
+
+        if let Some(mode) = attrs.permissions {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&local, std::fs::Permissions::from_mode(permissions))
+                fs::set_permissions(&local, std::fs::Permissions::from_mode(mode))
                     .await
                     .map_err(|_| StatusCode::Failure)?;
             }
@@ -500,14 +639,29 @@ impl russh_sftp::server::Handler for SftpHandler {
                 let _ = &local;
             }
         }
-        if let Some(mtime) = attrs.mtime {
-            let times = std::fs::FileTimes::new()
-                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64));
-            if let Ok(file) = std::fs::File::options().write(true).open(&local) {
-                let _ = file.set_times(times);
-            }
-        }
         Ok(Self::ok_status(id))
+    }
+
+    async fn readlink(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
+        #[cfg(unix)]
+        {
+            let local = self.resolve(&path);
+            let target = std::fs::read_link(&local).map_err(|_| StatusCode::Failure)?;
+            // Return the link target as the remote-relative path.
+            let remote_target = target
+                .strip_prefix(&self.root)
+                .map(|t| format!("/{}", t.display()))
+                .unwrap_or_else(|_| target.display().to_string());
+            Ok(Name {
+                id,
+                files: vec![File::dummy(remote_target)],
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (id, path);
+            Err(self.unimplemented())
+        }
     }
 }
 
@@ -607,6 +761,16 @@ impl TestSftpServer {
     /// Returns how many OPENDIR requests this server has handled.
     pub fn opendir_count(&self) -> u64 {
         self.failures.opendir_count.load(Ordering::Relaxed)
+    }
+
+    /// Returns how many MKDIR requests this server has handled.
+    pub fn mkdir_count(&self) -> u64 {
+        self.failures.mkdir_count.load(Ordering::Relaxed)
+    }
+
+    /// Returns true when the remote path exists as a directory.
+    pub fn remote_dir_exists(&self, remote_path: &str) -> bool {
+        self.resolve(remote_path).is_dir()
     }
 
     fn resolve(&self, path: &str) -> PathBuf {

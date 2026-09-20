@@ -205,7 +205,7 @@ final class FileDropAcceptanceTests: XCTestCase {
         let viewModel = try makeKickoffViewModel()
         let items = [RemoteFileDragPayload(path: "/remote/folder", isDirectory: true)]
         let displayedItems = [
-            RemoteFileRecord(name: "folder", path: "/remote/folder", isDirectory: true, size: 0, modifiedAtSecs: nil),
+            RemoteFileRecord(name: "folder", path: "/remote/folder", isDirectory: true, isSymlink: false, size: 0, modifiedAtSecs: nil, permissions: nil, uid: nil, gid: nil, symlinkTarget: nil, symlinkTargetIsDir: nil),
         ]
 
         // When: kickoff is invoked
@@ -312,7 +312,7 @@ final class FileDropAcceptanceTests: XCTestCase {
         viewModel.remotePath = "/destination"
         let items = [RemoteFileDragPayload(path: "/source/file.txt", isDirectory: false)]
         let displayedItems = [
-            RemoteFileRecord(name: "file.txt", path: "/source/file.txt", isDirectory: false, size: 10, modifiedAtSecs: nil),
+            RemoteFileRecord(name: "file.txt", path: "/source/file.txt", isDirectory: false, isSymlink: false, size: 10, modifiedAtSecs: nil, permissions: nil, uid: nil, gid: nil, symlinkTarget: nil, symlinkTargetIsDir: nil),
         ]
 
         // When: kickoff is invoked
@@ -353,7 +353,7 @@ final class FileDropAcceptanceTests: XCTestCase {
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         let items = [RemoteFileDragPayload(path: "/remote/file.txt", isDirectory: false)]
         let displayedItems = [
-            RemoteFileRecord(name: "file.txt", path: "/remote/file.txt", isDirectory: false, size: 1, modifiedAtSecs: nil),
+            RemoteFileRecord(name: "file.txt", path: "/remote/file.txt", isDirectory: false, isSymlink: false, size: 1, modifiedAtSecs: nil, permissions: nil, uid: nil, gid: nil, symlinkTarget: nil, symlinkTargetIsDir: nil),
         ]
 
         let accepted = FileDropTransferKickoff.acceptRemoteDownloads(

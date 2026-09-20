@@ -9,25 +9,30 @@ on:
       version:
         description: Version to release (e.g. 0.1.0)
         required: true
-        default: "0.1.0"
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   release:
     name: Build and publish release
     runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable (tag via rust-toolchain.toml)
 
       - name: Add Rust macOS targets
         run: |
@@ -35,14 +40,35 @@ jobs:
 
       - name: Resolve version
         id: version
+        env:
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            VERSION="${{ github.event.inputs.version }}"
+            VERSION="$DISPATCH_VERSION"
           else
             VERSION="${GITHUB_REF_NAME#v}"
           fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "error: release version must be a SemVer value" >&2
+            exit 1
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Release version: ${VERSION}"
+
+      - name: Verify release.toml / Cargo.toml match the tag version
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          release_version="$(awk -F'"' '/^version = / { print $2; exit }' config/release.toml)"
+          cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          if [[ "$release_version" != "$VERSION" ]]; then
+            echo "error: config/release.toml ($release_version) != tag version ($VERSION)" >&2
+            exit 1
+          fi
+          if [[ "$cargo_version" != "$VERSION" ]]; then
+            echo "error: Cargo.toml ($cargo_version) != tag version ($VERSION)" >&2
+            exit 1
+          fi
+          echo "release.toml and Cargo.toml match tag $VERSION"
 
       - name: Extract release notes
         id: notes
@@ -60,7 +86,12 @@ jobs:
               found { print }
             ' CHANGELOG.md > "$NOTES_FILE"
           else
-            echo "DockBridge ${VERSION}" > "$NOTES_FILE"
+            echo "error: no [${VERSION}] section found in CHANGELOG.md; add a section like:" >&2
+            echo "## [${VERSION}] - YYYY-MM-DD" >&2
+            echo "### Added" >&2
+            echo "- ..." >&2
+            echo "then re-run the release." >&2
+            exit 1
           fi
           echo "path=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
 
@@ -114,8 +145,16 @@ jobs:
           echo "sbom=dist/${SBOM_NAME}" >> "$GITHUB_OUTPUT"
           echo "sbom_sha256=dist/${SBOM_NAME}.sha256" >> "$GITHUB_OUTPUT"
 
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: |
+            ${{ steps.assets.outputs.dmg }}
+            ${{ steps.assets.outputs.cli }}
+            ${{ steps.assets.outputs.sbom }}
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', steps.version.outputs.version) || github.ref_name }}
           name: DockBridge ${{ steps.version.outputs.version }}
