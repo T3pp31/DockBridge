@@ -53,6 +53,21 @@ printf '%s\n' "$PASSWORD" | dockbridge list \
 
 When `CI=true` or in release builds, the CLI prints a warning if `--password` is used. Set `DOCKBRIDGE_SUPPRESS_PASSWORD_WARNING=1` only when you accept the risk (for example, a one-off local test in CI).
 
+## SSH transport algorithm policy
+
+DockBridge pins the SSH transport algorithms it offers at `crates/core/src/ssh/algorithm_policy.rs`. Servers only negotiate algorithms on this allow-list; SHA-1 KEX/MAC, CBC ciphers, and legacy `ssh-rsa` host keys are excluded.
+
+| Category | Allowed (preferred order) |
+|----------|---------------------------|
+| KEX | `mlkem768x25519-sha256` (post-quantum hybrid, preferred), `curve25519-sha256`, `curve25519-sha256@libssh.org`, `diffie-hellman-group16-sha512`, `diffie-hellman-group14-sha256` |
+| Protocol extensions | `ext-info-c`, `kex-strict-c-v00@openssh.com` |
+| Server host keys | `ssh-ed25519`, `ecdsa-sha2-nistp256/384/521`, `rsa-sha2-512`, `rsa-sha2-256` (no legacy `ssh-rsa`) |
+| Cipher | `chacha20-poly1305@openssh.com`, `aes256-gcm@openssh.com`, `aes256-ctr`, `aes192-ctr`, `aes128-ctr` |
+| MAC | `hmac-sha2-512-etm@openssh.com`, `hmac-sha2-256-etm@openssh.com`, `hmac-sha2-512`, `hmac-sha2-256` |
+| Compression | none |
+
+The post-quantum hybrid `mlkem768x25519-sha256` is offered first so servers running OpenSSH 9.9+ (and 10.x defaults) gain harvest-now-decrypt-later resistance for the SFTP payload.
+
 ## Host key trust policy
 
 Rust core settings in `config/default.toml` (and UniFFI `AppConfigRecord`):
@@ -235,10 +250,11 @@ When signing is enabled, the release workflow will require these repository secr
 
 With `SIGN_AND_NOTARIZE=true`, release packaging runs `scripts/sign-and-notarize-macos.sh`, which:
 
-1. Signs the Release `.app` with a Developer ID Application certificate (`codesign --options runtime`)
-2. Submits the build to Apple's Notary Service (`notarytool submit --wait`)
-3. Staples the notarization ticket to the app bundle (`stapler staple`)
-4. Verifies Gatekeeper acceptance (`spctl --assess --type execute`)
+1. Signs the Release `.app` with a Developer ID Application certificate. The signature includes a **secure timestamp** (`--timestamp`) and Hardened Runtime (`--options runtime`). `--deep` is **not** used (deprecated by Apple); if nested code (frameworks / XPC helpers) is added later, it must be signed from the inside out.
+2. Submits the build to Apple's Notary Service (`notarytool submit --wait`).
+3. Staples the notarization ticket to the app bundle (`stapler staple`).
+4. Verifies Gatekeeper acceptance (`spctl -a -vv -t execute`).
+5. When `DMG_PATH` is provided, **also signs the DMG** (`codesign --timestamp`), notarizes and staples it, and validates it with `spctl -a -vv -t open` so the mounted image is accepted by Gatekeeper.
 
 If signing or notarization fails, the release workflow must stop before publishing assets.
 
@@ -255,6 +271,7 @@ Do not remove Gatekeeper quarantine on public release DMGs. The dev-only helper 
 ### Automated scanning
 
 - **CI (`cargo audit`)**: Every push to `main` and every pull request runs `rustsec/audit-check` against `Cargo.lock`. The job fails when a new advisory is reported.
+- **Scheduled audit**: `.github/workflows/security-audit.yml` runs `cargo audit` daily (03:00 UTC) and on `workflow_dispatch`, so newly published RustSec advisories are detected even when the repository has no recent commits. It also enforces that every entry in `.cargo/audit.toml` carries an `# expires: YYYY-MM-DD` comment and fails once an expiry passes (forcing a re-review).
 - **Dependabot**: Weekly pull requests for `cargo` and `github-actions` dependency updates (see `.github/dependabot.yml`).
 
 ### Software Bill of Materials (SBOM)
@@ -263,7 +280,7 @@ DockBridge publishes a CycloneDX JSON SBOM for each release and verifies SBOM ge
 
 - **Format**: CycloneDX JSON (`.cdx.json`, spec version 1.5)
 - **Generator**: [`cargo-cyclonedx`](https://crates.io/crates/cargo-cyclonedx) (pinned in `config/release.toml`)
-- **Scope**: Source SBOM from `Cargo.lock`, generated from `crates/cli/Cargo.toml` (the release CLI entry point and its dependency graph)
+- **Scope**: Source SBOM from `Cargo.lock`, generated from `crates/uniffi/Cargo.toml` — the crate that ships as `libdockbridge_uniffi.a` inside the DMG. The CLI binary is a separate artifact with its own dependency graph and is NOT the SBOM subject.
 - **CI**: The `rust` job in `.github/workflows/ci.yml` runs `./scripts/generate-sbom.sh` and uploads the artifact for review
 - **Release**: `.github/workflows/release.yml` attaches `{app_name}-{version}.cdx.json` and its SHA-256 checksum to GitHub Releases alongside the DMG and CLI binaries
 
@@ -284,7 +301,7 @@ Swift/SPM dependencies are not included (the macOS app has no SPM packages).
    - Merge a Dependabot PR or run `cargo update -p <crate>`.
    - Bump the direct dependency version in `Cargo.toml` and run tests.
    - If no fix exists, document the accepted risk (see step 4).
-4. **Document exceptions** — When remediation is blocked (no upstream fix, major-version migration, toolchain requirement), add the advisory ID to `.cargo/audit.toml` with an inline comment explaining the blocker and link a tracking issue. Remove the entry once fixed.
+4. **Document exceptions** — When remediation is blocked (no upstream fix, major-version migration, toolchain requirement), add the advisory ID to `.cargo/audit.toml` with an inline comment explaining the blocker, an `# expires: YYYY-MM-DD` date for re-review, and link a tracking issue. Remove the entry once fixed.
 5. **Verify** — Run `cargo audit` locally and confirm CI passes before merging.
 
 ### Severity targets
@@ -329,6 +346,21 @@ Run `cargo audit` locally to match CI (`.cargo/audit.toml` applies tracked excep
 cargo install cargo-audit --locked
 cargo audit
 ```
+
+### Rust toolchain and dependency pinning policy
+
+- **MSRV** — the workspace declares `rust-version = "1.91"` in `[workspace.package]`
+  (`Cargo.toml`). CI runs an `msrv` job (pinned to `1.91.0` via
+  `dtolnay/rust-toolchain`, then `cargo check --workspace --all-targets`) so an
+  unintentional MSRV bump fails the build. `rust-toolchain.toml` keeps `stable` for
+  local/CI primary builds; the MSRV job pins the floor.
+- **`ssh-key` is pinned to the 0.7.0 release candidate** (`=0.7.0-rc.10`). The stable
+  0.6.x line lacks features DockBridge relies on; rc releases are reviewed before the
+  pin is advanced. When 0.7.0 stable ships, upgrade to it and drop `rsa`
+  (0.10.0-rc.18, currently transitive via `ssh-key`/`russh`) if its patch also lands.
+  Any rc adoption is re-evaluated on each Dependabot update.
+- **`russh-sftp` fork** (`bssh-russh-sftp`, see the "Supply chain: SFTP implementation"
+  section) is pinned exactly and updated only via explicit PRs.
 
 ### Supply chain: SFTP implementation
 

@@ -9,6 +9,7 @@ members = [
 [workspace.package]
 version = "0.1.6"
 edition = "2021"
+rust-version = "1.91"
 license = "MIT"
 repository = "https://github.com/T3pp31/DockBridge"
 
@@ -21,7 +22,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.11"
 subtle = "2"
-sha2 = "0.11"
 ssh-key = "=0.7.0-rc.10"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
@@ -29,7 +29,10 @@ toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zeroize = { version = "1", features = ["derive"] }
-russh = { version = "0.61", features = ["async-trait", "des"] }
-# Fork of russh-sftp with pipelined I/O. Pinned exactly; see docs/security.md.
+russh = { version = "0.61", features = ["async-trait"] }
+# bssh-russh-sftp is a temporary fork of russh-sftp that adds pipelined
+# SFTP file I/O (read_to_writer_pipelined / write_all_pipelined), used for
+# high-throughput downloads. The crate alias `russh-sftp` keeps source
+# imports unchanged. It is pinned exactly; see docs/security.md.
 russh-sftp = { package = "bssh-russh-sftp", version = "=2.4.0" }
 uniffi = { version = "0.32", features = ["cli"] }

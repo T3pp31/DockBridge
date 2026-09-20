@@ -29,8 +29,6 @@ else
   LIB_PATH="$CARGO_TARGET_DIR/${PROFILE}/libdockbridge_uniffi.a"
 fi
 
-LIB_NAME="libdockbridge_uniffi.a"
-
 if [[ ! -f "$LIB_PATH" ]]; then
   echo "Expected library not found: $LIB_PATH" >&2
   exit 1

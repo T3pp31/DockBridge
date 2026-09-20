@@ -1,0 +1,64 @@
+name: Bug report
+description: Report a bug in DockBridge
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to file a bug report. Please fill in as much as you can.
+  - type: input
+    id: version
+    attributes:
+      label: DockBridge version
+      description: macOS app version, CLI `dockbridge --version`, or commit hash
+      placeholder: e.g. 1.1.1
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: e.g. macOS 15.4
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: SFTP server
+      description: Server type and version, if relevant (e.g. OpenSSH 9.6)
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Connection / host keys
+        - Transfer (upload / download)
+        - Local or remote file list
+        - Settings / keychain
+        - UI / accessibility
+        - CLI
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps that trigger the bug
+      placeholder: |
+        1. Connect to ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include error text / logs if available
+    validations:
+      required: true
