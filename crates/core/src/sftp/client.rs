@@ -299,6 +299,18 @@ impl<'a> SftpClient<'a> {
         })
     }
 
+    /// Applies the supplied SFTP attributes to a remote entry via SETSTAT.
+    pub async fn set_metadata(
+        &self,
+        remote_path: &str,
+        attrs: FileAttributes,
+    ) -> Result<(), SftpError> {
+        let path = normalize_remote_path(remote_path)?;
+        self.sftp().set_metadata(&path, attrs).await.map_err(|err| {
+            SftpError::Other(anyhow::anyhow!("failed to set metadata on '{path}': {err}"))
+        })
+    }
+
     /// Uploads a local file to a remote path.
     pub async fn upload(&self, local_path: &Path, remote_path: &str) -> Result<(), SftpError> {
         self.upload_cancellable(
@@ -337,6 +349,20 @@ impl<'a> SftpClient<'a> {
                     message: err.to_string(),
                 })?;
 
+        // `metadata` follows symlinks, matching `File::open`: when a symlink is
+        // uploaded, preserve the metadata of the file whose bytes are read.
+        let local_metadata = match tokio::fs::metadata(local_path).await {
+            Ok(metadata) => Some(metadata),
+            Err(err) => {
+                tracing::warn!(
+                    local = %local_path.display(),
+                    error = %err,
+                    "failed to read source metadata before upload"
+                );
+                None
+            }
+        };
+
         let mut partial =
             PartialRemoteTransfer::begin(self, &parent, &local, &remote, overwrite_policy).await?;
 
@@ -356,7 +382,7 @@ impl<'a> SftpClient<'a> {
             return Err(SftpError::Cancelled);
         }
 
-        partial.finalize_rename(&remote_path).await
+        partial.finalize_rename(&remote_path, local_metadata).await
     }
 
     /// Downloads a remote file to a local path.
@@ -420,8 +446,27 @@ impl<'a> SftpClient<'a> {
                 })?;
 
         let local_parent = local_path.parent().unwrap_or_else(|| Path::new("."));
-        let mut partial =
-            PartialLocalTransfer::begin(local_parent, &remote, &local, overwrite_policy).await?;
+        // `metadata` follows symlinks, matching `open`: preserve the metadata
+        // of the remote file whose bytes are downloaded.
+        let remote_metadata = match self.sftp().metadata(&remote_path).await {
+            Ok(metadata) => Some(metadata),
+            Err(err) => {
+                tracing::warn!(
+                    remote = %remote_path,
+                    error = %err,
+                    "failed to read source metadata before download"
+                );
+                None
+            }
+        };
+        let mut partial = PartialLocalTransfer::begin(
+            local_parent,
+            &remote,
+            &local,
+            overwrite_policy,
+            remote_metadata,
+        )
+        .await?;
 
         let writer_file =
             partial
@@ -1395,7 +1440,11 @@ impl<'a> PartialRemoteTransfer<'a> {
         Ok(())
     }
 
-    async fn finalize_rename(mut self, final_path: &str) -> Result<(), SftpError> {
+    async fn finalize_rename(
+        mut self,
+        final_path: &str,
+        local_metadata: Option<std::fs::Metadata>,
+    ) -> Result<(), SftpError> {
         if let Err(err) = prepare_remote_finalize_destination(
             self.client,
             final_path,
@@ -1419,6 +1468,26 @@ impl<'a> PartialRemoteTransfer<'a> {
         match self.client.rename(&self.partial_path, final_path).await {
             Ok(()) => {
                 self.committed = true;
+                // Preserve the source file's mtime and permission bits on the
+                // remote copy. Failures are logged but do not fail the transfer
+                // (metadata is best-effort; scp/rsync expose the same caveat).
+                if let Some(metadata) = local_metadata {
+                    let mut attrs = FileAttributes::empty();
+                    attrs.mtime = metadata.modified().ok().and_then(modified_secs);
+                    attrs.atime = attrs.mtime;
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        attrs.permissions = Some(metadata.permissions().mode() & 0o7777);
+                    }
+                    if let Err(err) = self.client.set_metadata(final_path, attrs).await {
+                        tracing::warn!(
+                            remote = %final_path,
+                            error = %err,
+                            "failed to preserve mtime/permissions on uploaded file"
+                        );
+                    }
+                }
                 Ok(())
             }
             Err(err) => {
@@ -1507,6 +1576,8 @@ struct PartialLocalTransfer {
     remote: String,
     local: String,
     overwrite_policy: TransferOverwritePolicy,
+    /// Remote mtime/permissions to apply to the local final file, when available.
+    remote_metadata: Option<FileAttributes>,
 }
 
 impl PartialLocalTransfer {
@@ -1515,6 +1586,7 @@ impl PartialLocalTransfer {
         remote: &str,
         local: &str,
         overwrite_policy: TransferOverwritePolicy,
+        remote_metadata: Option<FileAttributes>,
     ) -> Result<Self, SftpError> {
         let (partial_path, local_file) = create_exclusive_local_partial(parent).await?;
         Ok(Self {
@@ -1524,7 +1596,16 @@ impl PartialLocalTransfer {
             remote: remote.to_string(),
             local: local.to_string(),
             overwrite_policy,
+            remote_metadata,
         })
+    }
+
+    /// Applies the captured remote mtime (and Unix permission bits) to the
+    /// local final file. Failures are logged and do not fail the transfer.
+    fn apply_remote_metadata(&self, final_path: &Path) {
+        if let Some(metadata) = &self.remote_metadata {
+            apply_downloaded_metadata(final_path, metadata);
+        }
     }
 
     /// Clones the underlying file handle for out-of-band streaming writes
@@ -1576,6 +1657,7 @@ impl PartialLocalTransfer {
                 match rename_local_noreplace(&self.partial_path, final_path).await {
                     Ok(()) => {
                         self.committed = true;
+                        self.apply_remote_metadata(final_path);
                         Ok(())
                     }
                     Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -1602,6 +1684,7 @@ impl PartialLocalTransfer {
                 match tokio::fs::rename(&self.partial_path, final_path).await {
                     Ok(()) => {
                         self.committed = true;
+                        self.apply_remote_metadata(final_path);
                         Ok(())
                     }
                     Err(err) => {
@@ -1696,6 +1779,65 @@ impl<'a> SftpClient<'a> {
                 local: String::new(),
                 message: err.to_string(),
             })
+    }
+}
+
+/// Converts a stdout/systemtime mtime to the SFTP `u32` seconds representation.
+fn modified_secs(modified: std::time::SystemTime) -> Option<u32> {
+    use std::time::UNIX_EPOCH;
+    modified
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| d.as_secs().try_into().ok())
+}
+
+fn apply_downloaded_metadata(final_path: &Path, metadata: &FileAttributes) {
+    if metadata.atime.is_some() || metadata.mtime.is_some() {
+        let mut times = std::fs::FileTimes::new();
+        if let Some(atime) = metadata.atime.or(metadata.mtime) {
+            times = times
+                .set_accessed(std::time::UNIX_EPOCH + std::time::Duration::from_secs(atime as u64));
+        }
+        if let Some(mtime) = metadata.mtime {
+            times = times
+                .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64));
+        }
+
+        match std::fs::File::open(final_path) {
+            Ok(file) => {
+                if let Err(err) = file.set_times(times) {
+                    tracing::warn!(
+                        local = %final_path.display(),
+                        error = %err,
+                        "failed to preserve timestamps on downloaded file"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    local = %final_path.display(),
+                    error = %err,
+                    "failed to open downloaded file to preserve timestamps"
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    if let Some(permissions) = metadata.permissions {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Apply zero as well: mode 0000 is a valid and intentional mode.
+        let mode = permissions & 0o7777;
+        if let Err(err) =
+            std::fs::set_permissions(final_path, std::fs::Permissions::from_mode(mode))
+        {
+            tracing::warn!(
+                local = %final_path.display(),
+                error = %err,
+                "failed to preserve permissions on downloaded file"
+            );
+        }
     }
 }
 
@@ -2027,10 +2169,10 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
 
     use super::{
-        append_cleanup_context, classify_sftp_client_error, create_exclusive_local_partial,
-        download_pipelined_to_writer, is_remote_file_exists_error, is_remote_no_such_file_error,
-        normalize_remote_path, open_exclusive_local_file, partial_file_name,
-        partial_local_path_for_suffix, partial_remote_path_for_suffix,
+        append_cleanup_context, apply_downloaded_metadata, classify_sftp_client_error,
+        create_exclusive_local_partial, download_pipelined_to_writer, is_remote_file_exists_error,
+        is_remote_no_such_file_error, normalize_remote_path, open_exclusive_local_file,
+        partial_file_name, partial_local_path_for_suffix, partial_remote_path_for_suffix,
         pipeline_depth_for_chunk_budget, prepare_local_finalize_destination, random_partial_suffix,
         remote_status_code, rename_local_noreplace, upload_from_reader, DownloadFlowError,
         PartialLocalTransfer, PartialRemoteTransfer, PipelinableTransferWriter, SftpClient,
@@ -2093,6 +2235,7 @@ mod tests {
             "/download/file.txt",
             &local_path.display().to_string(),
             TransferOverwritePolicy::default(),
+            None,
         )
         .await
         .unwrap();
@@ -2171,6 +2314,7 @@ mod tests {
             "/download/file.txt",
             &local_path.display().to_string(),
             TransferOverwritePolicy::default(),
+            None,
         )
         .await
         .unwrap();
@@ -4340,6 +4484,159 @@ mod tests {
             "bench_download_rtt_proxy summary one_way_ms=20 bytes={BENCH_BYTES} mean_depth1_ms={mean1} mean_depth64_ms={mean64}"
         );
     }
+
+    fn system_time_secs(time: std::time::SystemTime) -> u64 {
+        time.duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn download_preserves_remote_mtime_and_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/metadata/file.bin", b"metadata")
+            .await;
+        let remote_path = server.root.join("metadata/file.bin");
+        let expected_mtime = 1_700_000_123;
+        std::fs::File::open(&remote_path)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(expected_mtime),
+                    )
+                    .set_modified(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(expected_mtime),
+                    ),
+            )
+            .unwrap();
+        std::fs::set_permissions(&remote_path, std::fs::Permissions::from_mode(0o750)).unwrap();
+
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+
+        client
+            .download("/metadata/file.bin", &local_path)
+            .await
+            .unwrap();
+
+        let local_metadata = std::fs::metadata(&local_path).unwrap();
+        assert_eq!(
+            system_time_secs(local_metadata.modified().unwrap()),
+            expected_mtime
+        );
+        assert_eq!(local_metadata.permissions().mode() & 0o7777, 0o750);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn upload_preserves_followed_symlink_target_metadata() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let target_path = local_dir.path().join("target.sh");
+        let symlink_path = local_dir.path().join("source.sh");
+        let expected_mtime = 1_700_000_456;
+        std::fs::write(&target_path, b"#!/bin/sh\necho metadata\n").unwrap();
+        std::fs::File::open(&target_path)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(expected_mtime),
+                    )
+                    .set_modified(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(expected_mtime),
+                    ),
+            )
+            .unwrap();
+        std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o710)).unwrap();
+        symlink(&target_path, &symlink_path).unwrap();
+
+        client
+            .upload(&symlink_path, "/metadata/source.sh")
+            .await
+            .unwrap();
+
+        let remote_metadata = std::fs::metadata(server.root.join("metadata/source.sh")).unwrap();
+        assert_eq!(
+            system_time_secs(remote_metadata.modified().unwrap()),
+            expected_mtime
+        );
+        assert_eq!(remote_metadata.permissions().mode() & 0o7777, 0o710);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn downloaded_metadata_applies_mode_zero() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("mode-zero.txt");
+        std::fs::write(&local_path, b"locked").unwrap();
+        let mut attrs = russh_sftp::protocol::FileAttributes::empty();
+        attrs.permissions = Some(0);
+
+        apply_downloaded_metadata(&local_path, &attrs);
+
+        assert_eq!(
+            std::fs::metadata(&local_path).unwrap().permissions().mode() & 0o7777,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn set_metadata_propagates_server_failure() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/metadata/failure.txt", b"data")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        server.failures.fail_setstat.store(true, Ordering::SeqCst);
+
+        let mut attrs = russh_sftp::protocol::FileAttributes::empty();
+        attrs.mtime = Some(1_700_000_789);
+        let err = client
+            .set_metadata("/metadata/failure.txt", attrs)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, SftpError::Other(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn upload_succeeds_when_metadata_preservation_fails() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("best-effort.txt");
+        tokio::fs::write(&local_path, b"payload").await.unwrap();
+        server.failures.fail_setstat.store(true, Ordering::SeqCst);
+
+        client
+            .upload(&local_path, "/metadata/best-effort.txt")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tokio::fs::read(server.root.join("metadata/best-effort.txt"))
+                .await
+                .unwrap(),
+            b"payload"
+        );
+    }
+
     #[tokio::test]
     async fn stat_reports_permissions_uid_gid() {
         // Given: a remote file created by the test server

@@ -26,6 +26,7 @@ pub struct FailureConfig {
     pub fail_remote_read: AtomicBool,
     pub fail_remote_close: AtomicBool,
     pub fail_remote_rename: AtomicBool,
+    pub fail_setstat: AtomicBool,
     pub fail_mkdir: AtomicBool,
     pub opendir_count: AtomicU64,
     /// Number of SSH_FXP_MKDIR requests handled, used to assert that
@@ -604,6 +605,27 @@ impl russh_sftp::server::Handler for SftpHandler {
         attrs: FileAttributes,
     ) -> Result<Status, Self::Error> {
         let local = self.resolve(&path);
+        if self.failures.fail_setstat.swap(false, Ordering::SeqCst) {
+            return Err(StatusCode::Failure);
+        }
+
+        if attrs.atime.is_some() || attrs.mtime.is_some() {
+            let mut times = std::fs::FileTimes::new();
+            if let Some(atime) = attrs.atime {
+                times = times.set_accessed(
+                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(atime as u64),
+                );
+            }
+            if let Some(mtime) = attrs.mtime {
+                times = times.set_modified(
+                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64),
+                );
+            }
+            std::fs::File::open(&local)
+                .and_then(|file| file.set_times(times))
+                .map_err(|_| StatusCode::Failure)?;
+        }
+
         if let Some(mode) = attrs.permissions {
             #[cfg(unix)]
             {
