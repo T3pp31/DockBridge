@@ -40,11 +40,13 @@ final class TransferQueueViewModel: ObservableObject {
             previousTasks = nil
             progressSamples.removeAll()
             transferSpeeds.removeAll()
+            refreshGeneration &+= 1
             updateDockBadge(tasks: [])
         }
     }
     private let settings: AppSettingsService
     private var refreshTask: Task<Void, Never>?
+    private var refreshGeneration: UInt64 = 0
     private var progressSamples: [UInt64: (bytes: UInt64, date: Date)] = [:]
     private var transferSpeeds: [UInt64: Double] = [:]
     /// Previous snapshot used to detect active -> completed/failed transitions.
@@ -100,10 +102,12 @@ final class TransferQueueViewModel: ObservableObject {
             updateDockBadge(tasks: [])
             return
         }
+        refreshGeneration &+= 1
+        let generation = refreshGeneration
 
         do {
             let fetched = try await bridge.fetchTransferTasks()
-            guard bridge.isConnected else {
+            guard generation == refreshGeneration, bridge.isConnected else {
                 progressSamples.removeAll()
                 transferSpeeds.removeAll()
                 updateDockBadge(tasks: [])
@@ -112,9 +116,9 @@ final class TransferQueueViewModel: ObservableObject {
             let sessionTasks = filteredTasks(from: fetched)
             updateProgressSamples(for: sessionTasks)
             let finished = finishedTransitions(from: previousTasks, to: sessionTasks)
-            // Advance the snapshot before posting notifications. `refresh()`
-            // can be re-entered at its bridge await, so this ordering prevents
-            // two overlapping refreshes from reporting the same transition.
+            // Advance the snapshot before posting notifications. Together
+            // with the generation check, this prevents overlapping refreshes
+            // from reporting the same transition or applying stale results.
             previousTasks = sessionTasks
             if sessionTasks != tasks {
                 tasks = sessionTasks
@@ -125,6 +129,7 @@ final class TransferQueueViewModel: ObservableObject {
                 errorMessage = nil
             }
         } catch {
+            guard generation == refreshGeneration else { return }
             errorMessage = error.dockBridgeUserMessage
         }
     }
@@ -171,7 +176,7 @@ final class TransferQueueViewModel: ObservableObject {
     }
 
     /// Posts a user notification when a transfer transitions from
-    /// in-progress to completed/failed, but only while the app is in the
+    /// pending/in-progress to completed/failed, but only while the app is in the
     /// background (otherwise the queue UI is the feedback). The first fetch
     /// has no previous snapshot and never notifies (no spurious notifications
     /// for tasks that finished before the app looked at them).
@@ -199,7 +204,6 @@ final class TransferQueueViewModel: ObservableObject {
         guard config.notifyWhenTransfersFinish, !NSApp.isActive else { return }
 
         for task in finished {
-
             let direction = task.direction == .upload ? "Upload" : "Download"
             let title: String
             switch task.status {

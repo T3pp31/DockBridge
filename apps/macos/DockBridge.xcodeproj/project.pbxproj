@@ -14,6 +14,7 @@
 		0A7E7B61F467A806DB3B642A /* LocalFileItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = E161934AB4A2807AC6FBAC8F /* LocalFileItem.swift */; };
 		0FE80811B702FBDAF2CF36F6 /* ConnectionStatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E40A150A55326E39CF4FD0 /* ConnectionStatusBar.swift */; };
 		105770DB717D22E0B22AD381 /* SecureLocalFileReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FF66747EFAE3D01C48F7392 /* SecureLocalFileReader.swift */; };
+		108BF39C86A011402DEF2B33 /* TransferQueueNotificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FE2C762D8C4C2D2DEA91C68 /* TransferQueueNotificationTests.swift */; };
 		14230096169E4B62B51031A9 /* PathBookmarkStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC0FCF506A791A622DCEFDED /* PathBookmarkStore.swift */; };
 		146B86A2897D61D788614A68 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 74367E09A9260C6DAA67A818 /* Assets.xcassets */; };
 		14BA406FA6C050462700CC86 /* AppUpdateInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A5424AE602D11D22FD52C5 /* AppUpdateInfo.swift */; };
@@ -114,6 +115,7 @@
 		E7231EA6BE221D18E6326DBF /* VersionComparator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37AFC0ECB72FC39CE65A04FF /* VersionComparator.swift */; };
 		E84DB800005C00D4BE9203C3 /* FileDropValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91B90A80C053344BE981AA99 /* FileDropValidationTests.swift */; };
 		E8DB80EA30D7839B86B21D1B /* ProfileEncryptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E919019F81DFF4080137271C /* ProfileEncryptionService.swift */; };
+		EB91E70B19B87C004C3E54F7 /* TransferNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55AC5A302F3FFFFC7D225332 /* TransferNotificationService.swift */; };
 		F34446C73E64ABFE7DF02B74 /* ConnectionListViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E31BC28636C9C4001C524C5B /* ConnectionListViewModelTests.swift */; };
 		F6A0B9C232BFE7E24FA6243A /* PathBookmarkStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F2DC715F0EDB27E693B1415 /* PathBookmarkStoreTests.swift */; };
 		F895BC47AD111DEC0EFEADE3 /* RemotePaneSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5735931B021F61A1D203DAE0 /* RemotePaneSheets.swift */; };
@@ -173,7 +175,9 @@
 		4B2E7F77B9FE9B35057CF364 /* DockBridgeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DockBridgeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4C0ED66FCAC3414DBE296BAB /* ConnectionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionListView.swift; sourceTree = "<group>"; };
 		4E4B5DDE9194633D0AF22BA8 /* CredentialPromptSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialPromptSheet.swift; sourceTree = "<group>"; };
+		4FE2C762D8C4C2D2DEA91C68 /* TransferQueueNotificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferQueueNotificationTests.swift; sourceTree = "<group>"; };
 		51A7F99464020DA1F4D21F58 /* ProfileTrustSigningKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTrustSigningKeyStore.swift; sourceTree = "<group>"; };
+		55AC5A302F3FFFFC7D225332 /* TransferNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferNotificationService.swift; sourceTree = "<group>"; };
 		5735931B021F61A1D203DAE0 /* RemotePaneSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePaneSheets.swift; sourceTree = "<group>"; };
 		5BD1BC872D5A5397E7C6E6A8 /* HostKeyPromptVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyPromptVerificationTests.swift; sourceTree = "<group>"; };
 		5DBAA81FF7E2FA86D8FEE918 /* DropTargetOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropTargetOverlay.swift; sourceTree = "<group>"; };
@@ -272,6 +276,7 @@
 				44E032FFD48E10B4AAA9AA4D /* RustBridgeService.swift */,
 				6FF66747EFAE3D01C48F7392 /* SecureLocalFileReader.swift */,
 				1A93A9868FF01DF03A5544EE /* SecurityScopedBookmarkService.swift */,
+				55AC5A302F3FFFFC7D225332 /* TransferNotificationService.swift */,
 				37AFC0ECB72FC39CE65A04FF /* VersionComparator.swift */,
 			);
 			path = Services;
@@ -511,6 +516,7 @@
 				42E5DC6DD3162F26542577BC /* SensitiveStringTests.swift */,
 				0DB9EC9E67028E3D5F60C4D4 /* SSHConfigParserTests.swift */,
 				0FD0B46A64878555411E395C /* TransferProgressFormatterTests.swift */,
+				4FE2C762D8C4C2D2DEA91C68 /* TransferQueueNotificationTests.swift */,
 				6748324475AB10BE182F0500 /* TransferQueueSessionFilterTests.swift */,
 				05BB12FE8EB2A21EBC8273E1 /* UpdateCheckViewModelTests.swift */,
 				99EC71A49B225645A7167E28 /* VersionComparatorTests.swift */,
@@ -688,6 +694,7 @@
 				4098F7A9B48E7C01D6D8F70F /* SecurityScopedBookmarkServiceTests.swift in Sources */,
 				33DD92E2B157E3A99066AFAF /* SensitiveStringTests.swift in Sources */,
 				FC84C9D8348DB26B6259EF3C /* TransferProgressFormatterTests.swift in Sources */,
+				108BF39C86A011402DEF2B33 /* TransferQueueNotificationTests.swift in Sources */,
 				44EDFA71877334695363DBC8 /* TransferQueueSessionFilterTests.swift in Sources */,
 				7B66175188D4251282C81E45 /* UpdateCheckViewModelTests.swift in Sources */,
 				AAE60CCE427717CBB5CAF5E6 /* VersionComparatorTests.swift in Sources */,
@@ -766,6 +773,7 @@
 				018F820AE504722218B3CD0D /* SettingsView.swift in Sources */,
 				AC195B49DA756264C53C5F8F /* StoredConnectionProfile.swift in Sources */,
 				BB4F780256800CC8B6D7861F /* TableColumnLayout.swift in Sources */,
+				EB91E70B19B87C004C3E54F7 /* TransferNotificationService.swift in Sources */,
 				581A32EED841B4726C6FCE0D /* TransferOverwritePolicy.swift in Sources */,
 				C7280B049213595638A6A69D /* TransferProgressFormatter.swift in Sources */,
 				BE20F542BF8E932C0DD60B33 /* TransferQueueView.swift in Sources */,
