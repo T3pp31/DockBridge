@@ -11,7 +11,12 @@ use russh::mac;
 use russh::Preferred;
 use ssh_key::{Algorithm, EcdsaCurve, HashAlg};
 
+use crate::config::AppConfig;
+
 const ALLOWED_KEX: &[kex::Name] = &[
+    // Post-quantum hybrid (ML-KEM-768 + X25519), preferred first so servers
+    // that support it (OpenSSH 9.9+) gain harvest-now-decrypt-later resistance.
+    kex::MLKEM768X25519_SHA256,
     kex::CURVE25519,
     kex::CURVE25519_PRE_RFC_8731,
     kex::DH_G16_SHA512,
@@ -69,11 +74,26 @@ pub fn secure_client_preferred() -> Preferred {
     }
 }
 
-/// Builds a russh client configuration with secure algorithm preferences.
-pub fn build_client_config(inactivity_timeout_secs: u64) -> client::Config {
+/// Builds a russh client configuration with secure algorithm preferences,
+/// a SSH-level keepalive, and an idle (`inactivity`) timeout that is
+/// independent of the TCP/SSH connect timeout.
+///
+/// A keepalive interval of `0` explicitly disables SSH keep-alive packets
+/// (russh would otherwise spin on a zero-length interval).
+pub fn build_client_config(config: &AppConfig) -> client::Config {
+    let keepalive_interval = (config.ssh_keepalive_interval_secs != 0)
+        .then(|| Duration::from_secs(config.ssh_keepalive_interval_secs));
+    // A 0-second inactivity timeout would disconnect immediately; treat it
+    // like "disabled" (None) just as a 0 keepalive interval does.
+    let inactivity_timeout = config
+        .ssh_inactivity_timeout_secs
+        .filter(|&secs| secs > 0)
+        .map(Duration::from_secs);
     client::Config {
         preferred: secure_client_preferred(),
-        inactivity_timeout: Some(Duration::from_secs(inactivity_timeout_secs)),
+        inactivity_timeout,
+        keepalive_interval,
+        keepalive_max: 3,
         ..Default::default()
     }
 }
@@ -85,12 +105,10 @@ mod tests {
 
     const DISALLOWED_KEX: &[kex::Name] = &[kex::DH_G1_SHA1, kex::DH_G14_SHA1];
 
-    const DISALLOWED_CIPHER: &[cipher::Name] = &[
-        cipher::TRIPLE_DES_CBC,
-        cipher::AES_128_CBC,
-        cipher::AES_192_CBC,
-        cipher::AES_256_CBC,
-    ];
+    // Deprecated ciphers referenced by name so the russh `des` feature (which
+    // pulls in 3DES) never has to be enabled in release builds.
+    const DISALLOWED_CIPHER_NAMES: &[&str] =
+        &["3des-cbc", "aes128-cbc", "aes192-cbc", "aes256-cbc"];
 
     const DISALLOWED_MAC: &[mac::Name] = &[mac::HMAC_SHA1, mac::HMAC_SHA1_ETM];
 
@@ -167,11 +185,13 @@ mod tests {
             );
         }
 
-        for cipher in DISALLOWED_CIPHER {
+        // Each disallowed cipher (e.g. 3DES, CBC modes) must not appear in the
+        // client's offer list.
+        for cipher in DISALLOWED_CIPHER_NAMES {
             assert!(
-                !preferred.cipher.contains(cipher),
+                !preferred.cipher.iter().any(|c| c.as_ref() == *cipher),
                 "weak cipher `{}` must not be allowed",
-                cipher.as_ref()
+                cipher
             );
         }
 
@@ -195,15 +215,20 @@ mod tests {
     fn negotiates_modern_server_algorithms() {
         // Given: a server that offers modern algorithms
         let preferred = secure_client_preferred();
-        let server_kex = ["curve25519-sha256"];
+        let server_kex = ["mlkem768x25519-sha256", "curve25519-sha256"];
         let server_cipher = ["chacha20-poly1305@openssh.com"];
         let server_mac = ["hmac-sha2-256-etm@openssh.com"];
         let server_host_key = ["ssh-ed25519"];
 
         // When: performing client-side selection
-        // Then: each category negotiates successfully
+        // Then: each category negotiates successfully, and the post-quantum
+        // KEX is selected first when the server offers it.
         assert_eq!(
             select_preferred(preferred.kex.as_ref(), &server_kex),
+            Some("mlkem768x25519-sha256")
+        );
+        assert_eq!(
+            select_preferred(preferred.kex.as_ref(), &["curve25519-sha256"]),
             Some("curve25519-sha256")
         );
         assert_eq!(
@@ -224,6 +249,37 @@ mod tests {
                 &server_host_key
             ),
             Some("ssh-ed25519")
+        );
+    }
+
+    #[test]
+    fn kex_falls_back_when_server_lacks_post_quantum() {
+        // Given: a server that does not support mlkem768x25519-sha256
+        //        (e.g. OpenSSH < 9.9, Dropbear, PuTTY)
+        // When: performing client-side selection
+        // Then: the strongest mutually supported classic KEX is selected
+        let preferred = secure_client_preferred();
+
+        assert_eq!(
+            select_preferred(preferred.kex.as_ref(), &["curve25519-sha256"]),
+            Some("curve25519-sha256")
+        );
+        assert_eq!(
+            select_preferred(preferred.kex.as_ref(), &["diffie-hellman-group14-sha256"]),
+            Some("diffie-hellman-group14-sha256")
+        );
+    }
+
+    #[test]
+    fn kex_selects_post_quantum_when_server_offers_only_pq() {
+        // Given: a server that offers only mlkem768x25519-sha256
+        // When: performing client-side selection
+        // Then: the post-quantum KEX is selected
+        let preferred = secure_client_preferred();
+
+        assert_eq!(
+            select_preferred(preferred.kex.as_ref(), &["mlkem768x25519-sha256"]),
+            Some("mlkem768x25519-sha256")
         );
     }
 
@@ -254,14 +310,69 @@ mod tests {
 
     #[test]
     fn build_client_config_sets_preferred_and_timeout() {
-        // Given: a connection timeout
-        let config = build_client_config(42);
+        // Given: a config with distinct connect and idle timeouts
+        let app_config = AppConfig {
+            ssh_inactivity_timeout_secs: Some(600),
+            ssh_keepalive_interval_secs: 30,
+            ..AppConfig::default()
+        };
+        let config = build_client_config(&app_config);
 
         // When: inspecting the russh client config
-        // Then: secure preferences and inactivity timeout are applied
-        assert_eq!(config.inactivity_timeout, Some(Duration::from_secs(42)));
+        // Then: secure preferences, idle timeout, and keepalive are applied
+        assert_eq!(config.inactivity_timeout, Some(Duration::from_secs(600)));
+        assert_eq!(config.keepalive_interval, Some(Duration::from_secs(30)));
+        assert!(config.keepalive_max > 0);
         assert_eq!(config.preferred.kex.as_ref(), ALLOWED_KEX);
         assert_eq!(config.preferred.cipher.as_ref(), ALLOWED_CIPHER);
         assert_eq!(config.preferred.mac.as_ref(), ALLOWED_MAC);
+    }
+
+    #[test]
+    fn build_client_config_disables_idle_timeout_when_unset() {
+        // Given: a config with the idle timeout disabled
+        let app_config = AppConfig {
+            ssh_inactivity_timeout_secs: None,
+            ..AppConfig::default()
+        };
+        let config = build_client_config(&app_config);
+
+        // Then: inactivity_timeout is None and keepalive is still set
+        assert_eq!(config.inactivity_timeout, None);
+        assert!(config.keepalive_interval.is_some());
+    }
+
+    #[test]
+    fn build_client_config_disables_keepalive_at_zero_interval() {
+        // Given: a config with keepalive interval explicitly set to 0
+        let app_config = AppConfig {
+            ssh_keepalive_interval_secs: 0,
+            ..AppConfig::default()
+        };
+        let config = build_client_config(&app_config);
+
+        // Then: keepalive is disabled rather than spinning on a 0-length timer
+        assert_eq!(config.keepalive_interval, None);
+        assert_eq!(
+            config.inactivity_timeout,
+            Some(Duration::from_secs(
+                app_config.ssh_inactivity_timeout_secs.unwrap_or_default()
+            ))
+        );
+    }
+
+    #[test]
+    fn build_client_config_zero_keepalive_and_no_idle_timeout() {
+        // Given: keepalive disabled and idle timeout unset
+        let app_config = AppConfig {
+            ssh_inactivity_timeout_secs: None,
+            ssh_keepalive_interval_secs: 0,
+            ..AppConfig::default()
+        };
+        let config = build_client_config(&app_config);
+
+        // Then: both timers are off
+        assert_eq!(config.keepalive_interval, None);
+        assert_eq!(config.inactivity_timeout, None);
     }
 }
