@@ -4,6 +4,8 @@ import Foundation
 @MainActor
 final class ConnectionListViewModel: ObservableObject {
     @Published private(set) var profiles: [ConnectionProfile] = []
+    /// Profile awaiting delete confirmation (non-nil while the dialog is shown).
+    @Published var confirmDeleteProfile: ConnectionProfile? = nil
     @Published var selectedProfileID: UUID?
     @Published var searchText = ""
     @Published var errorMessage: String?
@@ -118,7 +120,14 @@ final class ConnectionListViewModel: ObservableObject {
         }
     }
 
+    /// Asks the user to confirm before deleting a profile (and its Keychain
+    /// credentials). The actual `delete(profile:)` runs only after approval.
+    func requestDelete(profile: ConnectionProfile) {
+        confirmDeleteProfile = profile
+    }
+
     func delete(profile: ConnectionProfile) {
+        defer { confirmDeleteProfile = nil }
         do {
             profiles = try store.delete(id: profile.id)
             let account = keychain.keychainAccount(for: profile.id, kind: "profile")
