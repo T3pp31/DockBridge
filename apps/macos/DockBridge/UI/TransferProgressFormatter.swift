@@ -32,6 +32,7 @@ enum TransferProgressFormatter {
 
     static func activeTransferSummary(
         for tasks: [TransferTaskRecord],
+        totalBytesPerSecond: Double? = nil,
         prefix: String = "Transferring"
     ) -> String? {
         let inProgressTasks = tasks.filter { $0.status == .inProgress }
@@ -46,7 +47,12 @@ enum TransferProgressFormatter {
 
         let additionalCount = inProgressTasks.count - 1
         if additionalCount > 0 {
-            return "\(prefix): \(label) +\(additionalCount) more"
+            var summary = "\(prefix): \(label) +\(additionalCount) more"
+            if let totalBytesPerSecond, totalBytesPerSecond > 0 {
+                let speed = byteFormatter.string(fromByteCount: Int64(totalBytesPerSecond))
+                summary += " · \(speed)/s total"
+            }
+            return summary
         }
         return "\(prefix): \(label)"
     }

@@ -20,6 +20,7 @@ enum AppSettingsKeys {
     static let sessionHealthCheckIntervalSecs = "sessionHealthCheckIntervalSecs"
     static let transferRetryCount = "transferRetryCount"
     static let transferChunkSizeBytes = "transferChunkSizeBytes"
+    static let transferDownloadPipelineDepth = "transferDownloadPipelineDepth"
     static let defaultLocalPath = "defaultLocalPath"
     static let defaultLocalBookmark = "defaultLocalBookmark"
     static let confirmBeforeDelete = "confirmBeforeDelete"
@@ -61,6 +62,7 @@ final class AppSettingsService: @unchecked Sendable {
             AppSettingsKeys.sessionHealthCheckIntervalSecs: Int(AppConfig.default.sessionHealthCheckIntervalSecs),
             AppSettingsKeys.transferRetryCount: Int(AppConfig.default.transferRetryCount),
             AppSettingsKeys.transferChunkSizeBytes: Int(AppConfig.default.transferChunkSizeBytes),
+            AppSettingsKeys.transferDownloadPipelineDepth: Int(AppConfig.default.transferDownloadPipelineDepth),
             AppSettingsKeys.defaultLocalPath: AppConfig.default.defaultLocalPath,
             AppSettingsKeys.confirmBeforeDelete: AppConfig.default.confirmBeforeDelete,
             AppSettingsKeys.showHiddenFiles: AppConfig.default.showHiddenFiles,
@@ -80,15 +82,44 @@ final class AppSettingsService: @unchecked Sendable {
     }
 
     func loadConfig() -> AppConfig {
-        AppConfig(
-            connectionTimeoutSecs: UInt64(defaults.integer(forKey: AppSettingsKeys.connectionTimeoutSecs)),
-            sessionHealthCheckIntervalSecs: UInt64(
-                defaults.integer(forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs)
+        // Integer fields are read clamp-safe: `UInt64(Int)` / `UInt32(Int)`
+        // trap at runtime on negative or out-of-range values, which a broken
+        // plist or a different app version can produce. Clamp instead of
+        // crashing so the app always launches.
+        let minChunk = 4_096
+        let maxChunk = 8_388_608
+        // Upper bounds keep runaway plist values from becoming effectively
+        // infinite retries/timeouts.
+        let maxRetryCount = 100
+        let maxTimeoutSecs = 86_400
+
+        let rawChunkSize = defaults.integer(forKey: AppSettingsKeys.transferChunkSizeBytes)
+        let chunkSize = rawChunkSize == 0
+            ? Int(AppConfig.default.transferChunkSizeBytes)
+            : rawChunkSize
+
+        return AppConfig(
+            connectionTimeoutSecs: UInt64(
+                clamping: min(
+                    maxTimeoutSecs,
+                    max(1, defaults.integer(forKey: AppSettingsKeys.connectionTimeoutSecs))
+                )
             ),
-            transferRetryCount: UInt32(defaults.integer(forKey: AppSettingsKeys.transferRetryCount)),
+            sessionHealthCheckIntervalSecs: UInt64(
+                clamping: max(1, defaults.integer(forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs))
+            ),
+            transferRetryCount: UInt32(
+                clamping: min(
+                    maxRetryCount,
+                    max(0, defaults.integer(forKey: AppSettingsKeys.transferRetryCount))
+                )
+            ),
             transferChunkSizeBytes: UInt64(
-                defaults.object(forKey: AppSettingsKeys.transferChunkSizeBytes) as? Int
-                    ?? Int(AppConfig.default.transferChunkSizeBytes)
+                clamping: min(maxChunk, max(minChunk, chunkSize))
+            ),
+            transferDownloadPipelineDepth: UInt64(
+                defaults.object(forKey: AppSettingsKeys.transferDownloadPipelineDepth) as? Int
+                    ?? Int(AppConfig.default.transferDownloadPipelineDepth)
             ),
             defaultLocalPath: defaults.string(forKey: AppSettingsKeys.defaultLocalPath)
                 ?? AppConfig.default.defaultLocalPath,
@@ -106,16 +137,25 @@ final class AppSettingsService: @unchecked Sendable {
                 forKey: AppSettingsKeys.failConnectOnOpensshMergeError
             ),
             directoryWalkMaxFiles: UInt64(
-                defaults.object(forKey: AppSettingsKeys.directoryWalkMaxFiles) as? Int
-                    ?? Int(AppConfig.default.directoryWalkMaxFiles)
+                clamping: max(
+                    0,
+                    defaults.object(forKey: AppSettingsKeys.directoryWalkMaxFiles) as? Int
+                        ?? Int(clamping: AppConfig.default.directoryWalkMaxFiles)
+                )
             ),
             directoryWalkMaxDepth: UInt32(
-                defaults.object(forKey: AppSettingsKeys.directoryWalkMaxDepth) as? Int
-                    ?? Int(AppConfig.default.directoryWalkMaxDepth)
+                clamping: max(
+                    0,
+                    defaults.object(forKey: AppSettingsKeys.directoryWalkMaxDepth) as? Int
+                        ?? Int(clamping: AppConfig.default.directoryWalkMaxDepth)
+                )
             ),
             directoryWalkMaxTotalBytes: UInt64(
-                defaults.object(forKey: AppSettingsKeys.directoryWalkMaxTotalBytes) as? Int
-                    ?? Int(AppConfig.default.directoryWalkMaxTotalBytes)
+                clamping: max(
+                    0,
+                    defaults.object(forKey: AppSettingsKeys.directoryWalkMaxTotalBytes) as? Int
+                        ?? Int(clamping: AppConfig.default.directoryWalkMaxTotalBytes)
+                )
             ),
             transferOverwritePolicy: TransferOverwritePolicy(
                 rawValue: defaults.string(forKey: AppSettingsKeys.transferOverwritePolicy)
@@ -129,6 +169,10 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(Int(config.sessionHealthCheckIntervalSecs), forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs)
         defaults.set(Int(config.transferRetryCount), forKey: AppSettingsKeys.transferRetryCount)
         defaults.set(Int(config.transferChunkSizeBytes), forKey: AppSettingsKeys.transferChunkSizeBytes)
+        defaults.set(
+            Int(config.transferDownloadPipelineDepth),
+            forKey: AppSettingsKeys.transferDownloadPipelineDepth
+        )
         defaults.set(config.defaultLocalPath, forKey: AppSettingsKeys.defaultLocalPath)
         defaults.set(config.defaultLocalBookmark, forKey: AppSettingsKeys.defaultLocalBookmark)
         defaults.set(config.confirmBeforeDelete, forKey: AppSettingsKeys.confirmBeforeDelete)

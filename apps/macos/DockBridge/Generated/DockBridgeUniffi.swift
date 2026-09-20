@@ -606,6 +606,15 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
     
     func delete(sessionId: UInt64, remotePath: String) throws 
     
+    /**
+     * Deletes a remote entry, optionally recursing into directories.
+     *
+     * Returns the number of entries removed. Distinguishes between files,
+     * symlinks (removed as links) and directories (recursively removed when
+     * `recursive` is true, otherwise rejected when not empty).
+     */
+    func deleteEntry(sessionId: UInt64, remotePath: String, recursive: Bool) throws  -> UInt64
+    
     func disconnect(sessionId: UInt64) throws 
     
     func download(sessionId: UInt64, remotePath: String, localPath: String) throws 
@@ -747,6 +756,25 @@ open func delete(sessionId: UInt64, remotePath: String)throws   {try rustCallWit
         FfiConverterString.lower(remotePath),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * Deletes a remote entry, optionally recursing into directories.
+     *
+     * Returns the number of entries removed. Distinguishes between files,
+     * symlinks (removed as links) and directories (recursively removed when
+     * `recursive` is true, otherwise rejected when not empty).
+     */
+open func deleteEntry(sessionId: UInt64, remotePath: String, recursive: Bool)throws  -> UInt64  {
+    return try  FfiConverterUInt64.lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_delete_entry(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterString.lower(remotePath),
+        FfiConverterBool.lower(recursive),uniffiCallStatus
+    )
+})
 }
     
 open func disconnect(sessionId: UInt64)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
@@ -909,6 +937,7 @@ public struct AppConfigRecord: Equatable, Hashable {
     public var sessionHealthCheckIntervalSecs: UInt64
     public var transferRetryCount: UInt32
     public var transferChunkSizeBytes: UInt64
+    public var transferDownloadPipelineDepth: UInt64
     public var knownHostsPath: String
     public var opensshKnownHostsPath: String
     public var mergeOpensshKnownHostsOnConnect: Bool
@@ -920,11 +949,12 @@ public struct AppConfigRecord: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool, knownHostsStrictMode: Bool, failConnectOnOpensshMergeError: Bool, directoryWalkMaxFiles: UInt64, directoryWalkMaxDepth: UInt32, directoryWalkMaxTotalBytes: UInt64) {
+    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, transferDownloadPipelineDepth: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool, knownHostsStrictMode: Bool, failConnectOnOpensshMergeError: Bool, directoryWalkMaxFiles: UInt64, directoryWalkMaxDepth: UInt32, directoryWalkMaxTotalBytes: UInt64) {
         self.connectionTimeoutSecs = connectionTimeoutSecs
         self.sessionHealthCheckIntervalSecs = sessionHealthCheckIntervalSecs
         self.transferRetryCount = transferRetryCount
         self.transferChunkSizeBytes = transferChunkSizeBytes
+        self.transferDownloadPipelineDepth = transferDownloadPipelineDepth
         self.knownHostsPath = knownHostsPath
         self.opensshKnownHostsPath = opensshKnownHostsPath
         self.mergeOpensshKnownHostsOnConnect = mergeOpensshKnownHostsOnConnect
@@ -955,6 +985,7 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
                 sessionHealthCheckIntervalSecs: FfiConverterUInt64.read(from: &buf), 
                 transferRetryCount: FfiConverterUInt32.read(from: &buf), 
                 transferChunkSizeBytes: FfiConverterUInt64.read(from: &buf), 
+                transferDownloadPipelineDepth: FfiConverterUInt64.read(from: &buf), 
                 knownHostsPath: FfiConverterString.read(from: &buf), 
                 opensshKnownHostsPath: FfiConverterString.read(from: &buf), 
                 mergeOpensshKnownHostsOnConnect: FfiConverterBool.read(from: &buf), 
@@ -971,6 +1002,7 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
         FfiConverterUInt64.write(value.sessionHealthCheckIntervalSecs, into: &buf)
         FfiConverterUInt32.write(value.transferRetryCount, into: &buf)
         FfiConverterUInt64.write(value.transferChunkSizeBytes, into: &buf)
+        FfiConverterUInt64.write(value.transferDownloadPipelineDepth, into: &buf)
         FfiConverterString.write(value.knownHostsPath, into: &buf)
         FfiConverterString.write(value.opensshKnownHostsPath, into: &buf)
         FfiConverterBool.write(value.mergeOpensshKnownHostsOnConnect, into: &buf)
@@ -2158,6 +2190,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_delete() != 12825) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_delete_entry() != 1346) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_disconnect() != 49600) {

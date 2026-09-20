@@ -17,8 +17,11 @@ KNOWN_HOSTS="$WORKDIR/known_hosts.json"
 CONFIG="$WORKDIR/config.toml"
 LOCAL_FILE="$WORKDIR/local-upload.txt"
 DOWNLOAD_FILE="$WORKDIR/local-download.txt"
-REMOTE_FILE="upload/e2e-verify.txt"
+REMOTE_FILE="/upload/e2e-verify.txt"
 LOG="$WORKDIR/e2e.log"
+KEYFILE="$WORKDIR/id_ed25519"
+KEYFILE_ENC="$WORKDIR/id_ed25519_enc"
+KEY_PASSPHRASE="${SFTP_KEY_PASSPHRASE:-testpassphrase}"
 
 CLI=(cargo run -q -p dockbridge-cli -- --config "$CONFIG")
 
@@ -49,22 +52,37 @@ check() {
 
 prepare_config() {
   rm -f "$KNOWN_HOSTS"
-  cat >"$CONFIG" <<EOF
-connection_timeout_secs = 30
-session_health_check_interval_secs = 10
-transfer_retry_count = 3
-known_hosts_path = "$KNOWN_HOSTS"
-EOF
+  # AppConfig has no serde(default) on most fields, so the generated TOML must
+  # contain every field. Base it on the committed default and override the
+  # test-specific paths / merge flag.
+  # Keep TOML string literals quoted: the outer double quotes around the
+  # replacement would be stripped by the shell before sed sees them.
+  sed     -e "s|^known_hosts_path = .*|known_hosts_path = \"$KNOWN_HOSTS\"|"     -e "s|^merge_openssh_known_hosts_on_connect = .*|merge_openssh_known_hosts_on_connect = false|"     -e "s|^openssh_known_hosts_path = .*|openssh_known_hosts_path = \"$WORKDIR/openssh_known_hosts\"|"     config/default.toml >"$CONFIG"
+  : >"$WORKDIR/openssh_known_hosts"
   echo "e2e upload $(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$LOCAL_FILE"
+}
+
+ensure_key() {
+  # Generate an unencrypted ed25519 key and a directly-encrypted copy for the
+  # private-key auth cases. The public keys are mounted into the container's
+  # /home/$USER/.ssh/keys directory so atmoz/sftp appends them to
+  # authorized_keys at startup.
+  if [[ ! -f "$KEYFILE" ]]; then
+    ssh-keygen -q -t ed25519 -N "" -f "$KEYFILE" >/dev/null 2>&1
+    ssh-keygen -q -t ed25519 -N "$KEY_PASSPHRASE" -f "$KEYFILE_ENC" >/dev/null 2>&1
+  fi
 }
 
 ensure_container() {
   if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
     return 0
   fi
+  ensure_key
   log "Starting Docker SFTP container $CONTAINER_NAME ..."
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   docker run -d --name "$CONTAINER_NAME" -p "${PORT}:22" -e SFTP_USER="$USER" \
+    -v "$WORKDIR/id_ed25519.pub:/home/$USER/.ssh/keys/id_ed25519.pub:ro" \
+    -v "$WORKDIR/id_ed25519_enc.pub:/home/$USER/.ssh/keys/id_ed25519_enc.pub:ro" \
     atmoz/sftp "${USER}:${PASSWORD}:::upload" >/dev/null
   sleep 3
 }
@@ -87,7 +105,30 @@ host_key_accept() {
 host_key_no_reprompt() {
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    >/dev/null
+    --path upload >/dev/null
+}
+
+private_key_auth_plain() {
+  ensure_key
+  prepare_config
+  # Seed the store with the host key first so the actual key-only run below
+  # never needs an interactive host-key prompt. In this non-TTY CI pipe the
+  # "yes" answer to the host-key confirmation is supplied before the password.
+  { printf '%s\n' "$PASSWORD" "yes"; } | "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --path upload >/dev/null
+  # Now authenticate with the key (host key already trusted)
+  "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" \
+    --identity "$WORKDIR/id_ed25519" --path upload >/dev/null
+}
+
+private_key_auth_encrypted() {
+  # Authenticate with an encrypted key; passphrase comes from --passphrase-stdin
+  printf '%s\n' "$KEY_PASSPHRASE" | "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" \
+    --identity "$WORKDIR/id_ed25519_enc" --passphrase-stdin \
+    --path upload >/dev/null
 }
 
 upload_file() {
@@ -146,6 +187,8 @@ main() {
   check "host key reject does not persist trust" host_key_reject
   check "host key accept persists trusted entry" host_key_accept
   check "second connection skips host key prompt" host_key_no_reprompt
+  check "private-key auth (plain key)" private_key_auth_plain
+  check "private-key auth (encrypted key, --passphrase-stdin)" private_key_auth_encrypted
   check "upload succeeds" upload_file
   check "download matches uploaded content" download_file
   check "transfer queue lifecycle tests pass" transfer_queue_states
