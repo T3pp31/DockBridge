@@ -20,6 +20,8 @@ final class MainViewModel: ObservableObject {
         }
     }
     @Published private(set) var remoteItems: [RemoteFileRecord] = []
+    @Published var localFilter = ""
+    @Published var remoteFilter = ""
     @Published var selectedLocalItemIDs: Set<String> = []
     @Published var selectedRemoteItemIDs: Set<String> = []
 
@@ -574,6 +576,12 @@ final class MainViewModel: ObservableObject {
         if canNavigateLocalUp {
             items.insert(LocalFileItem(parentOf: localPath), at: 0)
         }
+        if !localFilter.isEmpty {
+            items = items.filter { item in
+                item.isParentDirectory
+                    || item.name.localizedCaseInsensitiveContains(localFilter)
+            }
+        }
         return items
     }
 
@@ -581,6 +589,12 @@ final class MainViewModel: ObservableObject {
         var items = remoteItems
         if canNavigateRemoteUp, let parent = RemoteFileRecord.parentEntry(for: remotePath) {
             items.insert(parent, at: 0)
+        }
+        if !remoteFilter.isEmpty {
+            items = items.filter { item in
+                item.isParentDirectory
+                    || item.name.localizedCaseInsensitiveContains(remoteFilter)
+            }
         }
         return items
     }
