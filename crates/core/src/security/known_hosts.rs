@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -137,30 +137,7 @@ impl KnownHostsManager {
     /// Creates a manager and loads entries from the given path.
     pub fn load(path: impl Into<PathBuf>) -> Result<Self, SecurityError> {
         let path = path.into();
-        let (entries, hashed_entries) = if path.exists() {
-            let contents =
-                read_secure_known_hosts_file(&path, KnownHostsReadPolicy::DockBridgeStore)?;
-            let file: KnownHostsFile = serde_json::from_str(&contents).map_err(|err| {
-                SecurityError::KnownHostsReadFailed {
-                    path: path.display().to_string(),
-                    message: err.to_string(),
-                }
-            })?;
-            let hashed_entries = file.hashed_entries;
-            let entries = file
-                .entries
-                .into_iter()
-                .map(normalize_entry_case)
-                .map(|entry| {
-                    let key = entry_key(&entry.host, entry.port);
-                    (key, entry)
-                })
-                .collect();
-            (entries, hashed_entries)
-        } else {
-            (HashMap::new(), Vec::new())
-        };
-
+        let (entries, hashed_entries) = load_store_contents(&path)?;
         Ok(Self {
             path,
             entries,
@@ -216,6 +193,16 @@ impl KnownHostsManager {
         HostKeyCheckResult::Unknown
     }
 
+    /// Re-reads the latest store while the caller holds the sidecar lock.
+    /// Existing unreadable or malformed files fail closed so stale in-memory
+    /// contents can never overwrite an external update.
+    fn reload_for_update(&mut self) -> Result<(), SecurityError> {
+        let (entries, hashed_entries) = load_store_contents(&self.path)?;
+        self.entries = entries;
+        self.hashed_entries = hashed_entries;
+        Ok(())
+    }
+
     /// Saves a trusted host key to the store with file mode `0600`.
     ///
     /// When the fingerprint already exists for the same port under another host,
@@ -226,6 +213,8 @@ impl KnownHostsManager {
         port: u16,
         key: &PublicKey,
     ) -> Result<(), SecurityError> {
+        let _store_lock = acquire_store_lock(&self.path)?;
+        self.reload_for_update()?;
         let fingerprint = fingerprint_sha256(key);
         let public_key_openssh = key.to_openssh().ok();
 
@@ -435,6 +424,8 @@ impl KnownHostsManager {
     /// (unreadable file, insecure permissions, or persistence failure).
     pub fn import_openssh(&mut self, path: &Path) -> Result<ImportSummary, SecurityError> {
         let contents = read_secure_known_hosts_file(path, KnownHostsReadPolicy::OpenSshImport)?;
+        let _store_lock = acquire_store_lock(&self.path)?;
+        self.reload_for_update()?;
 
         let mut merged = 0;
         let mut changed = false;
@@ -862,6 +853,107 @@ impl KnownHostsManager {
         write_file_mode_0600(&self.path, format!("{json}\n").as_bytes())?;
         Ok(())
     }
+}
+
+fn load_store_contents(
+    path: &Path,
+) -> Result<(HashMap<String, KnownHostEntry>, Vec<HashedHostEntry>), SecurityError> {
+    match fs::symlink_metadata(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((HashMap::new(), Vec::new()));
+        }
+        Err(err) => {
+            return Err(SecurityError::KnownHostsReadFailed {
+                path: path.display().to_string(),
+                message: err.to_string(),
+            });
+        }
+        Ok(_) => {}
+    }
+
+    let contents = read_secure_known_hosts_file(path, KnownHostsReadPolicy::DockBridgeStore)?;
+    let file: KnownHostsFile =
+        serde_json::from_str(&contents).map_err(|err| SecurityError::KnownHostsReadFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        })?;
+    let entries = file
+        .entries
+        .into_iter()
+        .map(normalize_entry_case)
+        .map(|entry| (entry_key(&entry.host, entry.port), entry))
+        .collect();
+    Ok((entries, file.hashed_entries))
+}
+
+fn store_lock_path(path: &Path) -> PathBuf {
+    let mut lock_path = path.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    PathBuf::from(lock_path)
+}
+
+/// Acquires an exclusive advisory lock on a stable sidecar file. The JSON
+/// store itself is atomically replaced on save, so locking that inode would not
+/// coordinate later writers.
+fn acquire_store_lock(path: &Path) -> Result<File, SecurityError> {
+    ensure_known_hosts_parent(path)?;
+    let lock_path = store_lock_path(path);
+    let path_string = lock_path.display().to_string();
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+
+    let file = options
+        .open(&lock_path)
+        .map_err(|err| SecurityError::KnownHostsWriteFailed {
+            path: path_string.clone(),
+            message: format!("failed to open known hosts lock file: {err}"),
+        })?;
+
+    let metadata = file
+        .metadata()
+        .map_err(|err| SecurityError::KnownHostsWriteFailed {
+            path: path_string.clone(),
+            message: format!("failed to inspect known hosts lock file: {err}"),
+        })?;
+    if !metadata.is_file() {
+        return Err(SecurityError::KnownHostsWriteFailed {
+            path: path_string,
+            message: "known hosts lock path is not a regular file".to_string(),
+        });
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let effective_uid = unsafe { libc::geteuid() };
+        if metadata.uid() != effective_uid {
+            return Err(SecurityError::KnownHostsWriteFailed {
+                path: path_string.clone(),
+                message: format!(
+                    "lock owner uid {} does not match effective uid {effective_uid}",
+                    metadata.uid()
+                ),
+            });
+        }
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|err| SecurityError::KnownHostsWriteFailed {
+                path: path_string.clone(),
+                message: format!("failed to secure known hosts lock file: {err}"),
+            })?;
+    }
+
+    file.lock()
+        .map_err(|err| SecurityError::KnownHostsWriteFailed {
+            path: path_string,
+            message: format!("failed to lock known hosts store: {err}"),
+        })?;
+    Ok(file)
 }
 
 fn fingerprint_check(entry: &KnownHostEntry, actual: &str) -> HostKeyCheckResult {
@@ -3095,6 +3187,109 @@ mod tests {
         assert!(!fingerprints_match("SHA256:abc", "SHA256:ab"));
         assert!(fingerprints_match("", ""));
     }
+
+    #[test]
+    fn locked_updates_preserve_entries_written_by_another_instance() {
+        // Given: two KnownHostsManager instances sharing one store path
+        // When: they accept keys for different hosts
+        // Then: every update reloads under the sidecar lock and keeps both hosts
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key_a = test_public_key();
+        let key_b = test_public_key();
+
+        let mut manager_a = KnownHostsManager::load(&path).unwrap();
+        let mut manager_b = KnownHostsManager::load(&path).unwrap();
+
+        // Process A accepts host A first.
+        manager_a
+            .accept_host_key("alpha.example.com", 22, &key_a)
+            .unwrap();
+
+        // Process B has a stale view; accepting writes its entry too.
+        manager_b
+            .accept_host_key("beta.example.com", 22, &key_b)
+            .unwrap();
+
+        // Process A accepts another host and picks up B's entry under the lock.
+        manager_a
+            .accept_host_key("gamma.example.com", 22, &key_a)
+            .unwrap();
+
+        // All hosts must be trusted after the interleaving.
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("alpha.example.com", 22, &key_a, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            reloaded.check_host_key("beta.example.com", 22, &key_b, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            reloaded.check_host_key("gamma.example.com", 22, &key_a, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn locked_import_preserves_entries_written_by_another_instance() {
+        // Given: a stale manager and an entry persisted by another manager
+        // When: the stale manager imports an OpenSSH entry
+        // Then: the import reloads under the lock and preserves both entries
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let accepted_key = test_public_key();
+        let imported_key = test_public_key();
+        let imported_openssh = imported_key.to_openssh().unwrap();
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("imported.example.com {imported_openssh}\n"),
+        );
+
+        let mut stale_manager = KnownHostsManager::load(&path).unwrap();
+        let mut writer = KnownHostsManager::load(&path).unwrap();
+        writer
+            .accept_host_key("accepted.example.com", 22, &accepted_key)
+            .unwrap();
+
+        stale_manager.import_openssh(&openssh_path).unwrap();
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("accepted.example.com", 22, &accepted_key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            reloaded.check_host_key("imported.example.com", 22, &imported_key, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn corrupted_external_update_is_not_overwritten() {
+        // Given: a manager with stale state and a store corrupted externally
+        // When: the manager attempts another mutation
+        // Then: the update fails closed and leaves the external bytes untouched
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("alpha.example.com", 22, &key)
+            .unwrap();
+        let corrupt_contents = b"{not valid json";
+        fs::write(&path, corrupt_contents).unwrap();
+
+        let err = manager
+            .accept_host_key("beta.example.com", 22, &key)
+            .unwrap_err();
+        assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
+        assert_eq!(fs::read(&path).unwrap(), corrupt_contents);
+    }
+
     #[test]
     fn host_matching_is_case_insensitive() {
         // Given: a trusted host stored in mixed case
