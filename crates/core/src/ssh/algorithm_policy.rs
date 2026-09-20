@@ -12,6 +12,9 @@ use russh::Preferred;
 use ssh_key::{Algorithm, EcdsaCurve, HashAlg};
 
 const ALLOWED_KEX: &[kex::Name] = &[
+    // Post-quantum hybrid (ML-KEM-768 + X25519), preferred first so servers
+    // that support it (OpenSSH 9.9+) gain harvest-now-decrypt-later resistance.
+    kex::MLKEM768X25519_SHA256,
     kex::CURVE25519,
     kex::CURVE25519_PRE_RFC_8731,
     kex::DH_G16_SHA512,
@@ -195,15 +198,20 @@ mod tests {
     fn negotiates_modern_server_algorithms() {
         // Given: a server that offers modern algorithms
         let preferred = secure_client_preferred();
-        let server_kex = ["curve25519-sha256"];
+        let server_kex = ["mlkem768x25519-sha256", "curve25519-sha256"];
         let server_cipher = ["chacha20-poly1305@openssh.com"];
         let server_mac = ["hmac-sha2-256-etm@openssh.com"];
         let server_host_key = ["ssh-ed25519"];
 
         // When: performing client-side selection
-        // Then: each category negotiates successfully
+        // Then: each category negotiates successfully, and the post-quantum
+        // KEX is selected first when the server offers it.
         assert_eq!(
             select_preferred(preferred.kex.as_ref(), &server_kex),
+            Some("mlkem768x25519-sha256")
+        );
+        assert_eq!(
+            select_preferred(preferred.kex.as_ref(), &["curve25519-sha256"]),
             Some("curve25519-sha256")
         );
         assert_eq!(
@@ -224,6 +232,37 @@ mod tests {
                 &server_host_key
             ),
             Some("ssh-ed25519")
+        );
+    }
+
+    #[test]
+    fn kex_falls_back_when_server_lacks_post_quantum() {
+        // Given: a server that does not support mlkem768x25519-sha256
+        //        (e.g. OpenSSH < 9.9, Dropbear, PuTTY)
+        // When: performing client-side selection
+        // Then: the strongest mutually supported classic KEX is selected
+        let preferred = secure_client_preferred();
+
+        assert_eq!(
+            select_preferred(preferred.kex.as_ref(), &["curve25519-sha256"]),
+            Some("curve25519-sha256")
+        );
+        assert_eq!(
+            select_preferred(preferred.kex.as_ref(), &["diffie-hellman-group14-sha256"]),
+            Some("diffie-hellman-group14-sha256")
+        );
+    }
+
+    #[test]
+    fn kex_selects_post_quantum_when_server_offers_only_pq() {
+        // Given: a server that offers only mlkem768x25519-sha256
+        // When: performing client-side selection
+        // Then: the post-quantum KEX is selected
+        let preferred = secure_client_preferred();
+
+        assert_eq!(
+            select_preferred(preferred.kex.as_ref(), &["mlkem768x25519-sha256"]),
+            Some("mlkem768x25519-sha256")
         );
     }
 
