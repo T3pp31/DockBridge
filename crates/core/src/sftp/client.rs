@@ -1,6 +1,8 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 use std::{future::Future, io};
 
 use rand::TryRng;
@@ -22,7 +24,7 @@ use super::path::parent_remote_path;
 use super::tree::{
     ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
     normalize_remote_path, validated_remote_entry, walk_local_directory_with_options,
-    walk_remote_directory_with_limits, WalkLocalDirectoryOptions,
+    walk_remote_directory_with_limits, RemoteFileEntry, WalkLocalDirectoryOptions,
 };
 
 /// Metadata for a remote file or directory entry.
@@ -40,6 +42,9 @@ pub struct RemoteFile {
 pub struct SftpClient<'a> {
     session: &'a SshSession,
     directory_walk_limits: DirectoryWalkLimits,
+    /// Per-request timeout applied to upload WRITE acks and shutdown when the
+    /// underlying session timeout is unavailable. Tests can shorten it.
+    upload_request_timeout: Duration,
 }
 
 impl<'a> SftpClient<'a> {
@@ -48,12 +53,21 @@ impl<'a> SftpClient<'a> {
         Self {
             session,
             directory_walk_limits: DirectoryWalkLimits::default(),
+            upload_request_timeout: UPLOAD_REQUEST_TIMEOUT,
         }
     }
 
     /// Sets resource limits applied during recursive directory walks.
     pub fn with_directory_walk_limits(mut self, limits: DirectoryWalkLimits) -> Self {
         self.directory_walk_limits = limits;
+        self
+    }
+
+    /// Overrides the per-request timeout applied to upload WRITE acks and
+    /// shutdown. Primarily for tests that inject a hung server.
+    #[cfg(test)]
+    pub(crate) fn with_upload_request_timeout(mut self, timeout: Duration) -> Self {
+        self.upload_request_timeout = timeout;
         self
     }
 
@@ -94,6 +108,24 @@ impl<'a> SftpClient<'a> {
                 message: err.to_string(),
             })?;
         Ok(metadata.file_type().is_dir())
+    }
+
+    /// Reports whether `path` exists remotely and, when it does, whether it is
+    /// a directory.
+    ///
+    /// Returns `Ok(None)` when the path does not exist (`SSH_FX_NO_SUCH_FILE`);
+    /// `Ok(Some(true))` for a directory; `Ok(Some(false))` for a regular file
+    /// / symlink / other type. Any other stat failure is surfaced as an error.
+    pub async fn remote_path_kind(&self, path: &str) -> Result<Option<bool>, SftpError> {
+        let path = normalize_remote_path(path)?;
+        match self.sftp().metadata(&path).await {
+            Ok(metadata) => Ok(Some(metadata.file_type().is_dir())),
+            Err(err) if is_remote_no_such_file_error(&err) => Ok(None),
+            Err(err) => Err(SftpError::ListFailed {
+                path: path.clone(),
+                message: err.to_string(),
+            }),
+        }
     }
 
     /// Lists entries in a remote directory.
@@ -321,6 +353,113 @@ impl<'a> SftpClient<'a> {
             })
     }
 
+    /// Deletes a remote entry, optionally recursing into directories.
+    ///
+    /// Symlinks are removed as links (their targets are never followed).
+    /// When `recursive` is `false`, a non-empty directory fails with
+    /// [`SftpError::DirectoryNotEmpty`]. When `recursive` is `true`, children
+    /// are removed depth-first (files first, directories last), respecting the
+    /// configured [`DirectoryWalkLimits`] (depth / file count / byte budget).
+    ///
+    /// Returns the total number of entries removed. On a limit or I/O error the
+    /// previously removed entries stay removed, but the count is not returned;
+    /// callers that need partial counts should scan before deleting.
+    pub async fn delete_entry(
+        &self,
+        remote_path: &str,
+        recursive: bool,
+    ) -> Result<usize, SftpError> {
+        let remote_path = normalize_remote_path(remote_path)?;
+        if remote_path == "/" {
+            return Err(SftpError::InvalidRemotePath { path: remote_path });
+        }
+
+        // Recursive post-order deletion without async recursion: keep a stack
+        // of directories whose children still need visiting. Each child is
+        // classified via symlink_metadata (lstat), so symlinks are deleted as
+        // links and never descended.
+        // Owned paths so the stack keeps references valid while we await.
+        enum Task {
+            VisitDir(String, u32),
+            RemoveDir(String),
+        }
+
+        let mut count = 0usize;
+        let mut stack = vec![Task::VisitDir(remote_path, 0)];
+
+        while let Some(task) = stack.pop() {
+            match task {
+                Task::VisitDir(path, depth) => {
+                    let path = path.as_str();
+                    if depth > self.directory_walk_limits.max_depth {
+                        return Err(SftpError::DirectoryWalkLimitExceeded {
+                            limit: "max_depth".to_string(),
+                            value: depth as u64,
+                            path: path.to_string(),
+                        });
+                    }
+
+                    let metadata = self.sftp().symlink_metadata(path).await.map_err(|err| {
+                        SftpError::DeleteFailed {
+                            path: path.to_string(),
+                            message: err.to_string(),
+                        }
+                    })?;
+                    let file_type = metadata.file_type();
+
+                    // Files, symlinks and special files: remove directly.
+                    if !file_type.is_dir() {
+                        self.sftp().remove_file(path).await.map_err(|err| {
+                            SftpError::DeleteFailed {
+                                path: path.to_string(),
+                                message: err.to_string(),
+                            }
+                        })?;
+                        count += 1;
+                        continue;
+                    }
+
+                    if !recursive {
+                        let entries = self.list_directory(path).await?;
+                        if !entries.is_empty() {
+                            return Err(SftpError::DirectoryNotEmpty {
+                                path: path.to_string(),
+                            });
+                        }
+                        self.sftp().remove_dir(path).await.map_err(|err| {
+                            SftpError::DeleteFailed {
+                                path: path.to_string(),
+                                message: err.to_string(),
+                            }
+                        })?;
+                        count += 1;
+                        continue;
+                    }
+
+                    let entries = self.list_directory(path).await?;
+                    // First remove this dir after its children are removed.
+                    stack.push(Task::RemoveDir(path.to_string()));
+                    for entry in entries {
+                        stack.push(Task::VisitDir(entry.path, depth + 1));
+                    }
+                }
+                Task::RemoveDir(path) => {
+                    let path = path.as_str();
+                    self.sftp()
+                        .remove_dir(path)
+                        .await
+                        .map_err(|err| SftpError::DeleteFailed {
+                            path: path.to_string(),
+                            message: err.to_string(),
+                        })?;
+                    count += 1;
+                }
+            }
+        }
+
+        Ok(count)
+    }
+
     /// Renames a remote file or directory.
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), SftpError> {
         let from = normalize_remote_path(from)?;
@@ -349,6 +488,21 @@ impl<'a> SftpClient<'a> {
 
     /// Creates a remote directory and any missing parent directories.
     pub async fn create_directory_all(&self, remote_path: &str) -> Result<(), SftpError> {
+        self.create_directory_all_cached(remote_path, &mut None)
+            .await
+    }
+
+    /// Creates a remote directory (and missing parents), skipping segments
+    /// already present in `created_cache` (a cache of paths known to exist).
+    ///
+    /// Starts from the given path's parent chain (not from "/"), so repeated
+    /// calls for many files under the same root cost O(depth) per call instead
+    /// of O(depth × segments) round trips from "/".
+    pub async fn create_directory_all_cached(
+        &self,
+        remote_path: &str,
+        created_cache: &mut Option<HashSet<String>>,
+    ) -> Result<(), SftpError> {
         let normalized = normalize_remote_path(remote_path)?;
         if normalized == "/" {
             return Ok(());
@@ -364,20 +518,36 @@ impl<'a> SftpClient<'a> {
             if segment.is_empty() {
                 continue;
             }
-            current = join_remote_path(&current, Path::new(segment))?;
+            let next = join_remote_path(&current, Path::new(segment))?;
+
+            if next != normalized {
+                // The final segment is handled by the caller (a file path or
+                // its own create call); parents only need existing-state.
+                if let Some(created) = created_cache.as_ref() {
+                    if created.contains(&next) {
+                        current = next;
+                        continue;
+                    }
+                }
+            }
+
             if let Err(SftpError::MkdirFailed { path, message }) =
-                self.create_directory(&current).await
+                self.create_directory(&next).await
             {
                 // A generic SSH_FX_FAILURE may mean anything (permission denied,
                 // disk full, etc.). Only treat it as "already exists" when the
                 // path can be stat'd and is actually a directory.
-                match self.sftp().metadata(&current).await {
-                    Ok(metadata) if metadata.file_type().is_dir() => continue,
+                match self.sftp().metadata(&next).await {
+                    Ok(metadata) if metadata.file_type().is_dir() => {}
                     Ok(_) | Err(_) => {
                         return Err(SftpError::MkdirFailed { path, message });
                     }
                 }
             }
+            if let Some(created) = created_cache.as_mut() {
+                created.insert(next.clone());
+            }
+            current = next;
         }
 
         Ok(())
@@ -389,12 +559,35 @@ impl<'a> SftpClient<'a> {
         local_path: &Path,
         remote_directory: &str,
     ) -> Result<(), SftpError> {
+        let mut created = None;
+        self.upload_entries(local_path, remote_directory, &mut created, &mut |_| {})
+            .await
+    }
+
+    /// Uploads a local file or directory tree into a remote directory,
+    /// creating directories once (cached) and reporting each completed file
+    /// through `on_file_completed` (remote path per file).
+    pub(crate) async fn upload_entries(
+        &self,
+        local_path: &Path,
+        remote_directory: &str,
+        created: &mut Option<HashSet<String>>,
+        on_file_completed: &mut (dyn FnMut(&str) + Send),
+    ) -> Result<(), SftpError> {
         if is_local_directory(local_path).await? {
             let directory_name = local_entry_name(local_path);
             let remote_root = join_remote_path(remote_directory, Path::new(&directory_name))?;
-            self.create_directory_all(&remote_root).await?;
+            self.create_directory_all_cached(&remote_root, created)
+                .await?;
+            // Track the root with a normalized (no trailing slash) key so
+            // child paths created later hit the cache. create_directory_all_cached
+            // compares with normalized keys, so a trailing slash here would
+            // miss the cache and cause redundant mkdir round-trips.
+            if let Some(created) = created.as_mut() {
+                created.insert(normalize_remote_path(&remote_root)?);
+            }
 
-            let files = walk_local_directory_with_options(
+            let result = walk_local_directory_with_options(
                 local_path,
                 WalkLocalDirectoryOptions {
                     limits: self.directory_walk_limits,
@@ -402,12 +595,19 @@ impl<'a> SftpClient<'a> {
                 },
             )
             .await?;
-            for entry in files {
+            for entry in result.files {
                 let remote_path = join_remote_path(&remote_root, &entry.relative_path)?;
                 if let Some(parent) = parent_remote_path(&remote_path)? {
-                    self.create_directory_all(&parent).await?;
+                    self.create_directory_all_cached(&parent, created).await?;
                 }
                 self.upload(&entry.local_path, &remote_path).await?;
+                on_file_completed(&remote_path);
+            }
+            if !result.skipped.is_empty() {
+                tracing::warn!(
+                    skipped = ?result.skipped,
+                    "local directory walk skipped unreadable entries"
+                );
             }
             return Ok(());
         }
@@ -415,20 +615,29 @@ impl<'a> SftpClient<'a> {
         let remote_path =
             join_remote_path(remote_directory, Path::new(&local_entry_name(local_path)))?;
         if let Some(parent) = parent_remote_path(&remote_path)? {
-            self.create_directory_all(&parent).await?;
+            self.create_directory_all_cached(&parent, created).await?;
         }
-        self.upload(local_path, &remote_path).await
+        self.upload(local_path, &remote_path).await?;
+        on_file_completed(&remote_path);
+        Ok(())
     }
 
-    /// Downloads a remote file or directory tree into a local directory.
-    pub async fn download_entry(
+    /// Downloads a remote file or directory tree into a local directory,
+    /// creating local directories once per batch. Mirrors empty directories.
+    ///
+    /// Reports each remote entry via `on_entry` before its transfer runs so
+    /// the caller (e.g. the transfer manager) can enqueue a Pending task.
+    pub async fn download_entries<F>(
         &self,
         remote_path: &str,
         local_directory: &Path,
-    ) -> Result<(), SftpError> {
+        mut on_entry: F,
+    ) -> Result<(), SftpError>
+    where
+        F: FnMut(RemoteFileEntry) + Send,
+    {
         let normalized = normalize_remote_path(remote_path)?;
         if self.remote_is_directory(&normalized).await? {
-            let entries = self.list_directory(&normalized).await?;
             let directory_name = normalized
                 .trim_end_matches('/')
                 .rsplit('/')
@@ -444,26 +653,49 @@ impl<'a> SftpClient<'a> {
                     message: err.to_string(),
                 })?;
 
-            if entries.is_empty() {
-                return Ok(());
-            }
-
-            let files =
+            let result =
                 walk_remote_directory_with_limits(self, &normalized, self.directory_walk_limits)
                     .await?;
-            for entry in files {
+            let mut created_dirs = HashSet::<PathBuf>::new();
+            created_dirs.insert(local_root.clone());
+
+            for entry in result.files {
                 let local_path = local_root.join(&entry.relative_path);
                 ensure_local_path_within_root(&local_root, &local_path)?;
                 if let Some(parent) = local_path.parent() {
-                    tokio::fs::create_dir_all(parent).await.map_err(|err| {
-                        SftpError::DownloadFailed {
-                            remote: entry.remote_path.clone(),
-                            local: local_path.display().to_string(),
-                            message: err.to_string(),
+                    let mut ancestor = parent.to_path_buf();
+                    while !created_dirs.contains(&ancestor) {
+                        created_dirs.insert(ancestor.clone());
+                        tokio::fs::create_dir_all(&ancestor).await.map_err(|err| {
+                            SftpError::DownloadFailed {
+                                remote: entry.remote_path.clone(),
+                                local: ancestor.display().to_string(),
+                                message: err.to_string(),
+                            }
+                        })?;
+                        // Stop at the filesystem root ("/"); parent() is None
+                        // there, and treating it as an empty PathBuf would
+                        // otherwise call create_dir_all("") forever.
+                        match ancestor.parent() {
+                            Some(next) if !next.as_os_str().is_empty() => {
+                                ancestor = next.to_path_buf()
+                            }
+                            _ => break,
                         }
-                    })?;
+                    }
                 }
+
+                on_entry(RemoteFileEntry {
+                    remote_path: entry.remote_path.clone(),
+                    relative_path: entry.relative_path.clone(),
+                });
                 self.download(&entry.remote_path, &local_path).await?;
+            }
+            if !result.skipped.is_empty() {
+                tracing::warn!(
+                    skipped = ?result.skipped,
+                    "remote directory walk skipped unreadable entries"
+                );
             }
             Ok(())
         } else {
@@ -473,8 +705,23 @@ impl<'a> SftpClient<'a> {
                 .filter(|name| !name.is_empty())
                 .unwrap_or("download");
             let local_path = local_directory.join(file_name);
+            on_entry(RemoteFileEntry {
+                remote_path: normalized.clone(),
+                relative_path: PathBuf::from(&file_name),
+            });
             self.download(&normalized, &local_path).await
         }
+    }
+
+    /// Downloads a remote file or directory tree into a local directory
+    /// (legacy wrapper delegating to [`Self::download_entries`]).
+    pub async fn download_entry(
+        &self,
+        remote_path: &str,
+        local_directory: &Path,
+    ) -> Result<(), SftpError> {
+        self.download_entries(remote_path, local_directory, |_| {})
+            .await
     }
 }
 
@@ -522,11 +769,37 @@ async fn upload_from_reader(
             break;
         }
 
-        if let Err(err) = partial
-            .remote_file_mut()
-            .write_all(&buffer[..bytes_read])
-            .await
-        {
+        // A single SFTP WRITE must not block forever on a server that stops
+        // acknowledging (issue #306). Each write is bound by an overall
+        // request timeout, and raced against the cancellation flag so cancel
+        // breaks out within one chunk.
+        let request_timeout = partial.client_timeout();
+        let write_outcome = tokio::time::timeout(
+            request_timeout,
+            partial.remote_file_mut().write_all(&buffer[..bytes_read]),
+        );
+        tokio::pin!(write_outcome);
+
+        let result = tokio::select! {
+            timed_write = &mut write_outcome => match timed_write {
+                Ok(write_result) => write_result,
+                Err(_) => {
+                    // Server stopped acknowledging this WRITE.
+                    Err(io::Error::other(format!(
+                        "timed out after {request_timeout:?} waiting for the server to acknowledge a remote write"
+                    )))
+                }
+            },
+            () = cancel_watch(is_cancelled) => {
+                // The user cancelled; break out immediately. Cleanup is
+                // best-effort (a stalled server may not release the partial),
+                // but the outcome remains Cancelled — never relabeled as a
+                // cleanup failure (issue #319/#306).
+                let _ = partial.abort(false).await;
+                return Err(SftpError::Cancelled);
+            }
+        };
+        if let Err(err) = result {
             let cleanup_err = partial.abort(false).await?;
             return Err(SftpError::UploadFailed {
                 local: local.to_string(),
@@ -553,6 +826,18 @@ async fn upload_from_reader(
     }
 
     Ok(())
+}
+
+/// Awaits the transfer's cancellation flag becoming set. Used with
+/// [`tokio::select!`] so a blocked SFTP write can be interrupted by a cancel
+/// within one chunk (issue #306).
+async fn cancel_watch(is_cancelled: &impl Fn() -> bool) {
+    loop {
+        if is_cancelled() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 /// Error returned when a pipelined download flow fails.
@@ -820,6 +1105,15 @@ where
 const PARTIAL_SUFFIX_BYTES: usize = 16;
 const MAX_PARTIAL_CREATE_ATTEMPTS: usize = 5;
 
+/// Timeout applied to each SFTP WRITE acknowledgement and to the `shutdown`
+/// (drain pending acks) during uploads.
+///
+/// The fork's `File::write_all` waits for the WRITE ack without a timeout,
+/// so a server that stops responding would hang the upload forever. This
+/// mirrors the session-level `connection_timeout_secs` applied to other
+/// outgoing requests (issue #306).
+const UPLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn random_partial_suffix() -> String {
     let mut bytes = [0_u8; PARTIAL_SUFFIX_BYTES];
     rand::rng()
@@ -882,16 +1176,40 @@ impl<'a> PartialRemoteTransfer<'a> {
             .expect("partial remote file handle must exist before commit")
     }
 
+    fn client_timeout(&self) -> Duration {
+        self.client.upload_request_timeout
+    }
+
     async fn shutdown(&mut self) -> Result<(), SftpError> {
         if let Some(mut remote_file) = self.remote_file.take() {
-            remote_file
-                .shutdown()
-                .await
-                .map_err(|err| SftpError::UploadFailed {
-                    local: self.local.clone(),
-                    remote: self.remote.clone(),
-                    message: err.to_string(),
-                })?;
+            let request_timeout = self.client_timeout();
+            let local = self.local.clone();
+            let remote = self.remote.clone();
+            let shutdown = async move {
+                remote_file
+                    .shutdown()
+                    .await
+                    .map_err(|err| SftpError::UploadFailed {
+                        local,
+                        remote,
+                        message: err.to_string(),
+                    })
+            };
+            // `File::shutdown` drains pending WRITE acks without a timeout in
+            // the fork; a server that never acks would hang forever (issue
+            // #306). Bound it like the other SFTP requests.
+            match tokio::time::timeout(request_timeout, shutdown).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    return Err(SftpError::UploadFailed {
+                        local: self.local.clone(),
+                        remote: self.remote.clone(),
+                        message: format!(
+                            "timed out after {request_timeout:?} waiting for the server to acknowledge the final write (shutdown)"
+                        ),
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -910,14 +1228,29 @@ impl<'a> PartialRemoteTransfer<'a> {
             return Err(err);
         }
 
+        // Atomic overwrite: a plain `rename` (SSH_FXP_RENAME) replaces an
+        // existing destination on OpenSSH and most servers. No delete is
+        // issued before the rename, so a failing rename can never destroy the
+        // original file.
+        //
+        // On rename failure the fully-transferred partial is *preserved* so
+        // the user can recover it; the original final file is untouched.
         match self.client.rename(&self.partial_path, final_path).await {
             Ok(()) => {
                 self.committed = true;
                 Ok(())
             }
             Err(err) => {
-                self.abort(true).await?;
-                Err(err)
+                let message = format!(
+                    "upload was not committed: the source file '{}' still exists and the new file is preserved at '{}': {err}",
+                    self.remote,
+                    self.partial_path,
+                );
+                Err(SftpError::UploadFailed {
+                    local: self.local.clone(),
+                    remote: self.remote.clone(),
+                    message,
+                })
             }
         }
     }
@@ -928,18 +1261,32 @@ impl<'a> PartialRemoteTransfer<'a> {
         }
 
         if let Some(mut remote_file) = self.remote_file.take() {
-            if let Err(err) = remote_file.shutdown().await {
-                tracing::warn!(
-                    partial_remote_path = %self.partial_path,
-                    error = %err,
-                    "failed to close partial remote file during cleanup"
-                );
+            let request_timeout = self.client_timeout();
+            let close = async move { remote_file.shutdown().await.map_err(|err| err.to_string()) };
+            // Bound the close too: a hung WRITE ack would otherwise block the
+            // cleanup path forever after a timeout/cancel (issue #306).
+            match tokio::time::timeout(request_timeout, close).await {
+                Ok(Ok(())) => {}
+                Ok(Err(message)) => {
+                    tracing::warn!(
+                        partial_remote_path = %self.partial_path,
+                        error = %message,
+                        "failed to close partial remote file during cleanup"
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        partial_remote_path = %self.partial_path,
+                        "closing the partial remote file timed out during cleanup"
+                    );
+                }
             }
         }
 
-        match self.client.delete(&self.partial_path).await {
-            Ok(()) => Ok(None),
-            Err(err) if !strict => {
+        let delete_timeout = self.client_timeout();
+        match tokio::time::timeout(delete_timeout, self.client.delete(&self.partial_path)).await {
+            Ok(Ok(())) => Ok(None),
+            Ok(Err(err)) if !strict => {
                 tracing::warn!(
                     partial_remote_path = %self.partial_path,
                     error = %err,
@@ -950,9 +1297,23 @@ impl<'a> PartialRemoteTransfer<'a> {
                     message: err.to_string(),
                 }))
             }
-            Err(err) => Err(SftpError::CleanupFailed {
+            Ok(Err(err)) => Err(SftpError::CleanupFailed {
                 path: self.partial_path.clone(),
                 message: err.to_string(),
+            }),
+            Err(_) if !strict => {
+                tracing::warn!(
+                    partial_remote_path = %self.partial_path,
+                    "deleting the partial remote file timed out during cleanup"
+                );
+                Ok(Some(SftpError::CleanupFailed {
+                    path: self.partial_path.clone(),
+                    message: format!("deleted timed out after {delete_timeout:?}"),
+                }))
+            }
+            Err(_) => Err(SftpError::CleanupFailed {
+                path: self.partial_path.clone(),
+                message: format!("delete timed out after {delete_timeout:?}"),
             }),
         }
     }
@@ -1174,21 +1535,17 @@ async fn create_exclusive_remote_partial(
         {
             Ok(remote_file) => return Ok((partial_path, remote_file)),
             Err(err) if is_remote_file_exists_error(&err) => {
-                // SSH_FX_FAILURE is generic; it may be the exclusivity race but
-                // also permission/IO problems. Confirm the partial path really
-                // exists via stat before retrying, otherwise surface the error.
-                match client.sftp().metadata(&partial_path).await {
-                    Ok(_) => continue,
-                    Err(stat_err) => {
-                        return Err(SftpError::UploadFailed {
-                            local: local.to_string(),
-                            remote: remote.to_string(),
-                            message: format!(
-                                "{err}; failed to confirm path: {stat_err}"
-                            ),
-                        });
-                    }
+                // SSH_FX_FAILURE is generic: it may mean "the exclusive create
+                // lost a race", but also permission or I/O problems. Confirm the path actually exists via
+                // stat before retrying; otherwise propagate the real error.
+                if remote_path_exists(client, &partial_path).await? {
+                    continue;
                 }
+                return Err(SftpError::UploadFailed {
+                    local: local.to_string(),
+                    remote: remote.to_string(),
+                    message: err.to_string(),
+                });
             }
             Err(err) => {
                 return Err(SftpError::UploadFailed {
@@ -1254,18 +1611,47 @@ async fn prepare_remote_finalize_destination(
     local: &str,
     remote: &str,
 ) -> Result<(), SftpError> {
-    let exists = remote_path_exists(client, final_path).await?;
-    if !exists {
-        return Ok(());
-    }
-
-    match overwrite_policy {
-        TransferOverwritePolicy::FailIfExists => Err(SftpError::UploadFailed {
-            local: local.to_string(),
-            remote: remote.to_string(),
-            message: TransferOverwritePolicy::destination_exists_message(final_path),
+    // Fail fast when the destination is a directory: a rename onto it would
+    // fail only after the full upload, and would have been unrecoverable under
+    // the old delete+rename flow. Here it is a cheap upfront check.
+    match client.sftp().metadata(final_path).await {
+        Ok(metadata) if metadata.file_type().is_dir() => match overwrite_policy {
+            TransferOverwritePolicy::Replace => Err(SftpError::UploadFailed {
+                local: local.to_string(),
+                remote: remote.to_string(),
+                message: format!(
+                    "destination '{final_path}' is a directory and cannot be replaced by a file"
+                ),
+            }),
+            TransferOverwritePolicy::FailIfExists => Err(SftpError::UploadFailed {
+                local: local.to_string(),
+                remote: remote.to_string(),
+                message: TransferOverwritePolicy::destination_exists_message(final_path),
+            }),
+        },
+        // Destination does not exist yet or is a regular file: rename will
+        // create or atomically replace it.
+        Ok(_) => {
+            if matches!(overwrite_policy, TransferOverwritePolicy::FailIfExists)
+                && remote_path_exists(client, final_path).await?
+            {
+                return Err(SftpError::UploadFailed {
+                    local: local.to_string(),
+                    remote: remote.to_string(),
+                    message: TransferOverwritePolicy::destination_exists_message(final_path),
+                });
+            }
+            Ok(())
+        }
+        // `SSH_FX_NO_SUCH_FILE` → the destination does not exist yet; rename
+        // will create it. Any other stat failure (network error, timeout,
+        // permissions) is a real error and must not be misread as "missing" —
+        // doing so could let FailIfExists overwrite an existing file.
+        Err(err) if is_remote_no_such_file_error(&err) => Ok(()),
+        Err(err) => Err(SftpError::StatFailed {
+            path: final_path.to_string(),
+            message: err.to_string(),
         }),
-        TransferOverwritePolicy::Replace => client.delete(final_path).await,
     }
 }
 
@@ -1356,6 +1742,8 @@ fn remote_status_code(err: &SftpClientError) -> Option<RemoteStatusCode> {
         SftpClientError::Status(status) => {
             Some(RemoteStatusCode::from_raw(status.status_code as u32))
         }
+        // A locally-generated status (timeout / connection lost) may surface as
+        // `Timeout` or an unexpected-behavior string instead of a Status packet.
         _ => None,
     }
 }
@@ -1778,6 +2166,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_write_hang_times_out_and_cleans_up() {
+        // Given: a server that stalls on WRITE acks and a client with a short
+        // per-request timeout
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client =
+            SftpClient::new(&session).with_upload_request_timeout(Duration::from_millis(500));
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("hang.txt");
+        let payload = vec![0x4Du8; 1024 * 1024];
+        tokio::fs::write(&local_path, &payload).await.unwrap();
+
+        server.failures.hang_write.store(true, Ordering::SeqCst);
+
+        // When: the upload hits a WRITE that is never acknowledged
+        let started = std::time::Instant::now();
+        let err = client
+            .upload(&local_path, "/upload/hang.bin")
+            .await
+            .unwrap_err();
+
+        // Then: it fails with a timeout message within a bounded time instead
+        // of hanging forever on an unanswered WRITE.
+        assert!(matches!(err, SftpError::UploadFailed { .. }), "{err:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "upload must not hang forever on an unanswered WRITE"
+        );
+        assert!(
+            err.to_string().contains("timed out"),
+            "expected a timeout message, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_cancel_breaks_out_of_hung_write() {
+        // Given: a server that stalls on WRITE acks
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session).with_upload_request_timeout(Duration::from_secs(1));
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("hang-cancel.txt");
+        let payload = vec![0x33_u8; 2 * 1024 * 1024];
+        tokio::fs::write(&local_path, &payload).await.unwrap();
+
+        server.failures.hang_write.store(true, Ordering::SeqCst);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_flag = Arc::clone(&cancel);
+        let stop_cancel = Arc::clone(&cancel);
+
+        // When: a cancel is requested while the upload is blocked on a hung
+        // WRITE (cancel flag flips shortly after the transfer starts)
+        let cancel_handle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            cancel_flag.store(true, Ordering::Relaxed);
+        });
+
+        let started = std::time::Instant::now();
+        let err = client
+            .upload_cancellable(
+                &local_path,
+                "/upload/hang-cancel.bin",
+                262_144,
+                TransferOverwritePolicy::default(),
+                move || stop_cancel.load(Ordering::Relaxed),
+                |_| {},
+            )
+            .await
+            .unwrap_err();
+        cancel_handle.await.unwrap();
+
+        // Then: the upload exits promptly after cancel (no 30s+ stakes) and
+        // reports a cancellation-style error, with cleanup bounded by the
+        // per-request timeout.
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "cancel must break out of a blocked write and finish cleanup quickly, took {:?}",
+            started.elapsed()
+        );
+        assert!(
+            matches!(err, SftpError::Cancelled) || matches!(err, SftpError::UploadFailed { .. }),
+            "expected cancellation-style error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn download_remote_read_failure_cleans_up_local_partial() {
         let server = TestSftpServer::start().await;
         server
@@ -1799,6 +2273,99 @@ mod tests {
         assert!(matches!(err, SftpError::DownloadFailed { .. }));
         assert!(list_partial_paths(local_dir.path()).is_empty(), "{err:?}");
         assert!(!local_path.exists());
+    }
+
+    #[tokio::test]
+    async fn upload_replace_rename_failure_preserves_original_and_partial() {
+        // Given: an existing remote file that will be overwritten, and a server
+        // that fails every rename.
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/upload/overwrite.txt", b"original contents")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("overwrite.txt");
+        tokio::fs::write(&local_path, b"new contents that are longer")
+            .await
+            .unwrap();
+
+        // When: the rename step fails (exactly once) after the full upload
+        server
+            .failures
+            .fail_remote_rename
+            .store(true, Ordering::SeqCst);
+        let err = client
+            .upload(&local_path, "/upload/overwrite.txt")
+            .await
+            .unwrap_err();
+
+        // Then: the transfer reports failure, but the ORIGINAL file is intact
+        // and the fully-uploaded partial is preserved for recovery (no data loss).
+        assert!(matches!(err, SftpError::UploadFailed { .. }), "{err:?}");
+        assert!(
+            server.remote_file_exists("/upload/overwrite.txt"),
+            "original remote file must survive a failed rename"
+        );
+        let original = tokio::fs::read(server.root.join("upload/overwrite.txt"))
+            .await
+            .unwrap();
+        assert_eq!(original, b"original contents");
+        assert!(
+            !server.remote_partial_paths().is_empty(),
+            "the fully-uploaded partial must be preserved so the user can recover it"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_replace_overwrites_existing_file_atomically() {
+        // Given: an existing remote file
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/upload/overwrite.txt", b"old")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("new.txt");
+        tokio::fs::write(&local_path, b"brand new").await.unwrap();
+
+        // When: a Replace-policy upload runs to the same path
+        client
+            .upload(&local_path, "/upload/overwrite.txt")
+            .await
+            .unwrap();
+
+        // Then: the destination is atomically replaced (no delete step) and no
+        // partial remains
+        let contents = tokio::fs::read(server.root.join("upload/overwrite.txt"))
+            .await
+            .unwrap();
+        assert_eq!(contents, b"brand new");
+        assert!(server.remote_partial_paths().is_empty());
+    }
+
+    #[tokio::test]
+    async fn upload_replace_rejects_directory_destination_before_write() {
+        // Given: a local file and a remote destination that is a directory
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.txt");
+        tokio::fs::write(&local_path, b"payload").await.unwrap();
+        std::fs::create_dir_all(server.root.join("upload")).unwrap();
+
+        // When: an upload targets an existing directory
+        let err = client.upload(&local_path, "/upload").await.unwrap_err();
+
+        // Then: the upload fails fast reporting the directory destination
+        let message = err.to_string();
+        assert!(
+            message.contains("is a directory"),
+            "expected directory destination error, got: {message}"
+        );
     }
 
     #[tokio::test]
@@ -1901,8 +2468,6 @@ mod tests {
 
     #[test]
     fn classify_maps_protocol_violations_to_bad_message() {
-        use russh_sftp::protocol::{Status, StatusCode as RawCode};
-
         // UnexpectedBehavior / UnexpectedPacket are protocol violations:
         // typed as SSH_FX_BAD_MESSAGE so retry policy is decided without
         // matching message text.
@@ -2205,7 +2770,10 @@ mod tests {
 
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
-        let entries = walk_remote_directory(&client, "/download").await.unwrap();
+        let entries = walk_remote_directory(&client, "/download")
+            .await
+            .unwrap()
+            .files;
         let relatives: Vec<_> = entries
             .iter()
             .map(|entry| entry.relative_path.to_string_lossy().into_owned())
@@ -2424,7 +2992,7 @@ mod tests {
         let client = SftpClient::new(&session);
 
         // When: the remote directory is walked
-        let entries = walk_remote_directory(&client, "/walk").await.unwrap();
+        let entries = walk_remote_directory(&client, "/walk").await.unwrap().files;
 
         // Then: both files are collected with relative paths from the walk root
         assert_eq!(entries.len(), 2);
@@ -2482,7 +3050,10 @@ mod tests {
         let client = SftpClient::new(&session);
 
         // When: the empty directory is walked
-        let entries = walk_remote_directory(&client, "/emptywalk").await.unwrap();
+        let entries = walk_remote_directory(&client, "/emptywalk")
+            .await
+            .unwrap()
+            .files;
 
         // Then: an empty vector is returned rather than an error
         assert!(
@@ -2521,6 +3092,43 @@ mod tests {
             "partial remote files must not remain: {:?}",
             server.remote_partial_paths()
         );
+    }
+
+    #[tokio::test]
+    async fn walk_remote_directory_skips_unreadable_subdirectory() {
+        // Given: a remote tree with a subdirectory whose OPENDIR fails
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/walk/a.txt", b"a").await;
+        server
+            .write_remote_file("/walk/locked/secret.txt", b"secret")
+            .await;
+        server.write_remote_file("/walk/b.txt", b"b").await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // When: the walk hits the unreadable subdirectory (path-specific
+        // one-shot OPENDIR failure) — the root and other children still list.
+        *server.failures.fail_opendir_path.lock().unwrap() = Some("/walk/locked".to_string());
+        let result = walk_remote_directory(&client, "/walk").await.unwrap();
+
+        // Then: readable files are collected, and the failed subdirectory is
+        // reported as skipped rather than aborting the whole walk.
+        let relatives: Vec<_> = result
+            .files
+            .iter()
+            .map(|entry| entry.relative_path.to_string_lossy().into_owned())
+            .collect();
+        assert!(relatives.contains(&"a.txt".to_string()));
+        assert!(relatives.contains(&"b.txt".to_string()));
+        assert!(!relatives.iter().any(|p| p.contains("locked")));
+
+        assert_eq!(
+            result.skipped.len(),
+            1,
+            "unreadable subdirectory must be skipped: {:?}",
+            result.skipped
+        );
+        assert!(result.skipped[0].path.to_string_lossy().contains("locked"));
     }
 
     #[tokio::test]
@@ -2575,7 +3183,10 @@ mod tests {
         let client = SftpClient::new(&session);
 
         // When: the remote directory is walked
-        let entries = walk_remote_directory(&client, "/walkonce").await.unwrap();
+        let entries = walk_remote_directory(&client, "/walkonce")
+            .await
+            .unwrap()
+            .files;
 
         // Then: both files are collected and each directory is listed once
         // (no discarded root listing).
@@ -2611,7 +3222,10 @@ mod tests {
         let client = SftpClient::new(&session);
 
         // When: the empty directory is walked
-        let entries = walk_remote_directory(&client, "/emptyonce").await.unwrap();
+        let entries = walk_remote_directory(&client, "/emptyonce")
+            .await
+            .unwrap()
+            .files;
 
         // Then: no files are collected and the empty root is listed once
         assert!(
@@ -2731,7 +3345,10 @@ mod tests {
 
         // When: walk_remote_directory collects files under /benchwalk
         let started = std::time::Instant::now();
-        let entries = walk_remote_directory(&client, "/benchwalk").await.unwrap();
+        let entries = walk_remote_directory(&client, "/benchwalk")
+            .await
+            .unwrap()
+            .files;
         let elapsed_ms = started.elapsed().as_millis();
 
         // Then: collected file count is 40; elapsed time and OPENDIR count are reported
@@ -3175,6 +3792,121 @@ mod tests {
         let mean64 = depth64_ms.iter().sum::<u128>() / depth64_ms.len() as u128;
         eprintln!(
             "bench_download_rtt_proxy summary one_way_ms=20 bytes={BENCH_BYTES} mean_depth1_ms={mean1} mean_depth64_ms={mean64}"
+        );
+    }
+    #[tokio::test]
+    async fn delete_entry_removes_empty_directory() {
+        // Given: an empty remote directory
+        // When: delete_entry is called with recursive=false
+        // Then: the directory is removed
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/delete/empty/.keep", b"").await;
+        // write_remote_file creates parents; simulate an empty dir by removing
+        // the marker via the client.
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        client.delete("/delete/empty/.keep").await.unwrap();
+
+        let removed = client.delete_entry("/delete/empty", false).await.unwrap();
+        assert_eq!(removed, 1);
+        assert!(!server.remote_file_exists("/delete/empty/.keep"));
+    }
+
+    #[tokio::test]
+    async fn delete_entry_non_recursive_rejects_non_empty_directory() {
+        // Given: a remote directory containing a file
+        // When: delete_entry is called with recursive=false
+        // Then: DirectoryNotEmpty is returned and nothing is removed
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/delete/nonempty/file.txt", b"x")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let err = client
+            .delete_entry("/delete/nonempty", false)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, SftpError::DirectoryNotEmpty { .. }),
+            "unexpected error: {err:?}"
+        );
+        assert!(server.remote_file_exists("/delete/nonempty/file.txt"));
+    }
+
+    #[tokio::test]
+    async fn delete_entry_recursive_removes_nested_tree() {
+        // Given: a remote tree with nested files
+        // When: delete_entry is called with recursive=true
+        // Then: every file and directory is removed and the count is correct
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/delete/tree/a.txt", b"a").await;
+        server
+            .write_remote_file("/delete/tree/sub/b.txt", b"b")
+            .await;
+        server
+            .write_remote_file("/delete/tree/sub/deep/c.txt", b"c")
+            .await;
+
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let removed = client.delete_entry("/delete/tree", true).await.unwrap();
+
+        // Files: a.txt, b.txt, c.txt; dirs: sub, deep, tree => 6
+        assert_eq!(removed, 6);
+        assert!(!server.remote_file_exists("/delete/tree/a.txt"));
+        assert!(!server.remote_file_exists("/delete/tree/sub/b.txt"));
+        assert!(!server.remote_file_exists("/delete/tree/sub/deep/c.txt"));
+    }
+
+    #[tokio::test]
+    async fn delete_entry_symlink_removes_link_not_target() {
+        // Given: a symlink pointing into a directory that has a file
+        // When: delete_entry removes the symlink (recursive=true not descending)
+        // Then: the link is removed and the target survives
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/delete/symlink/target.txt", b"t")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        // Create a symlink on the server (SFTP SYMLINK).
+        client
+            .sftp()
+            .symlink("/delete/symlink/a_link", "/delete/symlink/target.txt")
+            .await
+            .unwrap();
+
+        let removed = client
+            .delete_entry("/delete/symlink/a_link", true)
+            .await
+            .unwrap();
+        assert_eq!(removed, 1);
+        assert!(server.remote_file_exists("/delete/symlink/target.txt"));
+    }
+
+    #[tokio::test]
+    async fn delete_entry_respects_max_depth_limit() {
+        // Given: a deep tree and a depth limit
+        // When: delete_entry walks beyond the limit
+        // Then: DirectoryWalkLimitExceeded is returned
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/delete/deep/level1/level2/file.txt", b"x")
+            .await;
+
+        let session = server.connect_session().await;
+        let limits = crate::DirectoryWalkLimits {
+            max_depth: 1,
+            ..Default::default()
+        };
+        let client = SftpClient::new(&session).with_directory_walk_limits(limits);
+
+        let err = client.delete_entry("/delete/deep", true).await.unwrap_err();
+        assert!(
+            matches!(err, SftpError::DirectoryWalkLimitExceeded { .. }),
+            "unexpected error: {err:?}"
         );
     }
 }

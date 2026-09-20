@@ -28,12 +28,23 @@ pub struct FailureConfig {
     pub fail_remote_rename: AtomicBool,
     pub fail_mkdir: AtomicBool,
     pub opendir_count: AtomicU64,
+    /// When set, a single OPENDIR for exactly this path fails (one-shot),
+    /// letting tests simulate an unreadable remote subdirectory during a walk
+    /// (issue #316).
+    pub fail_opendir_path: Mutex<Option<String>>,
     /// Artificial delay applied to every SSH_FXP_READ reply, used by benchmarks
     /// to emulate a high-latency link (milliseconds).
     pub read_delay_ms: AtomicU64,
     /// When `true`, `open` with `SSH_FX_EXCLUDE` reports `SSH_FX_PERMISSION_DENIED`
     /// for an already-existing exclusive path (some servers' EEXIST).
     pub exclude_exists_permission_denied: AtomicBool,
+    /// When `true`, the server receives WRITEs but does not acknowledge them
+    /// until [`write_unhang`](Self::write_unhang) is notified, simulating a
+    /// stalled link (issue #306). Clients must break out via timeout or
+    /// cancellation.
+    pub hang_write: AtomicBool,
+    /// Notifies a single blocked WRITE handler to stop hanging and reply.
+    pub write_unhang: tokio::sync::Notify,
 }
 
 pub struct TestSftpServer {
@@ -373,6 +384,13 @@ impl russh_sftp::server::Handler for SftpHandler {
             return Ok(Self::err_status(id, StatusCode::Failure, "write failed"));
         }
 
+        // Simulate a server that stalls on a WRITE ack (issue #306): block
+        // this handler until `write_unhang` is notified. The client must time
+        // out or cancel out of the write rather than hang forever.
+        if self.failures.hang_write.load(Ordering::Relaxed) {
+            self.failures.write_unhang.notified().await;
+        }
+
         let open = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;
         open.file
             .seek(std::io::SeekFrom::Start(offset))
@@ -402,6 +420,19 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn opendir(&mut self, id: u32, path: String) -> Result<Handle, Self::Error> {
         self.failures.opendir_count.fetch_add(1, Ordering::Relaxed);
+        let should_fail = {
+            let mut target = self.failures.fail_opendir_path.lock().unwrap();
+            match target.as_ref() {
+                Some(candidate) if *candidate == path => {
+                    *target = None;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if should_fail {
+            return Err(StatusCode::Failure);
+        }
         let entries = self.read_directory_entries(&path).await?;
         let handle_id = self.next_handle;
         self.next_handle += 1;
@@ -456,6 +487,44 @@ impl russh_sftp::server::Handler for SftpHandler {
             return Ok(Self::err_status(id, StatusCode::NoSuchFile, "no such file"));
         }
         Ok(Self::ok_status(id))
+    }
+
+    async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
+        let local = self.resolve(&path);
+        if fs::remove_dir(&local).await.is_err() {
+            return Ok(Self::err_status(id, StatusCode::Failure, "rmdir failed"));
+        }
+        Ok(Self::ok_status(id))
+    }
+
+    async fn symlink(
+        &mut self,
+        id: u32,
+        linkpath: String,
+        targetpath: String,
+    ) -> Result<Status, Self::Error> {
+        #[cfg(unix)]
+        {
+            let link = self.resolve(&linkpath);
+            if let Some(parent) = link.parent() {
+                if let Err(err) = fs::create_dir_all(parent).await {
+                    tracing::warn!(path = %parent.display(), error = %err, "symlink parent mkdir failed");
+                    return Ok(Self::err_status(id, StatusCode::Failure, "symlink failed"));
+                }
+            }
+            // Resolve the virtual remote target to the server's local root so
+            // the created link stays inside the sandbox and can be lstat'ed.
+            let target_local = self.resolve(&targetpath);
+            if std::os::unix::fs::symlink(&target_local, &link).is_err() {
+                return Ok(Self::err_status(id, StatusCode::Failure, "symlink failed"));
+            }
+            Ok(Self::ok_status(id))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (linkpath, targetpath);
+            Err(self.unimplemented())
+        }
     }
 
     async fn rename(
