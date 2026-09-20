@@ -11,6 +11,28 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         XCTAssertTrue(DockBridgeError.isConnectionLostMessage("session closed"))
         XCTAssertTrue(DockBridgeError.isConnectionLostMessage("Connection reset by peer"))
         XCTAssertFalse(DockBridgeError.isConnectionLostMessage("permission denied"))
+        XCTAssertFalse(DockBridgeError.isConnectionLostMessage("no such file"))
+        XCTAssertTrue(DockBridgeError.isConnectionLostMessage("sender dropped"))
+        XCTAssertTrue(DockBridgeError.isConnectionLostMessage("write channel closed"))
+        XCTAssertTrue(DockBridgeError.isConnectionLostMessage("RecvError: channel closed"))
+        XCTAssertTrue(DockBridgeError.isConnectionLostMessage("unexpected eof"))
+        XCTAssertTrue(DockBridgeError.isConnectionLostMessage("connection closed: eof"))
+    }
+
+    func testConnectionLostIgnoresEofSubstringInsidePath() {
+        // Given: an error embedding a user-controlled path containing "eof"
+        // When: checked for connection loss
+        // Then: it is NOT treated as disconnected
+        XCTAssertFalse(
+            DockBridgeError.isConnectionLostMessage(
+                "failed to delete '/home/geoffrey/thereof.txt': Permission denied"
+            )
+        )
+        XCTAssertFalse(
+            DockBridgeError.isConnectionLostMessage(
+                "failed to upload 'geoff.txt': no such file"
+            )
+        )
     }
 
     func testConnectionStatusTitles() {
