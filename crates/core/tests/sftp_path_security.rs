@@ -42,8 +42,8 @@ fn validated_remote_entry_accepts_matching_server_path() {
     );
 }
 
-#[test]
-fn download_paths_cannot_escape_local_root() {
+#[tokio::test]
+async fn download_paths_cannot_escape_local_root() {
     // Given: a local download root and relative paths that would escape it
     // When: ensure_local_path_within_root validates the joined path
     // Then: parent-directory traversal is rejected
@@ -52,7 +52,9 @@ fn download_paths_cannot_escape_local_root() {
     fs::create_dir(&root).unwrap();
     for relative in ["../outside.txt", "../../etc/passwd"] {
         let local_path = root.join(relative);
-        let err = ensure_local_path_within_root(&root, &local_path).unwrap_err();
+        let err = ensure_local_path_within_root(&root, &local_path)
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, SftpError::InvalidRemotePath { .. }),
             "expected InvalidRemotePath for {relative:?}"
@@ -61,8 +63,8 @@ fn download_paths_cannot_escape_local_root() {
 }
 
 #[cfg(unix)]
-#[test]
-fn download_paths_cannot_escape_via_symlink() {
+#[tokio::test]
+async fn download_paths_cannot_escape_via_symlink() {
     // Given: a local download root containing a symlink to an outside file
     // When: ensure_local_path_within_root validates a path through the symlink
     // Then: canonical resolution outside the root is rejected
@@ -74,7 +76,9 @@ fn download_paths_cannot_escape_via_symlink() {
     std::os::unix::fs::symlink(outside.path().join("secret.txt"), root.join("escape.txt")).unwrap();
 
     let escaped = root.join("escape.txt");
-    let err = ensure_local_path_within_root(&root, &escaped).unwrap_err();
+    let err = ensure_local_path_within_root(&root, &escaped)
+        .await
+        .unwrap_err();
     assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
 }
 

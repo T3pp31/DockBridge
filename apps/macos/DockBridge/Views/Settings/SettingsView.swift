@@ -96,10 +96,66 @@ struct SettingsView: View {
                     }
                 }
             }
+
+            Section("Advanced") {
+                Stepper(
+                    "Health check interval: \(config.sessionHealthCheckIntervalSecs)s",
+                    value: Binding(
+                        get: { Int(config.sessionHealthCheckIntervalSecs) },
+                        set: { config.sessionHealthCheckIntervalSecs = UInt64($0) }
+                    ),
+                    in: 1...300
+                )
+                .help("How often the app checks the SFTP session is still alive.")
+
+                Stepper(
+                    "Chunk size: \(config.transferChunkSizeBytes) bytes",
+                    value: Binding(
+                        get: { Int(config.transferChunkSizeBytes) },
+                        set: { config.transferChunkSizeBytes = UInt64($0) }
+                    ),
+                    in: 4096...8_388_608,
+                    step: 4096
+                )
+                .help("SFTP read/write chunk size (4 KiB ... 8 MiB).")
+
+                Stepper(
+                    "Upload pipeline depth: \(config.transferUploadPipelineDepth)",
+                    value: Binding(
+                        get: { Int(config.transferUploadPipelineDepth) },
+                        set: { config.transferUploadPipelineDepth = UInt64($0) }
+                    ),
+                    in: 1...256
+                )
+                .help("Maximum concurrent in-flight SFTP WRITE requests (1 ... 256).")
+
+                Stepper(
+                    "Directory walk max files: \(config.directoryWalkMaxFiles)",
+                    value: Binding(
+                        get: { Int(config.directoryWalkMaxFiles) },
+                        set: { config.directoryWalkMaxFiles = UInt64($0) }
+                    ),
+                    in: 1000...1_000_000,
+                    step: 1000
+                )
+
+                Stepper(
+                    "Directory walk max depth: \(config.directoryWalkMaxDepth)",
+                    value: Binding(
+                        get: { Int(config.directoryWalkMaxDepth) },
+                        set: { config.directoryWalkMaxDepth = UInt32($0) }
+                    ),
+                    in: 1...1024
+                )
+            }
         }
         .formStyle(.grouped)
 
         HStack(spacing: 12) {
+            Button("Reset to Defaults") {
+                config = AppConfig.default
+            }
+            .help("Restore all settings to their defaults (bookmarks are kept).")
             Spacer()
             Button("Cancel", role: .cancel) {
                 dismiss()

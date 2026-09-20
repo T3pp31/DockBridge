@@ -4,7 +4,8 @@
    version = "1.7">
    <BuildAction
       parallelizeBuildables = "YES"
-      buildImplicitDependencies = "YES">
+      buildImplicitDependencies = "YES"
+      runPostActionsOnFailure = "NO">
       <BuildActionEntries>
          <BuildActionEntry
             buildForTesting = "YES"
@@ -14,23 +15,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "01CAD85488C4961FCA9CA750"
+               BlueprintIdentifier = "3B8714B2F2E2F2E6931C50F6"
                BuildableName = "DockBridge.app"
                BlueprintName = "DockBridge"
-               ReferencedContainer = "container:DockBridge.xcodeproj">
-            </BuildableReference>
-         </BuildActionEntry>
-         <BuildActionEntry
-            buildForTesting = "YES"
-            buildForRunning = "NO"
-            buildForProfiling = "NO"
-            buildForArchiving = "NO"
-            buildForAnalyzing = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "6D7E8F901234567890123456"
-               BuildableName = "DockBridgeTests.xctest"
-               BlueprintName = "DockBridgeTests"
                ReferencedContainer = "container:DockBridge.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -41,20 +28,31 @@
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES"
-      shouldAutocreateTestPlan = "YES">
+      onlyGenerateCoverageForSpecifiedTargets = "NO">
+      <MacroExpansion>
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "3B8714B2F2E2F2E6931C50F6"
+            BuildableName = "DockBridge.app"
+            BlueprintName = "DockBridge"
+            ReferencedContainer = "container:DockBridge.xcodeproj">
+         </BuildableReference>
+      </MacroExpansion>
       <Testables>
          <TestableReference
             skipped = "NO"
             parallelizable = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "6D7E8F901234567890123456"
+               BlueprintIdentifier = "7A1069D0B43FC046B3B39666"
                BuildableName = "DockBridgeTests.xctest"
                BlueprintName = "DockBridgeTests"
                ReferencedContainer = "container:DockBridge.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
+      <CommandLineArguments>
+      </CommandLineArguments>
    </TestAction>
    <LaunchAction
       buildConfiguration = "Debug"
@@ -70,12 +68,14 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "01CAD85488C4961FCA9CA750"
+            BlueprintIdentifier = "3B8714B2F2E2F2E6931C50F6"
             BuildableName = "DockBridge.app"
             BlueprintName = "DockBridge"
             ReferencedContainer = "container:DockBridge.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <CommandLineArguments>
+      </CommandLineArguments>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
@@ -83,6 +83,16 @@
       savedToolIdentifier = ""
       useCustomWorkingDirectory = "NO"
       debugDocumentVersioning = "YES">
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "3B8714B2F2E2F2E6931C50F6"
+            BuildableName = "DockBridge.app"
+            BlueprintName = "DockBridge"
+            ReferencedContainer = "container:DockBridge.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
    </ProfileAction>
    <AnalyzeAction
       buildConfiguration = "Debug">

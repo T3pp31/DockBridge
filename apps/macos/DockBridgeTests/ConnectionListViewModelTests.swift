@@ -6,6 +6,8 @@ import XCTest
 final class ConnectionListViewModelTests: XCTestCase {
     private var baseDirectory: URL!
     private var store: ConnectionStore!
+    private var signingKeyStore: ProfileTrustSigningKeyStore!
+    private var trustStore: ProfileTrustStore!
     private var keychain: KeychainService!
     private var viewModel: ConnectionListViewModel!
 
@@ -15,7 +17,18 @@ final class ConnectionListViewModelTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         keychain = KeychainService(serviceName: "com.dockbridge.tests.\(UUID().uuidString)")
         let encryptionService = ProfileEncryptionService(keychain: keychain)
-        store = ConnectionStore(baseDirectory: baseDirectory, encryptionService: encryptionService)
+        signingKeyStore = ProfileTrustSigningKeyStore(
+            serviceName: "com.dockbridge.tests.\(UUID().uuidString)"
+        )
+        trustStore = ProfileTrustStore(
+            baseDirectory: baseDirectory,
+            signingKeyStore: signingKeyStore
+        )
+        store = ConnectionStore(
+            baseDirectory: baseDirectory,
+            trustStore: trustStore,
+            encryptionService: encryptionService
+        )
         viewModel = ConnectionListViewModel(
             store: store,
             keychain: keychain,
@@ -29,9 +42,64 @@ final class ConnectionListViewModelTests: XCTestCase {
             try? keychain.deletePassword(account: account)
             try? keychain.deletePassphrase(account: account)
         }
+        try? signingKeyStore.deleteKey()
         try? keychain.deleteKeyData(account: ProfileEncryptionService.masterKeyAccount)
         try? FileManager.default.removeItem(at: baseDirectory)
         super.tearDown()
+    }
+
+    func testImportSSHConfigDeduplicatesAliasesCaseInsensitively() throws {
+        viewModel.importSSHConfig(contents: """
+        Host Server
+            HostName first.example.com
+
+        Host other
+            HostName other.example.com
+        """)
+
+        XCTAssertEqual(viewModel.profiles.count, 2)
+        XCTAssertNil(viewModel.errorMessage)
+
+        viewModel.importSSHConfig(contents: """
+        Host server
+            HostName replacement.example.com
+        """)
+
+        XCTAssertEqual(viewModel.profiles.count, 2)
+        XCTAssertEqual(try store.loadProfiles().count, 2)
+        XCTAssertTrue(viewModel.importResultMessage?.contains("No profiles were imported") == true)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testImportSSHConfigMarksIdentityFileProfileForExplicitBookmarkGrant() throws {
+        viewModel.importSSHConfig(contents: """
+        Host key-server
+            HostName key.example.com
+            IdentityFile ~/.ssh/id_ed25519
+        """)
+
+        let imported = try XCTUnwrap(viewModel.profiles.first)
+        XCTAssertEqual(imported.authType, .privateKey)
+        XCTAssertEqual(imported.privateKeyPath, NSHomeDirectory() + "/.ssh/id_ed25519")
+        XCTAssertNil(imported.privateKeyBookmark)
+        XCTAssertTrue(viewModel.importResultMessage?.contains("Browse…") == true)
+
+        let persisted = try XCTUnwrap(store.loadProfiles().first)
+        XCTAssertEqual(persisted.authType, .privateKey)
+        XCTAssertNil(persisted.privateKeyPath)
+        XCTAssertNil(persisted.privateKeyBookmark)
+    }
+
+    func testImportSSHConfigReportsNoImportableHostsAsError() {
+        viewModel.importSSHConfig(contents: """
+        Include ~/.ssh/config.d/*
+        Match all
+            User ignored
+        """)
+
+        XCTAssertTrue(viewModel.profiles.isEmpty)
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.importResultMessage)
     }
 
     func testSaveDeletesPasswordWhenSwitchingToPrivateKey() throws {
@@ -105,8 +173,15 @@ final class ConnectionListViewModelTests: XCTestCase {
         )
         let profileID = UUID()
 
+        // The bridge publishes several @Published fields when the session state
+        // changes; assert that the view model is notified at least once rather
+        // than depending on an exact emission count.
+        // The bridge publishes several @Published fields per state change, so
+        // the view model may be notified more than once. Assert at least one
+        // notification and allow over-fulfillment.
         let expectation = expectation(description: "viewModel objectWillChange on connect")
-        expectation.expectedFulfillmentCount = 2
+        expectation.assertForOverFulfill = false
+        expectation.expectedFulfillmentCount = 1
         var cancellable: AnyCancellable?
         cancellable = viewModel.objectWillChange.sink { _ in
             expectation.fulfill()
@@ -138,7 +213,8 @@ final class ConnectionListViewModelTests: XCTestCase {
         )
 
         let expectation = expectation(description: "viewModel objectWillChange on disconnect")
-        expectation.expectedFulfillmentCount = 2
+        expectation.assertForOverFulfill = false
+        expectation.expectedFulfillmentCount = 1
         var cancellable: AnyCancellable?
         cancellable = viewModel.objectWillChange.sink { _ in
             expectation.fulfill()
@@ -224,7 +300,7 @@ final class ConnectionListViewModelTests: XCTestCase {
         viewModel.load()
         viewModel.confirmNewProfileTrust()
 
-        let trusted = try ProfileTrustStore(baseDirectory: baseDirectory).loadTrustedEndpoints()
+        let trusted = try trustStore.loadTrustedEndpoints()
         XCTAssertEqual(trusted[existingProfile.id], TrustedProfileEndpoint(profile: existingProfile))
         XCTAssertEqual(trusted[newProfile.id], TrustedProfileEndpoint(profile: newProfile))
         XCTAssertFalse(viewModel.showNewProfileTrustConfirmation)
@@ -248,7 +324,7 @@ final class ConnectionListViewModelTests: XCTestCase {
         viewModel.load()
         viewModel.declineNewProfileTrust()
 
-        let trusted = try ProfileTrustStore(baseDirectory: baseDirectory).loadTrustedEndpoints()
+        let trusted = try trustStore.loadTrustedEndpoints()
         XCTAssertEqual(trusted.count, 1)
         XCTAssertNil(trusted[newProfile.id])
         XCTAssertFalse(viewModel.showNewProfileTrustConfirmation)
@@ -278,7 +354,7 @@ final class ConnectionListViewModelTests: XCTestCase {
 
         viewModel.save(profile, password: nil, passphrase: nil)
 
-        XCTAssertTrue(try ProfileTrustStore(baseDirectory: baseDirectory).loadTrustedEndpoints().isEmpty)
+        XCTAssertTrue(try trustStore.loadTrustedEndpoints().isEmpty)
     }
 
     func testAcceptEndpointChangeUpdatesTrustAndClearsWarning() throws {
@@ -428,21 +504,116 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertNil(viewModel.errorMessage)
     }
 
-    func testRequestConnectShowsRsaKeyWarningForRsaPrivateKey() throws {
+    func testRequestConnectShowsRsaKeyWarningForRsaPrivateKey() async throws {
         let profile = try makeGeneratedPrivateKeyProfile(keyFilename: "id_rsa", keyType: "rsa")
 
         viewModel.requestConnect(profile: profile)
+
+        // The RSA inspection runs off the main actor; wait for the warning
+        // to appear instead of asserting before the detached task completes.
+        for _ in 0..<50 {
+            if viewModel.showRsaKeyWarning { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
 
         XCTAssertTrue(viewModel.showRsaKeyWarning)
         XCTAssertNotNil(viewModel.pendingConnectProfile)
     }
 
-    func testRequestConnectDoesNotShowRsaKeyWarningForEd25519PrivateKey() throws {
+    func testRequestConnectDoesNotShowRsaKeyWarningForEd25519PrivateKey() async throws {
         let profile = try makeGeneratedPrivateKeyProfile(keyFilename: "id_ed25519", keyType: "ed25519")
 
         viewModel.requestConnect(profile: profile)
+        for _ in 0..<50 where viewModel.pendingConnectProfile != nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
 
         XCTAssertFalse(viewModel.showRsaKeyWarning)
+        XCTAssertNil(viewModel.pendingConnectProfile)
+    }
+
+    func testCancelPendingConnectDiscardsInFlightRsaInspectionResult() async {
+        let inspectionStarted = DispatchSemaphore(value: 0)
+        let finishInspection = DispatchSemaphore(value: 0)
+        let viewModel = makeViewModel { _, _, _ in
+            inspectionStarted.signal()
+            finishInspection.wait()
+            return true
+        }
+        let profile = ConnectionProfile(
+            name: "RSA",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey
+        )
+
+        viewModel.requestConnect(profile: profile)
+        let didStartInspection = await waitForSignal(inspectionStarted)
+        XCTAssertTrue(didStartInspection)
+        viewModel.cancelPendingConnect()
+        finishInspection.signal()
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertFalse(viewModel.showRsaKeyWarning)
+    }
+
+    func testNewConnectRequestDiscardsPreviousRsaInspectionResult() async {
+        let inspectionStarted = DispatchSemaphore(value: 0)
+        let finishInspection = DispatchSemaphore(value: 0)
+        let viewModel = makeViewModel { _, _, _ in
+            inspectionStarted.signal()
+            finishInspection.wait()
+            return true
+        }
+        let firstProfile = ConnectionProfile(
+            name: "RSA",
+            host: "first.example.com",
+            username: "user",
+            authType: .privateKey
+        )
+        let rootProfile = ConnectionProfile(
+            name: "Root",
+            host: "second.example.com",
+            username: "root"
+        )
+
+        viewModel.requestConnect(profile: firstProfile)
+        let didStartInspection = await waitForSignal(inspectionStarted)
+        XCTAssertTrue(didStartInspection)
+        viewModel.requestConnect(profile: rootProfile)
+        for _ in 0..<20 where !viewModel.showRootWarning {
+            await Task.yield()
+        }
+        finishInspection.signal()
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+
+        XCTAssertTrue(viewModel.showRootWarning)
+        XCTAssertFalse(viewModel.showRsaKeyWarning)
+        XCTAssertEqual(viewModel.pendingConnectProfile?.id, rootProfile.id)
+    }
+
+    func testUnknownRsaInspectionContinuesToConnectionError() async {
+        let viewModel = makeViewModel { _, _, _ in nil }
+        let profile = ConnectionProfile(
+            name: "Unknown key",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey
+        )
+
+        viewModel.requestConnect(profile: profile)
+        for _ in 0..<50 where viewModel.errorMessage == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertFalse(viewModel.showRsaKeyWarning)
+        XCTAssertNotNil(viewModel.errorMessage)
     }
 
     func testConnectReleasesPrivateKeyBookmarkAccessAfterCompletion() async throws {
@@ -533,5 +704,31 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
             privateKeyPath: keyURL.path,
             privateKeyBookmark: bookmark
         )
+    }
+
+    private func makeViewModel(
+        rsaKeyInspector: @escaping @Sendable (
+            ConnectionProfile,
+            KeychainService,
+            SecurityScopedBookmarkService
+        ) -> Bool?
+    ) -> ConnectionListViewModel {
+        ConnectionListViewModel(
+            store: store,
+            keychain: keychain,
+            bookmarkService: .shared,
+            bridge: RustBridgeService(),
+            rsaKeyInspector: rsaKeyInspector
+        )
+    }
+
+    private func waitForSignal(_ semaphore: DispatchSemaphore) async -> Bool {
+        for _ in 0..<100 {
+            if semaphore.wait(timeout: .now()) == .success {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return false
     }
 }

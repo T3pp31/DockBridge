@@ -8,10 +8,14 @@ struct MainView: View {
     @StateObject private var updateCheck = UpdateCheckViewModel()
 
     @Binding private var showSettings: Bool
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @SceneStorage("sidebarHidden") private var sidebarHidden = false
     @State private var showNewConnection = false
     @State private var editingProfile: ConnectionProfile?
-    @State private var isTransferQueueExpanded = true
+    @SceneStorage("isTransferQueueExpanded") private var isTransferQueueExpanded = true
+
+    private var columnVisibility: NavigationSplitViewVisibility {
+        sidebarHidden ? .detailOnly : .all
+    }
     @State private var settingsConfig = AppConfig.default
 
     init(
@@ -30,7 +34,12 @@ struct MainView: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        NavigationSplitView(
+            columnVisibility: Binding(
+                get: { columnVisibility },
+                set: { sidebarHidden = $0 == .detailOnly }
+            )
+        ) {
             ConnectionListView(
                 viewModel: connectionList,
                 showNewConnection: $showNewConnection,
@@ -41,7 +50,13 @@ struct MainView: View {
             VStack(spacing: 0) {
                 ConnectionStatusBar(
                     status: bridge.connectionStatus,
-                    transferSummary: transferQueue.activeTransferSummary
+                    transferSummary: transferQueue.activeTransferSummary,
+                    remoteEditSessions: viewModel.remoteEditSessions,
+                    onRetryRemoteEditSession: { id in
+                        Task { await viewModel.retryRemoteEditSession(id: id) }
+                    },
+                    onStopRemoteEditSession: viewModel.stopRemoteEditSession,
+                    onStopAllRemoteEditSessions: viewModel.stopAllRemoteEditSessions
                 )
 
                 Divider()
@@ -83,7 +98,8 @@ struct MainView: View {
             }
             .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         }
-        .navigationTitle("DockBridge")
+        .navigationTitle(bridge.connectionStatus.endpointLabel ?? "DockBridge — Not Connected")
+        .navigationSubtitle(viewModel.remotePath)
         .toolbar {
             ToolbarItemGroup {
                 Button {
@@ -91,7 +107,6 @@ struct MainView: View {
                 } label: {
                     Label("Upload", systemImage: "square.and.arrow.up")
                 }
-                .buttonStyle(.borderedProminent)
                 .disabled(viewModel.selectedLocalItems.isEmpty || !viewModel.bridge.isConnected)
 
                 Button {
@@ -99,7 +114,6 @@ struct MainView: View {
                 } label: {
                     Label("Download", systemImage: "square.and.arrow.down")
                 }
-                .buttonStyle(.borderedProminent)
                 .disabled(viewModel.selectedRemoteItems.isEmpty || !viewModel.bridge.isConnected)
 
                 Button {
@@ -130,7 +144,12 @@ struct MainView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
-            SettingsView(config: settingsConfig) { config in
+            // Reload the latest persisted config every time the sheet opens so
+            // ⌘, or the toolbar gear never shows a stale copy (settings saved
+            // through another path used to be rolled back).
+            SettingsView(
+                config: AppSettingsService.shared.loadConfig()
+            ) { config in
                 AppSettingsService.shared.saveConfig(config)
                 showSettings = false
             }
@@ -174,7 +193,8 @@ struct MainView: View {
                             await updateCheck.downloadUpdate()
                         }
                     },
-                    onLater: updateCheck.skipUpdate
+                    onLater: updateCheck.skipUpdate,
+                    onSkipVersion: updateCheck.skipVersion
                 )
             }
         }
