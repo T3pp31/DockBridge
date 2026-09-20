@@ -22,6 +22,8 @@ struct AppConfig: Codable, Equatable, Sendable {
     var directoryWalkMaxDepth: UInt32
     var directoryWalkMaxTotalBytes: UInt64
     var transferOverwritePolicy: TransferOverwritePolicy = .replace
+    var notifyWhenTransfersFinish: Bool = true
+    var playTransferNotificationSound: Bool = true
 
     static let `default` = AppConfig(
         connectionTimeoutSecs: 30,
@@ -44,7 +46,9 @@ struct AppConfig: Codable, Equatable, Sendable {
         directoryWalkMaxFiles: 100_000,
         directoryWalkMaxDepth: 64,
         directoryWalkMaxTotalBytes: 107_374_182_400,
-        transferOverwritePolicy: .replace
+        transferOverwritePolicy: .replace,
+        notifyWhenTransfersFinish: true,
+        playTransferNotificationSound: true
     )
 
     /// Builds the UniFFI config record. The overwrite policy is passed per

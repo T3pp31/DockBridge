@@ -109,4 +109,23 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
         // Then: the registered default does not re-enable the timeout
         XCTAssertNil(reloaded.sshInactivityTimeoutSecs)
     }
+
+    func testTransferNotificationsAreEnabledByDefault() {
+        let config = service.loadConfig()
+
+        XCTAssertTrue(config.notifyWhenTransfersFinish)
+        XCTAssertTrue(config.playTransferNotificationSound)
+    }
+
+    func testSaveConfigPreservesTransferNotificationPreferences() {
+        var config = service.loadConfig()
+        config.notifyWhenTransfersFinish = false
+        config.playTransferNotificationSound = false
+
+        service.saveConfig(config)
+        let reloaded = service.loadConfig()
+
+        XCTAssertFalse(reloaded.notifyWhenTransfersFinish)
+        XCTAssertFalse(reloaded.playTransferNotificationSound)
+    }
 }

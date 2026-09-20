@@ -37,6 +37,8 @@ enum AppSettingsKeys {
     static let directoryWalkMaxDepth = "directoryWalkMaxDepth"
     static let directoryWalkMaxTotalBytes = "directoryWalkMaxTotalBytes"
     static let transferOverwritePolicy = "transferOverwritePolicy"
+    static let notifyWhenTransfersFinish = "notifyWhenTransfersFinish"
+    static let playTransferNotificationSound = "playTransferNotificationSound"
     static let skippedUpdateVersion = "skippedUpdateVersion"
 }
 
@@ -95,6 +97,8 @@ final class AppSettingsService: @unchecked Sendable {
             AppSettingsKeys.directoryWalkMaxDepth: Int(AppConfig.default.directoryWalkMaxDepth),
             AppSettingsKeys.directoryWalkMaxTotalBytes: Int(AppConfig.default.directoryWalkMaxTotalBytes),
             AppSettingsKeys.transferOverwritePolicy: AppConfig.default.transferOverwritePolicy.rawValue,
+            AppSettingsKeys.notifyWhenTransfersFinish: AppConfig.default.notifyWhenTransfersFinish,
+            AppSettingsKeys.playTransferNotificationSound: AppConfig.default.playTransferNotificationSound,
         ])
     }
 
@@ -202,7 +206,11 @@ final class AppSettingsService: @unchecked Sendable {
             transferOverwritePolicy: TransferOverwritePolicy(
                 rawValue: defaults.string(forKey: AppSettingsKeys.transferOverwritePolicy)
                     ?? AppConfig.default.transferOverwritePolicy.rawValue
-            ) ?? AppConfig.default.transferOverwritePolicy
+            ) ?? AppConfig.default.transferOverwritePolicy,
+            notifyWhenTransfersFinish: defaults.bool(forKey: AppSettingsKeys.notifyWhenTransfersFinish),
+            playTransferNotificationSound: defaults.bool(
+                forKey: AppSettingsKeys.playTransferNotificationSound
+            )
         )
     }
 
@@ -241,6 +249,8 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(Int(config.directoryWalkMaxDepth), forKey: AppSettingsKeys.directoryWalkMaxDepth)
         defaults.set(Int(config.directoryWalkMaxTotalBytes), forKey: AppSettingsKeys.directoryWalkMaxTotalBytes)
         defaults.set(config.transferOverwritePolicy.rawValue, forKey: AppSettingsKeys.transferOverwritePolicy)
+        defaults.set(config.notifyWhenTransfersFinish, forKey: AppSettingsKeys.notifyWhenTransfersFinish)
+        defaults.set(config.playTransferNotificationSound, forKey: AppSettingsKeys.playTransferNotificationSound)
         NotificationCenter.default.post(name: .appConfigDidChange, object: config)
     }
 

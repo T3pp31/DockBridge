@@ -95,6 +95,15 @@ struct SettingsView: View {
                         Text(policy.label).tag(policy)
                     }
                 }
+                Toggle(
+                    "Notify when transfers finish",
+                    isOn: $config.notifyWhenTransfersFinish
+                )
+                Toggle(
+                    "Play notification sound",
+                    isOn: $config.playTransferNotificationSound
+                )
+                .disabled(!config.notifyWhenTransfersFinish)
             }
 
             Section("Advanced") {
