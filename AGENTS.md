@@ -39,9 +39,16 @@ sudo /usr/sbin/sshd -f /tmp/sftpdemo/sshd_config
 Then drive the CLI (it reads the password, then `yes` to trust the host key on first connect):
 
 ```bash
+# password auth
 { printf '%s\n' password yes; } | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
   upload --host 127.0.0.1 --port 2222 --user ubuntu --password-stdin \
   --local ./file.txt --remote /home/ubuntu/upload/hello.txt
+
+# private-key auth (key-only servers): --identity expands ~; --passphrase-stdin unlocks encrypted keys
+{ printf '%s\n' "$KEY_PASSPHRASE" yes; } | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
+  list --host 127.0.0.1 --port 2222 --user ubuntu \
+  --identity ~/.ssh/id_ed25519 --passphrase-stdin \
+  --path /home/ubuntu
 ```
 
 Non-obvious gotchas discovered during setup:
