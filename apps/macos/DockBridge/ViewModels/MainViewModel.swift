@@ -21,6 +21,9 @@ final class MainViewModel: ObservableObject {
         }
     }
     @Published private(set) var remoteItems: [RemoteFileRecord] = []
+    @Published private(set) var showHiddenFiles: Bool
+    @Published var localFilter = ""
+    @Published var remoteFilter = ""
     @Published var selectedLocalItemIDs: Set<String> = []
     @Published var selectedRemoteItemIDs: Set<String> = []
 
@@ -158,23 +161,35 @@ final class MainViewModel: ObservableObject {
     @Published var mkdirName = ""
     // Local pane operations (Issue #341)
     @Published var localRenameTarget: LocalFileItem? = nil
+    @Published var localRenameText = ""
     @Published var showLocalMkdirPrompt = false
     @Published var localMkdirName = ""
-@Published var showOverwriteAsk = false
+    @Published var showOverwriteAsk = false
     @Published var overwriteAskDestination = ""
-    private var pendingTransferAction: (() async -> Bool)?
+    /// Profile that was active when the last connection was established.
+    /// Captured on the connect transition because `connectedProfileID` is
+    /// cleared synchronously by the bridge before `.onChange(of: isConnected)`
+    /// fires for the disconnect.
+    private var lastConnectedProfileID: UUID?
+    /// Continuation resumed when the user answers the overwrite sheet.
+    /// Replaces the previous single-slot `pendingTransferAction` so that a
+    /// batch loop pauses until the user decides, instead of overwriting the
+    /// pending action with the next colliding item.
+    private var overwriteAskContinuation: CheckedContinuation<Bool, Never>?
     @Published private(set) var pathBookmarks: [PathBookmark] = []
 
-    let bridge: RustBridgeService
+    let bridge: any RemoteBridging
     let connectionList: ConnectionListViewModel
     let transferQueue: TransferQueueViewModel
 
     private let settings: AppSettingsService
     private let bookmarkService: SecurityScopedBookmarkService
     private let pathBookmarkStore: PathBookmarkStore
+    private let trashLocalItemOperation: @Sendable (URL) throws -> Void
     private var defaultLocalAccessURL: URL?
     private var pathBookmarkAccessURL: URL?
     private var localLoadGeneration = 0
+    @Published private(set) var isLoadingRemote = false
     private var remoteLoadGeneration = 0
     private var localHistory: PathNavigationHistory
     private var remoteHistory = PathNavigationHistory(current: "/")
@@ -195,9 +210,12 @@ final class MainViewModel: ObservableObject {
         settings: AppSettingsService = .shared,
         bookmarkService: SecurityScopedBookmarkService = .shared,
         pathBookmarkStore: PathBookmarkStore = .shared,
-        bridge: RustBridgeService,
+        bridge: any RemoteBridging,
         connectionList: ConnectionListViewModel,
-        transferQueue: TransferQueueViewModel
+        transferQueue: TransferQueueViewModel,
+        trashLocalItemOperation: @escaping @Sendable (URL) throws -> Void = { url in
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        }
     ) {
         self.settings = settings
         self.bookmarkService = bookmarkService
@@ -205,7 +223,9 @@ final class MainViewModel: ObservableObject {
         self.bridge = bridge
         self.connectionList = connectionList
         self.transferQueue = transferQueue
+        self.trashLocalItemOperation = trashLocalItemOperation
         let config = settings.loadConfig()
+        self.showHiddenFiles = config.showHiddenFiles
         let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
         self.defaultLocalAccessURL = resolution.accessURL
         self.localHistory = PathNavigationHistory(current: resolution.url.path)
@@ -219,6 +239,8 @@ final class MainViewModel: ObservableObject {
     }
 
     func applyDefaultLocalConfig(_ config: AppConfig) {
+        let hiddenFilesChanged = showHiddenFiles != config.showHiddenFiles
+        showHiddenFiles = config.showHiddenFiles
         if let previous = defaultLocalAccessURL {
             bookmarkService.stopAccessing(previous)
             defaultLocalAccessURL = nil
@@ -233,6 +255,9 @@ final class MainViewModel: ObservableObject {
         }
             selectedLocalItemIDs = []
         reloadLocal()
+        if hiddenFilesChanged {
+            Task { await reloadRemote() }
+        }
     }
 
     func onAppear() {
@@ -252,7 +277,7 @@ final class MainViewModel: ObservableObject {
 
     func reloadLocal() {
         let directory = localPath
-        let showHiddenFiles = settings.loadConfig().showHiddenFiles
+        let includesHiddenFiles = showHiddenFiles
         localLoadGeneration += 1
         let generation = localLoadGeneration
 
@@ -260,7 +285,7 @@ final class MainViewModel: ObservableObject {
             let items: [LocalFileItem]
             do {
                 items = try await Task.detached(priority: .userInitiated) {
-                    try LocalFileItem.list(directory: directory, showHiddenFiles: showHiddenFiles)
+                    try LocalFileItem.list(directory: directory, showHiddenFiles: includesHiddenFiles)
                 }.value
             } catch {
                 guard generation == localLoadGeneration else { return }
@@ -310,8 +335,14 @@ final class MainViewModel: ObservableObject {
     }
 
     func onConnectionChanged(isConnected: Bool) async {
+        if isConnected {
+            // Remember which profile established this connection. The bridge
+            // clears `connectedProfileID` before the disconnect callback fires.
+            lastConnectedProfileID = bridge.connectedProfileID
+        }
+
         guard isConnected else {
-            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID {
+            if let profileID = lastConnectedProfileID ?? bridge.connectedProfileID {
                 connectionList.saveSessionPaths(
                     for: profileID,
                     localPath: localPath.path,
@@ -331,7 +362,7 @@ final class MainViewModel: ObservableObject {
 
         do {
             try await prepareRemoteWorkingDirectory()
-            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID,
+            if let profileID = lastConnectedProfileID ?? bridge.connectedProfileID,
                let profile = connectionList.profiles.first(where: { $0.id == profileID }),
                let savedRemotePath = profile.lastRemotePath,
                !savedRemotePath.isEmpty {
@@ -342,7 +373,7 @@ final class MainViewModel: ObservableObject {
                 // Missing lastRemotePath keeps the initial-directory result from prepareRemoteWorkingDirectory().
             }
             await reloadRemote()
-            if let profileID = connectionList.connectedProfileID ?? connectionList.selectedProfileID,
+            if let profileID = lastConnectedProfileID ?? bridge.connectedProfileID,
                let profile = connectionList.profiles.first(where: { $0.id == profileID }),
                let savedLocalPath = profile.lastLocalPath,
                !savedLocalPath.isEmpty {
@@ -482,7 +513,7 @@ final class MainViewModel: ObservableObject {
            username != "root" {
             return await bridge.firstExistingHomeDirectoryCandidate(for: username)
         }
-        guard let profileID = connectionList.selectedProfileID,
+        guard let profileID = lastConnectedProfileID ?? bridge.connectedProfileID,
               let profile = connectionList.profiles.first(where: { $0.id == profileID }),
               !profile.isRootUser
         else {
@@ -491,25 +522,53 @@ final class MainViewModel: ObservableObject {
         return await bridge.firstExistingHomeDirectoryCandidate(for: profile.username)
     }
 
+    /// Updates hidden-file visibility for both panes and persists the setting.
+    func setShowHiddenFiles(_ isVisible: Bool) {
+        guard isVisible != showHiddenFiles else { return }
+        showHiddenFiles = isVisible
+        var config = settings.loadConfig()
+        config.showHiddenFiles = isVisible
+        settings.saveConfig(config)
+        reloadLocal()
+        Task { await reloadRemote() }
+    }
+
     func reloadRemote() async {
         guard bridge.isConnected else {
             remoteItems = []
+            isLoadingRemote = false
             return
         }
 
         remoteLoadGeneration += 1
         let generation = remoteLoadGeneration
         let path = remotePath
+        isLoadingRemote = true
 
         do {
             let items = try await bridge.listDirectory(path: path)
             let filtered = items.filter { item in
-                RemotePath.pathMatchesEntry(parent: path, entryPath: item.path, name: item.name)
+                guard RemotePath.pathMatchesEntry(
+                    parent: path,
+                    entryPath: item.path,
+                    name: item.name
+                ) else {
+                    return false
+                }
+                return showHiddenFiles || !item.name.hasPrefix(".")
             }
-            guard generation == remoteLoadGeneration, path == remotePath else { return }
+            guard generation == remoteLoadGeneration, path == remotePath else {
+                isLoadingRemote = false
+                return
+            }
             remoteItems = filtered
+            isLoadingRemote = false
         } catch {
-            guard generation == remoteLoadGeneration else { return }
+            guard generation == remoteLoadGeneration else {
+                isLoadingRemote = false
+                return
+            }
+            isLoadingRemote = false
             errorMessage = error.dockBridgeUserMessage
             if error.isConnectionLost {
                 remoteItems = []
@@ -553,12 +612,22 @@ final class MainViewModel: ObservableObject {
         isApplyingNavigationHistory = !recordHistory
         remotePath = path
         isApplyingNavigationHistory = false
+        // Clear the previous directory's listing immediately so a user cannot
+        // act on stale rows while the new directory loads.
+        remoteItems = []
+        isLoadingRemote = true
     }
 
     var localTableItems: [LocalFileItem] {
         var items = localItems
         if canNavigateLocalUp {
             items.insert(LocalFileItem(parentOf: localPath), at: 0)
+        }
+        if !localFilter.isEmpty {
+            items = items.filter { item in
+                item.isParentDirectory
+                    || item.name.localizedCaseInsensitiveContains(localFilter)
+            }
         }
         return items
     }
@@ -567,6 +636,12 @@ final class MainViewModel: ObservableObject {
         var items = remoteItems
         if canNavigateRemoteUp, let parent = RemoteFileRecord.parentEntry(for: remotePath) {
             items.insert(parent, at: 0)
+        }
+        if !remoteFilter.isEmpty {
+            items = items.filter { item in
+                item.isParentDirectory
+                    || item.name.localizedCaseInsensitiveContains(remoteFilter)
+            }
         }
         return items
     }
@@ -653,39 +728,24 @@ final class MainViewModel: ObservableObject {
         }
     }
 
-    /// Drops local payloads into a specific remote folder (Issue #217).
-    func uploadPayloads(_ items: [LocalFileDragPayload], intoRemoteDirectory directory: String) async {
-        for item in items {
-            _ = await upload(localURL: item.url, toRemoteDirectory: directory)
-        }
-    }
-
-    /// Moves remote payloads into a specific remote folder (Issue #217).
-    func moveRemotePayloads(_ items: [RemoteFileDragPayload], intoRemoteDirectory directory: String) async {
-        for item in items {
-            _ = await moveRemoteItem(from: item.path, toDirectory: directory)
-        }
-    }
-
-    /// Downloads remote payloads into a specific local folder (Issue #217).
-    func downloadPayloads(_ items: [RemoteFileDragPayload], intoLocalDirectory directory: URL) async {
-        for item in items {
-            _ = await download(remotePath: item.path, toLocalDirectory: directory)
-        }
-    }
-
     @discardableResult
-    func upload(localURL: URL, toRemoteDirectory: String) async -> Bool {
+    func upload(localURL: URL, toRemoteDirectory: String?) async -> Bool {
         guard bridge.isConnected else {
             errorMessage = "Not connected to a remote host."
             return false
         }
 
         let fileName = localURL.lastPathComponent
+        // Resolve the destination ONCE, before the transfer. `nil` means the
+        // currently displayed remote folder; `"/"` always means the root — it
+        // is NOT rewritten to the current folder (that caused `..`-row drops
+        // to land in the wrong directory). The resolved value is captured by
+        // the transfer closure, so a concurrent upload cannot overwrite it.
+        let normalizedDirectory: String
         let destinationPath: String
         do {
-            let directory = toRemoteDirectory == "/" ? remotePath : toRemoteDirectory
-            let normalizedDirectory = try RemotePath.normalize(directory)
+            let directory = toRemoteDirectory ?? remotePath
+            normalizedDirectory = try RemotePath.normalize(directory)
             destinationPath = RemotePath.join(normalizedDirectory, fileName)
         } catch {
             errorMessage = error.dockBridgeUserMessage
@@ -695,12 +755,15 @@ final class MainViewModel: ObservableObject {
         return await runTransferOrAsk(
             destinationPath: destinationPath,
             destinationSide: .remote
-        ) {
+        ) { overwritePolicy in
+            // do NOT call prepareRemoteWorkingDirectory() here: it rewrites
+            // `remotePath` (when browsing "/") and would change the target.
             do {
-                try await self.prepareRemoteWorkingDirectory()
-                let directory = toRemoteDirectory == "/" ? self.remotePath : toRemoteDirectory
-                let normalizedDirectory = try RemotePath.normalize(directory)
-                try await self.bridge.upload(localPath: localURL.path, remoteDirectory: normalizedDirectory)
+                try await self.bridge.upload(
+                    localPath: localURL.path,
+                    remoteDirectory: normalizedDirectory,
+                    overwritePolicy: overwritePolicy
+                )
                 await self.transferQueue.refresh()
                 await self.reloadRemote()
                 return true
@@ -724,12 +787,13 @@ final class MainViewModel: ObservableObject {
         return await runTransferOrAsk(
             destinationPath: destinationPath,
             destinationSide: .local
-        ) {
+        ) { overwritePolicy in
             do {
                 let normalizedRemotePath = try RemotePath.normalize(remotePath)
                 try await self.bridge.download(
                     remotePath: normalizedRemotePath,
-                    localDirectory: toLocalDirectory.path
+                    localDirectory: toLocalDirectory.path,
+                    overwritePolicy: overwritePolicy
                 )
                 await self.transferQueue.refresh()
                 self.reloadLocal()
@@ -743,18 +807,18 @@ final class MainViewModel: ObservableObject {
 
     func confirmOverwriteAsk() {
         showOverwriteAsk = false
-        let action = pendingTransferAction
-        pendingTransferAction = nil
+        let continuation = overwriteAskContinuation
+        overwriteAskContinuation = nil
         overwriteAskDestination = ""
-        if let action {
-            Task { _ = await action() }
-        }
+        continuation?.resume(returning: true)
     }
 
     func cancelOverwriteAsk() {
         showOverwriteAsk = false
-        pendingTransferAction = nil
+        let continuation = overwriteAskContinuation
+        overwriteAskContinuation = nil
         overwriteAskDestination = ""
+        continuation?.resume(returning: false)
     }
 
     /// Whether the transfer destination lives on the remote host or the local filesystem.
@@ -766,34 +830,36 @@ final class MainViewModel: ObservableObject {
     private func runTransferOrAsk(
         destinationPath: String,
         destinationSide: TransferDestinationSide,
-        perform: @escaping () async -> Bool
+        perform: @escaping (TransferOverwritePolicy) async -> Bool
     ) async -> Bool {
         let policy = settings.loadConfig().transferOverwritePolicy
 
         switch policy {
         case .replace:
             errorMessage = nil
-            return await perform()
+            return await perform(.replace)
 
         case .failIfExists:
-            // Pre-check only: UniFFI AppConfigRecord does not yet carry overwrite policy,
-            // so the Rust engine still uses Replace after the transfer starts.
             if await destinationExists(at: destinationPath, side: destinationSide) {
                 errorMessage = "A file already exists at the destination."
                 return false
             }
             errorMessage = nil
-            return await perform()
+            return await perform(.failIfExists)
 
         case .ask:
             if await destinationExists(at: destinationPath, side: destinationSide) {
                 overwriteAskDestination = destinationPath
-                pendingTransferAction = perform
                 showOverwriteAsk = true
-                return false
+                let replace = await withCheckedContinuation { continuation in
+                    overwriteAskContinuation = continuation
+                }
+                return replace ? await perform(.replace) : false
             }
             errorMessage = nil
-            return await perform()
+            // If a destination appears after the UI pre-check, fail safely
+            // instead of overwriting a file the user was never asked about.
+            return await perform(.failIfExists)
         }
     }
 
@@ -927,29 +993,47 @@ final class MainViewModel: ObservableObject {
     // MARK: - Local pane operations (Issue #341)
 
     /// Moves the given local items to the Trash (recoverable).
-    func trashLocalItems(_ items: [LocalFileItem]) {
+    func trashLocalItems(_ items: [LocalFileItem]) async {
+        var failedNames: [String] = []
+        var trashedIDs: Set<String> = []
+        let trashItem = trashLocalItemOperation
+
         for item in items where !item.isParentDirectory {
             do {
-                try FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
+                try await Task.detached(priority: .userInitiated) {
+                    try trashItem(item.url)
+                }.value
+                trashedIDs.insert(item.id)
             } catch {
-                Logger(subsystem: "com.dockbridge.app", category: "ui")
-                    .error("failed to trash local item: \(error.localizedDescription, privacy: .public)")
-                errorMessage = error.localizedDescription
+                failedNames.append(item.name)
+                AppLogging.ui.error(
+                    "failed to trash local item \(item.name, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
             }
+        }
+
+        selectedLocalItemIDs.subtract(trashedIDs)
+        if !failedNames.isEmpty {
+            errorMessage = "Failed to move to Trash: \(failedNames.joined(separator: ", "))"
         }
         reloadLocal()
     }
 
     func beginLocalRename(item: LocalFileItem) {
         localRenameTarget = item
-        renameText = item.name
+        localRenameText = item.name
     }
 
     func commitLocalRename() async {
         guard let target = localRenameTarget else { return }
-        let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = localRenameText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard RemotePath.isValidEntryName(name) else {
             errorMessage = RemoteEntryNameError.invalidCharacters.localizedDescription
+            return
+        }
+        guard name != target.name else {
+            localRenameTarget = nil
+            localRenameText = ""
             return
         }
         let newURL = target.url.deletingLastPathComponent()
@@ -962,12 +1046,17 @@ final class MainViewModel: ObservableObject {
             return
         }
         do {
-            try FileManager.default.moveItem(at: target.url, to: newURL)
+            try await Task.detached(priority: .userInitiated) {
+                try FileManager.default.moveItem(at: target.url, to: newURL)
+            }.value
+            if selectedLocalItemIDs.remove(target.id) != nil {
+                selectedLocalItemIDs.insert(newURL.path)
+            }
             localRenameTarget = nil
-            renameText = ""
+            localRenameText = ""
             reloadLocal()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = Self.localFileOperationMessage(for: error, name: name)
         }
     }
 
@@ -976,23 +1065,35 @@ final class MainViewModel: ObservableObject {
         showLocalMkdirPrompt = true
     }
 
-    func commitLocalMkdir() {
+    func commitLocalMkdir() async {
         let name = localMkdirName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard RemotePath.isValidEntryName(name) else {
             errorMessage = RemoteEntryNameError.invalidCharacters.localizedDescription
             return
         }
+        let directoryURL = localPath.appendingPathComponent(name, isDirectory: true)
         do {
-            try FileManager.default.createDirectory(
-                at: localPath.appendingPathComponent(name),
-                withIntermediateDirectories: false
-            )
+            try await Task.detached(priority: .userInitiated) {
+                try FileManager.default.createDirectory(
+                    at: directoryURL,
+                    withIntermediateDirectories: false
+                )
+            }.value
             localMkdirName = ""
             showLocalMkdirPrompt = false
             reloadLocal()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = Self.localFileOperationMessage(for: error, name: name)
         }
+    }
+
+    private static func localFileOperationMessage(for error: Error, name: String) -> String {
+        let cocoaError = error as NSError
+        if cocoaError.domain == NSCocoaErrorDomain,
+           cocoaError.code == NSFileWriteFileExistsError {
+            return "A file or folder named '\(name)' already exists."
+        }
+        return error.localizedDescription
     }
 
     // MARK: - Error recovery actions (Issue #225)
@@ -1091,5 +1192,14 @@ final class MainViewModel: ObservableObject {
     func revealTransferQueue() {
         shouldRevealTransferQueue = true
         errorMessage = nil
+    }
+
+    /// Resumes any pending overwrite confirmation so a batch transfer awaiting
+    /// user input does not hang when the view model is torn down.
+    deinit {
+        if let continuation = overwriteAskContinuation {
+            overwriteAskContinuation = nil
+            continuation.resume(returning: false)
+        }
     }
 }

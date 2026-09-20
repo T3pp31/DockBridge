@@ -5,10 +5,28 @@ struct LocalPaneView: View {
     @ObservedObject var viewModel: MainViewModel
     @State private var isDropTargeted = false
     @State private var dropKind: DropKind = .none
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
             LocalPanePathBar(viewModel: viewModel)
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Filter files", text: $viewModel.localFilter)
+                    .textFieldStyle(.plain)
+                if !viewModel.localFilter.isEmpty {
+                    Button {
+                        viewModel.localFilter = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 6)
 
             Divider()
 
@@ -48,7 +66,7 @@ struct LocalPaneView: View {
                             let trashed = items.filter { !$0.isParentDirectory }
                             if !trashed.isEmpty {
                                 Button("Move to Trash", role: .destructive) {
-                                    viewModel.trashLocalItems(trashed)
+                                    Task { await viewModel.trashLocalItems(trashed) }
                                 }
                             }
                         }
@@ -74,7 +92,7 @@ struct LocalPaneView: View {
                             .transition(.opacity.combined(with: .scale(scale: 0.98)))
                         }
                     }
-                    .animation(.easeInOut(duration: 0.2), value: isDropTargeted)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isDropTargeted)
                     .modifier(LocalPaneDropModifier(viewModel: viewModel, isTargeted: $isDropTargeted, dropKind: $dropKind))
             }
             .layoutPriority(0)
@@ -100,7 +118,7 @@ struct LocalPaneView: View {
                 title: "Rename Local Item",
                 fieldLabel: "Name",
                 confirmLabel: "Rename",
-                name: $viewModel.renameText,
+                name: $viewModel.localRenameText,
                 onCancel: { viewModel.localRenameTarget = nil },
                 onConfirm: {
                     Task { await viewModel.commitLocalRename() }
@@ -114,7 +132,7 @@ struct LocalPaneView: View {
                 confirmLabel: "Create",
                 name: $viewModel.localMkdirName,
                 onCancel: { viewModel.showLocalMkdirPrompt = false },
-                onConfirm: { viewModel.commitLocalMkdir() }
+                onConfirm: { Task { await viewModel.commitLocalMkdir() } }
             )
         }
     }
