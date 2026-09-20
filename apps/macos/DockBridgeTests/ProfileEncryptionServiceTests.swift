@@ -51,6 +51,8 @@ extension ProfileEncryptionError: Equatable {
             return left == right
         case (.decryptionFailed(let left), .decryptionFailed(let right)):
             return left == right
+        case (.decodeFailed(let left), .decodeFailed(let right)):
+            return left == right
         default:
             return false
         }
