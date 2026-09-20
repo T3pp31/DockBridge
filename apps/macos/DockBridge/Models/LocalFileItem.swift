@@ -45,14 +45,9 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
     /// POSIX permission bits (e.g. "rwxr-xr-x") from the file system, or nil
     /// when they cannot be read.
     static func posixPermissionsString(for url: URL) -> String? {
-        let values = try? url.resourceValues(forKeys: [.fileResourceIdentifierKey])
-        _ = values
-        var mode: UInt16 = 0
-        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-        if let posix = attributes?[.posixPermissions] as? NSNumber {
-            mode = UInt16(truncating: posix)
-        }
-        guard mode != 0 else { return nil }
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let posix = attributes[.posixPermissions] as? NSNumber else { return nil }
+        let mode = UInt32(truncating: posix)
         return PermissionFormatter.string(from: mode)
     }
 
@@ -69,8 +64,15 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
             options: showHiddenFiles ? [] : [.skipsHiddenFiles]
         )
 
-        let items = try urls.map { url -> LocalFileItem in
-            let values = try url.resourceValues(forKeys: keys)
+        // Per-entry resilience: a single unreadable / disappearing entry must
+        // not blank the whole local pane. Fall back to the minimal initializer
+        // (size/date unknown) when resourceValues fails, e.g. a file deleted
+        // between the directory listing and this call, or an unreadable
+        // protected directory.
+        let items = urls.compactMap { url -> LocalFileItem? in
+            guard let values = try? url.resourceValues(forKeys: keys) else {
+                return nil
+            }
             return LocalFileItem(url: url, resourceValues: values)
         }
 

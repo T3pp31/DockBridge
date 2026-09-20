@@ -33,9 +33,9 @@ struct GetInfoSheet: View {
 
 /// Formats POSIX permission bits (e.g. 0o755 -> "rwxr-xr-x").
 enum PermissionFormatter {
-    static func string(from mode: UInt16) -> String {
+    static func string(from mode: UInt32) -> String {
         // Bit 8 = owner-read ... bit 0 = other-execute
-        let bits: [(shift: UInt16, ch: Character)] = [
+        let bits: [(shift: UInt32, ch: Character)] = [
             (8, "r"), (7, "w"), (6, "x"),
             (5, "r"), (4, "w"), (3, "x"),
             (2, "r"), (1, "w"), (0, "x"),
