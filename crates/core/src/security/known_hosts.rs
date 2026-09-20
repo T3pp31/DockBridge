@@ -229,19 +229,124 @@ impl KnownHostsManager {
         let fingerprint = fingerprint_sha256(key);
         let public_key_openssh = key.to_openssh().ok();
 
+        // Marker entries are security policy records, not ordinary trusted
+        // host rows. Never overwrite an @revoked or @cert-authority entry via
+        // the interactive acceptance path: doing so would silently discard
+        // the old policy record because the store permits one canonical row
+        // per (host, port). Re-accepting the exact same key is an idempotent
+        // no-op and leaves the marker intact.
+        if let Some(existing) = self.find_entry(host, port) {
+            if let Some(marker) = existing.marker {
+                if fingerprints_match(&existing.fingerprint_sha256, &fingerprint) {
+                    return Ok(());
+                }
+                return Err(SecurityError::KnownHostsWriteFailed {
+                    path: self.path.display().to_string(),
+                    message: format!(
+                        "cannot replace a {marker:?} known-hosts entry through host-key acceptance"
+                    ),
+                });
+            }
+        }
+
         if let Some(existing) = self.find_trusted_entry(host, port) {
             let canonical_key = entry_key(&existing.host, existing.port);
-            let entry = self.entries.get_mut(&canonical_key).ok_or_else(|| {
+
+            // The presented key is already trusted for this exact (host, port).
+            if fingerprints_match(&existing.fingerprint_sha256, &fingerprint) {
+                return Ok(());
+            }
+
+            let host_is_canonical = existing.host == host && existing.port == port;
+            let has_remaining_alias = existing
+                .aliases
+                .iter()
+                .any(|alias| !(alias.host == host && alias.port == port));
+            let has_remaining_exclusion = existing
+                .excluded_aliases
+                .iter()
+                .any(|alias| !(alias.host == host && alias.port == port));
+
+            // With no positive alias to promote, retaining exclusions for the
+            // old key would require two canonical rows for the same host, which
+            // the current on-disk schema cannot represent. Fail closed instead
+            // of silently dropping a negative trust rule.
+            if host_is_canonical && !has_remaining_alias && has_remaining_exclusion {
+                return Err(SecurityError::KnownHostsWriteFailed {
+                    path: self.path.display().to_string(),
+                    message: "cannot replace this host key without losing excluded host patterns"
+                        .to_string(),
+                });
+            }
+
+            // The user accepted a CHANGED key for (host, port). Only that
+            // (host, port) may trust the new key; the other hosts attached to
+            // this entry (aliases) keep the old key. Detach (host, port) into a
+            // dedicated entry with the new key instead of rewriting the shared
+            // fingerprint for every alias.
+            let mut old_entry = self.entries.remove(&canonical_key).ok_or_else(|| {
                 SecurityError::KnownHostsWriteFailed {
                     path: self.path.display().to_string(),
                     message: "internal known hosts index inconsistency".to_string(),
                 }
             })?;
 
-            entry.fingerprint_sha256 = fingerprint.clone();
-            entry.algorithm = format!("{:?}", key.algorithm());
-            entry.public_key_openssh = public_key_openssh;
-            entry.marker = None;
+            let mut remaining_aliases: Vec<HostAlias> = old_entry
+                .aliases
+                .drain(..)
+                .filter(|alias| !(alias.host == host && alias.port == port))
+                .collect();
+
+            // The detached (host, port) is now explicitly trusted with the new
+            // key, so drop any exclusion that previously carved it out of this
+            // entry. Every other exclusion keeps applying to the hosts that
+            // still trust the old key.
+            let remaining_excluded: Vec<HostAlias> = old_entry
+                .excluded_aliases
+                .drain(..)
+                .filter(|alias| !(alias.host == host && alias.port == port))
+                .collect();
+
+            if host_is_canonical {
+                // Promote the first remaining alias to canonical so the old key
+                // stays trusted for the other hosts of this entry. When no
+                // aliases remain the old entry covered only (host, port) and is
+                // dropped entirely.
+                if !remaining_aliases.is_empty() {
+                    let promoted = remaining_aliases.remove(0);
+                    old_entry.host = promoted.host;
+                    old_entry.port = promoted.port;
+                    old_entry.aliases = remaining_aliases;
+                    old_entry.excluded_aliases = remaining_excluded;
+                    self.entries
+                        .insert(entry_key(&old_entry.host, old_entry.port), old_entry);
+                }
+            } else {
+                // The detached host is an alias of the old entry, so the old
+                // entry keeps its original canonical host/port unchanged; the
+                // re-insertion key and the stored host/port therefore stay
+                // consistent (host_is_canonical was false above).
+                old_entry.aliases = remaining_aliases;
+                old_entry.excluded_aliases = remaining_excluded;
+                self.entries.insert(canonical_key, old_entry);
+            }
+
+            let entry = KnownHostEntry {
+                host: host.to_string(),
+                port,
+                fingerprint_sha256: fingerprint,
+                algorithm: format!("{:?}", key.algorithm()),
+                aliases: Vec::new(),
+                excluded_aliases: Vec::new(),
+                // The new key is a different key than the old entry's; keeping
+                // the old entry's OpenSSH representation here would pair the
+                // wrong key bytes with the new fingerprint, so when the new key
+                // cannot be serialized we store None (such entries are omitted
+                // from OpenSSH export but still trusted in the JSON store).
+                public_key_openssh,
+                marker: None,
+            };
+            self.entries.insert(entry_key(host, port), entry);
 
             return self.persist();
         }
@@ -2070,6 +2175,472 @@ mod tests {
             HostKeyCheckResult::Mismatch { .. } => {}
             other => panic!("expected mismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn accept_changed_key_detaches_only_accepted_host_from_aliases() {
+        // Given: example.com and 203.0.113.1 share one entry (same old key)
+        // When: the user accepts a NEW key for example.com
+        // Then: only example.com trusts the new key; 203.0.113.1 keeps the old
+        //       key (Mismatch with new key, Trust with old key)
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("203.0.113.1", 22, &old_key)
+            .unwrap();
+
+        // Sanity: both share one entry as an alias pair.
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.aliases.len(), 1);
+
+        manager
+            .accept_host_key("example.com", 22, &new_key)
+            .unwrap();
+
+        // example.com now trusts the new key only.
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key("example.com", 22, &old_key, false) {
+            HostKeyCheckResult::Mismatch { .. } => {}
+            other => panic!("expected mismatch, got {other:?}"),
+        }
+
+        // 203.0.113.1 still trusts the old key, and warns on the new key.
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key("203.0.113.1", 22, &new_key, false) {
+            HostKeyCheckResult::Mismatch { .. } => {}
+            other => panic!("expected mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_changed_key_on_alias_preserves_canonical_entry() {
+        // Given: example.com (canonical) and 203.0.113.1 (alias) share old key
+        // When: the user accepts a NEW key for the ALIAS 203.0.113.1
+        // Then: 203.0.113.1 gets a dedicated new-key entry; example.com keeps old key
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("203.0.113.1", 22, &old_key)
+            .unwrap();
+
+        manager
+            .accept_host_key("203.0.113.1", 22, &new_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key("203.0.113.1", 22, &old_key, false) {
+            HostKeyCheckResult::Mismatch { .. } => {}
+            other => panic!("expected mismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_changed_key_with_no_remaining_aliases_drops_old_entry() {
+        // Given: a single-host entry with the old key (no aliases)
+        // When: a new key is accepted for it
+        // Then: only the new-key entry remains and is trusted after reload
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("example.com", 22, &new_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        // The old entry covered only example.com and must be gone.
+        assert!(manager.find_entry("example.com", 22).is_some());
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+    }
+
+    #[test]
+    fn accept_same_key_is_idempotent_and_keeps_aliases() {
+        // Given: example.com + 203.0.113.1 share one entry (same key)
+        // When: the same key is accepted again for example.com
+        // Then: nothing changes; both hosts keep trusting the key
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+        manager.accept_host_key("203.0.113.1", 22, &key).unwrap();
+
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.aliases.len(), 1);
+    }
+
+    #[test]
+    fn accept_changed_key_on_canonical_keeps_multiple_aliases() {
+        // Given: example.com (canonical) with aliases 203.0.113.1 and
+        //        example.internal, all sharing the old key
+        // When: the user accepts a NEW key for the canonical example.com
+        // Then: example.com alone trusts the new key; both aliases keep the
+        //       old key and are not silently removed
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("203.0.113.1", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("example.internal", 22, &old_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.find_entry("example.com", 22).unwrap().aliases.len(),
+            2
+        );
+
+        manager
+            .accept_host_key("example.com", 22, &new_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        for alias in ["203.0.113.1", "example.internal"] {
+            assert_eq!(
+                manager.check_host_key(alias, 22, &old_key, false),
+                HostKeyCheckResult::Trust,
+                "{alias} should keep trusting the old key"
+            );
+            match manager.check_host_key(alias, 22, &new_key, false) {
+                HostKeyCheckResult::Mismatch { .. } => {}
+                other => panic!("expected mismatch for {alias}, got {other:?}"),
+            }
+        }
+
+        // Both aliases are still attached to one old-key entry after reload.
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded
+                .find_entry("203.0.113.1", 22)
+                .unwrap()
+                .aliases
+                .len(),
+            1
+        );
+        assert_eq!(
+            reloaded
+                .find_entry("example.internal", 22)
+                .unwrap()
+                .aliases
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn accept_changed_key_on_alias_keeps_other_aliases() {
+        // Given: example.com (canonical) with aliases 203.0.113.1 and
+        //        example.internal, all sharing the old key
+        // When: the user accepts a NEW key for the alias 203.0.113.1
+        // Then: example.com and example.internal keep the old key as one entry
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("203.0.113.1", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("example.internal", 22, &old_key)
+            .unwrap();
+
+        manager
+            .accept_host_key("203.0.113.1", 22, &new_key)
+            .unwrap();
+
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        for host in ["example.com", "example.internal"] {
+            assert_eq!(
+                manager.check_host_key(host, 22, &old_key, false),
+                HostKeyCheckResult::Trust,
+                "{host} should keep trusting the old key"
+            );
+            match manager.check_host_key(host, 22, &new_key, false) {
+                HostKeyCheckResult::Mismatch { .. } => {}
+                other => panic!("expected mismatch for {host}, got {other:?}"),
+            }
+        }
+
+        // example.com (promoted or kept canonical) still carries example.internal.
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert!(entry
+            .aliases
+            .iter()
+            .any(|alias| alias.host == "example.internal" && alias.port == 22));
+    }
+
+    #[test]
+    fn accept_changed_key_preserves_excluded_aliases() {
+        // Given: an entry with a trusted alias and an excluded host, and the
+        //        key for the canonical host changes
+        // When: the user accepts the NEW key for the canonical host
+        // Then: the accepted host is not left excluded, and the remaining
+        //       exclusions stay attached to the old-key entry that the other
+        //       hosts still trust
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+        let openssh_key = old_key.to_openssh().unwrap();
+
+        // @cert-authority would prevent find_trusted_entry; build the entry via
+        // import of a pattern with a negated exclusion instead.
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("example.com,old.example.com,!203.0.113.1 {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        // Sanity: the excluded alias is not trusted even though it shares the
+        // same fingerprint (same key as example.com).
+        assert_eq!(
+            manager.check_host_key("203.0.113.1", 22, &old_key, false),
+            HostKeyCheckResult::Unknown
+        );
+
+        manager
+            .accept_host_key("example.com", 22, &new_key)
+            .unwrap();
+
+        // The accepted host trusts the new key and is not excluded.
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("old.example.com", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        // The remaining exclusion still applies to the old key (203.0.113.1 is
+        // not trusted via the old-key entry).
+        match manager.check_host_key("203.0.113.1", 22, &old_key, false) {
+            HostKeyCheckResult::Unknown => {}
+            other => panic!("expected unknown for excluded alias, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_changed_key_fails_closed_when_only_exclusions_would_remain() {
+        // Given: a canonical host with an exclusion but no trusted alias that
+        // can carry the old key and its negative rule after a split.
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+        let openssh_key = old_key.to_openssh().unwrap();
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("example.com,!203.0.113.1 {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        // When: replacing the canonical key would otherwise discard the only
+        // stored copy of the exclusion.
+        let err = manager
+            .accept_host_key("example.com", 22, &new_key)
+            .expect_err("the exclusion must not be silently dropped");
+
+        // Then: the operation is rejected and the original policy is intact.
+        assert!(matches!(err, SecurityError::KnownHostsWriteFailed { .. }));
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Mismatch {
+                expected_fingerprint: fingerprint_sha256(&old_key),
+                actual_fingerprint: fingerprint_sha256(&new_key),
+            }
+        );
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded
+                .find_entry("example.com", 22)
+                .unwrap()
+                .excluded_aliases,
+            vec![HostAlias {
+                host: "203.0.113.1".to_string(),
+                port: 22,
+            }]
+        );
+    }
+
+    #[test]
+    fn accept_host_key_does_not_drop_revoked_marker() {
+        // Given: a @revoked entry for a host
+        // When: the same key is (re)accepted for that host
+        // Then: the marker survives accept_host_key and the key stays rejected
+        //       (fail-closed: the store never silently loses @revoked semantics)
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let openssh_path = dir.path().join("known_hosts");
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("@revoked example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.marker, Some(KnownHostMarker::Revoked));
+
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.marker, Some(KnownHostMarker::Revoked));
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Reject
+        );
+    }
+
+    #[test]
+    fn accept_different_key_cannot_overwrite_revoked_entry() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let revoked_key = test_public_key();
+        let replacement_key = test_public_key();
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!(
+                "@revoked example.com {}\n",
+                revoked_key.to_openssh().unwrap()
+            ),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        let err = manager
+            .accept_host_key("example.com", 22, &replacement_key)
+            .expect_err("a revoked policy row must not be overwritten");
+
+        assert!(matches!(err, SecurityError::KnownHostsWriteFailed { .. }));
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &revoked_key, false),
+            HostKeyCheckResult::Reject
+        );
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &replacement_key, false),
+            HostKeyCheckResult::Unknown
+        );
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        let entry = reloaded.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.marker, Some(KnownHostMarker::Revoked));
+        assert!(fingerprints_match(
+            &entry.fingerprint_sha256,
+            &fingerprint_sha256(&revoked_key)
+        ));
+    }
+
+    #[test]
+    fn accept_different_key_cannot_overwrite_cert_authority_entry() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let ca_key = test_public_key();
+        let replacement_key = test_public_key();
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!(
+                "@cert-authority example.com {}\n",
+                ca_key.to_openssh().unwrap()
+            ),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        manager
+            .accept_host_key("example.com", 22, &replacement_key)
+            .expect_err("a certificate-authority row must not be overwritten");
+
+        let entry = manager.find_entry("example.com", 22).unwrap();
+        assert_eq!(entry.marker, Some(KnownHostMarker::CertAuthority));
+        assert!(fingerprints_match(
+            &entry.fingerprint_sha256,
+            &fingerprint_sha256(&ca_key)
+        ));
     }
 
     #[test]
