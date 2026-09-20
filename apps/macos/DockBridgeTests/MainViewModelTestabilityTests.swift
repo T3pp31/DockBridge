@@ -76,6 +76,103 @@ final class MainViewModelTestabilityTests: XCTestCase {
         ConnectionProfile(id: id, name: name, host: "example.com", username: "user")
     }
 
+    private func makeRemoteItem(
+        name: String,
+        path: String,
+        isDirectory: Bool = false
+    ) -> RemoteFileRecord {
+        RemoteFileRecord(
+            name: name,
+            path: path,
+            isDirectory: isDirectory,
+            isSymlink: false,
+            size: 1,
+            modifiedAtSecs: nil,
+            permissions: nil,
+            uid: nil,
+            gid: nil,
+            symlinkTarget: nil,
+            symlinkTargetIsDir: nil
+        )
+    }
+
+    // MARK: - Hidden files
+
+    func testReloadRemoteHidesDotFilesWhenSettingIsOff() async {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        viewModel.remotePath = "/srv"
+        bridge.directoryListings["/srv"] = [
+            makeRemoteItem(name: ".secret", path: "/srv/.secret"),
+            makeRemoteItem(name: "visible.txt", path: "/srv/visible.txt")
+        ]
+
+        await viewModel.reloadRemote()
+
+        XCTAssertEqual(viewModel.remoteItems.map(\.name), ["visible.txt"])
+    }
+
+    func testReloadRemoteShowsDotFilesWhenSettingIsOn() async {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        viewModel.remotePath = "/srv"
+        bridge.directoryListings["/srv"] = [
+            makeRemoteItem(name: ".secret", path: "/srv/.secret"),
+            makeRemoteItem(name: "visible.txt", path: "/srv/visible.txt")
+        ]
+        var config = settings.loadConfig()
+        config.showHiddenFiles = true
+        viewModel.applyDefaultLocalConfig(config)
+
+        await viewModel.reloadRemote()
+
+        XCTAssertEqual(Set(viewModel.remoteItems.map(\.name)), [".secret", "visible.txt"])
+    }
+
+    func testRemoteParentEntryRemainsVisibleWhenHiddenFilesAreOff() async throws {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        viewModel.remotePath = "/srv"
+        bridge.directoryListings["/srv"] = [
+            // A server-supplied parent row must fail path validation; the view
+            // model adds its own trusted parent row after filtering.
+            makeRemoteItem(name: "..", path: "/", isDirectory: true),
+            makeRemoteItem(name: ".secret", path: "/srv/.secret")
+        ]
+
+        await viewModel.reloadRemote()
+
+        let parent = try XCTUnwrap(viewModel.remoteTableItems.first)
+        XCTAssertTrue(parent.isParentDirectory)
+        XCTAssertEqual(parent.name, "..")
+        XCTAssertEqual(viewModel.remoteTableItems.filter(\.isParentDirectory).count, 1)
+        XCTAssertFalse(viewModel.remoteTableItems.contains { $0.name == ".secret" })
+    }
+
+    func testSetShowHiddenFilesPersistsReloadsAndInitializesNewViewModel() async {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        viewModel.remotePath = "/srv"
+        bridge.directoryListings["/srv"] = [
+            makeRemoteItem(name: ".secret", path: "/srv/.secret")
+        ]
+
+        viewModel.setShowHiddenFiles(true)
+        for _ in 0..<20 where bridge.listedDirectories.isEmpty {
+            await Task.yield()
+        }
+
+        XCTAssertTrue(viewModel.showHiddenFiles)
+        XCTAssertTrue(settings.loadConfig().showHiddenFiles)
+        XCTAssertEqual(bridge.listedDirectories.last, "/srv")
+
+        let reloadedViewModel = MainViewModel(
+            settings: settings,
+            bookmarkService: bookmarkService,
+            pathBookmarkStore: pathBookmarkStore,
+            bridge: bridge,
+            connectionList: connectionList,
+            transferQueue: transferQueue
+        )
+        XCTAssertTrue(reloadedViewModel.showHiddenFiles)
+    }
+
     // MARK: - Destination resolution
 
     func testUploadResolvesRemoteDirectoryToCurrentPathWhenUnspecified() async throws {

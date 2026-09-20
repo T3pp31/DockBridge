@@ -20,6 +20,7 @@ final class MainViewModel: ObservableObject {
         }
     }
     @Published private(set) var remoteItems: [RemoteFileRecord] = []
+    @Published private(set) var showHiddenFiles: Bool
     @Published var localFilter = ""
     @Published var remoteFilter = ""
     @Published var selectedLocalItemIDs: Set<String> = []
@@ -213,6 +214,7 @@ final class MainViewModel: ObservableObject {
         self.connectionList = connectionList
         self.transferQueue = transferQueue
         let config = settings.loadConfig()
+        self.showHiddenFiles = config.showHiddenFiles
         let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
         self.defaultLocalAccessURL = resolution.accessURL
         self.localHistory = PathNavigationHistory(current: resolution.url.path)
@@ -226,6 +228,8 @@ final class MainViewModel: ObservableObject {
     }
 
     func applyDefaultLocalConfig(_ config: AppConfig) {
+        let hiddenFilesChanged = showHiddenFiles != config.showHiddenFiles
+        showHiddenFiles = config.showHiddenFiles
         if let previous = defaultLocalAccessURL {
             bookmarkService.stopAccessing(previous)
             defaultLocalAccessURL = nil
@@ -240,6 +244,9 @@ final class MainViewModel: ObservableObject {
         }
             selectedLocalItemIDs = []
         reloadLocal()
+        if hiddenFilesChanged {
+            Task { await reloadRemote() }
+        }
     }
 
     func onAppear() {
@@ -259,7 +266,7 @@ final class MainViewModel: ObservableObject {
 
     func reloadLocal() {
         let directory = localPath
-        let showHiddenFiles = settings.loadConfig().showHiddenFiles
+        let includesHiddenFiles = showHiddenFiles
         localLoadGeneration += 1
         let generation = localLoadGeneration
 
@@ -267,7 +274,7 @@ final class MainViewModel: ObservableObject {
             let items: [LocalFileItem]
             do {
                 items = try await Task.detached(priority: .userInitiated) {
-                    try LocalFileItem.list(directory: directory, showHiddenFiles: showHiddenFiles)
+                    try LocalFileItem.list(directory: directory, showHiddenFiles: includesHiddenFiles)
                 }.value
             } catch {
                 guard generation == localLoadGeneration else { return }
@@ -504,6 +511,17 @@ final class MainViewModel: ObservableObject {
         return await bridge.firstExistingHomeDirectoryCandidate(for: profile.username)
     }
 
+    /// Updates hidden-file visibility for both panes and persists the setting.
+    func setShowHiddenFiles(_ isVisible: Bool) {
+        guard isVisible != showHiddenFiles else { return }
+        showHiddenFiles = isVisible
+        var config = settings.loadConfig()
+        config.showHiddenFiles = isVisible
+        settings.saveConfig(config)
+        reloadLocal()
+        Task { await reloadRemote() }
+    }
+
     func reloadRemote() async {
         guard bridge.isConnected else {
             remoteItems = []
@@ -519,7 +537,14 @@ final class MainViewModel: ObservableObject {
         do {
             let items = try await bridge.listDirectory(path: path)
             let filtered = items.filter { item in
-                RemotePath.pathMatchesEntry(parent: path, entryPath: item.path, name: item.name)
+                guard RemotePath.pathMatchesEntry(
+                    parent: path,
+                    entryPath: item.path,
+                    name: item.name
+                ) else {
+                    return false
+                }
+                return showHiddenFiles || !item.name.hasPrefix(".")
             }
             guard generation == remoteLoadGeneration, path == remotePath else {
                 isLoadingRemote = false

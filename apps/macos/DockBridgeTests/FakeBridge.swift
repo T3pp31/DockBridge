@@ -15,6 +15,8 @@ final class FakeBridge: RemoteBridging {
 
     /// Directory listings keyed by path; missing paths throw `FakeBridgeError.listingNotFound`.
     var directoryListings: [String: [RemoteFileRecord]] = [:]
+    /// Paths requested through `listDirectory`, used to verify refreshes.
+    private(set) var listedDirectories: [String] = []
     /// Transfer tasks returned by `fetchTransferTasks`.
     var transferTasks: [TransferTaskRecord] = []
     /// Upload destinations recorded during `upload`.
@@ -68,6 +70,7 @@ final class FakeBridge: RemoteBridging {
     }
 
     func listDirectory(path: String) async throws -> [RemoteFileRecord] {
+        listedDirectories.append(path)
         if let items = directoryListings[path] { return items }
         throw DockBridgeError.Generic(message: "listing not found: \(path)")
     }
