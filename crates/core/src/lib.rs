@@ -8,7 +8,7 @@ pub mod ssh;
 pub mod transfer;
 
 pub use config::{
-    clamp_transfer_chunk_size, ensure_known_hosts_parent, expand_tilde,
+    clamp_transfer_chunk_size, ensure_known_hosts_parent, expand_tilde, u64_to_usize_or_invalid,
     validate_transfer_chunk_size, AppConfig, DirectoryWalkLimits, DEFAULT_DIRECTORY_WALK_MAX_DEPTH,
     DEFAULT_DIRECTORY_WALK_MAX_FILES, DEFAULT_DIRECTORY_WALK_MAX_TOTAL_BYTES,
     DEFAULT_TRANSFER_CHUNK_SIZE_BYTES, DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
@@ -18,7 +18,10 @@ pub use config::{
 pub use error::{
     AppError, AuthError, ConfigError, ConnectionError, SecurityError, SftpError, TransferError,
 };
-pub use security::{fingerprint_sha256, HostAlias, HostKeyCheckResult, KnownHostsManager};
+pub use security::{
+    fingerprint_sha256, HostAlias, HostKeyCheckResult, KnownHostEntry, KnownHostsManager,
+    KnownHostsStatus,
+};
 pub use sftp::{
     ensure_local_path_within_root, ensure_remote_path_within_root, normalize_remote_path,
     validate_remote_entry_name, validated_remote_entry, RemoteFile, SftpClient,

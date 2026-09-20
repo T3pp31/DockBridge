@@ -5,10 +5,28 @@ struct LocalPaneView: View {
     @ObservedObject var viewModel: MainViewModel
     @State private var isDropTargeted = false
     @State private var dropKind: DropKind = .none
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
             LocalPanePathBar(viewModel: viewModel)
+
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Filter files", text: $viewModel.localFilter)
+                    .textFieldStyle(.plain)
+                if !viewModel.localFilter.isEmpty {
+                    Button {
+                        viewModel.localFilter = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 6)
 
             Divider()
 
@@ -33,11 +51,26 @@ struct LocalPaneView: View {
                                 Button("Reveal in Finder") {
                                     NSWorkspace.shared.activateFileViewerSelecting([item.url])
                                 }
+                                Button("Get Info") {
+                                    Task { await viewModel.showLocalInfo(item) }
+                                }
+                                if !item.isParentDirectory {
+                                    Button("Rename") {
+                                        viewModel.beginLocalRename(item: item)
+                                    }
+                                }
                             }
 
                             Button(items.count == 1 ? "Upload" : "Upload \(items.count) Items") {
                                 viewModel.selectedLocalItemIDs = Set(items.map(\.id))
                                 Task { await viewModel.uploadSelected() }
+                            }
+
+                            let trashed = items.filter { !$0.isParentDirectory }
+                            if !trashed.isEmpty {
+                                Button("Move to Trash", role: .destructive) {
+                                    Task { await viewModel.trashLocalItems(trashed) }
+                                }
                             }
                         }
                     } primaryAction: { ids in
@@ -62,7 +95,7 @@ struct LocalPaneView: View {
                             .transition(.opacity.combined(with: .scale(scale: 0.98)))
                         }
                     }
-                    .animation(.easeInOut(duration: 0.2), value: isDropTargeted)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isDropTargeted)
                     .modifier(LocalPaneDropModifier(viewModel: viewModel, isTargeted: $isDropTargeted, dropKind: $dropKind))
             }
             .layoutPriority(0)
@@ -79,6 +112,45 @@ struct LocalPaneView: View {
         }
         .task(id: viewModel.localPath) {
             viewModel.reloadLocal()
+        }
+        .sheet(item: $viewModel.localInfoItem) { item in
+            GetInfoSheet(
+                title: "Info — \(item.name)",
+                rows: [
+                    ("Path", item.url.path),
+                    ("Kind", item.isDirectory ? "Folder" : "File"),
+                    ("Size", ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)),
+                    ("Modified", item.modificationDate.map {
+                        DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .medium)
+                    } ?? "—"),
+                    ("Permissions", viewModel.localInfoPermissions ?? "—"),
+                ]
+            )
+        }
+        .sheet(isPresented: Binding(
+            get: { viewModel.localRenameTarget != nil },
+            set: { if !$0 { viewModel.localRenameTarget = nil } }
+        )) {
+            RemoteEntryNameSheet(
+                title: "Rename Local Item",
+                fieldLabel: "Name",
+                confirmLabel: "Rename",
+                name: $viewModel.localRenameText,
+                onCancel: { viewModel.localRenameTarget = nil },
+                onConfirm: {
+                    Task { await viewModel.commitLocalRename() }
+                }
+            )
+        }
+        .sheet(isPresented: $viewModel.showLocalMkdirPrompt) {
+            RemoteEntryNameSheet(
+                title: "New Folder",
+                fieldLabel: "Folder name",
+                confirmLabel: "Create",
+                name: $viewModel.localMkdirName,
+                onCancel: { viewModel.showLocalMkdirPrompt = false },
+                onConfirm: { Task { await viewModel.commitLocalMkdir() } }
+            )
         }
     }
 
