@@ -30,6 +30,9 @@ struct GitHubReleaseResponse: Decodable {
 
 enum AppUpdateServiceError: Error, Equatable {
     case invalidResponse
+    /// GitHub rate-limited us (403/429) after `If-None-Match` handled 304s.
+    /// `retryAfter` is the server-provided Retry-After header when present.
+    case rateLimited(retryAfter: String?)
 }
 
 final class AppUpdateService: @unchecked Sendable {
@@ -43,7 +46,10 @@ final class AppUpdateService: @unchecked Sendable {
         currentVersion: String = VersionComparator.currentAppVersion,
         skippedVersion: String?
     ) async throws -> AppUpdateInfo? {
-        let release = try await fetchLatestRelease()
+        // 304 Not Modified (server matches our stored ETag) means no new release.
+        guard let release = try await fetchLatestRelease() else {
+            return nil
+        }
         let latestVersion = VersionComparator.normalize(release.tagName)
 
         guard VersionComparator.isNewerStrict(latestVersion, than: currentVersion) else {
@@ -81,14 +87,43 @@ final class AppUpdateService: @unchecked Sendable {
         )
     }
 
-    private func fetchLatestRelease() async throws -> GitHubReleaseResponse {
+    private func fetchLatestRelease() async throws -> GitHubReleaseResponse? {
         var request = URLRequest(url: AppUpdateConfig.releasesLatestURL)
+        // Keep startup snappy even when api.github.com is slow / blocked.
+        request.timeoutInterval = 15
         request.setValue(AppUpdateConfig.githubAPIAcceptHeader, forHTTPHeaderField: "Accept")
+        request.setValue(AppUpdateConfig.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(AppUpdateConfig.githubAPIVersion, forHTTPHeaderField: "X-GitHub-Api-Version")
+
+        let savedETag = AppUpdateConfig.showExistingETag()
+        if let savedETag {
+            request.setValue(savedETag, forHTTPHeaderField: "If-None-Match")
+        }
 
         let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) else {
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw AppUpdateServiceError.invalidResponse
+        }
+
+        // 304: the stored ETag matched; no new release.
+        if httpResponse.statusCode == 304 {
+            return nil
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            // 403 / 429 are rate-limit responses: surface them distinctly so
+            // the caller does not treat the failure as "no update available".
+            if httpResponse.statusCode == 403 || httpResponse.statusCode == 429 {
+                let retryAfter = httpResponse.value(forHTTPHeaderField: "Retry-After")
+                throw AppUpdateServiceError.rateLimited(retryAfter: retryAfter)
+            }
+            throw AppUpdateServiceError.invalidResponse
+        }
+
+        // Remember the ETag so the next launch can send If-None-Match and avoid
+        // burning GitHub's unauthenticated rate limit (60 req/h/IP).
+        if let etag = httpResponse.value(forHTTPHeaderField: "ETag") {
+            AppUpdateConfig.persistETag(etag)
         }
 
         return try JSONDecoder().decode(GitHubReleaseResponse.self, from: data)
