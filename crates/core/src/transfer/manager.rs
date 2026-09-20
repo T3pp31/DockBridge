@@ -2,13 +2,16 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use rand::RngExt as _;
 
 use crate::config::{AppConfig, DirectoryWalkLimits};
-use crate::error::{SftpError, TransferError};
+use crate::error::{RemoteStatusCode, SftpError, TransferError};
 use crate::sftp::{
     ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
-    normalize_remote_path, walk_local_directory_with_options, walk_remote_directory_with_limits,
-    SftpClient, WalkLocalDirectoryOptions,
+    normalize_remote_path, parent_remote_path, walk_local_directory_with_options,
+    walk_remote_directory_with_limits, SftpClient, WalkLocalDirectoryOptions,
 };
 use crate::ssh::SshSession;
 use crate::transfer::TransferOverwritePolicy;
@@ -51,6 +54,10 @@ pub struct TransferManager {
     directory_walk_limits: DirectoryWalkLimits,
     tasks: Mutex<Vec<TransferTask>>,
     cancellation_flags: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+    /// Fixed backoff delay in milliseconds between retries, used by tests to
+    /// avoid real sleeping. `None` uses the exponential jittered backoff.
+    #[cfg(test)]
+    backoff_override_ms: Option<u64>,
 }
 
 impl TransferManager {
@@ -64,6 +71,8 @@ impl TransferManager {
             directory_walk_limits: config.directory_walk_limits(),
             tasks: Mutex::new(Vec::new()),
             cancellation_flags: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            backoff_override_ms: None,
         }
     }
 
@@ -415,7 +424,7 @@ impl TransferManager {
                 .await
                 .map_err(transfer_error_from_sftp)?;
 
-            let files = walk_local_directory_with_options(
+            let result = walk_local_directory_with_options(
                 local_path,
                 WalkLocalDirectoryOptions {
                     limits: self.directory_walk_limits,
@@ -424,8 +433,8 @@ impl TransferManager {
             )
             .await
             .map_err(transfer_error_from_sftp)?;
-            let mut tasks = Vec::with_capacity(files.len());
-            for entry in files {
+            let mut tasks = Vec::with_capacity(result.files.len());
+            for entry in result.files {
                 let remote_path = join_remote_path(&remote_root, &entry.relative_path)
                     .map_err(transfer_error_from_sftp)?;
                 if let Some(parent) =
@@ -440,6 +449,12 @@ impl TransferManager {
                     .enqueue_upload(session, &entry.local_path, remote_path)
                     .await?;
                 tasks.push(task);
+            }
+            if !result.skipped.is_empty() {
+                tracing::warn!(
+                    skipped = ?result.skipped,
+                    "local directory walk skipped unreadable entries"
+                );
             }
             return Ok(tasks);
         }
@@ -497,12 +512,12 @@ impl TransferManager {
                 return Ok(Vec::new());
             }
 
-            let files =
+            let result =
                 walk_remote_directory_with_limits(&client, &normalized, self.directory_walk_limits)
                     .await
                     .map_err(transfer_error_from_sftp)?;
-            let mut tasks = Vec::with_capacity(files.len());
-            for entry in files {
+            let mut tasks = Vec::with_capacity(result.files.len());
+            for entry in result.files {
                 let local_path = local_root.join(&entry.relative_path);
                 ensure_local_path_within_root(&local_root, &local_path)
                     .map_err(transfer_error_from_sftp)?;
@@ -515,6 +530,12 @@ impl TransferManager {
                     .enqueue_download(session, &entry.remote_path, &local_path)
                     .await?;
                 tasks.push(task);
+            }
+            if !result.skipped.is_empty() {
+                tracing::warn!(
+                    skipped = ?result.skipped,
+                    "remote directory walk skipped unreadable entries"
+                );
             }
             Ok(tasks)
         } else {
@@ -545,10 +566,14 @@ impl TransferManager {
             .unwrap_or(0);
         self.set_task_total_bytes(task_id, total_bytes);
 
-        let attempts = self.retry_count.max(1);
-        let mut last_error = String::from("unknown transfer error");
+        // `retry_count` config means the number of RETRIES after the first
+        // attempt (issue #310): `transfer_retry_count = 3` performs 3
+        // retries, i.e. up to 4 attempts total.
+        let attempts = self.retry_count.saturating_add(1).max(1);
+        let mut last_error: Option<SftpError> = None;
         let mut attempt = 0;
 
+        let mut retry_index = 0_u32;
         for current in 1..=attempts {
             if self.is_cancelled(task_id) {
                 return Err(TransferError::Cancelled);
@@ -575,11 +600,17 @@ impl TransferManager {
                     return Err(TransferError::CleanupFailed { message });
                 }
                 Err(err) => {
-                    last_error = err.to_string();
-                    if is_non_retryable_transfer_error(&last_error) {
+                    last_error = Some(err);
+                    if is_non_retryable_error(last_error.as_ref().unwrap()) {
                         break;
                     }
                     if current < attempts {
+                        // Exponential backoff with jitter between retries;
+                        // still abortable while waiting.
+                        retry_index = retry_index.saturating_add(1);
+                        if self.sleep_backoff(task_id, retry_index).await {
+                            return Err(TransferError::Cancelled);
+                        }
                         tracing::warn!(
                             task_id,
                             attempt = current,
@@ -593,8 +624,40 @@ impl TransferManager {
 
         Err(TransferError::RetriesExhausted {
             attempts: attempt.max(1),
-            message: last_error,
+            message: last_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "unknown transfer error".to_string()),
         })
+    }
+
+    /// Sleeps with exponential backoff + jitter (1s, 2s, 4s, ... capped at 30s)
+    /// between retry attempts. Returns `true` when the transfer was cancelled
+    /// during the wait (so the caller aborts immediately).
+    async fn sleep_backoff(&self, task_id: u64, retry_index: u32) -> bool {
+        #[cfg(test)]
+        let delay = Duration::from_millis(
+            self.backoff_override_ms
+                .unwrap_or_else(|| backoff_delay_ms(retry_index)),
+        );
+        #[cfg(not(test))]
+        let delay = Duration::from_millis(backoff_delay_ms(retry_index));
+
+        tracing::info!(
+            task_id,
+            retry_backoff_ms = delay.as_millis(),
+            "waiting before retrying transfer"
+        );
+
+        tokio::time::timeout(delay, async {
+            loop {
+                if self.is_cancelled(task_id) {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .is_ok_and(|cancelled| cancelled)
     }
 
     async fn run_download_with_retries(
@@ -608,10 +671,13 @@ impl TransferManager {
         let total_bytes = client.remote_file_size(remote_path).await.unwrap_or(0);
         self.set_task_total_bytes(task_id, total_bytes);
 
-        let attempts = self.retry_count.max(1);
-        let mut last_error = String::from("unknown transfer error");
+        // `retry_count` config means the number of RETRIES after the first
+        // attempt (issue #310).
+        let attempts = self.retry_count.saturating_add(1).max(1);
+        let mut last_error: Option<SftpError> = None;
         let mut attempt = 0;
 
+        let mut retry_index = 0_u32;
         for current in 1..=attempts {
             if self.is_cancelled(task_id) {
                 return Err(TransferError::Cancelled);
@@ -639,11 +705,17 @@ impl TransferManager {
                     return Err(TransferError::CleanupFailed { message });
                 }
                 Err(err) => {
-                    last_error = err.to_string();
-                    if is_non_retryable_transfer_error(&last_error) {
+                    last_error = Some(err);
+                    if is_non_retryable_error(last_error.as_ref().unwrap()) {
                         break;
                     }
                     if current < attempts {
+                        // Exponential backoff with jitter between retries;
+                        // still abortable while waiting.
+                        retry_index = retry_index.saturating_add(1);
+                        if self.sleep_backoff(task_id, retry_index).await {
+                            return Err(TransferError::Cancelled);
+                        }
                         tracing::warn!(
                             task_id,
                             attempt = current,
@@ -657,35 +729,68 @@ impl TransferManager {
 
         Err(TransferError::RetriesExhausted {
             attempts: attempt.max(1),
-            message: last_error,
+            message: last_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "unknown transfer error".to_string()),
         })
     }
 }
 
-fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
-    let normalized = normalize_remote_path(remote_path)?;
-    if normalized == "/" {
-        return Ok(None);
-    }
+/// Returns the exponential-backoff delay in milliseconds for retry
+/// `retry_index` (1-based), with 50%..100% jitter. Sequence: ~1s, ~2s, ~4s,
+/// ... capped at 30s.
+fn backoff_delay_ms(retry_index: u32) -> u64 {
+    const BACKOFF_BASE_MS: u64 = 1_000;
+    const BACKOFF_MAX_MS: u64 = 30_000;
 
-    let trimmed = normalized.trim_end_matches('/');
-    let Some((parent, _)) = trimmed.rsplit_once('/') else {
-        return Ok(None);
-    };
-    Ok(Some(if parent.is_empty() {
-        "/".to_string()
-    } else {
-        parent.to_string()
-    }))
+    let exponent = (retry_index.saturating_sub(1)).min(6);
+    let base = BACKOFF_BASE_MS.saturating_mul(1_u64 << exponent);
+    let capped = base.min(BACKOFF_MAX_MS);
+    // Jitter: 50%..100% of the computed delay to avoid thundering herds.
+    rand::rng().random_range(capped / 2..=capped)
 }
 
 /// Returns `true` when retrying the same transfer is unlikely to succeed.
+///
+/// Decided from the typed [`SftpError`] variant, not the formatted message
+/// string. String matching on "failure" / "no such file" misfires for paths
+/// like `~/Documents/failure-report.txt` (issue #308).
+pub(crate) fn is_non_retryable_error(error: &SftpError) -> bool {
+    match error {
+        SftpError::RemoteStatus { code, .. } => {
+            // SSH_FX_* codes that a retry cannot recover from.
+            matches!(
+                code,
+                RemoteStatusCode::NoSuchFile
+                    | RemoteStatusCode::PermissionDenied
+                    | RemoteStatusCode::BadMessage
+                    | RemoteStatusCode::OpUnsupported
+            )
+        }
+        // A generic upload/download/cleanup failure may wrap a typed server
+        // status; only the explicit "permission denied" / "overwrite disabled"
+        // messages are deemed non-retryable from text.
+        SftpError::UploadFailed { message, .. }
+        | SftpError::DownloadFailed { message, .. }
+        | SftpError::RenameFailed { message, .. }
+        | SftpError::MkdirFailed { message, .. }
+        | SftpError::DeleteFailed { message, .. }
+        | SftpError::StatFailed { message, .. }
+        | SftpError::WalkFailed { message, .. } => {
+            let lower = message.to_lowercase();
+            lower.contains("permission denied")
+                || lower.contains("already exists and overwrite is disabled")
+        }
+        _ => false,
+    }
+}
+
+/// Legacy string-based classifier kept for messaging-only call sites.
+#[cfg(test)]
 pub(crate) fn is_non_retryable_transfer_error(message: &str) -> bool {
     let lower = message.to_lowercase();
     crate::ssh::is_connection_lost_message(message)
         || lower.contains("permission denied")
-        || lower.contains("failure")
-        || lower.contains("no such file")
         || lower.contains("already exists and overwrite is disabled")
         || lower.contains("failed to create directory")
 }
@@ -782,6 +887,56 @@ mod tests {
     }
 
     #[test]
+    fn backoff_delay_is_exponential_and_capped() {
+        // Jitter range is 50%..100% of the base delay:
+        // first retry 0.5-1s, second 1-2s, third 2-4s.
+        let d1 = backoff_delay_ms(1);
+        assert!(
+            (500..=1_000).contains(&d1),
+            "first retry delay should be 0.5-1s: {d1}ms"
+        );
+
+        let d2 = backoff_delay_ms(2);
+        assert!(
+            (1_000..=2_000).contains(&d2),
+            "second retry delay should be 1-2s: {d2}ms"
+        );
+
+        let d3 = backoff_delay_ms(3);
+        assert!(
+            (2_000..=4_000).contains(&d3),
+            "third retry delay should be 2-4s: {d3}ms"
+        );
+
+        for index in [8, 20, 100] {
+            let delay = backoff_delay_ms(index);
+            assert!(
+                (15_000..=30_000).contains(&delay),
+                "large retry indexes must be capped at 30s, got {delay}ms (index {index})"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_count_means_number_of_retries_not_attempts() {
+        // transfer_retry_count is stored verbatim for the retry loop to turn
+        // into `retry_count + 1` attempts.
+        let config_with_retries = AppConfig {
+            transfer_retry_count: 3,
+            ..AppConfig::default()
+        };
+        let manager = TransferManager::new(&config_with_retries);
+        assert_eq!(manager.retry_count, 3);
+
+        let config_zero = AppConfig {
+            transfer_retry_count: 0,
+            ..AppConfig::default()
+        };
+        let manager_zero = TransferManager::new(&config_zero);
+        assert_eq!(manager_zero.retry_count, 0);
+    }
+
+    #[test]
     fn cancel_unknown_task_returns_not_found() {
         let manager = TransferManager::new(&AppConfig::default());
         let err = manager.cancel_transfer(999).unwrap_err();
@@ -822,17 +977,50 @@ mod tests {
         assert!(is_non_retryable_transfer_error(
             "failed to upload '/a' to '/b': Permission denied"
         ));
-        assert!(is_non_retryable_transfer_error("SFTP failure"));
         assert!(is_non_retryable_transfer_error("connection reset"));
-        assert!(is_non_retryable_transfer_error(
-            "failed to upload '/a' to '/b': No such file: No such file"
-        ));
         assert!(is_non_retryable_transfer_error(
             "failed to create directory '/home/demo': Permission denied"
         ));
         assert!(is_non_retryable_transfer_error(
             "failed to upload '/a' to '/b': destination '/b' already exists and overwrite is disabled"
         ));
+
+        // A path containing the word "failure" must NOT be mistaken for a
+        // retryable-status failure (issue #308): the typed classifier uses
+        // status codes only, and the legacy message classifier no longer
+        // matches the bare word "failure" or "no such file".
+        assert!(!is_non_retryable_transfer_error(
+            "failed to upload '/home/Documents/failure-report.txt': timed out"
+        ));
+        assert!(!is_non_retryable_transfer_error("SFTP Failure"));
+    }
+
+    #[test]
+    fn typed_retryability_is_decided_by_status_code_not_message() {
+        // A generic SSH_FX_FAILURE (OpenSSH's "Failure") IS retryable.
+        assert!(!is_non_retryable_error(&SftpError::RemoteStatus {
+            code: RemoteStatusCode::Failure,
+            path: "/upload/file.txt".to_string(),
+        }));
+        // Typed non-retryable codes short-circuit regardless of message text.
+        assert!(is_non_retryable_error(&SftpError::RemoteStatus {
+            code: RemoteStatusCode::PermissionDenied,
+            path: "/upload/file.txt".to_string(),
+        }));
+        assert!(is_non_retryable_error(&SftpError::RemoteStatus {
+            code: RemoteStatusCode::NoSuchFile,
+            path: "/upload/missing.txt".to_string(),
+        }));
+        assert!(!is_non_retryable_error(&SftpError::RemoteStatus {
+            code: RemoteStatusCode::Failure,
+            path: "/Documents/failure.txt".to_string(),
+        }));
+        // UploadFailed wrapping a permission text remains non-retryable.
+        assert!(is_non_retryable_error(&SftpError::UploadFailed {
+            local: "/a".to_string(),
+            remote: "/b".to_string(),
+            message: "permission denied".to_string(),
+        }));
     }
 
     #[test]
@@ -1265,5 +1453,142 @@ mod tests {
             crate::sftp::test_server::list_partial_paths(local_dir.path()).is_empty(),
             "no partial files may remain"
         );
+    }
+
+    #[tokio::test]
+    async fn upload_retries_and_succeeds_after_one_write_failure() {
+        // Given: a manager configured for exactly one retry, no backoff delay,
+        // and a server whose first WRITE fails (one-shot).
+        let config = AppConfig {
+            transfer_retry_count: 1,
+            ..AppConfig::default()
+        };
+        let mut manager = TransferManager::new(&config);
+        manager.backoff_override_ms = Some(0);
+
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("retry.bin");
+        let payload = vec![0x5Au8; 512 * 1024];
+        tokio::fs::write(&local_path, &payload).await.unwrap();
+
+        server
+            .failures
+            .fail_remote_write
+            .store(true, Ordering::SeqCst);
+
+        // When: an upload task is enqueued; the first attempt fails mid-write,
+        // and the retry (with backoff) succeeds.
+        let task = manager
+            .enqueue_upload(&session, &local_path, "/upload/retry.bin")
+            .await
+            .expect("upload should succeed after one retry");
+
+        // Then: the task completes and the remote bytes match.
+        assert!(matches!(task.status, TransferStatus::Completed));
+        let remote_bytes = tokio::fs::read(server.root.join("upload/retry.bin"))
+            .await
+            .unwrap();
+        assert_eq!(remote_bytes, payload);
+    }
+
+    #[tokio::test]
+    async fn upload_retry_count_zero_does_not_retry() {
+        // Given: a manager with retries disabled and a server whose first
+        // WRITE fails.
+        let config = AppConfig {
+            transfer_retry_count: 0,
+            ..AppConfig::default()
+        };
+        let manager = TransferManager::new(&config);
+
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("no-retry.bin");
+        tokio::fs::write(&local_path, b"payload").await.unwrap();
+
+        server
+            .failures
+            .fail_remote_write
+            .store(true, Ordering::SeqCst);
+
+        // When: an upload task is enqueued with retries disabled
+        let task = manager
+            .enqueue_upload(&session, &local_path, "/upload/no-retry.bin")
+            .await
+            .expect_err("upload should fail without retries");
+
+        // Then: it fails with RetriesExhausted and exactly 1 attempt reported.
+        assert!(matches!(
+            task,
+            TransferError::RetriesExhausted { attempts: 1, .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn retry_sleep_aborts_when_cancelled_during_backoff() {
+        // Given: a manager with retries enabled, a server whose first WRITE
+        // fails (one-shot), and the real exponential backoff so the retry is
+        // still waiting when we cancel.
+        let config = AppConfig {
+            transfer_retry_count: 5,
+            ..AppConfig::default()
+        };
+        let manager = Arc::new(TransferManager::new(&config));
+
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("cancelled-retry.bin");
+        tokio::fs::write(&local_path, b"payload").await.unwrap();
+
+        server
+            .failures
+            .fail_remote_write
+            .store(true, Ordering::SeqCst);
+
+        // When: an upload task is spawned, then cancelled while it waits on
+        // the exponential backoff before retrying.
+        let manager_for_task = Arc::clone(&manager);
+        let upload = tokio::spawn(async move {
+            manager_for_task
+                .enqueue_upload(&session, &local_path, "/upload/cancelled-retry.bin")
+                .await
+        });
+
+        // Give the transfer a moment to fail the first write and enter the
+        // backoff sleep (first retry waits 0.5-1s without override), then
+        // cancel while it is sleeping.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let task_id = {
+            let tasks = manager.tasks.lock().unwrap();
+            tasks
+                .iter()
+                .find(|task| task.local_path.ends_with("cancelled-retry.bin"))
+                .map(|task| task.id)
+                .unwrap_or_else(|| panic!("task not found"))
+        };
+
+        let cancel_result = manager.cancel_transfer(task_id);
+        assert!(
+            cancel_result.is_ok(),
+            "task should be cancellable: {cancel_result:?}"
+        );
+
+        // Then: the spawned upload finishes with an error (cancelled at the
+        // next check boundary) and the task settles as Cancelled.
+        let result = upload.await.unwrap();
+        assert!(result.is_err(), "upload should not complete");
+        let status = manager
+            .tasks
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|task| task.id == task_id)
+            .map(|task| task.status.clone())
+            .unwrap();
+        assert_eq!(status, TransferStatus::Cancelled);
     }
 }

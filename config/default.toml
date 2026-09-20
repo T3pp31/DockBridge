@@ -21,3 +21,10 @@ fail_connect_on_openssh_merge_error = true
 directory_walk_max_files = 100000
 directory_walk_max_depth = 64
 directory_walk_max_total_bytes = 107374182400
+# Time with no SSH traffic before the session is considered dead (independent
+# of connection_timeout_secs, which budgets the TCP/SSH handshake). None
+# disables idle-based expiry.
+ssh_inactivity_timeout_secs = 600
+# Interval (seconds) between SSH keepalive packets so idle sessions survive
+# NAT/firewall timeouts without relying on the SFTP health checker.
+ssh_keepalive_interval_secs = 30
