@@ -60,6 +60,48 @@ final class MainViewModel: ObservableObject {
         return localTableItems.first { $0.id == id }
     }
 
+    var canShowInfoForFocusedPane: Bool {
+        switch focusedGoToPathPane {
+        case .local:
+            return selectedLocalTableItem?.isParentDirectory == false
+        case .remote:
+            return bridge.isConnected && selectedRemoteTableItem?.isParentDirectory == false
+        }
+    }
+
+    func showInfoForFocusedPane() async {
+        switch focusedGoToPathPane {
+        case .local:
+            guard let item = selectedLocalTableItem, !item.isParentDirectory else { return }
+            await showLocalInfo(item)
+        case .remote:
+            guard bridge.isConnected,
+                  let item = selectedRemoteTableItem,
+                  !item.isParentDirectory else { return }
+            showRemoteInfo(item)
+        }
+    }
+
+    func showLocalInfo(_ item: LocalFileItem) async {
+        localInfoLoadGeneration += 1
+        let generation = localInfoLoadGeneration
+        let url = item.url
+        let permissions = await Task.detached(priority: .userInitiated) {
+            LocalFileItem.posixPermissionsString(for: url)
+        }.value
+        guard generation == localInfoLoadGeneration else { return }
+        remoteInfoItem = nil
+        localInfoPermissions = permissions
+        localInfoItem = item
+    }
+
+    func showRemoteInfo(_ item: RemoteFileRecord) {
+        localInfoLoadGeneration += 1
+        localInfoItem = nil
+        localInfoPermissions = nil
+        remoteInfoItem = item
+    }
+
     var selectedConnectionProfile: ConnectionProfile? {
         guard let id = connectionList.selectedProfileID else { return nil }
         return connectionList.profiles.first { $0.id == id }
@@ -159,6 +201,10 @@ final class MainViewModel: ObservableObject {
     @Published var renameText = ""
     @Published var showMkdirPrompt = false
     @Published var mkdirName = ""
+    /// Item whose metadata is shown in the Get Info sheet (⌘I).
+    @Published var localInfoItem: LocalFileItem? = nil
+    @Published var localInfoPermissions: String?
+    @Published var remoteInfoItem: RemoteFileRecord? = nil
     // Local pane operations (Issue #341)
     @Published var localRenameTarget: LocalFileItem? = nil
     @Published var localRenameText = ""
@@ -186,6 +232,7 @@ final class MainViewModel: ObservableObject {
     private let bookmarkService: SecurityScopedBookmarkService
     private let pathBookmarkStore: PathBookmarkStore
     private let trashLocalItemOperation: @Sendable (URL) throws -> Void
+    private var localInfoLoadGeneration = 0
     private var defaultLocalAccessURL: URL?
     private var pathBookmarkAccessURL: URL?
     private var localLoadGeneration = 0

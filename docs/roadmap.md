@@ -18,7 +18,8 @@
 - [ ] Security: Enable Developer ID signing and notarization for release DMGs; see [security.md](security.md#code-signing-and-distribution)
 - [ ] External editor integration (#361)
 - [ ] Auto-upload on save (part of #361)
-- [ ] chmod / permissions UI (#363)
+- [x] Get Info sheets for local and remote entries (#363)
+- [ ] chmod / permissions editing UI (#363)
 - [ ] Symbolic link display & navigation (#300)
 
 ## v0.3

@@ -51,6 +51,9 @@ struct LocalPaneView: View {
                                 Button("Reveal in Finder") {
                                     NSWorkspace.shared.activateFileViewerSelecting([item.url])
                                 }
+                                Button("Get Info") {
+                                    Task { await viewModel.showLocalInfo(item) }
+                                }
                                 if !item.isParentDirectory {
                                     Button("Rename") {
                                         viewModel.beginLocalRename(item: item)
@@ -109,6 +112,20 @@ struct LocalPaneView: View {
         }
         .task(id: viewModel.localPath) {
             viewModel.reloadLocal()
+        }
+        .sheet(item: $viewModel.localInfoItem) { item in
+            GetInfoSheet(
+                title: "Info — \(item.name)",
+                rows: [
+                    ("Path", item.url.path),
+                    ("Kind", item.isDirectory ? "Folder" : "File"),
+                    ("Size", ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)),
+                    ("Modified", item.modificationDate.map {
+                        DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .medium)
+                    } ?? "—"),
+                    ("Permissions", viewModel.localInfoPermissions ?? "—"),
+                ]
+            )
         }
         .sheet(isPresented: Binding(
             get: { viewModel.localRenameTarget != nil },

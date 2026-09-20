@@ -67,6 +67,12 @@ struct MainViewCommands: Commands {
         }
 
         CommandGroup(after: .saveItem) {
+            Button("Get Info") {
+                Task { await viewModel.showInfoForFocusedPane() }
+            }
+            .keyboardShortcut("i", modifiers: [.command])
+            .disabled(!viewModel.canShowInfoForFocusedPane)
+
             Button("Refresh") {
                 viewModel.reloadLocal()
                 Task { await viewModel.reloadRemote() }
