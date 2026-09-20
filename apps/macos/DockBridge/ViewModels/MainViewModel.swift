@@ -166,7 +166,7 @@ final class MainViewModel: ObservableObject {
     private var overwriteAskContinuation: CheckedContinuation<Bool, Never>?
     @Published private(set) var pathBookmarks: [PathBookmark] = []
 
-    let bridge: RustBridgeService
+    let bridge: any RemoteBridging
     let connectionList: ConnectionListViewModel
     let transferQueue: TransferQueueViewModel
 
@@ -197,7 +197,7 @@ final class MainViewModel: ObservableObject {
         settings: AppSettingsService = .shared,
         bookmarkService: SecurityScopedBookmarkService = .shared,
         pathBookmarkStore: PathBookmarkStore = .shared,
-        bridge: RustBridgeService,
+        bridge: any RemoteBridging,
         connectionList: ConnectionListViewModel,
         transferQueue: TransferQueueViewModel
     ) {

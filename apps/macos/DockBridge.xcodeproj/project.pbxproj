@@ -23,6 +23,7 @@
 		EBE6C0D78C1B9D2DFB9E66B6 /* HostKeyStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */; };
 		6B644EEA7799402A90D59AAA /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */; };
 		14A839F4D61A1075B5ACF82D /* RustBridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */; };
+		R3M0T3BR1DG1NG5W1FT3BF1 /* RemoteBridging.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3M0T3BR1DG1NG5W1FT3RC2 /* RemoteBridging.swift */; };
 		9207DDB127B46575474EC6F5 /* ConnectionListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00EBFBF60D5CB33F46A53DF /* ConnectionListViewModel.swift */; };
 		67E6AD45895AF44CA96D83BB /* MainViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C973CCD1AFF29E5BC535CC /* MainViewModel.swift */; };
 		5061A717EBE8AB1160ED99D1 /* TransferQueueViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD683D1BCC635FB229692D63 /* TransferQueueViewModel.swift */; };
@@ -77,6 +78,8 @@
 		H0STK3YPR0MPTV3R1F1C4T5 /* HostKeyPromptVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = H0STK3YPR0MPTV3R1F1C4T6 /* HostKeyPromptVerificationTests.swift */; };
 		H0STK3YC0NF1RMV13WT3ST5 /* HostKeyConfirmViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = H0STK3YC0NF1RMV13WT3ST6 /* HostKeyConfirmViewTests.swift */; };
 		R3M0T3P4N3SH33T3ST5 /* RemotePaneSheetsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = R3M0T3P4N3SH33T3ST1 /* RemotePaneSheetsTests.swift */; };
+		F4K3BR1DG3F1L3BF1 /* FakeBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4K3BR1DG3F1L3R3F /* FakeBridge.swift */; };
+		MA1NVM4V14B1L1T4C1BF1 /* MainViewModelTestabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = MA1NVM4V14B1L1T4C1R3F /* MainViewModelTestabilityTests.swift */; };
 		D5R0P0P3R4T10N5Y5N0C1N5RC /* DropOperationSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */; };
 		T7R4N5F3R0P4R0G3F0RM4T3RC /* TransferProgressFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = T7R4N5F3R0P4R0G3F0RM4T3RD /* TransferProgressFormatter.swift */; };
 		T7R4N5F3R0P4R0G3F0RM4T3TS /* TransferProgressFormatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = T7R4N5F3R0P4R0G3F0RM4T3TS5 /* TransferProgressFormatterTests.swift */; };
@@ -128,6 +131,7 @@
 		FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyStore.swift; sourceTree = "<group>"; };
 		6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridgeService.swift; sourceTree = "<group>"; };
+		R3M0T3BR1DG1NG5W1FT3RC2 /* RemoteBridging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteBridging.swift; sourceTree = "<group>"; };
 		D00EBFBF60D5CB33F46A53DF /* ConnectionListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionListViewModel.swift; sourceTree = "<group>"; };
 		29C973CCD1AFF29E5BC535CC /* MainViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewModel.swift; sourceTree = "<group>"; };
 		CD683D1BCC635FB229692D63 /* TransferQueueViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferQueueViewModel.swift; sourceTree = "<group>"; };
@@ -194,6 +198,8 @@
 		H0STK3YPR0MPTV3R1F1C4T6 /* HostKeyPromptVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyPromptVerificationTests.swift; sourceTree = "<group>"; };
 		H0STK3YC0NF1RMV13WT3ST6 /* HostKeyConfirmViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyConfirmViewTests.swift; sourceTree = "<group>"; };
 		R3M0T3P4N3SH33T3ST1 /* RemotePaneSheetsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePaneSheetsTests.swift; sourceTree = "<group>"; };
+		F4K3BR1DG3F1L3R3F /* FakeBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeBridge.swift; sourceTree = "<group>"; };
+		MA1NVM4V14B1L1T4C1R3F /* MainViewModelTestabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewModelTestabilityTests.swift; sourceTree = "<group>"; };
 		D5R0P0P3R4T10N5Y5N0C1N5RD /* DropOperationSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropOperationSync.swift; sourceTree = "<group>"; };
 		T7R4N5F3R0P4R0G3F0RM4T3RD /* TransferProgressFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferProgressFormatter.swift; sourceTree = "<group>"; };
 		T7R4N5F3R0P4R0G3F0RM4T3TS5 /* TransferProgressFormatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferProgressFormatterTests.swift; sourceTree = "<group>"; };
@@ -400,6 +406,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				FB89AD68E827E020A07FF4A0 /* HostKeyStore.swift */,
 				6675DBE2C22A3DD9D8AD000A /* KeychainService.swift */,
 				5E4FB742B8B0BB716DAA4F7A /* RustBridgeService.swift */,
+				R3M0T3BR1DG1NG5W1FT3RC2 /* RemoteBridging.swift */,
 				S3C8K0P3B00KM4RKS3RV1C3SW2 /* SecurityScopedBookmarkService.swift */,
 				SECUREL0CALF1LERE4D3R1N5RC2 /* SecureLocalFileReader.swift */,
 				V3R5C0MP4R4T0R5W1FT3RC1 /* VersionComparator.swift */,
@@ -489,6 +496,8 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				H0STK3YPR0MPTV3R1F1C4T6 /* HostKeyPromptVerificationTests.swift */,
 				H0STK3YC0NF1RMV13WT3ST6 /* HostKeyConfirmViewTests.swift */,
 				R3M0T3P4N3SH33T3ST1 /* RemotePaneSheetsTests.swift */,
+				F4K3BR1DG3F1L3R3F /* FakeBridge.swift */,
+				MA1NVM4V14B1L1T4C1R3F /* MainViewModelTestabilityTests.swift */,
 				S3C8K0P3B00KM4RKS3RV1C3T2 /* SecurityScopedBookmarkServiceTests.swift */,
 				S3NS1T1V3STR1NGT3ST5RC2 /* SensitiveStringTests.swift */,
 				UPD4T3CH3CKV13WT3ST5RC1 /* UpdateCheckViewModelTests.swift */,
@@ -646,6 +655,7 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				EBE6C0D78C1B9D2DFB9E66B6 /* HostKeyStore.swift in Sources */,
 				6B644EEA7799402A90D59AAA /* KeychainService.swift in Sources */,
 				14A839F4D61A1075B5ACF82D /* RustBridgeService.swift in Sources */,
+				R3M0T3BR1DG1NG5W1FT3BF1 /* RemoteBridging.swift in Sources */,
 				S3C8K0P3B00KM4RKS3RV1C3SW1 /* SecurityScopedBookmarkService.swift in Sources */,
 				SECUREL0CALF1LERE4D3R1N5RC1 /* SecureLocalFileReader.swift in Sources */,
 				9207DDB127B46575474EC6F5 /* ConnectionListViewModel.swift in Sources */,
@@ -730,6 +740,8 @@ MA1NV13W1CMD5W1FT3RC1 /* MainViewCommands.swift */,
 				H0STK3YPR0MPTV3R1F1C4T5 /* HostKeyPromptVerificationTests.swift in Sources */,
 				H0STK3YC0NF1RMV13WT3ST5 /* HostKeyConfirmViewTests.swift in Sources */,
 				R3M0T3P4N3SH33T3ST5 /* RemotePaneSheetsTests.swift in Sources */,
+				F4K3BR1DG3F1L3BF1 /* FakeBridge.swift in Sources */,
+				MA1NVM4V14B1L1T4C1BF1 /* MainViewModelTestabilityTests.swift in Sources */,
 				S3C8K0P3B00KM4RKS3RV1C3T1 /* SecurityScopedBookmarkServiceTests.swift in Sources */,
 				S3NS1T1V3STR1NGT3ST5RC1 /* SensitiveStringTests.swift in Sources */,
 				UPD4T3CH3CKV13WT3ST5BF1 /* UpdateCheckViewModelTests.swift in Sources */,
