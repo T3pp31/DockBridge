@@ -33,8 +33,8 @@ struct DockBridgeApp: App {
             )
         }
         .defaultSize(
-            width: WindowLayout.mainMinWidth,
-            height: WindowLayout.mainMinHeight
+            width: WindowLayout.mainDefaultWidth,
+            height: WindowLayout.mainDefaultHeight
         )
         .commands {
             MainViewCommands(
@@ -45,7 +45,9 @@ struct DockBridgeApp: App {
         }
 
         Settings {
-            SettingsView(config: settingsConfig) { config in
+            SettingsView(
+                config: AppSettingsService.shared.loadConfig()
+            ) { config in
                 AppSettingsService.shared.saveConfig(config)
                 settingsConfig = config
             }
