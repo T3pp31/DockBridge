@@ -293,6 +293,19 @@ cargo install cargo-cyclonedx --version "$(awk -F'"' '/^cargo_cyclonedx_version 
 
 Swift/SPM dependencies are not included (the macOS app has no SPM packages).
 
+### Supply chain provenance (attestation)
+
+Starting with releases built from this repo, the DMG, CLI binary and SBOM are
+attested with [GitHub attestations](https://docs.github.com/en/actions/security-for-github-actions/supply-chain-security-for-github-actions)
+via `actions/attest-build-provenance`. Verify a downloaded artifact against the
+repository:
+
+```bash
+gh attestation verify DockBridge-<version>-macOS.dmg --repo T3pp31/DockBridge
+gh attestation verify dockbridge-<version>-macOS --repo T3pp31/DockBridge
+gh attestation verify DockBridge-<version>.cdx.json --repo T3pp31/DockBridge
+```
+
 ### Response workflow when a vulnerability is detected
 
 1. **Triage** — Read the advisory (ID, CVSS severity, affected crate/version, upstream fix).
