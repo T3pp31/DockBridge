@@ -52,6 +52,17 @@ pub enum HostKeyCheckResult {
     },
 }
 
+/// Health of the known hosts trust store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KnownHostsStatus {
+    /// The store was loaded or created successfully and is writable.
+    Available,
+    /// The store could not be read (corrupt JSON, insecure permissions, etc.).
+    /// The manager operates with an in-memory snapshot; `reason` explains how
+    /// to recover (repair permissions or recreate the file).
+    Unavailable { reason: String },
+}
+
 /// An alternate host identifier associated with a trusted key entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostAlias {
@@ -103,27 +114,34 @@ pub struct HashedHostEntry {
 }
 
 /// Manages trusted host keys in a DockBridge-specific JSON store.
+///
+/// When the underlying file cannot be read (e.g. corrupt JSON or drifted
+/// permissions), the manager can still be constructed empty via
+/// [`KnownHostsManager::load_or_empty`], keeping the app operable while
+/// remembering why the store is unavailable so the UI can surface recovery
+/// steps.
 #[derive(Debug, Clone)]
 pub struct KnownHostsManager {
     path: PathBuf,
     entries: HashMap<String, KnownHostEntry>,
     hashed_entries: Vec<HashedHostEntry>,
+    unavailable_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct KnownHostEntry {
-    host: String,
-    port: u16,
-    fingerprint_sha256: String,
-    algorithm: String,
+pub struct KnownHostEntry {
+    pub host: String,
+    pub port: u16,
+    pub fingerprint_sha256: String,
+    pub algorithm: String,
     #[serde(default)]
-    aliases: Vec<HostAlias>,
+    pub aliases: Vec<HostAlias>,
     #[serde(default)]
-    excluded_aliases: Vec<HostAlias>,
+    pub excluded_aliases: Vec<HostAlias>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    public_key_openssh: Option<String>,
+    pub public_key_openssh: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    marker: Option<KnownHostMarker>,
+    pub marker: Option<KnownHostMarker>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -142,7 +160,155 @@ impl KnownHostsManager {
             path,
             entries,
             hashed_entries,
+            unavailable_reason: None,
         })
+    }
+
+    /// Creates a manager, falling back to an empty in-memory store when the
+    /// on-disk store cannot be read. The failure reason is retained so callers
+    /// can surface recovery steps through [`KnownHostsManager::status`].
+    pub fn load_or_empty(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        match Self::load(&path) {
+            Ok(manager) => manager,
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "known_hosts store unreadable; continuing with empty in-memory store"
+                );
+                Self {
+                    path,
+                    entries: HashMap::new(),
+                    hashed_entries: Vec::new(),
+                    unavailable_reason: Some(err.to_string()),
+                }
+            }
+        }
+    }
+
+    /// Returns the current health of the trust store.
+    pub fn status(&self) -> KnownHostsStatus {
+        match &self.unavailable_reason {
+            Some(reason) => KnownHostsStatus::Unavailable {
+                reason: reason.clone(),
+            },
+            None => KnownHostsStatus::Available,
+        }
+    }
+
+    /// Returns a snapshot of the stored host key entries.
+    pub fn entries(&self) -> Vec<KnownHostEntry> {
+        let mut entries: Vec<_> = self.entries.values().cloned().collect();
+        entries.sort_by(|left, right| {
+            left.host
+                .cmp(&right.host)
+                .then_with(|| left.port.cmp(&right.port))
+        });
+        entries
+    }
+
+    /// Removes every host identifier of an entry that matches (host, port) and
+    /// persists the change. Returns `false` when no entry matched.
+    ///
+    /// When the removed host is the canonical host, the first remaining alias
+    /// is promoted to canonical (mirroring the accept-changed-key detach logic).
+    pub fn remove(&mut self, host: &str, port: u16) -> Result<bool, SecurityError> {
+        let _store_lock = acquire_store_lock(&self.path)?;
+        self.reload_for_update()?;
+
+        let Some(canonical_key) = self.entries.iter().find_map(|(key, entry)| {
+            if entry_matches_host(entry, host, port) {
+                Some(key.clone())
+            } else {
+                None
+            }
+        }) else {
+            return Ok(false);
+        };
+
+        let Some(mut entry) = self.entries.remove(&canonical_key) else {
+            return Ok(false);
+        };
+        let host_is_canonical = entry.host.eq_ignore_ascii_case(host) && entry.port == port;
+        let mut remaining: Vec<HostAlias> = entry
+            .aliases
+            .drain(..)
+            .filter(|alias| !(alias.host.eq_ignore_ascii_case(host) && alias.port == port))
+            .collect();
+
+        if host_is_canonical {
+            // Promote the first remaining alias to canonical so the other hosts
+            // keep their trust. When no aliases remain the old entry is dropped.
+            if let Some(index) = remaining
+                .iter()
+                .position(|alias| !entry_is_excluded_for_host(&entry, &alias.host, alias.port))
+            {
+                let promoted = remaining.remove(index);
+                entry.host = promoted.host.to_ascii_lowercase();
+                entry.port = promoted.port;
+                entry.aliases = remaining;
+                entry.excluded_aliases.retain(|excluded| {
+                    !(excluded.host.eq_ignore_ascii_case(&entry.host)
+                        && excluded.port == entry.port)
+                });
+                self.entries
+                    .insert(entry_key(&entry.host, entry.port), entry);
+            }
+        } else {
+            entry.aliases = remaining;
+            let entry = normalize_entry_case(entry);
+            self.entries
+                .insert(entry_key(&entry.host, entry.port), entry);
+        }
+
+        self.persist()?;
+        Ok(true)
+    }
+
+    /// Resets the store, optionally backing up the current file first.
+    ///
+    /// When `backup` is `true`, the current file is copied to
+    /// `known_hosts.json.bak` before the store is replaced with an empty one.
+    /// Missing files are treated as a successful reset with no backup.
+    pub fn reset(&mut self, backup: bool) -> Result<(), SecurityError> {
+        let _store_lock = acquire_store_lock(&self.path)?;
+        if backup {
+            backup_store_if_present(&self.path)?;
+        }
+        self.entries.clear();
+        self.hashed_entries.clear();
+        self.persist()?;
+        self.unavailable_reason = None;
+        Ok(())
+    }
+
+    /// Repairs owner-only permissions where supported and reloads the store.
+    /// A missing store is recreated empty. Malformed contents remain
+    /// unavailable and must be recovered with [`KnownHostsManager::reset`].
+    pub fn repair_permissions(&mut self) -> Result<(), SecurityError> {
+        let _store_lock = acquire_store_lock(&self.path)?;
+
+        match fs::symlink_metadata(&self.path) {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                self.entries.clear();
+                self.hashed_entries.clear();
+                self.persist()?;
+            }
+            Err(err) => {
+                return Err(SecurityError::KnownHostsWriteFailed {
+                    path: self.path.display().to_string(),
+                    message: err.to_string(),
+                });
+            }
+            Ok(_) => {
+                repair_store_permissions(&self.path)?;
+                self.reload_for_update()?;
+            }
+        }
+
+        self.unavailable_reason = None;
+        Ok(())
     }
 
     /// Returns the store path.
@@ -200,6 +366,7 @@ impl KnownHostsManager {
         let (entries, hashed_entries) = load_store_contents(&self.path)?;
         self.entries = entries;
         self.hashed_entries = hashed_entries;
+        self.unavailable_reason = None;
         Ok(())
     }
 
@@ -956,6 +1123,163 @@ fn acquire_store_lock(path: &Path) -> Result<File, SecurityError> {
     Ok(file)
 }
 
+fn backup_store_if_present(path: &Path) -> Result<Option<PathBuf>, SecurityError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(SecurityError::KnownHostsReadFailed {
+                path: path.display().to_string(),
+                message: err.to_string(),
+            });
+        }
+        Ok(metadata) => metadata,
+    };
+    if !metadata.is_file() {
+        return Err(SecurityError::KnownHostsReadFailed {
+            path: path.display().to_string(),
+            message: "known hosts store is not a regular file".to_string(),
+        });
+    }
+    if metadata.len() > MAX_KNOWN_HOSTS_FILE_BYTES {
+        return Err(SecurityError::KnownHostsReadFailed {
+            path: path.display().to_string(),
+            message: "known hosts file is too large to back up".to_string(),
+        });
+    }
+
+    let mut source_options = OpenOptions::new();
+    source_options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        source_options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut source =
+        source_options
+            .open(path)
+            .map_err(|err| SecurityError::KnownHostsReadFailed {
+                path: path.display().to_string(),
+                message: err.to_string(),
+            })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let source_metadata =
+            source
+                .metadata()
+                .map_err(|err| SecurityError::KnownHostsReadFailed {
+                    path: path.display().to_string(),
+                    message: err.to_string(),
+                })?;
+        let effective_uid = unsafe { libc::geteuid() };
+        if source_metadata.uid() != effective_uid {
+            return Err(SecurityError::KnownHostsReadFailed {
+                path: path.display().to_string(),
+                message: format!(
+                    "owner uid {} does not match effective uid {effective_uid}",
+                    source_metadata.uid()
+                ),
+            });
+        }
+    }
+
+    let mut suffix = 0_u64;
+    let (backup_path, mut backup_file) = loop {
+        let candidate = backup_path_for(path, suffix);
+        match open_exclusive_local_file_sync(&candidate) {
+            Ok(file) => break (candidate, file),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                suffix =
+                    suffix
+                        .checked_add(1)
+                        .ok_or_else(|| SecurityError::KnownHostsWriteFailed {
+                            path: path.display().to_string(),
+                            message: "exhausted known hosts backup suffixes".to_string(),
+                        })?;
+            }
+            Err(err) => {
+                return Err(SecurityError::KnownHostsWriteFailed {
+                    path: candidate.display().to_string(),
+                    message: err.to_string(),
+                });
+            }
+        }
+    };
+
+    if let Err(err) =
+        std::io::copy(&mut source, &mut backup_file).and_then(|_| backup_file.sync_all())
+    {
+        let _ = fs::remove_file(&backup_path);
+        return Err(SecurityError::KnownHostsWriteFailed {
+            path: backup_path.display().to_string(),
+            message: err.to_string(),
+        });
+    }
+
+    Ok(Some(backup_path))
+}
+
+#[cfg(unix)]
+fn repair_store_permissions(path: &Path) -> Result<(), SecurityError> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+    let path_string = path.display().to_string();
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|err| SecurityError::KnownHostsWriteFailed {
+            path: path_string.clone(),
+            message: format!("failed to open known hosts store for permission repair: {err}"),
+        })?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| SecurityError::KnownHostsWriteFailed {
+            path: path_string.clone(),
+            message: err.to_string(),
+        })?;
+    if !metadata.is_file() {
+        return Err(SecurityError::KnownHostsWriteFailed {
+            path: path_string,
+            message: "known hosts store is not a regular file".to_string(),
+        });
+    }
+    let effective_uid = unsafe { libc::geteuid() };
+    if metadata.uid() != effective_uid {
+        return Err(SecurityError::KnownHostsWriteFailed {
+            path: path_string.clone(),
+            message: format!(
+                "owner uid {} does not match effective uid {effective_uid}",
+                metadata.uid()
+            ),
+        });
+    }
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|err| SecurityError::KnownHostsWriteFailed {
+            path: path_string,
+            message: format!("failed to repair known hosts permissions: {err}"),
+        })
+}
+
+#[cfg(not(unix))]
+fn repair_store_permissions(path: &Path) -> Result<(), SecurityError> {
+    let metadata =
+        fs::symlink_metadata(path).map_err(|err| SecurityError::KnownHostsWriteFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        })?;
+    if metadata.is_file() {
+        Ok(())
+    } else {
+        Err(SecurityError::KnownHostsWriteFailed {
+            path: path.display().to_string(),
+            message: "known hosts store is not a regular file".to_string(),
+        })
+    }
+}
+
 fn fingerprint_check(entry: &KnownHostEntry, actual: &str) -> HostKeyCheckResult {
     if fingerprints_match(&entry.fingerprint_sha256, actual) {
         HostKeyCheckResult::Trust
@@ -1021,6 +1345,17 @@ fn merge_excluded_aliases(entry: &mut KnownHostEntry, excluded: &[HostAlias]) ->
 
 fn entry_key(host: &str, port: u16) -> String {
     format!("{}:{port}", host.to_ascii_lowercase())
+}
+
+/// Returns the sibling backup path for a known hosts store file
+/// (`<file>.bak`, then `<file>.bak.1`, ...), used by `reset(backup: true)`.
+fn backup_path_for(path: &Path, suffix: u64) -> PathBuf {
+    let mut os = path.as_os_str().to_owned();
+    os.push(".bak");
+    if suffix > 0 {
+        os.push(format!(".{suffix}"));
+    }
+    PathBuf::from(os)
 }
 
 /// Lowercases a stored entry's host identifiers so lookups are case-insensitive,
@@ -1330,6 +1665,11 @@ fn open_exclusive_local_file_sync(path: &Path) -> std::io::Result<std::fs::File>
     options.create_new(true).write(true).mode(0o600);
     options.custom_flags(libc::O_NOFOLLOW);
     options.open(path)
+}
+
+#[cfg(not(unix))]
+fn open_exclusive_local_file_sync(path: &Path) -> std::io::Result<std::fs::File> {
+    OpenOptions::new().create_new(true).write(true).open(path)
 }
 
 #[cfg(unix)]
@@ -3187,6 +3527,78 @@ mod tests {
         assert!(!fingerprints_match("SHA256:abc", "SHA256:ab"));
         assert!(fingerprints_match("", ""));
     }
+    #[test]
+    fn load_or_empty_keeps_operable_when_store_is_corrupt() {
+        // Given: a store file with corrupt JSON
+        // When: load_or_empty is used
+        // Then: an empty operable manager is returned with Unavailable status
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        write_test_file_mode_0600(&path, "not valid json");
+
+        let manager = KnownHostsManager::load_or_empty(&path);
+        match manager.status() {
+            KnownHostsStatus::Unavailable { reason } => {
+                assert!(!reason.is_empty(), "expected a recovery reason");
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+        // The app can still ask about hosts (all Unknown) without panicking.
+        let result = manager.check_host_key("example.com", 22, &test_public_key(), false);
+        assert!(matches!(result, HostKeyCheckResult::Unknown));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_or_empty_reports_insecure_permissions() {
+        // Given: a store file with insecure (0644) permissions
+        // When: load_or_empty is used
+        // Then: status reports Unavailable with a permission-related reason
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        write_test_file_mode_0600(&path, r#"{"entries":[],"hashed_entries":[]}"#);
+        set_test_file_mode(&path, 0o644);
+
+        let manager = KnownHostsManager::load_or_empty(&path);
+        match manager.status() {
+            KnownHostsStatus::Unavailable { reason } => {
+                assert!(
+                    reason.contains("insecure permissions"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remove_forgets_host_and_persists() {
+        // Given: a trusted host
+        // When: remove is called for it
+        // Then: it is no longer trusted and the change is persisted
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Trust
+        );
+
+        assert!(manager.remove("example.com", 22).unwrap());
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Unknown
+        );
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Unknown
+        );
+    }
 
     #[test]
     fn locked_updates_preserve_entries_written_by_another_instance() {
@@ -3268,6 +3680,61 @@ mod tests {
     }
 
     #[test]
+    fn remove_of_missing_host_returns_false() {
+        // Given: an empty store
+        // When: remove is called for a nonexistent host
+        // Then: false is returned without error
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        assert!(!manager.remove("example.com", 22).unwrap());
+    }
+
+    #[test]
+    fn reset_with_backup_creates_bak_and_clears_store() {
+        // Given: a store with one trusted host
+        // When: reset(backup: true) is called
+        // Then: a .bak file exists and the store is empty
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+        let original = fs::read(&path).unwrap();
+
+        manager.reset(true).unwrap();
+
+        assert_eq!(fs::read(backup_path_for(&path, 0)).unwrap(), original);
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, false),
+            HostKeyCheckResult::Unknown
+        );
+        assert!(KnownHostsManager::load(&path).unwrap().entries().is_empty());
+    }
+
+    #[test]
+    fn reset_recovers_corrupt_store_and_preserves_backup() {
+        // Given: a corrupt store loaded through the recovery path
+        // When: reset with backup is requested
+        // Then: the original bytes are preserved and a valid empty store replaces them
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let corrupt_contents = b"{not valid json";
+        write_test_file_mode_0600(&path, corrupt_contents);
+        let mut manager = KnownHostsManager::load_or_empty(&path);
+
+        manager.reset(true).unwrap();
+
+        assert_eq!(
+            fs::read(backup_path_for(&path, 0)).unwrap(),
+            corrupt_contents
+        );
+        assert_eq!(manager.status(), KnownHostsStatus::Available);
+        assert!(KnownHostsManager::load(&path).unwrap().entries().is_empty());
+    }
+
+    #[test]
     fn corrupted_external_update_is_not_overwritten() {
         // Given: a manager with stale state and a store corrupted externally
         // When: the manager attempts another mutation
@@ -3288,6 +3755,129 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, SecurityError::KnownHostsReadFailed { .. }));
         assert_eq!(fs::read(&path).unwrap(), corrupt_contents);
+    }
+
+    #[test]
+    fn remove_canonical_promotes_alias_and_persists() {
+        // Given: one key trusted for a canonical host and an alias
+        // When: the canonical host is removed
+        // Then: the alias is promoted and remains trusted after reload
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("canonical.example.com", 22, &key)
+            .unwrap();
+        manager
+            .accept_host_key("alias.example.com", 22, &key)
+            .unwrap();
+
+        assert!(manager.remove("canonical.example.com", 22).unwrap());
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(
+            reloaded.check_host_key("canonical.example.com", 22, &key, true),
+            HostKeyCheckResult::Unknown
+        );
+        assert_eq!(
+            reloaded.check_host_key("alias.example.com", 22, &key, true),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(reloaded.entries()[0].host, "alias.example.com");
+    }
+
+    #[test]
+    fn reset_backup_does_not_overwrite_existing_backup() {
+        // Given: an existing backup from a previous reset
+        // When: reset with backup is requested again
+        // Then: a numbered backup preserves both snapshots
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("first.example.com", 22, &test_public_key())
+            .unwrap();
+        let first_snapshot = fs::read(&path).unwrap();
+        manager.reset(true).unwrap();
+
+        manager
+            .accept_host_key("second.example.com", 22, &test_public_key())
+            .unwrap();
+        let second_snapshot = fs::read(&path).unwrap();
+        manager.reset(true).unwrap();
+
+        assert_eq!(fs::read(backup_path_for(&path, 0)).unwrap(), first_snapshot);
+        assert_eq!(
+            fs::read(backup_path_for(&path, 1)).unwrap(),
+            second_snapshot
+        );
+    }
+
+    #[test]
+    fn entries_are_sorted_by_host_and_port() {
+        // Given: entries inserted in reverse display order
+        // When: a snapshot is requested
+        // Then: the order is stable for UI consumers
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("beta.example.com", 22, &test_public_key())
+            .unwrap();
+        manager
+            .accept_host_key("alpha.example.com", 22, &test_public_key())
+            .unwrap();
+
+        let hosts: Vec<_> = manager
+            .entries()
+            .into_iter()
+            .map(|entry| entry.host)
+            .collect();
+        assert_eq!(hosts, ["alpha.example.com", "beta.example.com"]);
+    }
+
+    #[test]
+    fn repair_permissions_recreates_missing_store() {
+        // Given: a recovery manager whose store file does not exist
+        // When: permissions repair is requested
+        // Then: a valid empty store is created and reported available
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let mut manager = KnownHostsManager::load_or_empty(&path);
+
+        manager.repair_permissions().unwrap();
+
+        assert_eq!(manager.status(), KnownHostsStatus::Available);
+        assert!(path.is_file());
+        assert!(KnownHostsManager::load(&path).unwrap().entries().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_permissions_reloads_existing_entries() {
+        // Given: a valid store whose permissions drifted
+        // When: permissions are repaired
+        // Then: status and the in-memory snapshot become available again
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let mut writer = KnownHostsManager::load(&path).unwrap();
+        writer.accept_host_key("example.com", 22, &key).unwrap();
+        set_test_file_mode(&path, 0o644);
+
+        let mut manager = KnownHostsManager::load_or_empty(&path);
+        assert!(matches!(
+            manager.status(),
+            KnownHostsStatus::Unavailable { .. }
+        ));
+        manager.repair_permissions().unwrap();
+
+        assert_eq!(manager.status(), KnownHostsStatus::Available);
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &key, true),
+            HostKeyCheckResult::Trust
+        );
     }
 
     #[test]

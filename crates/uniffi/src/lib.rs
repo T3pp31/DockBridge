@@ -13,8 +13,9 @@ use dockbridge_core::{
     ensure_known_hosts_parent, expand_tilde,
     inspect_private_key_algorithm as core_inspect_private_key_algorithm,
     is_connection_lost_message, u64_to_usize_or_invalid, AppConfig, AuthType, ConnectionProfile,
-    HostKeyPrompt, KnownHostsManager, PrivateKeyAlgorithm, RemoteFile, SecretPassword, SftpClient,
-    SshSession, TransferDirection, TransferManager, TransferStatus, TransferTask,
+    HostKeyPrompt, KnownHostEntry, KnownHostsManager, KnownHostsStatus, PrivateKeyAlgorithm,
+    RemoteFile, SecretPassword, SftpClient, SshSession, TransferDirection, TransferManager,
+    TransferStatus, TransferTask,
 };
 #[cfg(test)]
 use dockbridge_core::{
@@ -165,6 +166,32 @@ pub struct HostKeyChallenge {
     pub expected_fingerprint_sha256: Option<String>,
 }
 
+/// Health of the known hosts trust store exposed to Swift.
+#[derive(uniffi::Enum)]
+pub enum KnownHostsStatusRecord {
+    Available,
+    Unavailable { reason: String },
+}
+
+/// A host identifier attached to a trusted key entry.
+#[derive(uniffi::Record)]
+pub struct KnownHostAliasRecord {
+    pub host: String,
+    pub port: u16,
+}
+
+/// Snapshot of a stored host key entry exposed to Swift.
+#[derive(uniffi::Record)]
+pub struct KnownHostEntryRecord {
+    pub host: String,
+    pub port: u16,
+    pub fingerprint_sha256: String,
+    pub algorithm: String,
+    pub aliases: Vec<KnownHostAliasRecord>,
+    pub excluded_aliases: Vec<KnownHostAliasRecord>,
+    pub public_key_openssh: Option<String>,
+}
+
 /// Flat error type exposed to Swift.
 #[derive(Debug, Clone, uniffi::Error)]
 #[uniffi(flat_error)]
@@ -274,8 +301,10 @@ impl DockBridgeClient {
         }
         .validate()
         .map_err(map_error)?;
-        let known_hosts_manager =
-            KnownHostsManager::load(config.known_hosts_path()).map_err(map_error)?;
+        // Keep the app operable when the trust store is corrupt or its
+        // permissions drift. The failure reason remains available through
+        // `known_hosts_status` until repair or reset succeeds.
+        let known_hosts_manager = KnownHostsManager::load_or_empty(config.known_hosts_path());
 
         Ok(Arc::new(Self {
             transfer_manager: Arc::new(TransferManager::new(&config)),
@@ -318,6 +347,39 @@ impl DockBridgeClient {
 
     fn disconnect(&self, session_id: u64) -> Result<(), DockBridgeError> {
         self.remove_session(session_id, false, String::new())
+    }
+
+    fn known_hosts_status(&self) -> KnownHostsStatusRecord {
+        let known_hosts = self.known_hosts.blocking_lock();
+        match known_hosts.status() {
+            KnownHostsStatus::Available => KnownHostsStatusRecord::Available,
+            KnownHostsStatus::Unavailable { reason } => {
+                KnownHostsStatusRecord::Unavailable { reason }
+            }
+        }
+    }
+
+    fn known_hosts_entries(&self) -> Vec<KnownHostEntryRecord> {
+        let entries = { self.known_hosts.blocking_lock().entries() };
+        entries
+            .into_iter()
+            .map(to_known_host_entry_record)
+            .collect()
+    }
+
+    fn known_hosts_remove(&self, host: String, port: u16) -> Result<bool, DockBridgeError> {
+        let mut known_hosts = self.known_hosts.blocking_lock();
+        known_hosts.remove(&host, port).map_err(map_error)
+    }
+
+    fn known_hosts_reset(&self, backup: bool) -> Result<(), DockBridgeError> {
+        let mut known_hosts = self.known_hosts.blocking_lock();
+        known_hosts.reset(backup).map_err(map_error)
+    }
+
+    fn known_hosts_repair_permissions(&self) -> Result<(), DockBridgeError> {
+        let mut known_hosts = self.known_hosts.blocking_lock();
+        known_hosts.repair_permissions().map_err(map_error)
     }
 
     fn get_initial_directory(&self, session_id: u64) -> Result<String, DockBridgeError> {
@@ -663,6 +725,32 @@ fn to_core_profile(profile: ConnectionProfileRecord) -> ConnectionProfile {
         port: profile.port,
         username: profile.username,
         auth,
+    }
+}
+
+fn to_known_host_entry_record(entry: KnownHostEntry) -> KnownHostEntryRecord {
+    KnownHostEntryRecord {
+        host: entry.host,
+        port: entry.port,
+        fingerprint_sha256: entry.fingerprint_sha256,
+        algorithm: entry.algorithm,
+        aliases: entry
+            .aliases
+            .into_iter()
+            .map(|alias| KnownHostAliasRecord {
+                host: alias.host,
+                port: alias.port,
+            })
+            .collect(),
+        excluded_aliases: entry
+            .excluded_aliases
+            .into_iter()
+            .map(|alias| KnownHostAliasRecord {
+                host: alias.host,
+                port: alias.port,
+            })
+            .collect(),
+        public_key_openssh: entry.public_key_openssh,
     }
 }
 
