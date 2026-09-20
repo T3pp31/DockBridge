@@ -22,9 +22,10 @@ use crate::transfer::TransferOverwritePolicy;
 
 use super::path::parent_remote_path;
 use super::tree::{
-    ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
-    normalize_remote_path, validated_remote_entry, walk_local_directory_with_options,
-    walk_remote_directory_with_limits, RemoteFileEntry, WalkLocalDirectoryOptions,
+    ensure_local_path_within_root, is_local_directory, join_remote_path, local_directories,
+    local_entry_name, normalize_remote_path, remote_directories, validated_remote_entry,
+    walk_local_directory_with_options, walk_remote_directory_with_limits, RemoteFileEntry,
+    WalkLocalDirectoryOptions,
 };
 
 /// Metadata for a remote file or directory entry.
@@ -576,14 +577,26 @@ impl<'a> SftpClient<'a> {
         if is_local_directory(local_path).await? {
             let directory_name = local_entry_name(local_path);
             let remote_root = join_remote_path(remote_directory, Path::new(&directory_name))?;
+            // Create the whole remote directory tree exactly once (parents
+            // first), including EMPTY directories, before uploading any files
+            // — no per-file `create_directory_all` from "/" (issue #312).
+            if created.is_none() {
+                *created = Some(HashSet::new());
+            }
             self.create_directory_all_cached(&remote_root, created)
                 .await?;
-            // Track the root with a normalized (no trailing slash) key so
-            // child paths created later hit the cache. create_directory_all_cached
-            // compares with normalized keys, so a trailing slash here would
-            // miss the cache and cause redundant mkdir round-trips.
-            if let Some(created) = created.as_mut() {
-                created.insert(normalize_remote_path(&remote_root)?);
+            for relative_dir in local_directories(
+                local_path,
+                WalkLocalDirectoryOptions {
+                    limits: self.directory_walk_limits,
+                    ..Default::default()
+                },
+            )
+            .await?
+            {
+                let remote_dir = join_remote_path(&remote_root, &relative_dir)?;
+                self.create_directory_all_cached(&remote_dir, created)
+                    .await?;
             }
 
             let result = walk_local_directory_with_options(
@@ -596,9 +609,6 @@ impl<'a> SftpClient<'a> {
             .await?;
             for entry in result.files {
                 let remote_path = join_remote_path(&remote_root, &entry.relative_path)?;
-                if let Some(parent) = parent_remote_path(&remote_path)? {
-                    self.create_directory_all_cached(&parent, created).await?;
-                }
                 self.upload(&entry.local_path, &remote_path).await?;
                 on_file_completed(&remote_path);
             }
@@ -652,11 +662,28 @@ impl<'a> SftpClient<'a> {
                     message: err.to_string(),
                 })?;
 
+            // Mirror the remote directory structure once (parents first),
+            // including EMPTY directories, before downloading any files.
+            let mut created_dirs = HashSet::new();
+            created_dirs.insert(local_root.clone());
+            for relative_dir in
+                remote_directories(self, &normalized, self.directory_walk_limits).await?
+            {
+                let local_dir = local_root.join(&relative_dir);
+                ensure_local_path_within_root(&local_root, &local_dir).await?;
+                tokio::fs::create_dir_all(&local_dir).await.map_err(|err| {
+                    SftpError::DownloadFailed {
+                        remote: normalized.clone(),
+                        local: local_dir.display().to_string(),
+                        message: err.to_string(),
+                    }
+                })?;
+                created_dirs.insert(local_dir);
+            }
+
             let result =
                 walk_remote_directory_with_limits(self, &normalized, self.directory_walk_limits)
                     .await?;
-            let mut created_dirs = HashSet::<PathBuf>::new();
-            created_dirs.insert(local_root.clone());
 
             for entry in result.files {
                 let local_path = local_root.join(&entry.relative_path);
@@ -2866,6 +2893,79 @@ mod tests {
         let local_path = local_dir.path().join("tree/nested/file.txt");
         let contents = tokio::fs::read(&local_path).await.unwrap();
         assert_eq!(contents, b"nested payload");
+    }
+
+    #[tokio::test]
+    async fn download_entry_mirrors_empty_remote_directories() {
+        // Given: a remote tree containing an EMPTY subdirectory
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/emptytree/filled/file.txt", b"x")
+            .await;
+        std::fs::create_dir_all(server.root.join("download/emptytree/empty")).unwrap();
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+
+        // When: the remote directory is downloaded
+        client
+            .download_entry("/download/emptytree", local_dir.path())
+            .await
+            .unwrap();
+
+        // Then: the empty subdirectory is mirrored locally too
+        assert!(
+            local_dir.path().join("emptytree/empty").is_dir(),
+            "empty remote directories must be mirrored locally"
+        );
+        assert!(
+            local_dir.path().join("emptytree/filled/file.txt").is_file(),
+            "non-empty entries must still download"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_entry_mirrors_empty_directories_with_bounded_mkdirs() {
+        // Given: a local tree with an EMPTY subdirectory nested under others
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(local_dir.path().join("src/empty/nested").as_path()).unwrap();
+        std::fs::create_dir_all(local_dir.path().join("src/b").as_path()).unwrap();
+        tokio::fs::write(local_dir.path().join("src/a.txt"), b"a")
+            .await
+            .unwrap();
+        tokio::fs::write(local_dir.path().join("src/b/f.txt"), b"b")
+            .await
+            .unwrap();
+
+        // When: the local directory is uploaded
+        let before = server.mkdir_count();
+        client
+            .upload_entry(local_dir.path().join("src").as_path(), "/up")
+            .await
+            .unwrap();
+
+        // Then: empty subdirectories are mirrored remotely, and the number of
+        // MKDIR requests is bounded by the number of directories (not per-file).
+        assert!(
+            server.remote_dir_exists("/up/src/empty/nested"),
+            "empty nested remote directories must be mirrored"
+        );
+        assert!(server.remote_dir_exists("/up/src/b"));
+        assert!(server.remote_file_exists("/up/src/a.txt"));
+        assert!(server.remote_file_exists("/up/src/b/f.txt"));
+
+        let dirs_created = server.mkdir_count() - before;
+        // Distinct remote directories created: /up, /up/src, /up/src/empty,
+        // /up/src/empty/nested, /up/src/b — exactly one mkdir per directory,
+        // NOT per file (2 files × depth 2 would have been ~8+ under the old
+        // per-file create_directory_all).
+        assert!(
+            dirs_created <= 5,
+            "one mkdir per directory (target root + 4 dirs): got {dirs_created}"
+        );
     }
 
     #[tokio::test]
