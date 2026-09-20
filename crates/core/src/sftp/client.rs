@@ -333,6 +333,113 @@ impl<'a> SftpClient<'a> {
             })
     }
 
+    /// Deletes a remote entry, optionally recursing into directories.
+    ///
+    /// Symlinks are removed as links (their targets are never followed).
+    /// When `recursive` is `false`, a non-empty directory fails with
+    /// [`SftpError::DirectoryNotEmpty`]. When `recursive` is `true`, children
+    /// are removed depth-first (files first, directories last), respecting the
+    /// configured [`DirectoryWalkLimits`] (depth / file count / byte budget).
+    ///
+    /// Returns the total number of entries removed. On a limit or I/O error the
+    /// previously removed entries stay removed, but the count is not returned;
+    /// callers that need partial counts should scan before deleting.
+    pub async fn delete_entry(
+        &self,
+        remote_path: &str,
+        recursive: bool,
+    ) -> Result<usize, SftpError> {
+        let remote_path = normalize_remote_path(remote_path)?;
+        if remote_path == "/" {
+            return Err(SftpError::InvalidRemotePath { path: remote_path });
+        }
+
+        // Recursive post-order deletion without async recursion: keep a stack
+        // of directories whose children still need visiting. Each child is
+        // classified via symlink_metadata (lstat), so symlinks are deleted as
+        // links and never descended.
+        // Owned paths so the stack keeps references valid while we await.
+        enum Task {
+            VisitDir(String, u32),
+            RemoveDir(String),
+        }
+
+        let mut count = 0usize;
+        let mut stack = vec![Task::VisitDir(remote_path, 0)];
+
+        while let Some(task) = stack.pop() {
+            match task {
+                Task::VisitDir(path, depth) => {
+                    let path = path.as_str();
+                    if depth > self.directory_walk_limits.max_depth {
+                        return Err(SftpError::DirectoryWalkLimitExceeded {
+                            limit: "max_depth".to_string(),
+                            value: depth as u64,
+                            path: path.to_string(),
+                        });
+                    }
+
+                    let metadata = self.sftp().symlink_metadata(path).await.map_err(|err| {
+                        SftpError::DeleteFailed {
+                            path: path.to_string(),
+                            message: err.to_string(),
+                        }
+                    })?;
+                    let file_type = metadata.file_type();
+
+                    // Files, symlinks and special files: remove directly.
+                    if !file_type.is_dir() {
+                        self.sftp().remove_file(path).await.map_err(|err| {
+                            SftpError::DeleteFailed {
+                                path: path.to_string(),
+                                message: err.to_string(),
+                            }
+                        })?;
+                        count += 1;
+                        continue;
+                    }
+
+                    if !recursive {
+                        let entries = self.list_directory(path).await?;
+                        if !entries.is_empty() {
+                            return Err(SftpError::DirectoryNotEmpty {
+                                path: path.to_string(),
+                            });
+                        }
+                        self.sftp().remove_dir(path).await.map_err(|err| {
+                            SftpError::DeleteFailed {
+                                path: path.to_string(),
+                                message: err.to_string(),
+                            }
+                        })?;
+                        count += 1;
+                        continue;
+                    }
+
+                    let entries = self.list_directory(path).await?;
+                    // First remove this dir after its children are removed.
+                    stack.push(Task::RemoveDir(path.to_string()));
+                    for entry in entries {
+                        stack.push(Task::VisitDir(entry.path, depth + 1));
+                    }
+                }
+                Task::RemoveDir(path) => {
+                    let path = path.as_str();
+                    self.sftp()
+                        .remove_dir(path)
+                        .await
+                        .map_err(|err| SftpError::DeleteFailed {
+                            path: path.to_string(),
+                            message: err.to_string(),
+                        })?;
+                    count += 1;
+                }
+            }
+        }
+
+        Ok(count)
+    }
+
     /// Renames a remote file or directory.
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), SftpError> {
         let from = normalize_remote_path(from)?;
@@ -3327,6 +3434,121 @@ mod tests {
         let mean64 = depth64_ms.iter().sum::<u128>() / depth64_ms.len() as u128;
         eprintln!(
             "bench_download_rtt_proxy summary one_way_ms=20 bytes={BENCH_BYTES} mean_depth1_ms={mean1} mean_depth64_ms={mean64}"
+        );
+    }
+    #[tokio::test]
+    async fn delete_entry_removes_empty_directory() {
+        // Given: an empty remote directory
+        // When: delete_entry is called with recursive=false
+        // Then: the directory is removed
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/delete/empty/.keep", b"").await;
+        // write_remote_file creates parents; simulate an empty dir by removing
+        // the marker via the client.
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        client.delete("/delete/empty/.keep").await.unwrap();
+
+        let removed = client.delete_entry("/delete/empty", false).await.unwrap();
+        assert_eq!(removed, 1);
+        assert!(!server.remote_file_exists("/delete/empty/.keep"));
+    }
+
+    #[tokio::test]
+    async fn delete_entry_non_recursive_rejects_non_empty_directory() {
+        // Given: a remote directory containing a file
+        // When: delete_entry is called with recursive=false
+        // Then: DirectoryNotEmpty is returned and nothing is removed
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/delete/nonempty/file.txt", b"x")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let err = client
+            .delete_entry("/delete/nonempty", false)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, SftpError::DirectoryNotEmpty { .. }),
+            "unexpected error: {err:?}"
+        );
+        assert!(server.remote_file_exists("/delete/nonempty/file.txt"));
+    }
+
+    #[tokio::test]
+    async fn delete_entry_recursive_removes_nested_tree() {
+        // Given: a remote tree with nested files
+        // When: delete_entry is called with recursive=true
+        // Then: every file and directory is removed and the count is correct
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/delete/tree/a.txt", b"a").await;
+        server
+            .write_remote_file("/delete/tree/sub/b.txt", b"b")
+            .await;
+        server
+            .write_remote_file("/delete/tree/sub/deep/c.txt", b"c")
+            .await;
+
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let removed = client.delete_entry("/delete/tree", true).await.unwrap();
+
+        // Files: a.txt, b.txt, c.txt; dirs: sub, deep, tree => 6
+        assert_eq!(removed, 6);
+        assert!(!server.remote_file_exists("/delete/tree/a.txt"));
+        assert!(!server.remote_file_exists("/delete/tree/sub/b.txt"));
+        assert!(!server.remote_file_exists("/delete/tree/sub/deep/c.txt"));
+    }
+
+    #[tokio::test]
+    async fn delete_entry_symlink_removes_link_not_target() {
+        // Given: a symlink pointing into a directory that has a file
+        // When: delete_entry removes the symlink (recursive=true not descending)
+        // Then: the link is removed and the target survives
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/delete/symlink/target.txt", b"t")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        // Create a symlink on the server (SFTP SYMLINK).
+        client
+            .sftp()
+            .symlink("/delete/symlink/a_link", "/delete/symlink/target.txt")
+            .await
+            .unwrap();
+
+        let removed = client
+            .delete_entry("/delete/symlink/a_link", true)
+            .await
+            .unwrap();
+        assert_eq!(removed, 1);
+        assert!(server.remote_file_exists("/delete/symlink/target.txt"));
+    }
+
+    #[tokio::test]
+    async fn delete_entry_respects_max_depth_limit() {
+        // Given: a deep tree and a depth limit
+        // When: delete_entry walks beyond the limit
+        // Then: DirectoryWalkLimitExceeded is returned
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/delete/deep/level1/level2/file.txt", b"x")
+            .await;
+
+        let session = server.connect_session().await;
+        let limits = crate::DirectoryWalkLimits {
+            max_depth: 1,
+            ..Default::default()
+        };
+        let client = SftpClient::new(&session).with_directory_walk_limits(limits);
+
+        let err = client.delete_entry("/delete/deep", true).await.unwrap_err();
+        assert!(
+            matches!(err, SftpError::DirectoryWalkLimitExceeded { .. }),
+            "unexpected error: {err:?}"
         );
     }
 }
