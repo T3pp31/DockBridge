@@ -15,7 +15,7 @@
 - [x] OpenSSH known_hosts compatibility (import/export/merge; see #302, #303)
 - [x] Drag and drop (see #153, #337)
 - [x] Encrypted connection-profile storage (AES-GCM envelope + Keychain master key); see [security.md](security.md#connection-profiles-profilesjson)
-- [ ] Security: Developer ID signing and notarization for release DMGs (#391); see [security.md](security.md#code-signing-and-distribution)
+- [ ] Security: Enable Developer ID signing and notarization for release DMGs; see [security.md](security.md#code-signing-and-distribution)
 - [ ] External editor integration (#361)
 - [ ] Auto-upload on save (part of #361)
 - [ ] chmod / permissions UI (#363)
