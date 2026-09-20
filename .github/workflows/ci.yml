@@ -55,8 +55,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Test core crate
-        run: cargo test -p dockbridge-core
+      - name: Test workspace (all targets)
+        run: cargo test --workspace --all-targets
 
       - name: Build workspace
         run: cargo build --workspace
