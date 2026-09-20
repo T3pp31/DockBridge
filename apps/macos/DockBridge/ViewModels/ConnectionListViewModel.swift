@@ -21,11 +21,17 @@ final class ConnectionListViewModel: ObservableObject {
     private let keychain: KeychainService
     private let bridge: RustBridgeService
     private let bookmarkService: SecurityScopedBookmarkService
+    private let rsaKeyInspector: @Sendable (
+        ConnectionProfile,
+        KeychainService,
+        SecurityScopedBookmarkService
+    ) -> Bool?
     private var pendingEndpointChanges: [ProfileEndpointChange] = []
     private var pendingInitialTrustProfiles: [ConnectionProfile] = []
     private var pendingNewProfileTrustProfiles: [ConnectionProfile] = []
     private var rootWarningAcknowledged = false
     private var rsaWarningAcknowledged = false
+    private var connectRequestGeneration = 0
     private var cancellables = Set<AnyCancellable>()
 
     var isConnected: Bool { bridge.isConnected }
@@ -46,12 +52,18 @@ final class ConnectionListViewModel: ObservableObject {
         store: ConnectionStore = .shared,
         keychain: KeychainService = .shared,
         bookmarkService: SecurityScopedBookmarkService = .shared,
-        bridge: RustBridgeService
+        bridge: RustBridgeService,
+        rsaKeyInspector: @escaping @Sendable (
+            ConnectionProfile,
+            KeychainService,
+            SecurityScopedBookmarkService
+        ) -> Bool? = ConnectionListViewModel.inspectRsa
     ) {
         self.store = store
         self.keychain = keychain
         self.bookmarkService = bookmarkService
         self.bridge = bridge
+        self.rsaKeyInspector = rsaKeyInspector
 
         bridge.objectWillChange
             .sink { [weak self] _ in
@@ -159,6 +171,12 @@ final class ConnectionListViewModel: ObservableObject {
     }
 
     func requestConnect(profile: ConnectionProfile) {
+        connectRequestGeneration &+= 1
+        pendingConnectProfile = nil
+        showRootWarning = false
+        showRsaKeyWarning = false
+        rootWarningAcknowledged = false
+        rsaWarningAcknowledged = false
         do {
             if let change = try store.endpointChange(for: profile) {
                 pendingConnectProfile = profile
@@ -172,12 +190,16 @@ final class ConnectionListViewModel: ObservableObject {
         }
 
         pendingConnectProfile = profile
-        rootWarningAcknowledged = false
-        rsaWarningAcknowledged = false
-        continueConnectAfterWarnings()
+        resumePendingConnect()
     }
 
-    private func continueConnectAfterWarnings() {
+    private func resumePendingConnect() {
+        let generation = connectRequestGeneration
+        Task { await continueConnectAfterWarnings(generation: generation) }
+    }
+
+    private func continueConnectAfterWarnings(generation: Int) async {
+        guard generation == connectRequestGeneration else { return }
         guard let profile = pendingConnectProfile else { return }
 
         if profile.isRootUser, !rootWarningAcknowledged {
@@ -186,7 +208,18 @@ final class ConnectionListViewModel: ObservableObject {
         }
 
         if profile.authType == .privateKey, !rsaWarningAcknowledged {
-            switch profileUsesRsaPrivateKey(profile) {
+            // The private-key pre-check decrypts the key (bcrypt KDF) and reads
+            // the Keychain; run it off the main actor so Connect does not
+            // freeze the UI (beachball) while inspecting an encrypted key.
+            let inspector = rsaKeyInspector
+            let keychain = keychain
+            let bookmarkService = bookmarkService
+            let usesRsa = await Task.detached(priority: .userInitiated) {
+                inspector(profile, keychain, bookmarkService)
+            }.value
+            guard generation == connectRequestGeneration,
+                  pendingConnectProfile?.id == profile.id else { return }
+            switch usesRsa {
             case .some(true):
                 showRsaKeyWarning = true
                 return
@@ -201,7 +234,9 @@ final class ConnectionListViewModel: ObservableObject {
             }
         }
 
-        guard let profileToConnect = pendingConnectProfile else { return }
+        guard generation == connectRequestGeneration,
+              let profileToConnect = pendingConnectProfile,
+              profileToConnect.id == profile.id else { return }
         clearPendingConnectState()
         Task { await connect(profile: profileToConnect) }
     }
@@ -211,6 +246,7 @@ final class ConnectionListViewModel: ObservableObject {
     }
 
     private func clearPendingConnectState() {
+        connectRequestGeneration &+= 1
         pendingConnectProfile = nil
         showRootWarning = false
         showRsaKeyWarning = false
@@ -300,13 +336,13 @@ final class ConnectionListViewModel: ObservableObject {
     func confirmRootConnect() {
         showRootWarning = false
         rootWarningAcknowledged = true
-        continueConnectAfterWarnings()
+        resumePendingConnect()
     }
 
     func confirmRsaConnect() {
         showRsaKeyWarning = false
         rsaWarningAcknowledged = true
-        continueConnectAfterWarnings()
+        resumePendingConnect()
     }
 
     // MARK: - Interactive credential prompt (Issue #213)
@@ -458,7 +494,14 @@ final class ConnectionListViewModel: ObservableObject {
         selectedProfileID = updated.id
     }
 
-    private func profileUsesRsaPrivateKey(_ profile: ConnectionProfile) -> Bool? {
+    /// Runs off the main actor; returns `.some(true)` when the private key is
+    /// RSA, `.some(false)` otherwise, and `nil` when the key cannot be
+    /// inspected (missing bookmark / undecryptable key).
+    private nonisolated static func inspectRsa(
+        profile: ConnectionProfile,
+        keychain: KeychainService,
+        bookmarkService: SecurityScopedBookmarkService
+    ) -> Bool? {
         guard let bookmark = profile.privateKeyBookmark else {
             // Pre-check only: without a bookmark we cannot inspect the key.
             // Treat as unknown and let the real connection flow produce the error.
