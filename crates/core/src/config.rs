@@ -134,11 +134,57 @@ impl AppConfig {
 
         config.known_hosts_path = expand_tilde(&config.known_hosts_path);
         config.openssh_known_hosts_path = expand_tilde(&config.openssh_known_hosts_path);
-        config.transfer_chunk_size_bytes =
-            validate_transfer_chunk_size(config.transfer_chunk_size_bytes)?;
-        config.transfer_download_pipeline_depth =
-            validate_transfer_download_pipeline_depth(config.transfer_download_pipeline_depth);
+        // Single source of truth for validation: validate() normalizes and
+        // checks chunk size / pipeline depth / retry count / timeouts here too.
+        config = config.validate()?;
         Ok(config)
+    }
+
+    /// Validates all fields have sane ranges, normalizing values that can be
+    /// safely clamped. Single source of truth shared by TOML, CLI, and UniFFI
+    /// entry points.
+    pub fn validate(mut self) -> Result<Self, ConfigError> {
+        ensure_range(
+            "connection_timeout_secs",
+            self.connection_timeout_secs,
+            1..=3600,
+            "must be between 1 and 3600 seconds",
+        )?;
+        ensure_range(
+            "session_health_check_interval_secs",
+            self.session_health_check_interval_secs,
+            1..=3600,
+            "must be between 1 and 3600 seconds",
+        )?;
+        ensure_range(
+            "transfer_retry_count",
+            u64::from(self.transfer_retry_count),
+            0..=10,
+            "must be between 0 and 10",
+        )?;
+        self.transfer_chunk_size_bytes =
+            validate_transfer_chunk_size(self.transfer_chunk_size_bytes)?;
+        self.transfer_download_pipeline_depth =
+            validate_transfer_download_pipeline_depth(self.transfer_download_pipeline_depth);
+        ensure_range(
+            "directory_walk_max_files",
+            self.directory_walk_max_files,
+            1..=u64::MAX,
+            "must be at least 1",
+        )?;
+        ensure_range(
+            "directory_walk_max_depth",
+            u64::from(self.directory_walk_max_depth),
+            1..=1024,
+            "must be between 1 and 1024",
+        )?;
+        ensure_range(
+            "directory_walk_max_total_bytes",
+            self.directory_walk_max_total_bytes,
+            1..=u64::MAX,
+            "must be at least 1",
+        )?;
+        Ok(self)
     }
 
     /// Returns the resolved known hosts path.
@@ -154,6 +200,39 @@ impl AppConfig {
             max_total_bytes: self.directory_walk_max_total_bytes,
         }
     }
+}
+
+/// Validates that `value` falls within `range`, returning an
+/// [`ConfigError::InvalidValue`] otherwise.
+fn ensure_range(
+    field: &'static str,
+    value: u64,
+    range: std::ops::RangeInclusive<u64>,
+    reason: &'static str,
+) -> Result<(), ConfigError> {
+    if range.contains(&value) {
+        Ok(())
+    } else {
+        Err(ConfigError::InvalidValue {
+            field,
+            value,
+            reason,
+        })
+    }
+}
+
+/// Converts a `u64`-typed config value into `usize` without silent truncation.
+///
+/// UniFFI receives chunk-size / pipeline-depth values as `u64`; on 32-bit
+/// targets a value above `usize::MAX` would otherwise be truncated before
+/// `validate()` sees it. Rejecting the value here (rather than wrapping)
+/// keeps the "single source of truth" validation meaningful.
+pub fn u64_to_usize_or_invalid(field: &'static str, value: u64) -> Result<usize, ConfigError> {
+    usize::try_from(value).map_err(|_| ConfigError::InvalidValue {
+        field,
+        value,
+        reason: "value exceeds usize::MAX on this platform",
+    })
 }
 
 /// Validates a transfer chunk size from configuration.
@@ -454,6 +533,58 @@ mod tests {
         assert!(matches!(err, ConfigError::InvalidTransferChunkSize { .. }));
     }
 
+    #[test]
+    fn all_repo_config_toml_files_parse() {
+        // Given: the repository's AppConfig-format config files
+        // (release.toml uses a separate `[release]` schema and is excluded)
+        // When: every one is loaded as an AppConfig
+        // Then: every file parses successfully (regression for duplicate-key
+        // files like the old config/test.toml)
+        //
+        // NOTE: every `.toml` file in this directory other than release.toml
+        // must use the AppConfig schema - this test fails (loudly) when a
+        // different schema is added so the exclusion list is kept in sync.
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let config_dir = manifest_dir.join("../../config");
+        let config_dir_abs = config_dir.canonicalize().unwrap_or_else(|err| {
+            panic!(
+                "cannot resolve config directory {} (workspace layout moved?): {err}",
+                config_dir.display()
+            )
+        });
+        let mut found_any = false;
+        let entries = std::fs::read_dir(&config_dir_abs).unwrap_or_else(|err| {
+            panic!(
+                "cannot read config directory {}: {err}",
+                config_dir_abs.display()
+            )
+        });
+        for entry in entries {
+            let path = entry
+                .unwrap_or_else(|err| {
+                    panic!("cannot read entry in {}: {err}", config_dir_abs.display())
+                })
+                .path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if name.ends_with(".toml") && name != "release.toml" {
+                found_any = true;
+                AppConfig::from_toml_file(&path).unwrap_or_else(|err| {
+                    panic!(
+                        "config file {} failed to parse: {err}",
+                        path.canonicalize().unwrap_or(path.clone()).display()
+                    )
+                });
+            }
+        }
+        assert!(
+            found_any,
+            "no .toml files found under {}",
+            config_dir_abs.display()
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn ensure_known_hosts_parent_creates_parent_with_0700_permissions() {
@@ -501,6 +632,195 @@ mod tests {
         assert_eq!(mode, 0o700);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_rejects_zero_timeout() {
+        // Given: a config with connection_timeout_secs = 0
+        let config = AppConfig {
+            connection_timeout_secs: 0,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: an InvalidValue error is returned
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue {
+                field: "connection_timeout_secs",
+                value: 0,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_zero_health_check_interval() {
+        // Given: a config with session_health_check_interval_secs = 0
+        let config = AppConfig {
+            session_health_check_interval_secs: 0,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: an InvalidValue error is returned
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue {
+                field: "session_health_check_interval_secs",
+                value: 0,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_zero_directory_walk_limits() {
+        // Given: configs with zero directory walk limits
+        let config = AppConfig {
+            directory_walk_max_files: 0,
+            ..AppConfig::default()
+        };
+        assert!(config.validate().is_err());
+
+        let config = AppConfig {
+            directory_walk_max_depth: 0,
+            ..AppConfig::default()
+        };
+        assert!(config.validate().is_err());
+
+        let config = AppConfig {
+            directory_walk_max_total_bytes: 0,
+            ..AppConfig::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validate_clamps_pipeline_depth() {
+        // Given: out-of-range pipeline depth
+        let config = AppConfig {
+            transfer_download_pipeline_depth: 0,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: the pipeline depth is clamped to the allowed range
+        let config = config.validate().unwrap();
+        assert_eq!(
+            config.transfer_download_pipeline_depth,
+            MIN_TRANSFER_DOWNLOAD_PIPELINE_DEPTH
+        );
+    }
+
+    #[test]
+    fn validate_rejects_oversized_chunk_size() {
+        // Given: a chunk size above the allowed maximum
+        let config = AppConfig {
+            transfer_chunk_size_bytes: 1_000_000_000,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: an InvalidTransferChunkSize error is returned
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidTransferChunkSize {
+                value: 1_000_000_000,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_default_config() {
+        // Given: the default config
+        // When: validating
+        // Then: it succeeds and is unchanged
+        let config = AppConfig::default().validate().unwrap();
+        assert_eq!(config.connection_timeout_secs, 30);
+        assert_eq!(
+            config.directory_walk_max_files,
+            DEFAULT_DIRECTORY_WALK_MAX_FILES
+        );
+    }
+
+    #[test]
+    fn validate_rejects_retry_count_above_maximum() {
+        // Given: a transfer_retry_count above the allowed maximum
+        let config = AppConfig {
+            transfer_retry_count: 11,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: an InvalidValue error is returned
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue {
+                field: "transfer_retry_count",
+                value: 11,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_zero_retry_count() {
+        // Given: transfer_retry_count = 0 (retries explicitly disabled)
+        // When: validating
+        // Then: it is accepted
+        let config = AppConfig {
+            transfer_retry_count: 0,
+            ..AppConfig::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_timeout_above_maximum() {
+        // Given: connection_timeout_secs above the allowed maximum
+        let config = AppConfig {
+            connection_timeout_secs: 3601,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: an InvalidValue error is returned
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue {
+                field: "connection_timeout_secs",
+                value: 3601,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_directory_walk_depth_above_maximum() {
+        // Given: directory_walk_max_depth above the allowed maximum
+        let config = AppConfig {
+            directory_walk_max_depth: 1025,
+            ..AppConfig::default()
+        };
+
+        // When: validating
+        // Then: an InvalidValue error is returned
+        let err = config.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::InvalidValue {
+                field: "directory_walk_max_depth",
+                value: 1025,
+                ..
+            }
+        ));
     }
 
     #[test]

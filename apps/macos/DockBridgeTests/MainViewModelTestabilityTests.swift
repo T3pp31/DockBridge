@@ -78,7 +78,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
     // MARK: - Destination resolution
 
-    func testUploadResolvesRemoteDirectoryToCurrentPathWhenRoot() async throws {
+    func testUploadResolvesRemoteDirectoryToCurrentPathWhenUnspecified() async throws {
         bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
         viewModel.remotePath = "/srv/files"
         bridge.directoryListings["/srv/files"] = []
@@ -88,7 +88,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
         let accepted = await viewModel.upload(
             localURL: localFile,
-            toRemoteDirectory: "/"
+            toRemoteDirectory: nil
         )
 
         XCTAssertTrue(accepted)
@@ -146,15 +146,21 @@ final class MainViewModelTestabilityTests: XCTestCase {
         let localFile = baseDirectory.appendingPathComponent("existing.txt")
         try "data".write(to: localFile, atomically: true, encoding: .utf8)
 
-        let accepted = await viewModel.upload(
-            localURL: localFile,
-            toRemoteDirectory: "/"
-        )
+        let uploadTask = Task { @MainActor in
+            await viewModel.upload(
+                localURL: localFile,
+                toRemoteDirectory: nil
+            )
+        }
+        await Task.yield()
 
-        XCTAssertFalse(accepted)
         XCTAssertTrue(viewModel.showOverwriteAsk)
         XCTAssertEqual(viewModel.overwriteAskDestination, "/srv/files/existing.txt")
         XCTAssertTrue(bridge.uploaded.isEmpty, "transfer must not run while ask sheet is pending")
+
+        viewModel.cancelOverwriteAsk()
+        let accepted = await uploadTask.value
+        XCTAssertFalse(accepted)
     }
 
     func testOverwriteAskProceedsWhenDestinationMissing() async throws {
@@ -172,7 +178,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
         let accepted = await viewModel.upload(
             localURL: localFile,
-            toRemoteDirectory: "/"
+            toRemoteDirectory: nil
         )
 
         XCTAssertTrue(accepted)

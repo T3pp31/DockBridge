@@ -20,6 +20,7 @@ enum AppSettingsKeys {
     static let sessionHealthCheckIntervalSecs = "sessionHealthCheckIntervalSecs"
     static let transferRetryCount = "transferRetryCount"
     static let transferChunkSizeBytes = "transferChunkSizeBytes"
+    static let transferDownloadPipelineDepth = "transferDownloadPipelineDepth"
     static let defaultLocalPath = "defaultLocalPath"
     static let defaultLocalBookmark = "defaultLocalBookmark"
     static let confirmBeforeDelete = "confirmBeforeDelete"
@@ -61,6 +62,7 @@ final class AppSettingsService: @unchecked Sendable {
             AppSettingsKeys.sessionHealthCheckIntervalSecs: Int(AppConfig.default.sessionHealthCheckIntervalSecs),
             AppSettingsKeys.transferRetryCount: Int(AppConfig.default.transferRetryCount),
             AppSettingsKeys.transferChunkSizeBytes: Int(AppConfig.default.transferChunkSizeBytes),
+            AppSettingsKeys.transferDownloadPipelineDepth: Int(AppConfig.default.transferDownloadPipelineDepth),
             AppSettingsKeys.defaultLocalPath: AppConfig.default.defaultLocalPath,
             AppSettingsKeys.confirmBeforeDelete: AppConfig.default.confirmBeforeDelete,
             AppSettingsKeys.showHiddenFiles: AppConfig.default.showHiddenFiles,
@@ -115,6 +117,10 @@ final class AppSettingsService: @unchecked Sendable {
             transferChunkSizeBytes: UInt64(
                 clamping: min(maxChunk, max(minChunk, chunkSize))
             ),
+            transferDownloadPipelineDepth: UInt64(
+                defaults.object(forKey: AppSettingsKeys.transferDownloadPipelineDepth) as? Int
+                    ?? Int(AppConfig.default.transferDownloadPipelineDepth)
+            ),
             defaultLocalPath: defaults.string(forKey: AppSettingsKeys.defaultLocalPath)
                 ?? AppConfig.default.defaultLocalPath,
             defaultLocalBookmark: defaults.data(forKey: AppSettingsKeys.defaultLocalBookmark),
@@ -163,6 +169,10 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(Int(config.sessionHealthCheckIntervalSecs), forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs)
         defaults.set(Int(config.transferRetryCount), forKey: AppSettingsKeys.transferRetryCount)
         defaults.set(Int(config.transferChunkSizeBytes), forKey: AppSettingsKeys.transferChunkSizeBytes)
+        defaults.set(
+            Int(config.transferDownloadPipelineDepth),
+            forKey: AppSettingsKeys.transferDownloadPipelineDepth
+        )
         defaults.set(config.defaultLocalPath, forKey: AppSettingsKeys.defaultLocalPath)
         defaults.set(config.defaultLocalBookmark, forKey: AppSettingsKeys.defaultLocalBookmark)
         defaults.set(config.confirmBeforeDelete, forKey: AppSettingsKeys.confirmBeforeDelete)
