@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 
@@ -9,6 +10,7 @@ final class ConnectionListViewModel: ObservableObject {
     @Published var selectedProfileID: UUID?
     @Published var searchText = ""
     @Published var errorMessage: String?
+    @Published var importResultMessage: String?
     @Published var showRootWarning = false
     @Published var showRsaKeyWarning = false
     @Published var showEndpointChangeWarning = false
@@ -92,6 +94,92 @@ final class ConnectionListViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Imports connection profiles from an OpenSSH `~/.ssh/config` file the
+    /// user selects (sandbox requires an explicit picker). Only plain `Host`
+    /// aliases with a `HostName` are imported; wildcards are skipped.
+    func importFromSSHConfig() async {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Import"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let readResult = await Task.detached(priority: .userInitiated) {
+            () -> (contents: String?, error: String?) in
+            do {
+                return (contents: try String(contentsOf: url, encoding: .utf8), error: nil)
+            } catch {
+                return (contents: nil, error: error.localizedDescription)
+            }
+        }.value
+
+        guard let contents = readResult.contents else {
+            errorMessage = "Could not read SSH config file: \(readResult.error ?? "Unknown error")"
+            return
+        }
+        importSSHConfig(contents: contents)
+    }
+
+    /// Parses and persists imported profiles. Kept separate from the file
+    /// picker so duplicate handling and result reporting can be unit tested.
+    func importSSHConfig(contents: String) {
+        errorMessage = nil
+        importResultMessage = nil
+
+        let hosts = SSHConfigParser.parse(contents)
+        guard !hosts.isEmpty else {
+            errorMessage = "No importable Host blocks found. Match and Include sections are not expanded."
+            return
+        }
+
+        let imported = SSHConfigParser.toProfiles(hosts)
+        var updated = profiles
+        var knownNames = Set(profiles.map { normalizedProfileName($0.name) })
+        var added: [ConnectionProfile] = []
+        var skipped: [String] = []
+        for profile in imported {
+            // Skip aliases that already exist (re-importing the same config
+            // or an alias colliding with a manual/imported profile must not
+            // duplicate). OpenSSH host aliases are compared case-insensitively.
+            let normalizedName = normalizedProfileName(profile.name)
+            guard !knownNames.contains(normalizedName) else {
+                skipped.append(profile.name)
+                continue
+            }
+            knownNames.insert(normalizedName)
+            updated.append(profile)
+            added.append(profile)
+        }
+
+        guard !added.isEmpty else {
+            importResultMessage = "No profiles were imported; all \(skipped.count) host alias(es) already exist."
+            return
+        }
+
+        do {
+            try store.saveProfiles(updated)
+            profiles = updated
+            selectedProfileID = added.first?.id
+
+            var result = "Imported \(added.count) profile(s)."
+            if let firstSkipped = skipped.first {
+                result += " Skipped \(skipped.count) existing alias(es), including \(firstSkipped)."
+            }
+            let privateKeyCount = added.filter { $0.authType == .privateKey }.count
+            if privateKeyCount > 0 {
+                result += " Open each of the \(privateKeyCount) private-key profile(s) and use Browse… to grant file access."
+            }
+            importResultMessage = result
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func normalizedProfileName(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     func save(_ profile: ConnectionProfile, password: String?, passphrase: String?) {

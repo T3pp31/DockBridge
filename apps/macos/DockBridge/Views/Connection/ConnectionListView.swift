@@ -13,13 +13,26 @@ struct ConnectionListView: View {
                 profileList
             }
         }
+        .alert("SSH Config Import", isPresented: Binding(
+            get: { viewModel.importResultMessage != nil },
+            set: { if !$0 { viewModel.importResultMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(viewModel.importResultMessage ?? "")
+        }
     }
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup {
-            Button {
-                showNewConnection = true
+            Menu {
+                Button("New Connection…") {
+                    showNewConnection = true
+                }
+                Button("Import from SSH Config…") {
+                    Task { await viewModel.importFromSSHConfig() }
+                }
             } label: {
                 Label("Add", systemImage: "plus")
             }

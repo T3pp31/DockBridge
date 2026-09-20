@@ -20,6 +20,7 @@
 		15724D1548616821B1C6F29D /* UpdateAvailableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0D177341D5C8309D376C81A /* UpdateAvailableView.swift */; };
 		1689E50E8A71292F68153C4E /* PathNavigationHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D985760A54C252085C13AAA /* PathNavigationHistory.swift */; };
 		1772AA8C3458715C16C58552 /* AppUpdateConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 292465ED4DCDE43E139A4E9C /* AppUpdateConfig.swift */; };
+		193104B086D05A2689E325D2 /* SSHConfigParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = B42423E6C41E62152BC34177 /* SSHConfigParser.swift */; };
 		1C4293843D7BBEC971CEE158 /* ClipboardHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EB55A6D6119BAE06270A395 /* ClipboardHelper.swift */; };
 		1CA9409C8154A82603FC6EB0 /* FileDropModifiers.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEBA48C74CF2F9352ACB3588 /* FileDropModifiers.swift */; };
 		1E4AB966167587EA3DA353FA /* AppLogging.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F0A8FC180036720A1E1B562 /* AppLogging.swift */; };
@@ -104,6 +105,7 @@
 		D2089E2889B2D2C48EBD70DD /* HostKeyConfirmViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21889340030F3E1B19D3A47 /* HostKeyConfirmViewTests.swift */; };
 		D23B4C9E4E2B0469BE507D79 /* ConnectionStatusIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE465935459E499151CFCA9D /* ConnectionStatusIndicator.swift */; };
 		D3A48B2435E8E147C634FF98 /* FileTypeIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84B29A44A31F477495651C24 /* FileTypeIcon.swift */; };
+		D6D3C40199DFC7D2162BBFD9 /* SSHConfigParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DB9EC9E67028E3D5F60C4D4 /* SSHConfigParserTests.swift */; };
 		D84B34AF8FDA59BA9E267AA1 /* AuthType.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAE3604B17D67E05C9E12536 /* AuthType.swift */; };
 		E64021DE84238706FA56EBA8 /* UpdateCheckViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A85ACD689F14702D0EF4553 /* UpdateCheckViewModel.swift */; };
 		E7231EA6BE221D18E6326DBF /* VersionComparator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37AFC0ECB72FC39CE65A04FF /* VersionComparator.swift */; };
@@ -137,6 +139,7 @@
 		08F4993F2337892473D3A2FA /* WindowMinSizeModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowMinSizeModifier.swift; sourceTree = "<group>"; };
 		0982DD7A12934B346657D92F /* TransferProgressFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferProgressFormatter.swift; sourceTree = "<group>"; };
 		0C3DD773B195E0553CA6AEEF /* DockBridgeUniffi.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockBridgeUniffi.swift; sourceTree = "<group>"; };
+		0DB9EC9E67028E3D5F60C4D4 /* SSHConfigParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHConfigParserTests.swift; sourceTree = "<group>"; };
 		0DD474B58EEBD4040431DCF8 /* QuickLookPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickLookPresenter.swift; sourceTree = "<group>"; };
 		0E3FE1D16E6BA51E0BD22955 /* ManualTestPlanVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualTestPlanVerificationTests.swift; sourceTree = "<group>"; };
 		0F0A8FC180036720A1E1B562 /* AppLogging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLogging.swift; sourceTree = "<group>"; };
@@ -210,6 +213,7 @@
 		B0C8EEE4674D4D5150FA026A /* HostKeyStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyStore.swift; sourceTree = "<group>"; };
 		B21889340030F3E1B19D3A47 /* HostKeyConfirmViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyConfirmViewTests.swift; sourceTree = "<group>"; };
 		B2364B5125ADC32FA213D5D6 /* MainViewModelTestabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewModelTestabilityTests.swift; sourceTree = "<group>"; };
+		B42423E6C41E62152BC34177 /* SSHConfigParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHConfigParser.swift; sourceTree = "<group>"; };
 		B9D0151BEDAABC188D276137 /* HostKeyConfirmView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyConfirmView.swift; sourceTree = "<group>"; };
 		BAFE71459129089A0FEF8727 /* ConnectionFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionFormView.swift; sourceTree = "<group>"; };
 		C094152383C89E8A0A64D14D /* AppSettingsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsService.swift; sourceTree = "<group>"; };
@@ -395,6 +399,7 @@
 				73F8333C7680AAC97115A06C /* ProfileEndpointChange.swift */,
 				CDB20C85309DC950C1082DAE /* RemotePath.swift */,
 				D7933877E61CBF98CE3DC833 /* SensitiveString.swift */,
+				B42423E6C41E62152BC34177 /* SSHConfigParser.swift */,
 				731417E727E4DA8265BB8885 /* StoredConnectionProfile.swift */,
 				CADFEE9BB79021C72702910F /* TransferOverwritePolicy.swift */,
 				ACBE4A1492B75396ED932C73 /* UniFFIExtensions.swift */,
@@ -496,6 +501,7 @@
 				CE736FA932786CF0F918FA94 /* SecureLocalFileReaderTests.swift */,
 				2A864C589F24866F5373ACCF /* SecurityScopedBookmarkServiceTests.swift */,
 				42E5DC6DD3162F26542577BC /* SensitiveStringTests.swift */,
+				0DB9EC9E67028E3D5F60C4D4 /* SSHConfigParserTests.swift */,
 				0FD0B46A64878555411E395C /* TransferProgressFormatterTests.swift */,
 				05BB12FE8EB2A21EBC8273E1 /* UpdateCheckViewModelTests.swift */,
 				99EC71A49B225645A7167E28 /* VersionComparatorTests.swift */,
@@ -667,6 +673,7 @@
 				396AB247EBC811470C77A593 /* ReleaseCodeSignatureVerifierTests.swift in Sources */,
 				7A6F7E5B24A218D876F4D82E /* RemotePaneSheetsTests.swift in Sources */,
 				07594B1F18FF731F296E16DB /* RemotePathTests.swift in Sources */,
+				D6D3C40199DFC7D2162BBFD9 /* SSHConfigParserTests.swift in Sources */,
 				7F1888649EBBADF9B1924792 /* SecureLocalFileReaderTests.swift in Sources */,
 				4098F7A9B48E7C01D6D8F70F /* SecurityScopedBookmarkServiceTests.swift in Sources */,
 				33DD92E2B157E3A99066AFAF /* SensitiveStringTests.swift in Sources */,
@@ -740,6 +747,7 @@
 				F928696ECA04334C09CC53BE /* RemotePaneView.swift in Sources */,
 				748DA275DA31A9BA1F6053F4 /* RemotePath.swift in Sources */,
 				BB0BCC3443CF3CA5586818E0 /* RustBridgeService.swift in Sources */,
+				193104B086D05A2689E325D2 /* SSHConfigParser.swift in Sources */,
 				105770DB717D22E0B22AD381 /* SecureLocalFileReader.swift in Sources */,
 				55F2C781CE7B26E654490E9A /* SecurityScopedBookmarkService.swift in Sources */,
 				5BEDF0729DAAB3E87975E55D /* SensitiveString.swift in Sources */,

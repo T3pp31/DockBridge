@@ -48,6 +48,60 @@ final class ConnectionListViewModelTests: XCTestCase {
         super.tearDown()
     }
 
+    func testImportSSHConfigDeduplicatesAliasesCaseInsensitively() throws {
+        viewModel.importSSHConfig(contents: """
+        Host Server
+            HostName first.example.com
+
+        Host other
+            HostName other.example.com
+        """)
+
+        XCTAssertEqual(viewModel.profiles.count, 2)
+        XCTAssertNil(viewModel.errorMessage)
+
+        viewModel.importSSHConfig(contents: """
+        Host server
+            HostName replacement.example.com
+        """)
+
+        XCTAssertEqual(viewModel.profiles.count, 2)
+        XCTAssertEqual(try store.loadProfiles().count, 2)
+        XCTAssertTrue(viewModel.importResultMessage?.contains("No profiles were imported") == true)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testImportSSHConfigMarksIdentityFileProfileForExplicitBookmarkGrant() throws {
+        viewModel.importSSHConfig(contents: """
+        Host key-server
+            HostName key.example.com
+            IdentityFile ~/.ssh/id_ed25519
+        """)
+
+        let imported = try XCTUnwrap(viewModel.profiles.first)
+        XCTAssertEqual(imported.authType, .privateKey)
+        XCTAssertEqual(imported.privateKeyPath, NSHomeDirectory() + "/.ssh/id_ed25519")
+        XCTAssertNil(imported.privateKeyBookmark)
+        XCTAssertTrue(viewModel.importResultMessage?.contains("Browse…") == true)
+
+        let persisted = try XCTUnwrap(store.loadProfiles().first)
+        XCTAssertEqual(persisted.authType, .privateKey)
+        XCTAssertNil(persisted.privateKeyPath)
+        XCTAssertNil(persisted.privateKeyBookmark)
+    }
+
+    func testImportSSHConfigReportsNoImportableHostsAsError() {
+        viewModel.importSSHConfig(contents: """
+        Include ~/.ssh/config.d/*
+        Match all
+            User ignored
+        """)
+
+        XCTAssertTrue(viewModel.profiles.isEmpty)
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.importResultMessage)
+    }
+
     func testSaveDeletesPasswordWhenSwitchingToPrivateKey() throws {
         let profileID = UUID()
         var profile = ConnectionProfile(
