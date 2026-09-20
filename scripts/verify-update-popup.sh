@@ -4,15 +4,22 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-APP="${1:-/Users/fukutomiteppei/Library/Developer/Xcode/DerivedData/DockBridge-hjxsfbvxdglziagsfhxqzemiwnff/Build/Products/Debug/DockBridge.app}"
+APP="${1:-/Applications/DockBridge.app}"
+BUNDLE_ID="${BUNDLE_ID:-$(awk -F'"' '/^bundle_identifier / { print $2; exit }' config/release.toml)}"
+if [[ -z "$BUNDLE_ID" ]]; then
+  echo "bundle_identifier not found in config/release.toml" >&2
+  exit 1
+fi
+
 read_skipped_version() {
-  local plist="$HOME/Library/Containers/com.dockbridge.app/Data/Library/Preferences/com.dockbridge.app.plist"
-  /usr/libexec/PlistBuddy -c 'Print :skippedUpdateVersion' "$plist" 2>/dev/null || true
+  # Use `defaults` (cfprefsd) instead of editing the plist directly with
+  # PlistBuddy; the hardcoded container path broke for sandboxed installs and
+  # bypassed cfprefsd caching.
+  defaults read "$BUNDLE_ID" skippedUpdateVersion 2>/dev/null || true
 }
 
 clear_skipped_version() {
-  local plist="$HOME/Library/Containers/com.dockbridge.app/Data/Library/Preferences/com.dockbridge.app.plist"
-  /usr/libexec/PlistBuddy -c 'Delete :skippedUpdateVersion' "$plist" 2>/dev/null || true
+  defaults delete "$BUNDLE_ID" skippedUpdateVersion 2>/dev/null || true
 }
 
 kill_dockbridge() {

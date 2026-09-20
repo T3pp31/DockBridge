@@ -9,6 +9,7 @@ struct UpdateAvailableView: View {
     let downloadErrorMessage: String?
     let onDownload: () -> Void
     let onLater: () -> Void
+    let onSkipVersion: () -> Void
 
     var body: some View {
         DialogCard(title: "Update Available") {
@@ -49,7 +50,7 @@ struct UpdateAvailableView: View {
 
             if let downloadErrorMessage {
                 Text(downloadErrorMessage)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(DesignTokens.Status.error)
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -65,6 +66,8 @@ struct UpdateAvailableView: View {
             }
         } footer: {
             Button("Later", role: .cancel, action: onLater)
+                .disabled(isDownloading)
+            Button("Skip This Version", action: onSkipVersion)
                 .disabled(isDownloading)
             Button(inAppUpdateInstallationEnabled ? "Download" : "Open Release Page", action: onDownload)
                 .keyboardShortcut(.defaultAction)
