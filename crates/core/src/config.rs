@@ -522,13 +522,10 @@ mod tests {
             config.transfer_download_pipeline_depth,
             DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH
         );
-        assert_eq!(
-            config.known_hosts_path,
-            PathBuf::from(default_known_hosts_path())
-        );
+        assert_eq!(config.known_hosts_path, default_known_hosts_path());
         assert_eq!(
             config.openssh_known_hosts_path,
-            PathBuf::from(default_openssh_known_hosts_path())
+            default_openssh_known_hosts_path()
         );
         assert!(config.known_hosts_strict_mode);
         assert!(config.merge_openssh_known_hosts_on_connect);
@@ -546,10 +543,7 @@ mod tests {
         let config = AppConfig::from_toml_file(&path).unwrap();
         assert_eq!(config.connection_timeout_secs, 15);
         assert_eq!(config.transfer_retry_count, 3);
-        assert_eq!(
-            config.known_hosts_path,
-            PathBuf::from(default_known_hosts_path())
-        );
+        assert_eq!(config.known_hosts_path, default_known_hosts_path());
     }
 
     #[test]
