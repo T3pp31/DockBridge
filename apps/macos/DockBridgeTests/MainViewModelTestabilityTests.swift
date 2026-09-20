@@ -184,6 +184,53 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertTrue(accepted)
         XCTAssertFalse(viewModel.showOverwriteAsk)
         XCTAssertEqual(bridge.uploaded.last?.remoteDirectory, "/srv/files")
+        XCTAssertEqual(bridge.uploaded.last?.overwritePolicy.rawValue, "failIfExists")
+    }
+
+    func testOverwriteAskConfirmationPassesReplacePolicy() async throws {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        viewModel.remotePath = "/srv/files"
+        var config = settings.loadConfig()
+        config.transferOverwritePolicy = .ask
+        settings.saveConfig(config)
+        bridge.directoryListings["/srv/files"] = [
+            RemoteFileRecord(name: "existing.txt", path: "/srv/files/existing.txt", isDirectory: false, size: 1, modifiedAtSecs: nil)
+        ]
+
+        let localFile = baseDirectory.appendingPathComponent("existing.txt")
+        try "replacement".write(to: localFile, atomically: true, encoding: .utf8)
+
+        let uploadTask = Task { @MainActor in
+            await viewModel.upload(localURL: localFile, toRemoteDirectory: nil)
+        }
+        await Task.yield()
+        XCTAssertTrue(viewModel.showOverwriteAsk)
+
+        viewModel.confirmOverwriteAsk()
+        let accepted = await uploadTask.value
+
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(bridge.uploaded.last?.overwritePolicy.rawValue, "replace")
+    }
+
+    func testFailIfExistsPassesFailIfExistsPolicyWhenDestinationIsMissing() async throws {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        viewModel.remotePath = "/srv/files"
+        var config = settings.loadConfig()
+        config.transferOverwritePolicy = .failIfExists
+        settings.saveConfig(config)
+        bridge.directoryListings["/srv/files"] = []
+
+        let localFile = baseDirectory.appendingPathComponent("new.txt")
+        try "data".write(to: localFile, atomically: true, encoding: .utf8)
+
+        let accepted = await viewModel.upload(
+            localURL: localFile,
+            toRemoteDirectory: nil
+        )
+
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(bridge.uploaded.last?.overwritePolicy.rawValue, "failIfExists")
     }
 
     // MARK: - Path saving on disconnect

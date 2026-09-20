@@ -1,4 +1,8 @@
 use std::collections::HashSet;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::ffi::CString;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -1429,9 +1433,9 @@ impl PartialLocalTransfer {
     ) -> Result<(), SftpError> {
         self.local_file.take();
 
-        // Always check for symlinks and existing files first. This provides
-        // an early failure path and rejects symlink targets that hard_link
-        // would otherwise follow.
+        // Always check for symlinks and existing files first. The final
+        // no-replace rename below is still authoritative and closes the race
+        // between this early diagnostic check and commit.
         if let Err(err) = prepare_local_finalize_destination(
             final_path,
             self.overwrite_policy,
@@ -1440,49 +1444,37 @@ impl PartialLocalTransfer {
         )
         .await
         {
-            self.abort(true, remote_file).await?;
-            return Err(err);
+            return self.abort_preserving_error(err, remote_file).await;
         }
 
         match self.overwrite_policy {
             TransferOverwritePolicy::FailIfExists => {
-                // Use hard_link + unlink to atomically reserve the final path.
-                // hard_link fails with AlreadyExists if the target appears
-                // between prepare_local_finalize_destination and here,
-                // closing the TOCTOU window.
-                match tokio::fs::hard_link(&self.partial_path, final_path).await {
+                // Use the platform's exclusive rename primitive. Unlike a
+                // metadata check followed by plain rename, this cannot replace
+                // a destination created concurrently. It also works on filesystems
+                // that reject hard links but support atomic rename.
+                match rename_local_noreplace(&self.partial_path, final_path).await {
                     Ok(()) => {
-                        if let Err(err) = tokio::fs::remove_file(&self.partial_path).await {
-                            tracing::warn!(
-                                local = %self.partial_path.display(),
-                                error = %err,
-                                "failed to remove partial after hard_link"
-                            );
-                        }
                         self.committed = true;
                         Ok(())
                     }
                     Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                        let remote = self.remote.clone();
-                        let local = self.local.clone();
-                        self.abort(true, remote_file).await?;
-                        Err(SftpError::DownloadFailed {
-                            remote,
-                            local,
+                        let primary = SftpError::DownloadFailed {
+                            remote: self.remote.clone(),
+                            local: self.local.clone(),
                             message: TransferOverwritePolicy::destination_exists_message(
                                 &final_path.display().to_string(),
                             ),
-                        })
+                        };
+                        self.abort_preserving_error(primary, remote_file).await
                     }
                     Err(err) => {
-                        let remote = self.remote.clone();
-                        let local = self.local.clone();
-                        self.abort(true, remote_file).await?;
-                        Err(SftpError::DownloadFailed {
-                            remote,
-                            local,
+                        let primary = SftpError::DownloadFailed {
+                            remote: self.remote.clone(),
+                            local: self.local.clone(),
                             message: err.to_string(),
-                        })
+                        };
+                        self.abort_preserving_error(primary, remote_file).await
                     }
                 }
             }
@@ -1493,18 +1485,32 @@ impl PartialLocalTransfer {
                         Ok(())
                     }
                     Err(err) => {
-                        let remote = self.remote.clone();
-                        let local = self.local.clone();
-                        self.abort(true, remote_file).await?;
-                        Err(SftpError::DownloadFailed {
-                            remote,
-                            local,
+                        let primary = SftpError::DownloadFailed {
+                            remote: self.remote.clone(),
+                            local: self.local.clone(),
                             message: err.to_string(),
-                        })
+                        };
+                        self.abort_preserving_error(primary, remote_file).await
                     }
                 }
             }
         }
+    }
+
+    async fn abort_preserving_error(
+        &mut self,
+        primary: SftpError,
+        remote_file: &mut RemoteFileHandle,
+    ) -> Result<(), SftpError> {
+        if let Err(cleanup_error) = self.abort(true, remote_file).await {
+            tracing::warn!(
+                primary_error = %primary,
+                cleanup_error = %cleanup_error,
+                local = %self.partial_path.display(),
+                "failed to clean up a partial download after commit failure"
+            );
+        }
+        Err(primary)
     }
 
     /// Aborts an in-progress local download: closes the local partial handle,
@@ -1659,6 +1665,69 @@ async fn open_exclusive_local_file(path: &Path) -> std::io::Result<tokio::fs::Fi
         options.custom_flags(libc::O_NOFOLLOW);
     }
     options.open(path).await
+}
+
+async fn rename_local_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    let from = from.to_path_buf();
+    let to = to.to_path_buf();
+    tokio::task::spawn_blocking(move || rename_local_noreplace_blocking(&from, &to))
+        .await
+        .map_err(io::Error::other)?
+}
+
+#[cfg(target_os = "linux")]
+fn rename_local_noreplace_blocking(from: &Path, to: &Path) -> io::Result<()> {
+    let from = path_to_c_string(from)?;
+    let to = path_to_c_string(to)?;
+    // SAFETY: both pointers come from live CStrings and remain valid for the
+    // duration of this call. AT_FDCWD makes both paths relative to the process
+    // working directory when they are not absolute.
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_local_noreplace_blocking(from: &Path, to: &Path) -> io::Result<()> {
+    let from = path_to_c_string(from)?;
+    let to = path_to_c_string(to)?;
+    // SAFETY: both pointers come from live CStrings and remain valid for the
+    // duration of this call. RENAME_EXCL makes destination creation exclusive.
+    let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn rename_local_noreplace_blocking(_from: &Path, _to: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "atomic no-replace rename is unavailable on this platform",
+    ))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn path_to_c_string(path: &Path) -> io::Result<CString> {
+    CString::new(path.as_os_str().as_bytes()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "file path contains an embedded null byte",
+        )
+    })
 }
 
 async fn prepare_remote_finalize_destination(
@@ -1843,8 +1912,8 @@ mod tests {
         normalize_remote_path, open_exclusive_local_file, partial_file_name,
         partial_local_path_for_suffix, partial_remote_path_for_suffix,
         pipeline_depth_for_chunk_budget, prepare_local_finalize_destination, random_partial_suffix,
-        remote_status_code, upload_from_reader, DownloadFlowError, PartialLocalTransfer,
-        PartialRemoteTransfer, PipelinableTransferWriter, SftpClient,
+        remote_status_code, rename_local_noreplace, upload_from_reader, DownloadFlowError,
+        PartialLocalTransfer, PartialRemoteTransfer, PipelinableTransferWriter, SftpClient,
     };
     use crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
     use crate::error::{RemoteStatusCode, SftpError};
@@ -2612,6 +2681,38 @@ mod tests {
 
         let err = open_exclusive_local_file(&link).await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+    }
+
+    #[tokio::test]
+    async fn rename_local_noreplace_moves_file_when_destination_is_absent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source = temp_dir.path().join("source.partial");
+        let destination = temp_dir.path().join("final.txt");
+        std::fs::write(&source, b"new data").unwrap();
+
+        rename_local_noreplace(&source, &destination)
+            .await
+            .expect("exclusive rename should succeed");
+
+        assert!(!source.exists());
+        assert_eq!(std::fs::read(destination).unwrap(), b"new data");
+    }
+
+    #[tokio::test]
+    async fn rename_local_noreplace_never_replaces_existing_destination() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source = temp_dir.path().join("source.partial");
+        let destination = temp_dir.path().join("final.txt");
+        std::fs::write(&source, b"new data").unwrap();
+        std::fs::write(&destination, b"existing data").unwrap();
+
+        let err = rename_local_noreplace(&source, &destination)
+            .await
+            .expect_err("exclusive rename must reject an existing destination");
+
+        assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(source).unwrap(), b"new data");
+        assert_eq!(std::fs::read(destination).unwrap(), b"existing data");
     }
 
     #[tokio::test]

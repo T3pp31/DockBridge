@@ -175,23 +175,35 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         return nil
     }
 
-    func upload(localPath: String, remoteDirectory: String) async throws {
+    func upload(
+        localPath: String,
+        remoteDirectory: String,
+        overwritePolicy: TransferOverwritePolicy
+    ) async throws {
+        let rustOverwritePolicy = overwritePolicy.rustRecord
         try await runOnBridge { client, sessionId in
             try client.uploadEntry(
                 sessionId: sessionId,
                 localPath: localPath,
-                remoteDirectory: remoteDirectory
+                remoteDirectory: remoteDirectory,
+                overwritePolicy: rustOverwritePolicy
             )
         }
         await refreshTransferQueue()
     }
 
-    func download(remotePath: String, localDirectory: String) async throws {
+    func download(
+        remotePath: String,
+        localDirectory: String,
+        overwritePolicy: TransferOverwritePolicy
+    ) async throws {
+        let rustOverwritePolicy = overwritePolicy.rustRecord
         try await runOnBridge { client, sessionId in
             try client.downloadEntry(
                 sessionId: sessionId,
                 remotePath: remotePath,
-                localDirectory: localDirectory
+                localDirectory: localDirectory,
+                overwritePolicy: rustOverwritePolicy
             )
         }
         await refreshTransferQueue()
@@ -395,6 +407,17 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
                 }
             }
             throw error
+        }
+    }
+}
+
+private extension TransferOverwritePolicy {
+    var rustRecord: TransferOverwritePolicyRecord {
+        switch self {
+        case .replace, .ask:
+            return .replace
+        case .failIfExists:
+            return .failIfExists
         }
     }
 }

@@ -66,6 +66,7 @@ pub struct TransferManager {
     download_pipeline_depth: usize,
     directory_walk_limits: DirectoryWalkLimits,
     tasks: Mutex<Vec<TransferTask>>,
+    overwrite_policies: Mutex<HashMap<u64, TransferOverwritePolicy>>,
     cancellation_flags: Mutex<HashMap<u64, Arc<AtomicBool>>>,
     /// Task ids whose transfer future has not finished yet. `retry_transfer`
     /// refuses to retry a task while it is in this set, so a cancelled task
@@ -88,6 +89,7 @@ impl TransferManager {
             download_pipeline_depth: config.transfer_download_pipeline_depth,
             directory_walk_limits: config.directory_walk_limits(),
             tasks: Mutex::new(Vec::new()),
+            overwrite_policies: Mutex::new(HashMap::new()),
             cancellation_flags: Mutex::new(HashMap::new()),
             in_flight: Mutex::new(HashSet::new()),
             #[cfg(test)]
@@ -106,12 +108,20 @@ impl TransferManager {
     /// Removes completed, failed, and cancelled tasks from the queue.
     pub fn clear_completed_transfers(&self) {
         if let Ok(mut tasks) = self.tasks.lock() {
+            let mut retained_ids = HashSet::new();
             tasks.retain(|task| {
-                matches!(
+                let retain = matches!(
                     task.status,
                     TransferStatus::Pending | TransferStatus::InProgress
-                )
+                );
+                if retain {
+                    retained_ids.insert(task.id);
+                }
+                retain
             });
+            if let Ok(mut policies) = self.overwrite_policies.lock() {
+                policies.retain(|task_id, _| retained_ids.contains(task_id));
+            }
         }
     }
 
@@ -135,6 +145,9 @@ impl TransferManager {
 
         if let Ok(mut tasks) = self.tasks.lock() {
             tasks.clear();
+            if let Ok(mut policies) = self.overwrite_policies.lock() {
+                policies.clear();
+            }
         }
 
         Ok(())
@@ -146,8 +159,8 @@ impl TransferManager {
         session: &SshSession,
         task_id: u64,
     ) -> Result<TransferTask, TransferError> {
-        let task = self
-            .find_task(task_id)
+        let (task, overwrite_policy) = self
+            .find_task_with_policy(task_id)
             .ok_or(TransferError::TaskNotFound { task_id })?;
 
         match task.status {
@@ -166,6 +179,9 @@ impl TransferManager {
 
         if let Ok(mut tasks) = self.tasks.lock() {
             tasks.retain(|existing| existing.id != task_id);
+            if let Ok(mut policies) = self.overwrite_policies.lock() {
+                policies.remove(&task_id);
+            }
         }
         // The cancellation flag is *not* removed here: it is removed by
         // `finalize_task_result` when the original future completes. Removing
@@ -174,12 +190,22 @@ impl TransferManager {
 
         match task.direction {
             TransferDirection::Upload => {
-                self.enqueue_upload(session, &task.local_path, &task.remote_path)
-                    .await
+                self.enqueue_upload_with_policy(
+                    session,
+                    &task.local_path,
+                    &task.remote_path,
+                    overwrite_policy,
+                )
+                .await
             }
             TransferDirection::Download => {
-                self.enqueue_download(session, &task.remote_path, &task.local_path)
-                    .await
+                self.enqueue_download_with_policy(
+                    session,
+                    &task.remote_path,
+                    &task.local_path,
+                    overwrite_policy,
+                )
+                .await
             }
         }
     }
@@ -206,10 +232,29 @@ impl TransferManager {
         }
     }
 
+    #[cfg(test)]
     fn insert_task(&self, task: TransferTask) {
+        self.register_task(task, TransferOverwritePolicy::default());
+    }
+
+    fn register_task(&self, task: TransferTask, overwrite_policy: TransferOverwritePolicy) {
         if let Ok(mut tasks) = self.tasks.lock() {
-            tasks.push(task);
+            if let Ok(mut policies) = self.overwrite_policies.lock() {
+                policies.insert(task.id, overwrite_policy);
+                tasks.push(task);
+            }
         }
+    }
+
+    fn find_task_with_policy(
+        &self,
+        task_id: u64,
+    ) -> Option<(TransferTask, TransferOverwritePolicy)> {
+        let tasks = self.tasks.lock().ok()?;
+        let task = tasks.iter().find(|task| task.id == task_id)?.clone();
+        let policies = self.overwrite_policies.lock().ok()?;
+        let overwrite_policy = policies.get(&task_id).copied().unwrap_or_default();
+        Some((task, overwrite_policy))
     }
 
     fn update_task_status(&self, task_id: u64, status: TransferStatus) {
@@ -393,12 +438,28 @@ impl TransferManager {
         local_path: impl AsRef<Path>,
         remote_path: impl Into<String>,
     ) -> Result<TransferTask, TransferError> {
+        self.enqueue_upload_with_policy(
+            session,
+            local_path,
+            remote_path,
+            TransferOverwritePolicy::default(),
+        )
+        .await
+    }
+
+    pub async fn enqueue_upload_with_policy(
+        &self,
+        session: &SshSession,
+        local_path: impl AsRef<Path>,
+        remote_path: impl Into<String>,
+        overwrite_policy: TransferOverwritePolicy,
+    ) -> Result<TransferTask, TransferError> {
         let task = self.make_task(
             TransferDirection::Upload,
             local_path.as_ref(),
             &remote_path.into(),
         );
-        self.run_upload_task(session, task).await
+        self.run_upload_task(session, task, overwrite_policy).await
     }
 
     /// Builds a Pending task without registering it.
@@ -424,6 +485,7 @@ impl TransferManager {
         &self,
         session: &SshSession,
         task: TransferTask,
+        overwrite_policy: TransferOverwritePolicy,
     ) -> Result<TransferTask, TransferError> {
         let task_id = task.id;
         let local_path = task.local_path.clone();
@@ -431,7 +493,7 @@ impl TransferManager {
         let original = task.clone();
 
         if self.find_task(task_id).is_none() {
-            self.insert_task(task);
+            self.register_task(task, overwrite_policy);
         }
         self.register_cancellation_flag(task_id);
         self.mark_in_flight(task_id);
@@ -442,7 +504,13 @@ impl TransferManager {
         }
 
         let result = self
-            .run_upload_with_retries(session, task_id, &local_path, &remote_path)
+            .run_upload_with_retries(
+                session,
+                task_id,
+                &local_path,
+                &remote_path,
+                overwrite_policy,
+            )
             .await;
 
         self.finalize_task_result(task_id, result)?;
@@ -457,12 +525,29 @@ impl TransferManager {
         remote_path: impl Into<String>,
         local_path: impl AsRef<Path>,
     ) -> Result<TransferTask, TransferError> {
+        self.enqueue_download_with_policy(
+            session,
+            remote_path,
+            local_path,
+            TransferOverwritePolicy::default(),
+        )
+        .await
+    }
+
+    pub async fn enqueue_download_with_policy(
+        &self,
+        session: &SshSession,
+        remote_path: impl Into<String>,
+        local_path: impl AsRef<Path>,
+        overwrite_policy: TransferOverwritePolicy,
+    ) -> Result<TransferTask, TransferError> {
         let task = self.make_task(
             TransferDirection::Download,
             local_path.as_ref(),
             &remote_path.into(),
         );
-        self.run_download_task(session, task).await
+        self.run_download_task(session, task, overwrite_policy)
+            .await
     }
 
     /// Registers an already-built task and executes it to completion.
@@ -470,6 +555,7 @@ impl TransferManager {
         &self,
         session: &SshSession,
         task: TransferTask,
+        overwrite_policy: TransferOverwritePolicy,
     ) -> Result<TransferTask, TransferError> {
         let task_id = task.id;
         let local_path = task.local_path.clone();
@@ -477,7 +563,7 @@ impl TransferManager {
         let original = task.clone();
 
         if self.find_task(task_id).is_none() {
-            self.insert_task(task);
+            self.register_task(task, overwrite_policy);
         }
         self.register_cancellation_flag(task_id);
         self.mark_in_flight(task_id);
@@ -488,7 +574,13 @@ impl TransferManager {
         }
 
         let result = self
-            .run_download_with_retries(session, task_id, &remote_path, &local_path)
+            .run_download_with_retries(
+                session,
+                task_id,
+                &remote_path,
+                &local_path,
+                overwrite_policy,
+            )
             .await;
 
         self.finalize_task_result(task_id, result)?;
@@ -508,6 +600,22 @@ impl TransferManager {
         session: &SshSession,
         local_path: impl AsRef<std::path::Path>,
         remote_directory: impl Into<String>,
+    ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
+        self.enqueue_upload_entry_with_policy(
+            session,
+            local_path,
+            remote_directory,
+            TransferOverwritePolicy::default(),
+        )
+        .await
+    }
+
+    pub async fn enqueue_upload_entry_with_policy(
+        &self,
+        session: &SshSession,
+        local_path: impl AsRef<std::path::Path>,
+        remote_directory: impl Into<String>,
+        overwrite_policy: TransferOverwritePolicy,
     ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
         let local_path = local_path.as_ref();
         let remote_directory = remote_directory.into();
@@ -597,14 +705,14 @@ impl TransferManager {
             // Register all tasks (Pending), then execute each; failures
             // continue to the next file.
             for task in &tasks {
-                self.insert_task(task.clone());
+                self.register_task(task.clone(), overwrite_policy);
                 self.register_cancellation_flag(task.id);
             }
 
             let mut executed = Vec::with_capacity(tasks.len());
             for task in tasks {
                 let task_id = task.id;
-                let final_task = match self.run_upload_task(session, task).await {
+                let final_task = match self.run_upload_task(session, task, overwrite_policy).await {
                     Ok(final_task) => final_task,
                     Err(_) => {
                         batch.failed += 1;
@@ -637,7 +745,7 @@ impl TransferManager {
                 .map_err(transfer_error_from_sftp)?;
         }
         let task = self
-            .enqueue_upload(session, local_path, remote_path)
+            .enqueue_upload_with_policy(session, local_path, remote_path, overwrite_policy)
             .await?;
         batch.succeeded += 1;
         Ok((vec![task], batch))
@@ -652,6 +760,22 @@ impl TransferManager {
         session: &SshSession,
         remote_path: impl Into<String>,
         local_directory: impl AsRef<std::path::Path>,
+    ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
+        self.enqueue_download_entry_with_policy(
+            session,
+            remote_path,
+            local_directory,
+            TransferOverwritePolicy::default(),
+        )
+        .await
+    }
+
+    pub async fn enqueue_download_entry_with_policy(
+        &self,
+        session: &SshSession,
+        remote_path: impl Into<String>,
+        local_directory: impl AsRef<std::path::Path>,
+        overwrite_policy: TransferOverwritePolicy,
     ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
         let remote_path = remote_path.into();
         let local_directory = local_directory.as_ref();
@@ -734,14 +858,17 @@ impl TransferManager {
             }
 
             for task in &tasks {
-                self.insert_task(task.clone());
+                self.register_task(task.clone(), overwrite_policy);
                 self.register_cancellation_flag(task.id);
             }
 
             let mut executed = Vec::with_capacity(tasks.len());
             for task in tasks {
                 let task_id = task.id;
-                let final_task = match self.run_download_task(session, task).await {
+                let final_task = match self
+                    .run_download_task(session, task, overwrite_policy)
+                    .await
+                {
                     Ok(final_task) => final_task,
                     Err(_) => {
                         batch.failed += 1;
@@ -768,7 +895,7 @@ impl TransferManager {
                 .unwrap_or("download");
             let local_path = local_directory.join(file_name);
             let task = self
-                .enqueue_download(session, &normalized, &local_path)
+                .enqueue_download_with_policy(session, &normalized, &local_path, overwrite_policy)
                 .await?;
             batch.succeeded += 1;
             Ok((vec![task], batch))
@@ -781,6 +908,7 @@ impl TransferManager {
         task_id: u64,
         local_path: &Path,
         remote_path: &str,
+        overwrite_policy: TransferOverwritePolicy,
     ) -> Result<(), TransferError> {
         let client = SftpClient::new(session);
         let total_bytes = tokio::fs::metadata(local_path)
@@ -815,7 +943,7 @@ impl TransferManager {
                     local_path,
                     remote_path,
                     self.chunk_size,
-                    TransferOverwritePolicy::default(),
+                    overwrite_policy,
                     {
                         let cancel_flag = Arc::clone(&cancel_flag);
                         move || cancel_flag.load(Ordering::Relaxed)
@@ -900,6 +1028,7 @@ impl TransferManager {
         task_id: u64,
         remote_path: &str,
         local_path: &Path,
+        overwrite_policy: TransferOverwritePolicy,
     ) -> Result<(), TransferError> {
         let client = SftpClient::new(session);
         let total_bytes = client.remote_file_size(remote_path).await.unwrap_or(0);
@@ -928,7 +1057,7 @@ impl TransferManager {
                     local_path,
                     self.chunk_size,
                     self.download_pipeline_depth,
-                    TransferOverwritePolicy::default(),
+                    overwrite_policy,
                     {
                         let cancel_flag = Arc::clone(&cancel_flag);
                         move || cancel_flag.load(Ordering::Relaxed)
@@ -1744,6 +1873,118 @@ mod tests {
         assert!(
             crate::sftp::test_server::list_partial_paths(local_dir.path()).is_empty(),
             "no partial files may remain"
+        );
+    }
+    #[tokio::test]
+    async fn enqueue_download_with_fail_if_exists_policy_rejects_existing_destination() {
+        // Given: a remote file and an existing local destination
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/fie.bin", b"remote data")
+            .await;
+        let session = server.connect_session().await;
+        let manager = TransferManager::new(&AppConfig::default());
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("fie.bin");
+        tokio::fs::write(&local_path, b"existing local data")
+            .await
+            .unwrap();
+
+        // When: downloading with FailIfExists
+        let err = manager
+            .enqueue_download_with_policy(
+                &session,
+                "/download/fie.bin",
+                &local_path,
+                TransferOverwritePolicy::FailIfExists,
+            )
+            .await
+            .expect_err("FailIfExists download should fail");
+
+        // Then: the transfer failed and the local bytes are untouched
+        assert!(matches!(err, TransferError::RetriesExhausted { .. }));
+        let local_contents = tokio::fs::read(&local_path).await.unwrap();
+        assert_eq!(local_contents, b"existing local data");
+        assert!(
+            crate::sftp::test_server::list_partial_paths(local_dir.path()).is_empty(),
+            "no partial files may remain"
+        );
+    }
+
+    #[tokio::test]
+    async fn enqueue_upload_with_fail_if_exists_policy_rejects_existing_remote() {
+        // Given: an existing remote file and a local source
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/upload/fie.txt", b"old remote")
+            .await;
+        let session = server.connect_session().await;
+        let manager = TransferManager::new(&AppConfig::default());
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("source.txt");
+        tokio::fs::write(&local_path, b"new local").await.unwrap();
+
+        // When: uploading with FailIfExists
+        let err = manager
+            .enqueue_upload_with_policy(
+                &session,
+                &local_path,
+                "/upload/fie.txt",
+                TransferOverwritePolicy::FailIfExists,
+            )
+            .await
+            .expect_err("FailIfExists upload should fail");
+
+        // Then: the transfer failed and the remote file keeps its old contents
+        assert!(matches!(err, TransferError::RetriesExhausted { .. }));
+        assert!(server.remote_file_exists("/upload/fie.txt"));
+        assert_eq!(
+            tokio::fs::read(server.root.join("upload/fie.txt"))
+                .await
+                .unwrap(),
+            b"old remote"
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_transfer_preserves_fail_if_exists_policy() {
+        // Given: a failed upload task whose original policy forbids replacing
+        // an existing destination.
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/upload/retry-policy.txt", b"existing remote")
+            .await;
+        let session = server.connect_session().await;
+        let manager = TransferManager::new(&AppConfig::default());
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("retry-policy.txt");
+        tokio::fs::write(&local_path, b"replacement").await.unwrap();
+
+        let mut task = manager.make_task(
+            TransferDirection::Upload,
+            &local_path,
+            "/upload/retry-policy.txt",
+        );
+        task.status = TransferStatus::Failed {
+            message: "initial failure".to_string(),
+        };
+        let task_id = task.id;
+        manager.register_task(task, TransferOverwritePolicy::FailIfExists);
+
+        // When: the user retries the failed task.
+        let err = manager
+            .retry_transfer(&session, task_id)
+            .await
+            .expect_err("retry must retain FailIfExists");
+
+        // Then: the existing remote file remains untouched. If retry had
+        // fallen back to Replace, this assertion would observe "replacement".
+        assert!(matches!(err, TransferError::RetriesExhausted { .. }));
+        assert_eq!(
+            tokio::fs::read(server.root.join("upload/retry-policy.txt"))
+                .await
+                .unwrap(),
+            b"existing remote"
         );
     }
 

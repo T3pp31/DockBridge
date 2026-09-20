@@ -729,11 +729,15 @@ final class MainViewModel: ObservableObject {
         return await runTransferOrAsk(
             destinationPath: destinationPath,
             destinationSide: .remote
-        ) {
+        ) { overwritePolicy in
             // do NOT call prepareRemoteWorkingDirectory() here: it rewrites
             // `remotePath` (when browsing "/") and would change the target.
             do {
-                try await self.bridge.upload(localPath: localURL.path, remoteDirectory: normalizedDirectory)
+                try await self.bridge.upload(
+                    localPath: localURL.path,
+                    remoteDirectory: normalizedDirectory,
+                    overwritePolicy: overwritePolicy
+                )
                 await self.transferQueue.refresh()
                 await self.reloadRemote()
                 return true
@@ -757,12 +761,13 @@ final class MainViewModel: ObservableObject {
         return await runTransferOrAsk(
             destinationPath: destinationPath,
             destinationSide: .local
-        ) {
+        ) { overwritePolicy in
             do {
                 let normalizedRemotePath = try RemotePath.normalize(remotePath)
                 try await self.bridge.download(
                     remotePath: normalizedRemotePath,
-                    localDirectory: toLocalDirectory.path
+                    localDirectory: toLocalDirectory.path,
+                    overwritePolicy: overwritePolicy
                 )
                 await self.transferQueue.refresh()
                 self.reloadLocal()
@@ -799,24 +804,22 @@ final class MainViewModel: ObservableObject {
     private func runTransferOrAsk(
         destinationPath: String,
         destinationSide: TransferDestinationSide,
-        perform: @escaping () async -> Bool
+        perform: @escaping (TransferOverwritePolicy) async -> Bool
     ) async -> Bool {
         let policy = settings.loadConfig().transferOverwritePolicy
 
         switch policy {
         case .replace:
             errorMessage = nil
-            return await perform()
+            return await perform(.replace)
 
         case .failIfExists:
-            // Pre-check only: UniFFI AppConfigRecord does not yet carry overwrite policy,
-            // so the Rust engine still uses Replace after the transfer starts.
             if await destinationExists(at: destinationPath, side: destinationSide) {
                 errorMessage = "A file already exists at the destination."
                 return false
             }
             errorMessage = nil
-            return await perform()
+            return await perform(.failIfExists)
 
         case .ask:
             if await destinationExists(at: destinationPath, side: destinationSide) {
@@ -825,10 +828,12 @@ final class MainViewModel: ObservableObject {
                 let replace = await withCheckedContinuation { continuation in
                     overwriteAskContinuation = continuation
                 }
-                return replace ? await perform() : false
+                return replace ? await perform(.replace) : false
             }
             errorMessage = nil
-            return await perform()
+            // If a destination appears after the UI pre-check, fail safely
+            // instead of overwriting a file the user was never asked about.
+            return await perform(.failIfExists)
         }
     }
 

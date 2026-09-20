@@ -18,9 +18,17 @@ final class FakeBridge: RemoteBridging {
     /// Transfer tasks returned by `fetchTransferTasks`.
     var transferTasks: [TransferTaskRecord] = []
     /// Upload destinations recorded during `upload`.
-    private(set) var uploaded: [(localPath: String, remoteDirectory: String)] = []
+    private(set) var uploaded: [(
+        localPath: String,
+        remoteDirectory: String,
+        overwritePolicy: TransferOverwritePolicy
+    )] = []
     /// Download destinations recorded during `download`.
-    private(set) var downloaded: [(remotePath: String, localDirectory: String)] = []
+    private(set) var downloaded: [(
+        remotePath: String,
+        localDirectory: String,
+        overwritePolicy: TransferOverwritePolicy
+    )] = []
     /// Delete paths recorded during `deleteRemote`.
     private(set) var deleted: [String] = []
     /// Rename pairs recorded during `renameRemote`.
@@ -72,15 +80,23 @@ final class FakeBridge: RemoteBridging {
         return nil
     }
 
-    func upload(localPath: String, remoteDirectory: String) async throws {
-        uploaded.append((localPath, remoteDirectory))
+    func upload(
+        localPath: String,
+        remoteDirectory: String,
+        overwritePolicy: TransferOverwritePolicy
+    ) async throws {
+        uploaded.append((localPath, remoteDirectory, overwritePolicy))
         if uploadFails {
             throw DockBridgeError.Generic(message: "simulated upload failure")
         }
     }
 
-    func download(remotePath: String, localDirectory: String) async throws {
-        downloaded.append((remotePath, localDirectory))
+    func download(
+        remotePath: String,
+        localDirectory: String,
+        overwritePolicy: TransferOverwritePolicy
+    ) async throws {
+        downloaded.append((remotePath, localDirectory, overwritePolicy))
         if downloadFails {
             throw DockBridgeError.Generic(message: "simulated download failure")
         }

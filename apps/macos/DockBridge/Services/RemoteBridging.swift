@@ -26,8 +26,16 @@ protocol RemoteBridging {
     func getInitialDirectory() async throws -> String
     func listDirectory(path: String) async throws -> [RemoteFileRecord]
     func firstExistingHomeDirectoryCandidate(for username: String) async -> String?
-    func upload(localPath: String, remoteDirectory: String) async throws
-    func download(remotePath: String, localDirectory: String) async throws
+    func upload(
+        localPath: String,
+        remoteDirectory: String,
+        overwritePolicy: TransferOverwritePolicy
+    ) async throws
+    func download(
+        remotePath: String,
+        localDirectory: String,
+        overwritePolicy: TransferOverwritePolicy
+    ) async throws
     func deleteRemote(path: String) async throws
     func renameRemote(from: String, to: String) async throws
     func mkdirRemote(path: String) async throws
@@ -37,4 +45,26 @@ protocol RemoteBridging {
     func clearAllTransfers() async throws
     func retryTransfer(taskId: UInt64) async throws
     func respondToHostKeyChallenge(accepted: Bool)
+}
+
+extension RemoteBridging {
+    /// Backward-compatible convenience for callers that explicitly want the
+    /// historical replace behavior.
+    func upload(localPath: String, remoteDirectory: String) async throws {
+        try await upload(
+            localPath: localPath,
+            remoteDirectory: remoteDirectory,
+            overwritePolicy: .replace
+        )
+    }
+
+    /// Backward-compatible convenience for callers that explicitly want the
+    /// historical replace behavior.
+    func download(remotePath: String, localDirectory: String) async throws {
+        try await download(
+            remotePath: remotePath,
+            localDirectory: localDirectory,
+            overwritePolicy: .replace
+        )
+    }
 }
