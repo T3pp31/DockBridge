@@ -1,6 +1,7 @@
 //! UniFFI bridge exposing DockBridge core to Swift.
 
 // UniFFI scaffolding emits a large `MetadataBuffer` const; allow it under `-D warnings`.
+#![allow(clippy::large_const_arrays)]
 
 use std::collections::HashMap;
 use std::path::PathBuf;
