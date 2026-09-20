@@ -60,7 +60,12 @@ jobs:
               found { print }
             ' CHANGELOG.md > "$NOTES_FILE"
           else
-            echo "DockBridge ${VERSION}" > "$NOTES_FILE"
+            echo "error: no [${VERSION}] section found in CHANGELOG.md; add a section like:" >&2
+            echo "## [${VERSION}] - YYYY-MM-DD" >&2
+            echo "### Added" >&2
+            echo "- ..." >&2
+            echo "then re-run the release." >&2
+            exit 1
           fi
           echo "path=${NOTES_FILE}" >> "$GITHUB_OUTPUT"
 
