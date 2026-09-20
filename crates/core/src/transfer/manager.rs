@@ -569,6 +569,7 @@ impl TransferManager {
             for entry in result.files {
                 let local_path = local_root.join(&entry.relative_path);
                 ensure_local_path_within_root(&local_root, &local_path)
+                    .await
                     .map_err(transfer_error_from_sftp)?;
                 if let Some(parent) = local_path.parent() {
                     tokio::fs::create_dir_all(parent)

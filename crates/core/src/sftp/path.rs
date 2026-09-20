@@ -7,6 +7,10 @@ use super::tree::normalize_remote_path;
 /// Returns the parent directory of `remote_path`, or `None` for the root.
 ///
 /// `"/"` and empty paths have no parent. `"/file.txt"` has parent `"/"`.
+///
+/// Single source of truth shared by the SFTP client and the transfer manager
+/// (issue #321: previously duplicated in `sftp/client.rs` and
+/// `transfer/manager.rs`).
 pub fn parent_remote_path(remote_path: &str) -> Result<Option<String>, SftpError> {
     let normalized = normalize_remote_path(remote_path)?;
     if normalized == "/" {

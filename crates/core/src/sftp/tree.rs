@@ -122,45 +122,6 @@ fn invalid_local_path(path: &Path) -> SftpError {
     }
 }
 
-fn canonicalize_local_path(path: &Path) -> Result<PathBuf, SftpError> {
-    std::fs::canonicalize(path).map_err(|_| invalid_local_path(path))
-}
-
-fn resolve_local_path_for_root_check(path: &Path) -> Result<PathBuf, SftpError> {
-    if path.exists() {
-        return canonicalize_local_path(path);
-    }
-
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| invalid_local_path(path))?
-        .to_os_string();
-
-    let mut parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut pending_components: Vec<std::ffi::OsString> = Vec::new();
-
-    while !parent.as_os_str().is_empty() && !parent.exists() {
-        if let Some(name) = parent.file_name() {
-            pending_components.push(name.to_os_string());
-        }
-        parent = parent.parent().unwrap_or_else(|| Path::new("."));
-    }
-
-    let canonical_parent = if parent.as_os_str().is_empty() {
-        canonicalize_local_path(Path::new("."))?
-    } else {
-        canonicalize_local_path(parent)?
-    };
-
-    let mut resolved = canonical_parent;
-    pending_components.reverse();
-    for component in pending_components {
-        resolved.push(component);
-    }
-    resolved.push(file_name);
-    Ok(resolved)
-}
-
 fn ensure_canonical_path_within_root(
     canonical_root: &Path,
     canonical_path: &Path,
@@ -178,7 +139,10 @@ fn ensure_canonical_path_within_root(
 
 /// Ensures `path` resolves under `root` after normalizing `.`, rejecting `..`, and resolving
 /// symlinks via canonicalization.
-pub fn ensure_local_path_within_root(root: &Path, path: &Path) -> Result<(), SftpError> {
+///
+/// Async because canonicalization and existence checks can block on disk I/O;
+/// blocking the tokio runtime would stall other transfers (issue #321).
+pub async fn ensure_local_path_within_root(root: &Path, path: &Path) -> Result<(), SftpError> {
     let normalized_root = normalize_local_path(root)?;
     let normalized_path = normalize_local_path(path)?;
 
@@ -188,9 +152,56 @@ pub fn ensure_local_path_within_root(root: &Path, path: &Path) -> Result<(), Sft
             .map_err(|_| invalid_local_path(path))?;
     }
 
-    let canonical_root = canonicalize_local_path(root)?;
-    let resolved_path = resolve_local_path_for_root_check(path)?;
+    let canonical_root = async_canonicalize_local_path(root).await?;
+    let resolved_path = resolve_local_path_for_root_check(path).await?;
     ensure_canonical_path_within_root(&canonical_root, &resolved_path, path)
+}
+
+async fn async_canonicalize_local_path(path: &Path) -> Result<PathBuf, SftpError> {
+    tokio::fs::canonicalize(path)
+        .await
+        .map_err(|_| invalid_local_path(path))
+}
+
+async fn resolve_local_path_for_root_check(path: &Path) -> Result<PathBuf, SftpError> {
+    if tokio::fs::try_exists(path).await.unwrap_or(false) {
+        return async_canonicalize_local_path(path).await;
+    }
+
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| invalid_local_path(path))?
+        .to_os_string();
+
+    let mut parent = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let mut pending_components: Vec<std::ffi::OsString> = Vec::new();
+
+    while !parent.as_os_str().is_empty() && !tokio::fs::try_exists(&parent).await.unwrap_or(false) {
+        if let Some(name) = parent.file_name() {
+            pending_components.push(name.to_os_string());
+        }
+        parent = parent
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+    }
+
+    let canonical_parent = if parent.as_os_str().is_empty() {
+        async_canonicalize_local_path(Path::new(".")).await?
+    } else {
+        async_canonicalize_local_path(&parent).await?
+    };
+
+    let mut resolved = canonical_parent;
+    pending_components.reverse();
+    for component in pending_components {
+        resolved.push(component);
+    }
+    resolved.push(file_name);
+    Ok(resolved)
 }
 
 /// Joins a remote base path with a relative path using POSIX separators.
@@ -671,8 +682,8 @@ mod tests {
         assert!(validate_remote_entry_name("..hidden").is_ok());
     }
 
-    #[test]
-    fn ensure_local_path_within_root_rejects_escape() {
+    #[tokio::test]
+    async fn ensure_local_path_within_root_rejects_escape() {
         // Given: a download root and a path that escapes it
         // When: ensure_local_path_within_root is called
         // Then: InvalidRemotePath is returned
@@ -680,12 +691,14 @@ mod tests {
         let root = dir.path().join("download");
         fs::create_dir(&root).unwrap();
         let escaped = root.join("../secret.txt");
-        let err = ensure_local_path_within_root(&root, &escaped).unwrap_err();
+        let err = ensure_local_path_within_root(&root, &escaped)
+            .await
+            .unwrap_err();
         assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
     }
 
-    #[test]
-    fn ensure_local_path_within_root_accepts_nested_paths() {
+    #[tokio::test]
+    async fn ensure_local_path_within_root_accepts_nested_paths() {
         // Given: a nested path under the root
         // When: ensure_local_path_within_root is called
         // Then: validation succeeds
@@ -693,11 +706,11 @@ mod tests {
         let root = dir.path().join("download");
         fs::create_dir_all(root.join("nested")).unwrap();
         let nested = root.join("nested/file.txt");
-        assert!(ensure_local_path_within_root(&root, &nested).is_ok());
+        assert!(ensure_local_path_within_root(&root, &nested).await.is_ok());
     }
 
-    #[test]
-    fn ensure_local_path_within_root_accepts_nonexistent_nested_paths() {
+    #[tokio::test]
+    async fn ensure_local_path_within_root_accepts_nonexistent_nested_paths() {
         // Given: a download destination that does not exist yet
         // When: ensure_local_path_within_root is called
         // Then: validation succeeds when the logical path stays under the root
@@ -705,12 +718,12 @@ mod tests {
         let root = dir.path().join("download");
         fs::create_dir(&root).unwrap();
         let nested = root.join("nested/new/file.txt");
-        assert!(ensure_local_path_within_root(&root, &nested).is_ok());
+        assert!(ensure_local_path_within_root(&root, &nested).await.is_ok());
     }
 
     #[cfg(unix)]
-    #[test]
-    fn ensure_local_path_within_root_rejects_symlink_escape() {
+    #[tokio::test]
+    async fn ensure_local_path_within_root_rejects_symlink_escape() {
         // Given: a symlink under the root that points outside it
         // When: ensure_local_path_within_root is called
         // Then: InvalidRemotePath is returned
@@ -723,13 +736,15 @@ mod tests {
             .unwrap();
 
         let escaped = root.join("escape.txt");
-        let err = ensure_local_path_within_root(&root, &escaped).unwrap_err();
+        let err = ensure_local_path_within_root(&root, &escaped)
+            .await
+            .unwrap_err();
         assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
     }
 
     #[cfg(unix)]
-    #[test]
-    fn ensure_local_path_within_root_rejects_symlink_directory_escape() {
+    #[tokio::test]
+    async fn ensure_local_path_within_root_rejects_symlink_directory_escape() {
         // Given: a directory symlink under the root that points outside it
         // When: ensure_local_path_within_root is called for a nested file path
         // Then: InvalidRemotePath is returned
@@ -741,7 +756,9 @@ mod tests {
         std::os::unix::fs::symlink(outside.path(), root.join("link_dir")).unwrap();
 
         let escaped = root.join("link_dir/secret.txt");
-        let err = ensure_local_path_within_root(&root, &escaped).unwrap_err();
+        let err = ensure_local_path_within_root(&root, &escaped)
+            .await
+            .unwrap_err();
         assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
     }
 

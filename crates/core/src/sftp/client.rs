@@ -167,9 +167,8 @@ impl<'a> SftpClient<'a> {
             self.sftp()
                 .metadata(&remote_path)
                 .await
-                .map_err(|err| SftpError::DownloadFailed {
-                    remote: remote_path.clone(),
-                    local: String::new(),
+                .map_err(|err| SftpError::StatFailed {
+                    path: remote_path.clone(),
                     message: err.to_string(),
                 })?;
         Ok(metadata.size.unwrap_or(0))
@@ -661,7 +660,7 @@ impl<'a> SftpClient<'a> {
 
             for entry in result.files {
                 let local_path = local_root.join(&entry.relative_path);
-                ensure_local_path_within_root(&local_root, &local_path)?;
+                ensure_local_path_within_root(&local_root, &local_path).await?;
                 if let Some(parent) = local_path.parent() {
                     let mut ancestor = parent.to_path_buf();
                     while !created_dirs.contains(&ancestor) {
@@ -1040,6 +1039,19 @@ where
         // Drain any in-flight write first. While Pending, we never reach the
         // cancel branch below, so cancel cannot race with a live pending_write.
         if self.pending_write.is_some() {
+            // Contract guard: `poll_pending` reports the *pending* buffer's
+            // length. A future caller that abandons a `write_all` mid-buffer
+            // would get a mismatched count (silent byte loss), so refuse it
+            // explicitly instead (issue #321).
+            if let Some(expected) = self.pending_len {
+                if buf.len() != expected {
+                    return Poll::Ready(Err(io::Error::other(format!(
+                        "writer returned {} bytes for a {} byte buffer; a pending write was not fully consumed",
+                        expected,
+                        buf.len()
+                    ))));
+                }
+            }
             return self.poll_pending(cx);
         }
 
