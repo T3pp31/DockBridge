@@ -94,6 +94,25 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # MSRV job: guards against unintentionally raising rust-version. Uses
+  # 1.91 (see [workspace.package] rust-version in Cargo.toml).
+  msrv:
+    name: MSRV (1.91)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.91.0
+
+      # --all-targets also compiles unit tests and build scripts, so a dep that
+      # only fails to link/codegen at 1.91 is caught here rather than at merge.
+      - name: Check workspace at MSRV
+        run: cargo check --workspace --all-targets
+
   # macOS job: compile/test only (unsigned). Release signing and notarization run in
   # .github/workflows/release.yml — see docs/security.md#release-signing-pipeline.
   macos:
