@@ -1,5 +1,6 @@
 name: DockBridge
 options:
+  xcodeVersion: "16.0"
   bundleIdPrefix: com.dockbridge
   deploymentTarget:
     macOS: "15.0"
@@ -72,6 +73,8 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/DockBridge.app/Contents/MacOS/DockBridge
         BUNDLE_LOADER: $(TEST_HOST)
+        HEADER_SEARCH_PATHS:
+          - $(PROJECT_DIR)/DockBridge/Generated/Headers
         SWIFT_STRICT_CONCURRENCY: complete
 
 schemes:
@@ -81,3 +84,8 @@ schemes:
         DockBridge: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - name: DockBridgeTests
+          parallelizable: true

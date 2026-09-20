@@ -4,6 +4,24 @@ enum AppUpdateConfig {
     static let githubRepo = "T3pp31/DockBridge"
     static let releasesLatestURL = URL(string: "https://api.github.com/repos/T3pp31/DockBridge/releases/latest")!
     static let githubAPIAcceptHeader = "application/vnd.github+json"
+    static let githubAPIVersion = "2022-11-28"
+
+    /// User-Agent sent to api.github.com (GitHub requires one and recommends
+    /// an identifiable client).
+    static var userAgent: String {
+        "DockBridge/\(VersionComparator.currentAppVersion) (macOS)"
+    }
+
+    /// Stored `ETag` from the last successful release check, sent as
+    /// `If-None-Match` on the next check to conserve the unauthenticated
+    /// rate limit (60 req/h/IP).
+    static let etagDefaultsKey = "updateCheckETag"
+    static func persistETag(_ etag: String) {
+        UserDefaults.standard.set(etag, forKey: etagDefaultsKey)
+    }
+    static func showExistingETag() -> String? {
+        UserDefaults.standard.string(forKey: etagDefaultsKey)
+    }
 
     static let allowedDownloadHosts: Set<String> = ["github.com", "objects.githubusercontent.com"]
     static let githubReleaseDownloadPathPrefix = "/T3pp31/DockBridge/releases/download/"

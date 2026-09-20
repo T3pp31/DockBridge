@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches:
@@ -8,41 +11,47 @@ on:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   security-audit:
     name: Security audit
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       checks: write
       issues: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Audit dependencies
-        uses: rustsec/audit-check@v2.0.0
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998  # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   rust:
     name: Rust
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable (tag via rust-toolchain.toml)
         with:
           components: rustfmt, clippy
 
       - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           shared-key: ci-rust
           # Keep ~/.cargo/bin out of rust-cache so the dedicated cargo-cyclonedx
@@ -52,11 +61,31 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Shellcheck scripts
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck scripts/*.sh
+          else
+            echo 'shellcheck not installed; installing...'
+            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null
+            shellcheck scripts/*.sh
+          fi
+
+      - name: Check version consistency (Cargo.toml == release.toml)
+        run: |
+          cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          release_version="$(awk -F'"' '/^version = / { print $2; exit }' config/release.toml)"
+          if [[ "$cargo_version" != "$release_version" ]]; then
+            echo "error: Cargo.toml version ($cargo_version) != config/release.toml version ($release_version)" >&2
+            exit 1
+          fi
+          echo "version=$cargo_version"
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Test core crate
-        run: cargo test -p dockbridge-core
+      - name: Test workspace (all targets)
+        run: cargo test --workspace --all-targets
 
       - name: Build workspace
         run: cargo build --workspace
@@ -72,7 +101,7 @@ jobs:
 
       - name: Cache cargo-cyclonedx
         id: cache-cyclonedx
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: ~/.cargo/bin/cargo-cyclonedx
           key: cargo-cyclonedx-${{ runner.os }}-${{ steps.cyclonedx.outputs.version }}
@@ -85,7 +114,7 @@ jobs:
         run: ./scripts/generate-sbom.sh --out dist
 
       - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: dockbridge-sbom
           path: |
@@ -93,6 +122,27 @@ jobs:
             dist/*.cdx.json.sha256
           if-no-files-found: error
           retention-days: 14
+
+  # MSRV job: guards against unintentionally raising rust-version. Uses
+  # 1.91 (see [workspace.package] rust-version in Cargo.toml).
+  msrv:
+    name: MSRV (1.91)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@8d8cc9a8e0d47b64af669de71110e76860d6afbd  # 1.91.0
+
+      # --all-targets also compiles unit tests and build scripts, so a dep that
+      # only fails to link/codegen at 1.91 is caught here rather than at merge.
+      - name: Check workspace at MSRV
+        run: cargo check --workspace --all-targets
 
   # macOS job: compile/test only (unsigned). Release signing and notarization run in
   # .github/workflows/release.yml — see docs/security.md#release-signing-pipeline.
@@ -104,13 +154,15 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable (tag via rust-toolchain.toml)
 
       - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
         with:
           shared-key: ci-macos
           # Keep ~/.cargo/bin out of rust-cache; macOS does not build cargo-cyclonedx,
@@ -122,6 +174,27 @@ jobs:
 
       - name: Generate UniFFI bindings
         run: ./scripts/generate-uniffi.sh
+
+      - name: Install pinned XcodeGen
+        run: |
+          version="$(awk -F'"' '/^xcodegen_version / { print $2; exit }' config/release.toml)"
+          checksum="$(awk -F'"' '/^xcodegen_sha256 / { print $2; exit }' config/release.toml)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid xcodegen_version in config/release.toml"
+            exit 1
+          fi
+          if [[ ! "$checksum" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Invalid xcodegen_sha256 in config/release.toml"
+            exit 1
+          fi
+          archive="${RUNNER_TEMP}/xcodegen-${version}.zip"
+          curl --fail --location --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            --output "$archive" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${version}/xcodegen.zip"
+          printf '%s  %s\n' "$checksum" "$archive" | shasum -a 256 --check
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          echo "${RUNNER_TEMP}/xcodegen/bin" >> "$GITHUB_PATH"
 
       - name: Verify xcodeproj matches project.yml (xcodegen)
         run: |
@@ -302,7 +375,7 @@ jobs:
 
       - name: Upload macOS test artifacts
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: macos-test-artifacts
           path: |
