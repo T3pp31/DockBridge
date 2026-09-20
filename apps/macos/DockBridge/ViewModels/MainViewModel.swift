@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import os
 
 @MainActor
 final class MainViewModel: ObservableObject {
@@ -158,6 +159,11 @@ final class MainViewModel: ObservableObject {
     @Published var renameText = ""
     @Published var showMkdirPrompt = false
     @Published var mkdirName = ""
+    // Local pane operations (Issue #341)
+    @Published var localRenameTarget: LocalFileItem? = nil
+    @Published var localRenameText = ""
+    @Published var showLocalMkdirPrompt = false
+    @Published var localMkdirName = ""
     @Published var showOverwriteAsk = false
     @Published var overwriteAskDestination = ""
     /// Profile that was active when the last connection was established.
@@ -179,6 +185,7 @@ final class MainViewModel: ObservableObject {
     private let settings: AppSettingsService
     private let bookmarkService: SecurityScopedBookmarkService
     private let pathBookmarkStore: PathBookmarkStore
+    private let trashLocalItemOperation: @Sendable (URL) throws -> Void
     private var defaultLocalAccessURL: URL?
     private var pathBookmarkAccessURL: URL?
     private var localLoadGeneration = 0
@@ -205,7 +212,10 @@ final class MainViewModel: ObservableObject {
         pathBookmarkStore: PathBookmarkStore = .shared,
         bridge: any RemoteBridging,
         connectionList: ConnectionListViewModel,
-        transferQueue: TransferQueueViewModel
+        transferQueue: TransferQueueViewModel,
+        trashLocalItemOperation: @escaping @Sendable (URL) throws -> Void = { url in
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        }
     ) {
         self.settings = settings
         self.bookmarkService = bookmarkService
@@ -213,6 +223,7 @@ final class MainViewModel: ObservableObject {
         self.bridge = bridge
         self.connectionList = connectionList
         self.transferQueue = transferQueue
+        self.trashLocalItemOperation = trashLocalItemOperation
         let config = settings.loadConfig()
         self.showHiddenFiles = config.showHiddenFiles
         let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
@@ -977,6 +988,112 @@ final class MainViewModel: ObservableObject {
         } catch {
             errorMessage = error.dockBridgeUserMessage
         }
+    }
+
+    // MARK: - Local pane operations (Issue #341)
+
+    /// Moves the given local items to the Trash (recoverable).
+    func trashLocalItems(_ items: [LocalFileItem]) async {
+        var failedNames: [String] = []
+        var trashedIDs: Set<String> = []
+        let trashItem = trashLocalItemOperation
+
+        for item in items where !item.isParentDirectory {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try trashItem(item.url)
+                }.value
+                trashedIDs.insert(item.id)
+            } catch {
+                failedNames.append(item.name)
+                AppLogging.ui.error(
+                    "failed to trash local item \(item.name, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+
+        selectedLocalItemIDs.subtract(trashedIDs)
+        if !failedNames.isEmpty {
+            errorMessage = "Failed to move to Trash: \(failedNames.joined(separator: ", "))"
+        }
+        reloadLocal()
+    }
+
+    func beginLocalRename(item: LocalFileItem) {
+        localRenameTarget = item
+        localRenameText = item.name
+    }
+
+    func commitLocalRename() async {
+        guard let target = localRenameTarget else { return }
+        let name = localRenameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard RemotePath.isValidEntryName(name) else {
+            errorMessage = RemoteEntryNameError.invalidCharacters.localizedDescription
+            return
+        }
+        guard name != target.name else {
+            localRenameTarget = nil
+            localRenameText = ""
+            return
+        }
+        let newURL = target.url.deletingLastPathComponent()
+            .appendingPathComponent(name)
+        // Guard against overwriting an existing item before the move. A
+        // destination collision would otherwise surface only as a generic
+        // move error.
+        if FileManager.default.fileExists(atPath: newURL.path) {
+            errorMessage = "A file or folder named '\(name)' already exists."
+            return
+        }
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try FileManager.default.moveItem(at: target.url, to: newURL)
+            }.value
+            if selectedLocalItemIDs.remove(target.id) != nil {
+                selectedLocalItemIDs.insert(newURL.path)
+            }
+            localRenameTarget = nil
+            localRenameText = ""
+            reloadLocal()
+        } catch {
+            errorMessage = Self.localFileOperationMessage(for: error, name: name)
+        }
+    }
+
+    func beginLocalMkdir() {
+        localMkdirName = ""
+        showLocalMkdirPrompt = true
+    }
+
+    func commitLocalMkdir() async {
+        let name = localMkdirName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard RemotePath.isValidEntryName(name) else {
+            errorMessage = RemoteEntryNameError.invalidCharacters.localizedDescription
+            return
+        }
+        let directoryURL = localPath.appendingPathComponent(name, isDirectory: true)
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try FileManager.default.createDirectory(
+                    at: directoryURL,
+                    withIntermediateDirectories: false
+                )
+            }.value
+            localMkdirName = ""
+            showLocalMkdirPrompt = false
+            reloadLocal()
+        } catch {
+            errorMessage = Self.localFileOperationMessage(for: error, name: name)
+        }
+    }
+
+    private static func localFileOperationMessage(for error: Error, name: String) -> String {
+        let cocoaError = error as NSError
+        if cocoaError.domain == NSCocoaErrorDomain,
+           cocoaError.code == NSFileWriteFileExistsError {
+            return "A file or folder named '\(name)' already exists."
+        }
+        return error.localizedDescription
     }
 
     // MARK: - Error recovery actions (Issue #225)

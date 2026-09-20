@@ -173,6 +173,134 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertTrue(reloadedViewModel.showHiddenFiles)
     }
 
+    // MARK: - Local pane operations
+
+    func testCommitLocalRenameRenamesItemAndUpdatesSelection() async throws {
+        let sourceURL = baseDirectory.appendingPathComponent("before.txt")
+        let destinationURL = baseDirectory.appendingPathComponent("after.txt")
+        try "contents".write(to: sourceURL, atomically: true, encoding: .utf8)
+        let item = LocalFileItem(url: sourceURL)
+        viewModel.localPath = baseDirectory
+        viewModel.selectedLocalItemIDs = [item.id]
+        viewModel.beginLocalRename(item: item)
+        viewModel.localRenameText = destinationURL.lastPathComponent
+
+        await viewModel.commitLocalRename()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sourceURL.path))
+        XCTAssertEqual(
+            try String(contentsOf: destinationURL, encoding: .utf8),
+            "contents"
+        )
+        XCTAssertEqual(viewModel.selectedLocalItemIDs, [destinationURL.path])
+        XCTAssertNil(viewModel.localRenameTarget)
+        XCTAssertTrue(viewModel.localRenameText.isEmpty)
+    }
+
+    func testCommitLocalRenameRejectsExistingDestinationWithoutChangingEitherFile() async throws {
+        let sourceURL = baseDirectory.appendingPathComponent("source.txt")
+        let destinationURL = baseDirectory.appendingPathComponent("existing.txt")
+        try "source".write(to: sourceURL, atomically: true, encoding: .utf8)
+        try "existing".write(to: destinationURL, atomically: true, encoding: .utf8)
+        viewModel.beginLocalRename(item: LocalFileItem(url: sourceURL))
+        viewModel.localRenameText = destinationURL.lastPathComponent
+
+        await viewModel.commitLocalRename()
+
+        XCTAssertEqual(try String(contentsOf: sourceURL, encoding: .utf8), "source")
+        XCTAssertEqual(try String(contentsOf: destinationURL, encoding: .utf8), "existing")
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            "A file or folder named 'existing.txt' already exists."
+        )
+        XCTAssertNotNil(viewModel.localRenameTarget)
+    }
+
+    func testBeginLocalRenameUsesIndependentTextState() throws {
+        let sourceURL = baseDirectory.appendingPathComponent("local.txt")
+        try "contents".write(to: sourceURL, atomically: true, encoding: .utf8)
+        viewModel.renameText = "remote-name.txt"
+
+        viewModel.beginLocalRename(item: LocalFileItem(url: sourceURL))
+
+        XCTAssertEqual(viewModel.localRenameText, "local.txt")
+        XCTAssertEqual(viewModel.renameText, "remote-name.txt")
+    }
+
+    func testCommitLocalMkdirCreatesDirectoryInCurrentLocalPath() async throws {
+        let currentDirectory = baseDirectory.appendingPathComponent("current", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: currentDirectory,
+            withIntermediateDirectories: false
+        )
+        viewModel.localPath = currentDirectory
+        viewModel.beginLocalMkdir()
+        viewModel.localMkdirName = "created"
+
+        await viewModel.commitLocalMkdir()
+
+        var isDirectory: ObjCBool = false
+        let createdURL = currentDirectory.appendingPathComponent("created", isDirectory: true)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: createdURL.path, isDirectory: &isDirectory)
+        )
+        XCTAssertTrue(isDirectory.boolValue)
+        XCTAssertFalse(viewModel.showLocalMkdirPrompt)
+        XCTAssertTrue(viewModel.localMkdirName.isEmpty)
+    }
+
+    func testCommitLocalMkdirRejectsExistingItemAndKeepsPromptOpen() async throws {
+        let existingURL = baseDirectory.appendingPathComponent("existing")
+        try "contents".write(to: existingURL, atomically: true, encoding: .utf8)
+        viewModel.localPath = baseDirectory
+        viewModel.beginLocalMkdir()
+        viewModel.localMkdirName = existingURL.lastPathComponent
+
+        await viewModel.commitLocalMkdir()
+
+        XCTAssertEqual(try String(contentsOf: existingURL, encoding: .utf8), "contents")
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            "A file or folder named 'existing' already exists."
+        )
+        XCTAssertTrue(viewModel.showLocalMkdirPrompt)
+    }
+
+    func testTrashLocalItemsReportsPartialFailureAndKeepsOnlyFailedItemSelected() async throws {
+        let trashedURL = baseDirectory.appendingPathComponent("trashed.txt")
+        let failedURL = baseDirectory.appendingPathComponent("failed.txt")
+        try "trash".write(to: trashedURL, atomically: true, encoding: .utf8)
+        try "keep".write(to: failedURL, atomically: true, encoding: .utf8)
+        let trashedItem = LocalFileItem(url: trashedURL)
+        let failedItem = LocalFileItem(url: failedURL)
+        viewModel = MainViewModel(
+            settings: settings,
+            bookmarkService: bookmarkService,
+            pathBookmarkStore: pathBookmarkStore,
+            bridge: bridge,
+            connectionList: connectionList,
+            transferQueue: transferQueue,
+            trashLocalItemOperation: { url in
+                if url.lastPathComponent == "failed.txt" {
+                    throw NSError(
+                        domain: NSCocoaErrorDomain,
+                        code: NSFileWriteNoPermissionError
+                    )
+                }
+                try FileManager.default.removeItem(at: url)
+            }
+        )
+        viewModel.localPath = baseDirectory
+        viewModel.selectedLocalItemIDs = [trashedItem.id, failedItem.id]
+
+        await viewModel.trashLocalItems([trashedItem, failedItem])
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: trashedURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: failedURL.path))
+        XCTAssertEqual(viewModel.selectedLocalItemIDs, [failedItem.id])
+        XCTAssertEqual(viewModel.errorMessage, "Failed to move to Trash: failed.txt")
+    }
+
     // MARK: - Destination resolution
 
     func testUploadResolvesRemoteDirectoryToCurrentPathWhenUnspecified() async throws {

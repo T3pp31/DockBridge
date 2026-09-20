@@ -51,11 +51,23 @@ struct LocalPaneView: View {
                                 Button("Reveal in Finder") {
                                     NSWorkspace.shared.activateFileViewerSelecting([item.url])
                                 }
+                                if !item.isParentDirectory {
+                                    Button("Rename") {
+                                        viewModel.beginLocalRename(item: item)
+                                    }
+                                }
                             }
 
                             Button(items.count == 1 ? "Upload" : "Upload \(items.count) Items") {
                                 viewModel.selectedLocalItemIDs = Set(items.map(\.id))
                                 Task { await viewModel.uploadSelected() }
+                            }
+
+                            let trashed = items.filter { !$0.isParentDirectory }
+                            if !trashed.isEmpty {
+                                Button("Move to Trash", role: .destructive) {
+                                    Task { await viewModel.trashLocalItems(trashed) }
+                                }
                             }
                         }
                     } primaryAction: { ids in
@@ -97,6 +109,31 @@ struct LocalPaneView: View {
         }
         .task(id: viewModel.localPath) {
             viewModel.reloadLocal()
+        }
+        .sheet(isPresented: Binding(
+            get: { viewModel.localRenameTarget != nil },
+            set: { if !$0 { viewModel.localRenameTarget = nil } }
+        )) {
+            RemoteEntryNameSheet(
+                title: "Rename Local Item",
+                fieldLabel: "Name",
+                confirmLabel: "Rename",
+                name: $viewModel.localRenameText,
+                onCancel: { viewModel.localRenameTarget = nil },
+                onConfirm: {
+                    Task { await viewModel.commitLocalRename() }
+                }
+            )
+        }
+        .sheet(isPresented: $viewModel.showLocalMkdirPrompt) {
+            RemoteEntryNameSheet(
+                title: "New Folder",
+                fieldLabel: "Folder name",
+                confirmLabel: "Create",
+                name: $viewModel.localMkdirName,
+                onCancel: { viewModel.showLocalMkdirPrompt = false },
+                onConfirm: { Task { await viewModel.commitLocalMkdir() } }
+            )
         }
     }
 
