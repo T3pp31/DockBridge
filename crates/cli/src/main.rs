@@ -841,6 +841,7 @@ mod tests {
                  transfer_retry_count = {retry}\n\
                  transfer_chunk_size_bytes = 262144\n\
                  transfer_download_pipeline_depth = 64\n\
+                 transfer_upload_pipeline_depth = 64\n\
                  known_hosts_path = \"{}/known_hosts.json\"\n\
                  openssh_known_hosts_path = \"/dev/null\"\n\
                  merge_openssh_known_hosts_on_connect = false\n\

@@ -5,7 +5,7 @@ use std::time::Duration;
 use russh::client::{self, Handle};
 use russh::keys::PublicKey;
 use russh::keys::{decode_secret_key, PrivateKeyWithHashAlg};
-use russh_sftp::client::SftpSession;
+use russh_sftp::client::{Config as SftpConfig, SftpSession};
 use tokio::sync::Mutex;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -139,6 +139,7 @@ pub struct SshSession {
     pub(crate) sftp: SftpSession,
     host: String,
     port: u16,
+    upload_pipeline_depth: usize,
 }
 
 struct SshClientHandler {
@@ -294,11 +295,17 @@ impl SshSession {
                 message: err.to_string(),
             })?;
 
-        let sftp = SftpSession::new(channel.into_stream())
-            .await
-            .map_err(|err| SftpError::SubsystemFailed {
-                message: err.to_string(),
-            })?;
+        let sftp = SftpSession::new_with_config(
+            channel.into_stream(),
+            SftpConfig {
+                max_concurrent_writes: config.transfer_upload_pipeline_depth,
+                ..SftpConfig::default()
+            },
+        )
+        .await
+        .map_err(|err| SftpError::SubsystemFailed {
+            message: err.to_string(),
+        })?;
 
         sftp.set_timeout(config.connection_timeout_secs);
 
@@ -307,6 +314,7 @@ impl SshSession {
             sftp,
             host,
             port,
+            upload_pipeline_depth: config.transfer_upload_pipeline_depth,
         })
     }
 
@@ -323,6 +331,12 @@ impl SshSession {
     /// Returns a reference to the underlying SFTP session.
     pub fn sftp(&self) -> &SftpSession {
         &self.sftp
+    }
+
+    /// Maximum number of concurrent in-flight SFTP WRITE requests configured
+    /// when this session was created.
+    pub(crate) fn upload_pipeline_depth(&self) -> usize {
+        self.upload_pipeline_depth
     }
 }
 

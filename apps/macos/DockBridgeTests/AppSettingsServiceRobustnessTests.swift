@@ -66,6 +66,37 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(config.transferChunkSizeBytes, 4_096)
     }
 
+    func testLoadConfigClampsUploadPipelineDepthToSupportedRange() {
+        // Given: corrupted upload pipeline depths outside the supported range
+        defaults().set(0, forKey: AppSettingsKeys.transferUploadPipelineDepth)
+
+        // When: the low value is loaded
+        let lowConfig = service.loadConfig()
+
+        // Then: it is clamped to the minimum
+        XCTAssertEqual(lowConfig.transferUploadPipelineDepth, 1)
+
+        // When: an oversized value is loaded
+        defaults().set(Int.max, forKey: AppSettingsKeys.transferUploadPipelineDepth)
+        let highConfig = service.loadConfig()
+
+        // Then: it is clamped to the maximum
+        XCTAssertEqual(highConfig.transferUploadPipelineDepth, 256)
+    }
+
+    func testSaveConfigPreservesUploadPipelineDepth() {
+        // Given: a non-default upload pipeline depth
+        var config = service.loadConfig()
+        config.transferUploadPipelineDepth = 32
+
+        // When: the config is saved and loaded again
+        service.saveConfig(config)
+        let reloaded = service.loadConfig()
+
+        // Then: the configured value is preserved
+        XCTAssertEqual(reloaded.transferUploadPipelineDepth, 32)
+    }
+
     func testSaveConfigPreservesDisabledInactivityTimeout() {
         // Given: idle-based expiry is explicitly disabled
         var config = service.loadConfig()

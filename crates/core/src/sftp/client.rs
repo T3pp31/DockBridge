@@ -943,6 +943,12 @@ async fn upload_from_reader(
 ) -> Result<(), SftpError> {
     let mut buffer = vec![0_u8; chunk_size];
     let mut transferred = 0_u64;
+    let mut reported = 0_u64;
+    // `File::write_all` queues at most `depth` packets. Subtracting the
+    // maximum possible queued bytes gives a conservative lower bound for
+    // acknowledged bytes without relying on unexposed ACK-ring internals.
+    let max_unacknowledged = (partial.client.session.upload_pipeline_depth() as u64)
+        .saturating_mul(DEFAULT_TRANSFER_CHUNK_SIZE_BYTES as u64);
     loop {
         if is_cancelled() {
             partial.abort(true).await?;
@@ -964,10 +970,10 @@ async fn upload_from_reader(
             break;
         }
 
-        // A single SFTP WRITE must not block forever on a server that stops
-        // acknowledging (issue #306). Each write is bound by an overall
-        // request timeout, and raced against the cancellation flag so cancel
-        // breaks out within one chunk.
+        // `File::write_all` uses the SFTP session's configured write-ACK ring,
+        // so successive chunks are pipelined up to
+        // `transfer_upload_pipeline_depth`. Keep the timeout/cancellation race
+        // around every chunk to preserve the existing stalled-server behavior.
         let request_timeout = partial.client_timeout();
         let write_outcome = tokio::time::timeout(
             request_timeout,
@@ -978,18 +984,11 @@ async fn upload_from_reader(
         let result = tokio::select! {
             timed_write = &mut write_outcome => match timed_write {
                 Ok(write_result) => write_result,
-                Err(_) => {
-                    // Server stopped acknowledging this WRITE.
-                    Err(io::Error::other(format!(
-                        "timed out after {request_timeout:?} waiting for the server to acknowledge a remote write"
-                    )))
-                }
+                Err(_) => Err(io::Error::other(format!(
+                    "timed out after {request_timeout:?} waiting for the server to acknowledge a remote write"
+                ))),
             },
             () = cancel_watch(is_cancelled) => {
-                // The user cancelled; break out immediately. Cleanup is
-                // best-effort (a stalled server may not release the partial),
-                // but the outcome remains Cancelled — never relabeled as a
-                // cleanup failure (issue #319/#306).
                 let _ = partial.abort(false).await;
                 return Err(SftpError::Cancelled);
             }
@@ -1003,7 +1002,11 @@ async fn upload_from_reader(
             });
         }
         transferred += bytes_read as u64;
-        on_progress(transferred);
+        let acknowledged = transferred.saturating_sub(max_unacknowledged);
+        if acknowledged > reported {
+            reported = acknowledged;
+            on_progress(reported);
+        }
     }
 
     if is_cancelled() {
@@ -1011,7 +1014,18 @@ async fn upload_from_reader(
         return Err(SftpError::Cancelled);
     }
 
-    if let Err(err) = partial.shutdown().await {
+    let shutdown_result = {
+        let mut shutdown = Box::pin(partial.shutdown());
+        tokio::select! {
+            result = &mut shutdown => Some(result),
+            () = cancel_watch(is_cancelled) => None,
+        }
+    };
+    let Some(shutdown_result) = shutdown_result else {
+        let _ = partial.abort(false).await;
+        return Err(SftpError::Cancelled);
+    };
+    if let Err(err) = shutdown_result {
         let cleanup_err = partial.abort(false).await?;
         return Err(SftpError::UploadFailed {
             local: local.to_string(),
@@ -1020,12 +1034,18 @@ async fn upload_from_reader(
         });
     }
 
+    // `shutdown` drains every pending WRITE ACK, so the full byte count is
+    // exact here. Avoid a duplicate callback when the lower bound caught up.
+    if transferred > reported {
+        on_progress(transferred);
+    }
+
     Ok(())
 }
 
 /// Awaits the transfer's cancellation flag becoming set. Used with
-/// [`tokio::select!`] so a blocked SFTP write can be interrupted by a cancel
-/// within one chunk (issue #306).
+/// [`tokio::select!`] so blocked pipelined SFTP writes can be interrupted
+/// promptly (issue #306).
 async fn cancel_watch(is_cancelled: &impl Fn() -> bool) {
     loop {
         if is_cancelled() {
@@ -1073,10 +1093,10 @@ type PendingWriteOutput = (tokio::fs::File, io::Result<()>);
 /// Scales `pipeline_depth` so peak buffered memory stays near
 /// `pipeline_depth × chunk_size`.
 ///
-/// `read_to_writer_pipelined` sizes each READ from the SFTP packet ceiling
-/// (~[`DEFAULT_TRANSFER_CHUNK_SIZE_BYTES`]), not from `chunk_size`. Reducing
-/// depth when the caller asks for smaller chunks preserves the intended
-/// memory budget.
+/// The SFTP crate sizes each READ issued by `read_to_writer_pipelined` from
+/// the SFTP packet ceiling (~[`DEFAULT_TRANSFER_CHUNK_SIZE_BYTES`]), not from
+/// `chunk_size`. Reducing depth when the caller asks for smaller chunks
+/// preserves the intended memory budget.
 fn pipeline_depth_for_chunk_budget(pipeline_depth: usize, chunk_size: usize) -> usize {
     let depth = clamp_transfer_download_pipeline_depth(pipeline_depth);
     let chunk = clamp_transfer_chunk_size(chunk_size).max(1);
@@ -2473,6 +2493,138 @@ mod tests {
         assert!(list_partial_paths(local_dir.path()).is_empty());
     }
 
+    #[tokio::test]
+    async fn pipelined_upload_cancel_midway_stops_and_cleans_up() {
+        // Given: a local file large enough to span many pipeline chunks
+        let server = TestSftpServer::start().await;
+        let session = server
+            .connect_session_to_with_upload_pipeline_depth(server.addr.port(), 1)
+            .await;
+        assert_eq!(session.upload_pipeline_depth(), 1);
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let payload = vec![0x7E_u8; 16 * 1024 * 1024];
+        let local_path = local_dir.path().join("cancel.bin");
+        tokio::fs::write(&local_path, &payload).await.unwrap();
+        let cancel_after = Arc::new(AtomicBool::new(false));
+        let last_progress = Arc::new(std::sync::atomic::AtomicU64::new(0));
+
+        // When: the transfer is cancelled partway (after the first reported
+        // progress), the pipelined reader surfaces the cancellation
+        let cancel_flag = Arc::clone(&cancel_after);
+        let err = client
+            .upload_cancellable(
+                &local_path,
+                "/upload/cancel.bin",
+                262_144,
+                TransferOverwritePolicy::Replace,
+                move || cancel_flag.load(Ordering::Relaxed),
+                {
+                    let cancel_flag = Arc::clone(&cancel_after);
+                    let last_progress = Arc::clone(&last_progress);
+                    move |transferred| {
+                        last_progress.store(transferred, Ordering::Relaxed);
+                        if transferred >= 1024 * 1024 {
+                            cancel_flag.store(true, Ordering::Relaxed);
+                        }
+                    }
+                },
+            )
+            .await
+            .unwrap_err();
+
+        // Then: the upload is cancelled and the partial file is removed
+        assert!(matches!(err, SftpError::Cancelled), "got {err:?}");
+        assert!(
+            !server.remote_file_exists("/upload/cancel.bin"),
+            "final remote file must not exist after cancel"
+        );
+        assert!(
+            server.remote_partial_paths().is_empty(),
+            "partial remote files must be cleaned up after cancel: {:?}",
+            server.remote_partial_paths()
+        );
+        // Progress reached the cancellation threshold before the next check.
+        assert!(
+            last_progress.load(Ordering::Relaxed) >= 1024 * 1024,
+            "cancel path must have reported progress before rejecting"
+        );
+    }
+
+    #[tokio::test]
+    async fn pipelined_upload_depth1_completes_without_deadlock() {
+        // Given: a local file spanning many chunks and pipeline depth 1
+        let server = TestSftpServer::start().await;
+        let session = server
+            .connect_session_to_with_upload_pipeline_depth(server.addr.port(), 1)
+            .await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let payload = vec![0x3D_u8; 768 * 1024];
+        let local_path = local_dir.path().join("depth1.bin");
+        tokio::fs::write(&local_path, &payload).await.unwrap();
+        let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let progress_values = Arc::clone(&progress);
+
+        // When: the file is uploaded with depth 1
+        client
+            .upload_cancellable(
+                &local_path,
+                "/upload/depth1.bin",
+                262_144,
+                TransferOverwritePolicy::Replace,
+                || false,
+                move |transferred| {
+                    progress_values.lock().unwrap().push(transferred);
+                },
+            )
+            .await
+            .unwrap();
+
+        // Then: the transfer completes (no hang) and remote bytes match
+        let remote_size = client.remote_file_size("/upload/depth1.bin").await.unwrap();
+        assert_eq!(remote_size, payload.len() as u64);
+        assert_eq!(
+            *progress.lock().unwrap(),
+            vec![262_144, 524_288, 786_432],
+            "progress must remain conservative until shutdown acknowledges the final packet"
+        );
+        assert!(server.remote_partial_paths().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pipelined_upload_reports_total_progress() {
+        // Given: a small local file on the test SFTP server
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let payload = b"pipelined upload progress payload".to_vec();
+        let local_path = local_dir.path().join("progress.bin");
+        tokio::fs::write(&local_path, &payload).await.unwrap();
+
+        // When: the file is uploaded with pipelined writes and progress tracking
+        let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let progress_values = Arc::clone(&progress);
+        client
+            .upload_cancellable(
+                &local_path,
+                "/upload/progress.bin",
+                262_144,
+                TransferOverwritePolicy::Replace,
+                || false,
+                move |transferred| {
+                    progress_values.lock().unwrap().push(transferred);
+                },
+            )
+            .await
+            .unwrap();
+
+        // Then: the final progress value equals the full file size
+        assert_eq!(*progress.lock().unwrap(), vec![payload.len() as u64]);
+        assert!(server.remote_partial_paths().is_empty());
+    }
+
     #[test]
     fn append_cleanup_context_preserves_original_error() {
         let message = append_cleanup_context(
@@ -3127,7 +3279,9 @@ mod tests {
     async fn upload_cancel_midway_removes_partial() {
         // Given: a file large enough to span many chunks
         let server = TestSftpServer::start().await;
-        let session = server.connect_session().await;
+        let session = server
+            .connect_session_to_with_upload_pipeline_depth(server.addr.port(), 1)
+            .await;
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();
         let local_path = local_dir.path().join("mid.txt");
@@ -4413,6 +4567,86 @@ mod tests {
             }
         });
         addr
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore]
+    async fn bench_upload_rtt_proxy_depth8_vs_64() {
+        // Given: a 16 MiB local file and ~40 ms RTT (20 ms each way).
+        const BENCH_BYTES: usize = 16 * 1024 * 1024;
+        let chunk_size = DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
+        let one_way = Duration::from_millis(20);
+        let server = TestSftpServer::start().await;
+        let proxy_addr = spawn_tcp_delay_proxy(server.addr, one_way).await;
+        let depth8_session = server
+            .connect_session_to_with_upload_pipeline_depth(proxy_addr.port(), 8)
+            .await;
+        let depth64_session = server
+            .connect_session_to_with_upload_pipeline_depth(proxy_addr.port(), 64)
+            .await;
+        let depth8_client = SftpClient::new(&depth8_session);
+        let depth64_client = SftpClient::new(&depth64_session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let payload_path = local_dir.path().join("upload-rtt.bin");
+        tokio::fs::write(&payload_path, vec![0xAB_u8; BENCH_BYTES])
+            .await
+            .unwrap();
+
+        let mut depth8_ms = Vec::new();
+        let mut depth64_ms = Vec::new();
+        for round in 0..3 {
+            let depth8_remote = format!("/bench/upload-depth8-{round}.bin");
+            let started = Instant::now();
+            depth8_client
+                .upload_cancellable(
+                    &payload_path,
+                    &depth8_remote,
+                    chunk_size,
+                    TransferOverwritePolicy::Replace,
+                    || false,
+                    |_| {},
+                )
+                .await
+                .unwrap();
+            let elapsed_ms = started.elapsed().as_millis();
+            assert_eq!(
+                depth8_client
+                    .remote_file_size(&depth8_remote)
+                    .await
+                    .unwrap(),
+                BENCH_BYTES as u64
+            );
+            depth8_ms.push(elapsed_ms);
+
+            let depth64_remote = format!("/bench/upload-depth64-{round}.bin");
+            let started = Instant::now();
+            depth64_client
+                .upload_cancellable(
+                    &payload_path,
+                    &depth64_remote,
+                    chunk_size,
+                    TransferOverwritePolicy::Replace,
+                    || false,
+                    |_| {},
+                )
+                .await
+                .unwrap();
+            let elapsed_ms = started.elapsed().as_millis();
+            assert_eq!(
+                depth64_client
+                    .remote_file_size(&depth64_remote)
+                    .await
+                    .unwrap(),
+                BENCH_BYTES as u64
+            );
+            depth64_ms.push(elapsed_ms);
+        }
+
+        let depth8_mean = depth8_ms.iter().sum::<u128>() / depth8_ms.len() as u128;
+        let depth64_mean = depth64_ms.iter().sum::<u128>() / depth64_ms.len() as u128;
+        eprintln!(
+            "bench_upload_rtt_proxy summary one_way_ms=20 bytes={BENCH_BYTES} depth8_ms={depth8_ms:?} depth64_ms={depth64_ms:?} depth8_mean_ms={depth8_mean} depth64_mean_ms={depth64_mean}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -720,6 +720,18 @@ impl TestSftpServer {
     }
 
     pub async fn connect_session_to(&self, port: u16) -> SshSession {
+        self.connect_session_to_with_upload_pipeline_depth(
+            port,
+            AppConfig::default().transfer_upload_pipeline_depth,
+        )
+        .await
+    }
+
+    pub async fn connect_session_to_with_upload_pipeline_depth(
+        &self,
+        port: u16,
+        upload_pipeline_depth: usize,
+    ) -> SshSession {
         struct AcceptAllPrompt;
         impl HostKeyPrompt for AcceptAllPrompt {
             fn prompt_unknown_host(&self, _: &str, _: u16, _: &str) -> bool {
@@ -730,6 +742,7 @@ impl TestSftpServer {
         let config = AppConfig {
             known_hosts_path: self._known_hosts_dir.path().join("known_hosts.json"),
             merge_openssh_known_hosts_on_connect: false,
+            transfer_upload_pipeline_depth: upload_pipeline_depth,
             ..AppConfig::default()
         };
         let known_hosts = Arc::new(AsyncMutex::new(

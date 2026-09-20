@@ -120,6 +120,16 @@ struct SettingsView: View {
                 .help("SFTP read/write chunk size (4 KiB ... 8 MiB).")
 
                 Stepper(
+                    "Upload pipeline depth: \(config.transferUploadPipelineDepth)",
+                    value: Binding(
+                        get: { Int(config.transferUploadPipelineDepth) },
+                        set: { config.transferUploadPipelineDepth = UInt64($0) }
+                    ),
+                    in: 1...256
+                )
+                .help("Maximum concurrent in-flight SFTP WRITE requests (1 ... 256).")
+
+                Stepper(
                     "Directory walk max files: \(config.directoryWalkMaxFiles)",
                     value: Binding(
                         get: { Int(config.directoryWalkMaxFiles) },

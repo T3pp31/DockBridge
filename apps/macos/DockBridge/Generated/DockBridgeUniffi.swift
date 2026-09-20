@@ -1064,6 +1064,7 @@ public struct AppConfigRecord: Equatable, Hashable {
     public var transferRetryCount: UInt32
     public var transferChunkSizeBytes: UInt64
     public var transferDownloadPipelineDepth: UInt64
+    public var transferUploadPipelineDepth: UInt64
     public var sshInactivityTimeoutSecs: UInt64?
     public var sshKeepaliveIntervalSecs: UInt64
     public var knownHostsPath: String
@@ -1077,12 +1078,13 @@ public struct AppConfigRecord: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, transferDownloadPipelineDepth: UInt64, sshInactivityTimeoutSecs: UInt64?, sshKeepaliveIntervalSecs: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool, knownHostsStrictMode: Bool, failConnectOnOpensshMergeError: Bool, directoryWalkMaxFiles: UInt64, directoryWalkMaxDepth: UInt32, directoryWalkMaxTotalBytes: UInt64) {
+    public init(connectionTimeoutSecs: UInt64, sessionHealthCheckIntervalSecs: UInt64, transferRetryCount: UInt32, transferChunkSizeBytes: UInt64, transferDownloadPipelineDepth: UInt64, transferUploadPipelineDepth: UInt64, sshInactivityTimeoutSecs: UInt64?, sshKeepaliveIntervalSecs: UInt64, knownHostsPath: String, opensshKnownHostsPath: String, mergeOpensshKnownHostsOnConnect: Bool, knownHostsStrictMode: Bool, failConnectOnOpensshMergeError: Bool, directoryWalkMaxFiles: UInt64, directoryWalkMaxDepth: UInt32, directoryWalkMaxTotalBytes: UInt64) {
         self.connectionTimeoutSecs = connectionTimeoutSecs
         self.sessionHealthCheckIntervalSecs = sessionHealthCheckIntervalSecs
         self.transferRetryCount = transferRetryCount
         self.transferChunkSizeBytes = transferChunkSizeBytes
         self.transferDownloadPipelineDepth = transferDownloadPipelineDepth
+        self.transferUploadPipelineDepth = transferUploadPipelineDepth
         self.sshInactivityTimeoutSecs = sshInactivityTimeoutSecs
         self.sshKeepaliveIntervalSecs = sshKeepaliveIntervalSecs
         self.knownHostsPath = knownHostsPath
@@ -1116,6 +1118,7 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
                 transferRetryCount: FfiConverterUInt32.read(from: &buf), 
                 transferChunkSizeBytes: FfiConverterUInt64.read(from: &buf), 
                 transferDownloadPipelineDepth: FfiConverterUInt64.read(from: &buf), 
+                transferUploadPipelineDepth: FfiConverterUInt64.read(from: &buf), 
                 sshInactivityTimeoutSecs: FfiConverterOptionUInt64.read(from: &buf), 
                 sshKeepaliveIntervalSecs: FfiConverterUInt64.read(from: &buf), 
                 knownHostsPath: FfiConverterString.read(from: &buf), 
@@ -1135,6 +1138,7 @@ public struct FfiConverterTypeAppConfigRecord: FfiConverterRustBuffer {
         FfiConverterUInt32.write(value.transferRetryCount, into: &buf)
         FfiConverterUInt64.write(value.transferChunkSizeBytes, into: &buf)
         FfiConverterUInt64.write(value.transferDownloadPipelineDepth, into: &buf)
+        FfiConverterUInt64.write(value.transferUploadPipelineDepth, into: &buf)
         FfiConverterOptionUInt64.write(value.sshInactivityTimeoutSecs, into: &buf)
         FfiConverterUInt64.write(value.sshKeepaliveIntervalSecs, into: &buf)
         FfiConverterString.write(value.knownHostsPath, into: &buf)

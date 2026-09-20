@@ -76,6 +76,7 @@ pub struct AppConfigRecord {
     pub transfer_retry_count: u32,
     pub transfer_chunk_size_bytes: u64,
     pub transfer_download_pipeline_depth: u64,
+    pub transfer_upload_pipeline_depth: u64,
     pub ssh_inactivity_timeout_secs: Option<u64>,
     pub ssh_keepalive_interval_secs: u64,
     pub known_hosts_path: String,
@@ -321,6 +322,11 @@ impl DockBridgeClient {
             transfer_download_pipeline_depth: u64_to_usize_or_invalid(
                 "transfer_download_pipeline_depth",
                 app_config.transfer_download_pipeline_depth,
+            )
+            .map_err(map_error)?,
+            transfer_upload_pipeline_depth: u64_to_usize_or_invalid(
+                "transfer_upload_pipeline_depth",
+                app_config.transfer_upload_pipeline_depth,
             )
             .map_err(map_error)?,
             ssh_inactivity_timeout_secs: app_config.ssh_inactivity_timeout_secs,

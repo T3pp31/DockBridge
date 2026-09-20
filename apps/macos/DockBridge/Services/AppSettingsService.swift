@@ -21,6 +21,7 @@ enum AppSettingsKeys {
     static let transferRetryCount = "transferRetryCount"
     static let transferChunkSizeBytes = "transferChunkSizeBytes"
     static let transferDownloadPipelineDepth = "transferDownloadPipelineDepth"
+    static let transferUploadPipelineDepth = "transferUploadPipelineDepth"
     static let sshInactivityTimeoutSecs = "sshInactivityTimeoutSecs"
     static let sshKeepaliveIntervalSecs = "sshKeepaliveIntervalSecs"
     static let defaultLocalPath = "defaultLocalPath"
@@ -80,6 +81,7 @@ final class AppSettingsService: @unchecked Sendable {
             AppSettingsKeys.transferRetryCount: Int(AppConfig.default.transferRetryCount),
             AppSettingsKeys.transferChunkSizeBytes: Int(AppConfig.default.transferChunkSizeBytes),
             AppSettingsKeys.transferDownloadPipelineDepth: Int(AppConfig.default.transferDownloadPipelineDepth),
+            AppSettingsKeys.transferUploadPipelineDepth: Int(AppConfig.default.transferUploadPipelineDepth),
             AppSettingsKeys.sshInactivityTimeoutSecs: AppConfig.default.sshInactivityTimeoutSecs,
             AppSettingsKeys.sshKeepaliveIntervalSecs: Int(AppConfig.default.sshKeepaliveIntervalSecs),
             AppSettingsKeys.defaultLocalPath: AppConfig.default.defaultLocalPath,
@@ -111,6 +113,8 @@ final class AppSettingsService: @unchecked Sendable {
         // infinite retries/timeouts.
         let maxRetryCount = 100
         let maxTimeoutSecs = 86_400
+        let minUploadPipelineDepth = 1
+        let maxUploadPipelineDepth = 256
 
         let rawChunkSize = defaults.integer(forKey: AppSettingsKeys.transferChunkSizeBytes)
         let chunkSize = rawChunkSize == 0
@@ -139,6 +143,16 @@ final class AppSettingsService: @unchecked Sendable {
             transferDownloadPipelineDepth: UInt64(
                 defaults.object(forKey: AppSettingsKeys.transferDownloadPipelineDepth) as? Int
                     ?? Int(AppConfig.default.transferDownloadPipelineDepth)
+            ),
+            transferUploadPipelineDepth: UInt64(
+                clamping: min(
+                    maxUploadPipelineDepth,
+                    max(
+                        minUploadPipelineDepth,
+                        defaults.object(forKey: AppSettingsKeys.transferUploadPipelineDepth) as? Int
+                            ?? Int(AppConfig.default.transferUploadPipelineDepth)
+                    )
+                )
             ),
             sshInactivityTimeoutSecs: loadOptionalPositiveTimeout(
                 defaults.object(forKey: AppSettingsKeys.sshInactivityTimeoutSecs) as? Int,
@@ -200,6 +214,10 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(
             Int(config.transferDownloadPipelineDepth),
             forKey: AppSettingsKeys.transferDownloadPipelineDepth
+        )
+        defaults.set(
+            Int(config.transferUploadPipelineDepth),
+            forKey: AppSettingsKeys.transferUploadPipelineDepth
         )
         if let inactivity = config.sshInactivityTimeoutSecs {
             defaults.set(Int(inactivity), forKey: AppSettingsKeys.sshInactivityTimeoutSecs)

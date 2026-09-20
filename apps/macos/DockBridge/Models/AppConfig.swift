@@ -6,6 +6,7 @@ struct AppConfig: Codable, Equatable, Sendable {
     var transferRetryCount: UInt32
     var transferChunkSizeBytes: UInt64
     var transferDownloadPipelineDepth: UInt64
+    var transferUploadPipelineDepth: UInt64 = 64
     var sshInactivityTimeoutSecs: UInt64?
     var sshKeepaliveIntervalSecs: UInt64
     var defaultLocalPath: String
@@ -28,6 +29,7 @@ struct AppConfig: Codable, Equatable, Sendable {
         transferRetryCount: 3,
         transferChunkSizeBytes: 262_144,
         transferDownloadPipelineDepth: 64,
+        transferUploadPipelineDepth: 64,
         sshInactivityTimeoutSecs: 600,
         sshKeepaliveIntervalSecs: 30,
         defaultLocalPath: DefaultLocalPathResolver.containerHomeURL().path,
@@ -54,6 +56,7 @@ struct AppConfig: Codable, Equatable, Sendable {
             transferRetryCount: transferRetryCount,
             transferChunkSizeBytes: transferChunkSizeBytes,
             transferDownloadPipelineDepth: transferDownloadPipelineDepth,
+            transferUploadPipelineDepth: transferUploadPipelineDepth,
             sshInactivityTimeoutSecs: sshInactivityTimeoutSecs,
             sshKeepaliveIntervalSecs: sshKeepaliveIntervalSecs,
             knownHostsPath: knownHostsPath,
