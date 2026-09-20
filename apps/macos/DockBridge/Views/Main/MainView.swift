@@ -50,7 +50,13 @@ struct MainView: View {
             VStack(spacing: 0) {
                 ConnectionStatusBar(
                     status: bridge.connectionStatus,
-                    transferSummary: transferQueue.activeTransferSummary
+                    transferSummary: transferQueue.activeTransferSummary,
+                    remoteEditSessions: viewModel.remoteEditSessions,
+                    onRetryRemoteEditSession: { id in
+                        Task { await viewModel.retryRemoteEditSession(id: id) }
+                    },
+                    onStopRemoteEditSession: viewModel.stopRemoteEditSession,
+                    onStopAllRemoteEditSessions: viewModel.stopAllRemoteEditSessions
                 )
 
                 Divider()

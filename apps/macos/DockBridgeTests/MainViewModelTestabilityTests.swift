@@ -15,6 +15,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
     private var viewModel: MainViewModel!
     private var bookmarkService: SecurityScopedBookmarkService!
     private var pathBookmarkStore: PathBookmarkStore!
+    private var remoteEditTempRoot: URL!
 
     override func setUp() {
         super.setUp()
@@ -36,13 +37,16 @@ final class MainViewModelTestabilityTests: XCTestCase {
         transferQueue = TransferQueueViewModel(bridge: bridge)
         bookmarkService = SecurityScopedBookmarkService.shared
         pathBookmarkStore = PathBookmarkStore.shared
+        remoteEditTempRoot = baseDirectory.appendingPathComponent("remote-edits", isDirectory: true)
         viewModel = MainViewModel(
             settings: settings,
             bookmarkService: bookmarkService,
             pathBookmarkStore: pathBookmarkStore,
             bridge: bridge,
             connectionList: connectionList,
-            transferQueue: transferQueue
+            transferQueue: transferQueue,
+            remoteEditTempRoot: remoteEditTempRoot,
+            openFileOperation: { _ in true }
         )
     }
 
@@ -62,6 +66,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         viewModel = nil
         bookmarkService = nil
         pathBookmarkStore = nil
+        remoteEditTempRoot = nil
         super.tearDown()
     }
 
@@ -94,6 +99,24 @@ final class MainViewModelTestabilityTests: XCTestCase {
             symlinkTarget: nil,
             symlinkTargetIsDir: nil
         )
+    }
+
+    private func makeTrackedRemoteEditFile(
+        contents: String = "original",
+        remotePath: String = "/srv/config.txt"
+    ) throws -> (session: MainViewModel.RemoteEditSession, file: URL) {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        bridge.connectedProfileID = UUID()
+
+        let directory = remoteEditTempRoot
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent((remotePath as NSString).lastPathComponent)
+        try contents.write(to: file, atomically: true, encoding: .utf8)
+        let session = try XCTUnwrap(
+            viewModel.trackRemoteEditFile(localURL: file, remotePath: remotePath)
+        )
+        return (session, file)
     }
 
     // MARK: - Hidden files
@@ -456,6 +479,156 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
         XCTAssertTrue(accepted)
         XCTAssertEqual(bridge.uploaded.last?.overwritePolicy.rawValue, "failIfExists")
+    }
+
+    // MARK: - External edit monitoring
+
+    func testRemoteEditChangeUploadsWithReplaceAndReturnsToWatching() async throws {
+        let tracked = try makeTrackedRemoteEditFile()
+        try "changed".write(to: tracked.file, atomically: true, encoding: .utf8)
+
+        await viewModel.checkRemoteEditSessions()
+
+        XCTAssertEqual(bridge.uploaded.count, 1)
+        XCTAssertEqual(bridge.uploaded[0].localPath, tracked.file.path)
+        XCTAssertEqual(bridge.uploaded[0].remoteDirectory, "/srv")
+        XCTAssertEqual(bridge.uploaded[0].overwritePolicy, .replace)
+        XCTAssertEqual(viewModel.remoteEditSessions.first?.state, .watching)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: tracked.file.deletingLastPathComponent()
+                    .appendingPathComponent(".dockbridge-unsynced").path
+            )
+        )
+    }
+
+    func testRemoteEditUploadFailureStopsAutomaticRetriesAndManualRetrySucceeds() async throws {
+        let tracked = try makeTrackedRemoteEditFile()
+        bridge.uploadFails = true
+        try "changed".write(to: tracked.file, atomically: true, encoding: .utf8)
+
+        await viewModel.checkRemoteEditSessions()
+
+        XCTAssertEqual(bridge.uploaded.count, 1)
+        guard case .uploadFailed = viewModel.remoteEditSessions.first?.state else {
+            return XCTFail("Expected the session to require an explicit retry")
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tracked.file.path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: tracked.file.deletingLastPathComponent()
+                    .appendingPathComponent(".dockbridge-unsynced").path
+            )
+        )
+
+        await viewModel.checkRemoteEditSessions()
+        XCTAssertEqual(bridge.uploaded.count, 1, "failed uploads must not retry every poll")
+
+        bridge.uploadFails = false
+        await viewModel.retryRemoteEditSession(id: tracked.session.id)
+
+        XCTAssertEqual(bridge.uploaded.count, 2)
+        XCTAssertEqual(viewModel.remoteEditSessions.first?.state, .watching)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: tracked.file.deletingLastPathComponent()
+                    .appendingPathComponent(".dockbridge-unsynced").path
+            )
+        )
+    }
+
+    func testMissingRemoteEditFileKeepsSessionUntilAtomicReplacementAppears() async throws {
+        let tracked = try makeTrackedRemoteEditFile()
+        let directory = tracked.file.deletingLastPathComponent()
+        try FileManager.default.removeItem(at: tracked.file)
+
+        await viewModel.checkRemoteEditSessions()
+
+        XCTAssertEqual(viewModel.remoteEditSessions.count, 1)
+        XCTAssertEqual(viewModel.remoteEditSessions.first?.state, .fileMissing)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path))
+        XCTAssertTrue(bridge.uploaded.isEmpty)
+
+        try "atomic replacement".write(to: tracked.file, atomically: true, encoding: .utf8)
+        await viewModel.checkRemoteEditSessions()
+
+        XCTAssertEqual(bridge.uploaded.count, 1)
+        XCTAssertEqual(viewModel.remoteEditSessions.first?.state, .watching)
+    }
+
+    func testRemoteEditSessionWaitsForItsOriginalConnection() async throws {
+        let tracked = try makeTrackedRemoteEditFile()
+        let originalProfileID = try XCTUnwrap(bridge.connectedProfileID)
+        try "changed".write(to: tracked.file, atomically: true, encoding: .utf8)
+        bridge.connectedProfileID = UUID()
+
+        await viewModel.checkRemoteEditSessions()
+
+        XCTAssertTrue(bridge.uploaded.isEmpty)
+        XCTAssertEqual(viewModel.remoteEditSessions.first?.state, .waitingForConnection)
+
+        bridge.connectedProfileID = originalProfileID
+        await viewModel.checkRemoteEditSessions()
+
+        XCTAssertEqual(bridge.uploaded.count, 1)
+        XCTAssertEqual(viewModel.remoteEditSessions.first?.state, .watching)
+    }
+
+    func testStoppingCleanRemoteEditDeletesOnlyItsDedicatedDirectory() throws {
+        let tracked = try makeTrackedRemoteEditFile()
+        let directory = tracked.file.deletingLastPathComponent()
+
+        viewModel.stopRemoteEditSession(tracked.session)
+
+        XCTAssertTrue(viewModel.remoteEditSessions.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    }
+
+    func testStoppingDirtyRemoteEditPreservesRecoverableLocalCopy() throws {
+        let tracked = try makeTrackedRemoteEditFile()
+        let directory = tracked.file.deletingLastPathComponent()
+        try "unsynced".write(to: tracked.file, atomically: true, encoding: .utf8)
+
+        viewModel.stopRemoteEditSession(tracked.session)
+
+        XCTAssertTrue(viewModel.remoteEditSessions.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tracked.file.path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent(".dockbridge-unsynced").path
+            )
+        )
+        XCTAssertTrue(viewModel.errorMessage?.contains(tracked.file.path) == true)
+    }
+
+    func testCleanupDeletesCleanLeftoversButPreservesUnsyncedEdits() throws {
+        let clean = try makeTrackedRemoteEditFile(remotePath: "/srv/clean.txt")
+        let dirty = try makeTrackedRemoteEditFile(remotePath: "/srv/dirty.txt")
+        let cleanDirectory = clean.file.deletingLastPathComponent()
+        let dirtyDirectory = dirty.file.deletingLastPathComponent()
+        // Simulate an app termination before the one-second poll has had a
+        // chance to create the explicit unsynced marker.
+        try "changed before polling".write(
+            to: dirty.file,
+            atomically: true,
+            encoding: .utf8
+        )
+        let recoveryViewModel = MainViewModel(
+            settings: settings,
+            bookmarkService: bookmarkService,
+            pathBookmarkStore: pathBookmarkStore,
+            bridge: bridge,
+            connectionList: connectionList,
+            transferQueue: transferQueue,
+            remoteEditTempRoot: remoteEditTempRoot,
+            openFileOperation: { _ in true }
+        )
+
+        recoveryViewModel.cleanupRemoteOpenTemp()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cleanDirectory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dirtyDirectory.path))
+        XCTAssertTrue(recoveryViewModel.errorMessage?.contains("Preserved 1 unsynced external edit") == true)
     }
 
     // MARK: - Path saving on disconnect

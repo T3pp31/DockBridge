@@ -5,6 +5,66 @@ import os
 @MainActor
 final class MainViewModel: ObservableObject {
     private static let remoteOpenTempFolderName = "DockBridge-open"
+    private static let remoteEditPendingMarkerName = ".dockbridge-unsynced"
+    private static let remoteEditMetadataFileName = ".dockbridge-session.json"
+
+    struct RemoteEditFileSnapshot: Codable, Equatable {
+        let modifiedAt: Date?
+        let size: Int?
+        let fileIdentifier: String?
+    }
+
+    private struct RemoteEditRecoveryMetadata: Codable {
+        let remotePath: String
+        let connectionIdentity: String
+        let localFileName: String
+        let lastUploadedSnapshot: RemoteEditFileSnapshot
+    }
+
+    /// A remote file opened for external editing; the temp copy is watched and
+    /// re-uploaded on save.
+    struct RemoteEditSession: Identifiable {
+        enum State: Equatable {
+            case watching
+            case uploading
+            case uploadFailed(String)
+            case fileMissing
+            case waitingForConnection
+
+            var title: String {
+                switch self {
+                case .watching: "Watching"
+                case .uploading: "Uploading"
+                case .uploadFailed: "Upload failed"
+                case .fileMissing: "Waiting for file"
+                case .waitingForConnection: "Waiting for connection"
+                }
+            }
+
+            var systemImage: String {
+                switch self {
+                case .watching: "eye"
+                case .uploading: "arrow.triangle.2.circlepath"
+                case .uploadFailed: "exclamationmark.triangle"
+                case .fileMissing: "doc.questionmark"
+                case .waitingForConnection: "network.slash"
+                }
+            }
+
+            var canRetry: Bool {
+                if case .uploadFailed = self { return true }
+                return false
+            }
+        }
+
+        let id = UUID()
+        let remotePath: String
+        let remoteDirectory: String
+        let localURL: URL
+        let connectionIdentity: String
+        var lastUploadedSnapshot: RemoteEditFileSnapshot
+        var state: State = .watching
+    }
     @Published var localPath: URL {
         didSet {
             if !isApplyingNavigationHistory {
@@ -230,6 +290,10 @@ final class MainViewModel: ObservableObject {
 
     private let settings: AppSettingsService
     private let bookmarkService: SecurityScopedBookmarkService
+    @Published private(set) var remoteEditSessions: [RemoteEditSession] = []
+    private var editMonitorTask: Task<Void, Never>?
+    private let remoteEditTempRoot: URL
+    private let openFileOperation: (URL) -> Bool
     private let pathBookmarkStore: PathBookmarkStore
     private let trashLocalItemOperation: @Sendable (URL) throws -> Void
     private var localInfoLoadGeneration = 0
@@ -262,7 +326,9 @@ final class MainViewModel: ObservableObject {
         transferQueue: TransferQueueViewModel,
         trashLocalItemOperation: @escaping @Sendable (URL) throws -> Void = { url in
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-        }
+        },
+        remoteEditTempRoot: URL? = nil,
+        openFileOperation: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) {
         self.settings = settings
         self.bookmarkService = bookmarkService
@@ -271,6 +337,10 @@ final class MainViewModel: ObservableObject {
         self.connectionList = connectionList
         self.transferQueue = transferQueue
         self.trashLocalItemOperation = trashLocalItemOperation
+        self.remoteEditTempRoot = remoteEditTempRoot
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+                .appendingPathComponent(Self.remoteOpenTempFolderName, isDirectory: true)
+        self.openFileOperation = openFileOperation
         let config = settings.loadConfig()
         self.showHiddenFiles = config.showHiddenFiles
         let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
@@ -311,9 +381,12 @@ final class MainViewModel: ObservableObject {
         connectionList.load()
         transferQueue.startPolling()
         refreshPathBookmarks()
+        cleanupRemoteOpenTemp()
+        startRemoteEditMonitoring()
     }
 
     func onDisappear() {
+        stopRemoteEditMonitoring()
         transferQueue.stopPolling()
         releasePathBookmarkAccess()
         if let scopedURL = defaultLocalAccessURL {
@@ -389,6 +462,7 @@ final class MainViewModel: ObservableObject {
         }
 
         guard isConnected else {
+            stopRemoteEditMonitoring()
             if let profileID = lastConnectedProfileID ?? bridge.connectedProfileID {
                 connectionList.saveSessionPaths(
                     for: profileID,
@@ -428,6 +502,7 @@ final class MainViewModel: ObservableObject {
                 reloadLocal()
             }
             refreshPathBookmarks()
+            startRemoteEditMonitoring()
         } catch {
             errorMessage = error.dockBridgeUserMessage
         }
@@ -718,17 +793,31 @@ final class MainViewModel: ObservableObject {
         QuickLookPresenter.shared.preview(url: item.url)
     }
 
-    /// Downloads a remote file into a temp directory, then opens it
-    /// in its default app (Issue #228).
+    /// Downloads a remote file into a dedicated temp directory, then watches
+    /// the local copy and uploads saves back to the same connection.
     func openRemoteFile(_ item: RemoteFileRecord) async {
         guard !item.isDirectory else {
             navigateRemote(into: item)
             return
         }
 
-        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent(Self.remoteOpenTempFolderName, isDirectory: true)
-        let sessionDirectory = tempRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        guard let connectionIdentity = currentRemoteEditConnectionIdentity else {
+            errorMessage = "Not connected to a remote host."
+            return
+        }
+
+        if let existing = remoteEditSessions.first(where: {
+            $0.connectionIdentity == connectionIdentity
+                && $0.remotePath == item.path
+                && FileManager.default.fileExists(atPath: $0.localURL.path)
+        }) {
+            _ = openFileOperation(existing.localURL)
+            startRemoteEditMonitoring()
+            return
+        }
+
+        let sessionDirectory = remoteEditTempRoot
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
 
         do {
             try FileManager.default.createDirectory(
@@ -741,14 +830,328 @@ final class MainViewModel: ObservableObject {
         }
 
         let didDownload = await download(remotePath: item.path, toLocalDirectory: sessionDirectory)
-        guard didDownload else { return }
+        guard didDownload else {
+            try? FileManager.default.removeItem(at: sessionDirectory)
+            return
+        }
 
         let localFile = sessionDirectory.appendingPathComponent(item.name, isDirectory: false)
         guard FileManager.default.fileExists(atPath: localFile.path) else {
             errorMessage = "Downloaded file was not found at \(localFile.path)."
+            try? FileManager.default.removeItem(at: sessionDirectory)
             return
         }
-        NSWorkspace.shared.open(localFile)
+
+        guard trackRemoteEditFile(
+            localURL: localFile,
+            remotePath: item.path,
+            connectionIdentity: connectionIdentity
+        ) != nil else {
+            try? FileManager.default.removeItem(at: sessionDirectory)
+            return
+        }
+
+        guard openFileOperation(localFile) else {
+            if let session = remoteEditSessions.first(where: { $0.localURL == localFile }) {
+                stopRemoteEditSession(session)
+            }
+            errorMessage = "Could not open \(localFile.lastPathComponent) in its default application."
+            return
+        }
+        startRemoteEditMonitoring()
+    }
+
+    @discardableResult
+    func trackRemoteEditFile(
+        localURL: URL,
+        remotePath: String,
+        connectionIdentity: String? = nil
+    ) -> RemoteEditSession? {
+        guard let identity = connectionIdentity ?? currentRemoteEditConnectionIdentity else {
+            errorMessage = "Not connected to a remote host."
+            return nil
+        }
+        guard let snapshot = remoteEditFileSnapshot(at: localURL) else {
+            errorMessage = "Could not inspect the downloaded file at \(localURL.path)."
+            return nil
+        }
+        guard let remoteDirectory = try? RemotePath.parent(of: remotePath) else {
+            errorMessage = "Invalid remote path: \(remotePath)"
+            return nil
+        }
+
+        let session = RemoteEditSession(
+            remotePath: remotePath,
+            remoteDirectory: remoteDirectory,
+            localURL: localURL,
+            connectionIdentity: identity,
+            lastUploadedSnapshot: snapshot
+        )
+        do {
+            try writeRecoveryMetadata(for: session)
+        } catch {
+            errorMessage = "Could not create recovery metadata for \(localURL.path): "
+                + error.dockBridgeUserMessage
+            return nil
+        }
+        remoteEditSessions.append(session)
+        return session
+    }
+
+    /// Starts one serial polling task. A session marked as uploading is never
+    /// started again until its current upload has completed.
+    func startRemoteEditMonitoring() {
+        guard editMonitorTask == nil,
+              !remoteEditSessions.isEmpty,
+              bridge.isConnected else { return }
+        editMonitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(1))
+                } catch {
+                    break
+                }
+                guard let self else { break }
+                await self.checkRemoteEditSessions()
+            }
+        }
+    }
+
+    func stopRemoteEditMonitoring() {
+        editMonitorTask?.cancel()
+        editMonitorTask = nil
+    }
+
+    func stopRemoteEditSession(_ session: RemoteEditSession) {
+        let directory = session.localURL.deletingLastPathComponent()
+        let isDirty = remoteEditFileSnapshot(at: session.localURL) != session.lastUploadedSnapshot
+            || FileManager.default.fileExists(atPath: pendingMarkerURL(for: session).path)
+
+        if isDirty {
+            try? writePendingMarker(for: session)
+        }
+        remoteEditSessions.removeAll { $0.id == session.id }
+        if isDirty {
+            errorMessage = "Stopped watching \(session.localURL.lastPathComponent). "
+                + "The unsynced local copy was preserved at \(session.localURL.path)."
+        } else {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        if remoteEditSessions.isEmpty {
+            stopRemoteEditMonitoring()
+        }
+    }
+
+    func stopAllRemoteEditSessions() {
+        for session in remoteEditSessions {
+            stopRemoteEditSession(session)
+        }
+    }
+
+    func retryRemoteEditSession(id: UUID) async {
+        guard let session = remoteEditSessions.first(where: { $0.id == id }),
+              session.state.canRetry else { return }
+        guard let snapshot = remoteEditFileSnapshot(at: session.localURL) else {
+            updateRemoteEditSession(id: id) { $0.state = .fileMissing }
+            errorMessage = "The edited local file is temporarily unavailable at \(session.localURL.path)."
+            return
+        }
+        errorMessage = nil
+        await uploadRemoteEditSession(id: id, snapshot: snapshot)
+    }
+
+    func checkRemoteEditSessions() async {
+        for id in remoteEditSessions.map(\.id) {
+            guard let session = remoteEditSessions.first(where: { $0.id == id }) else { continue }
+            guard session.state != .uploading else { continue }
+
+            guard bridge.isConnected,
+                  session.connectionIdentity == currentRemoteEditConnectionIdentity else {
+                updateRemoteEditSession(id: id) { $0.state = .waitingForConnection }
+                continue
+            }
+
+            guard let snapshot = remoteEditFileSnapshot(at: session.localURL) else {
+                // Atomic-save editors may briefly remove or rename the file.
+                // Keep both the session and its directory so the next poll can
+                // observe the replacement instead of deleting user data.
+                updateRemoteEditSession(id: id) { $0.state = .fileMissing }
+                continue
+            }
+
+            if session.state.canRetry {
+                // A failed upload requires an explicit user retry. This avoids
+                // an unbounded request loop while keeping the edited file.
+                continue
+            }
+
+            guard snapshot != session.lastUploadedSnapshot else {
+                updateRemoteEditSession(id: id) { $0.state = .watching }
+                continue
+            }
+
+            await uploadRemoteEditSession(id: id, snapshot: snapshot)
+        }
+    }
+
+    /// Removes clean leftovers from previous runs. Any directory carrying an
+    /// unsynced marker is deliberately retained for manual recovery.
+    func cleanupRemoteOpenTemp() {
+        let trackedURLs = Set(remoteEditSessions.map { $0.localURL.deletingLastPathComponent() })
+        guard let directories = try? FileManager.default.contentsOfDirectory(
+            at: remoteEditTempRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsSubdirectoryDescendants]
+        ) else { return }
+
+        var preserved: [URL] = []
+        for dir in directories {
+            if trackedURLs.contains(dir) { continue }
+            let marker = dir.appendingPathComponent(Self.remoteEditPendingMarkerName, isDirectory: false)
+            if FileManager.default.fileExists(atPath: marker.path) {
+                preserved.append(dir)
+                continue
+            }
+
+            let metadataURL = dir.appendingPathComponent(Self.remoteEditMetadataFileName)
+            guard let data = try? Data(contentsOf: metadataURL),
+                  let metadata = try? JSONDecoder().decode(RemoteEditRecoveryMetadata.self, from: data) else {
+                // Never delete an unknown directory from the shared temp root.
+                preserved.append(dir)
+                continue
+            }
+            let localFile = dir.appendingPathComponent(metadata.localFileName, isDirectory: false)
+            guard let currentSnapshot = remoteEditFileSnapshot(at: localFile),
+                  currentSnapshot == metadata.lastUploadedSnapshot else {
+                preserved.append(dir)
+                continue
+            }
+
+            try? FileManager.default.removeItem(at: dir)
+        }
+
+        if !preserved.isEmpty, errorMessage == nil {
+            errorMessage = "Preserved \(preserved.count) unsynced external edit(s) in "
+                + "\(remoteEditTempRoot.path)."
+        }
+    }
+
+    private var currentRemoteEditConnectionIdentity: String? {
+        guard bridge.isConnected else { return nil }
+        if let profileID = bridge.connectedProfileID {
+            return "profile:\(profileID.uuidString.lowercased())"
+        }
+        guard let endpoint = bridge.connectionStatus.endpointLabel else { return nil }
+        return "endpoint:\(endpoint.lowercased())"
+    }
+
+    private func remoteEditFileSnapshot(at url: URL) -> RemoteEditFileSnapshot? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        // URL resource values may be cached on a reused URL. FileManager
+        // attributes are fetched afresh, which is essential for polling.
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+            return nil
+        }
+        return RemoteEditFileSnapshot(
+            modifiedAt: attributes[.modificationDate] as? Date,
+            size: (attributes[.size] as? NSNumber)?.intValue,
+            fileIdentifier: (attributes[.systemFileNumber] as? NSNumber)?.stringValue
+        )
+    }
+
+    private func pendingMarkerURL(for session: RemoteEditSession) -> URL {
+        session.localURL.deletingLastPathComponent()
+            .appendingPathComponent(Self.remoteEditPendingMarkerName, isDirectory: false)
+    }
+
+    private func writePendingMarker(for session: RemoteEditSession) throws {
+        let payload = "\(session.connectionIdentity)\n\(session.remotePath)\n"
+        try payload.write(to: pendingMarkerURL(for: session), atomically: true, encoding: .utf8)
+    }
+
+    private func recoveryMetadataURL(for session: RemoteEditSession) -> URL {
+        session.localURL.deletingLastPathComponent()
+            .appendingPathComponent(Self.remoteEditMetadataFileName, isDirectory: false)
+    }
+
+    private func writeRecoveryMetadata(for session: RemoteEditSession) throws {
+        let metadata = RemoteEditRecoveryMetadata(
+            remotePath: session.remotePath,
+            connectionIdentity: session.connectionIdentity,
+            localFileName: session.localURL.lastPathComponent,
+            lastUploadedSnapshot: session.lastUploadedSnapshot
+        )
+        let data = try JSONEncoder().encode(metadata)
+        try data.write(to: recoveryMetadataURL(for: session), options: .atomic)
+    }
+
+    private func updateRemoteEditSession(
+        id: UUID,
+        update: (inout RemoteEditSession) -> Void
+    ) {
+        guard let index = remoteEditSessions.firstIndex(where: { $0.id == id }) else { return }
+        update(&remoteEditSessions[index])
+    }
+
+    private func uploadRemoteEditSession(
+        id: UUID,
+        snapshot: RemoteEditFileSnapshot
+    ) async {
+        guard let session = remoteEditSessions.first(where: { $0.id == id }) else { return }
+        guard bridge.isConnected,
+              session.connectionIdentity == currentRemoteEditConnectionIdentity else {
+            updateRemoteEditSession(id: id) { $0.state = .waitingForConnection }
+            return
+        }
+
+        do {
+            try writePendingMarker(for: session)
+        } catch {
+            let message = error.dockBridgeUserMessage
+            updateRemoteEditSession(id: id) { $0.state = .uploadFailed(message) }
+            errorMessage = "Could not protect the edited local copy before upload: \(message)"
+            return
+        }
+
+        updateRemoteEditSession(id: id) { $0.state = .uploading }
+
+        do {
+            try await bridge.upload(
+                localPath: session.localURL.path,
+                remoteDirectory: session.remoteDirectory,
+                overwritePolicy: .replace
+            )
+            await transferQueue.refresh()
+            if remotePath == session.remoteDirectory {
+                await reloadRemote()
+            }
+
+            let currentSnapshot = remoteEditFileSnapshot(at: session.localURL)
+            var uploadedSession = session
+            uploadedSession.lastUploadedSnapshot = snapshot
+            do {
+                try writeRecoveryMetadata(for: uploadedSession)
+            } catch {
+                let message = error.dockBridgeUserMessage
+                updateRemoteEditSession(id: id) { $0.state = .uploadFailed(message) }
+                errorMessage = "The edit was uploaded, but its recovery metadata could not be saved. "
+                    + "The local copy remains at \(session.localURL.path). \(message)"
+                return
+            }
+
+            updateRemoteEditSession(id: id) { current in
+                current.lastUploadedSnapshot = snapshot
+                current.state = currentSnapshot == nil ? .fileMissing : .watching
+            }
+            if currentSnapshot == snapshot {
+                try? FileManager.default.removeItem(at: pendingMarkerURL(for: session))
+            }
+        } catch {
+            let message = error.dockBridgeUserMessage
+            updateRemoteEditSession(id: id) { $0.state = .uploadFailed(message) }
+            errorMessage = "Failed to upload edited file to \(session.remotePath). "
+                + "The local copy was preserved at \(session.localURL.path). \(message)"
+        }
     }
 
     func openRemoteTableItem(_ item: RemoteFileRecord) {
@@ -1244,6 +1647,7 @@ final class MainViewModel: ObservableObject {
     /// Resumes any pending overwrite confirmation so a batch transfer awaiting
     /// user input does not hang when the view model is torn down.
     deinit {
+        editMonitorTask?.cancel()
         if let continuation = overwriteAskContinuation {
             overwriteAskContinuation = nil
             continuation.resume(returning: false)
