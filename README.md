@@ -132,6 +132,9 @@ cargo run -q -p dockbridge-cli -- pwd \
 ```
 
 Open `apps/macos/DockBridge.xcodeproj` in Xcode to build the macOS app.
+The project is generated from `apps/macos/project.yml`; use the XcodeGen
+version pinned in `config/release.toml` and run `(cd apps/macos && xcodegen
+generate)` after project or source-tree changes.
 
 The DockBridge target runs a **preBuild** phase on every Xcode build (`alwaysOutOfDate = 1`) that executes `./scripts/build-rust.sh` and `./scripts/generate-uniffi.sh` from the repository root. The app links `target/release/libdockbridge_uniffi.a` with `-force_load`.
 

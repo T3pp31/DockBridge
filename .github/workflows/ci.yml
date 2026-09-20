@@ -175,6 +175,36 @@ jobs:
       - name: Generate UniFFI bindings
         run: ./scripts/generate-uniffi.sh
 
+      - name: Install pinned XcodeGen
+        run: |
+          version="$(awk -F'"' '/^xcodegen_version / { print $2; exit }' config/release.toml)"
+          checksum="$(awk -F'"' '/^xcodegen_sha256 / { print $2; exit }' config/release.toml)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid xcodegen_version in config/release.toml"
+            exit 1
+          fi
+          if [[ ! "$checksum" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Invalid xcodegen_sha256 in config/release.toml"
+            exit 1
+          fi
+          archive="${RUNNER_TEMP}/xcodegen-${version}.zip"
+          curl --fail --location --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            --output "$archive" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${version}/xcodegen.zip"
+          printf '%s  %s\n' "$checksum" "$archive" | shasum -a 256 --check
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          echo "${RUNNER_TEMP}/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Verify xcodeproj matches project.yml (xcodegen)
+        run: |
+          cd apps/macos
+          xcodegen generate
+          if ! git diff --exit-code DockBridge.xcodeproj; then
+            echo "::error::DockBridge.xcodeproj is out of date. Run 'cd apps/macos && xcodegen generate' and commit the result."
+            exit 1
+          fi
+
       - name: Verify committed Swift bindings are up to date
         run: |
           if ! git diff --exit-code apps/macos/DockBridge/Generated/DockBridgeUniffi.swift; then

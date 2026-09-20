@@ -24,17 +24,23 @@ cargo build --workspace
 
 ### macOS app
 
-You need macOS with **Xcode 16+**.
+You need macOS with **Xcode 16+** and the XcodeGen version pinned by
+`xcodegen_version` in `config/release.toml`.
 
 ```sh
 ./scripts/build-rust.sh            # builds the Rust crates (all targets)
 ./scripts/generate-uniffi.sh       # regenerates apps/macos/DockBridge/Generated
-open DockBridge.xcworkspace        # or open apps/macos/DockBridge.xcodeproj
+(cd apps/macos && xcodegen generate)  # regenerates DockBridge.xcodeproj
+open apps/macos/DockBridge.xcodeproj
 ```
 
 When the UniFFI surface changes (records, methods, error types), you **must**
 regenerate bindings with `./scripts/generate-uniffi.sh` and commit the
 generated Swift files.
+
+`apps/macos/project.yml` is the source of truth for the Xcode project. After
+changing project settings or adding/removing source files, regenerate and
+commit `apps/macos/DockBridge.xcodeproj`.
 
 ## Checks required before a PR
 
