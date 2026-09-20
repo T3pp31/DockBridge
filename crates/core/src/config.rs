@@ -454,6 +454,58 @@ mod tests {
         assert!(matches!(err, ConfigError::InvalidTransferChunkSize { .. }));
     }
 
+    #[test]
+    fn all_repo_config_toml_files_parse() {
+        // Given: the repository's AppConfig-format config files
+        // (release.toml uses a separate `[release]` schema and is excluded)
+        // When: every one is loaded as an AppConfig
+        // Then: every file parses successfully (regression for duplicate-key
+        // files like the old config/test.toml)
+        //
+        // NOTE: every `.toml` file in this directory other than release.toml
+        // must use the AppConfig schema - this test fails (loudly) when a
+        // different schema is added so the exclusion list is kept in sync.
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let config_dir = manifest_dir.join("../../config");
+        let config_dir_abs = config_dir.canonicalize().unwrap_or_else(|err| {
+            panic!(
+                "cannot resolve config directory {} (workspace layout moved?): {err}",
+                config_dir.display()
+            )
+        });
+        let mut found_any = false;
+        let entries = std::fs::read_dir(&config_dir_abs).unwrap_or_else(|err| {
+            panic!(
+                "cannot read config directory {}: {err}",
+                config_dir_abs.display()
+            )
+        });
+        for entry in entries {
+            let path = entry
+                .unwrap_or_else(|err| {
+                    panic!("cannot read entry in {}: {err}", config_dir_abs.display())
+                })
+                .path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if name.ends_with(".toml") && name != "release.toml" {
+                found_any = true;
+                AppConfig::from_toml_file(&path).unwrap_or_else(|err| {
+                    panic!(
+                        "config file {} failed to parse: {err}",
+                        path.canonicalize().unwrap_or(path.clone()).display()
+                    )
+                });
+            }
+        }
+        assert!(
+            found_any,
+            "no .toml files found under {}",
+            config_dir_abs.display()
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn ensure_known_hosts_parent_creates_parent_with_0700_permissions() {
