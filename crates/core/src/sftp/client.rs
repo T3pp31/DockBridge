@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
 use std::{future::Future, io};
 
 use rand::TryRng;
@@ -39,6 +40,9 @@ pub struct RemoteFile {
 pub struct SftpClient<'a> {
     session: &'a SshSession,
     directory_walk_limits: DirectoryWalkLimits,
+    /// Per-request timeout applied to upload WRITE acks and shutdown when the
+    /// underlying session timeout is unavailable. Tests can shorten it.
+    upload_request_timeout: Duration,
 }
 
 impl<'a> SftpClient<'a> {
@@ -47,12 +51,21 @@ impl<'a> SftpClient<'a> {
         Self {
             session,
             directory_walk_limits: DirectoryWalkLimits::default(),
+            upload_request_timeout: UPLOAD_REQUEST_TIMEOUT,
         }
     }
 
     /// Sets resource limits applied during recursive directory walks.
     pub fn with_directory_walk_limits(mut self, limits: DirectoryWalkLimits) -> Self {
         self.directory_walk_limits = limits;
+        self
+    }
+
+    /// Overrides the per-request timeout applied to upload WRITE acks and
+    /// shutdown. Primarily for tests that inject a hung server.
+    #[cfg(test)]
+    pub(crate) fn with_upload_request_timeout(mut self, timeout: Duration) -> Self {
+        self.upload_request_timeout = timeout;
         self
     }
 
@@ -521,11 +534,37 @@ async fn upload_from_reader(
             break;
         }
 
-        if let Err(err) = partial
-            .remote_file_mut()
-            .write_all(&buffer[..bytes_read])
-            .await
-        {
+        // A single SFTP WRITE must not block forever on a server that stops
+        // acknowledging (issue #306). Each write is bound by an overall
+        // request timeout, and raced against the cancellation flag so cancel
+        // breaks out within one chunk.
+        let request_timeout = partial.client_timeout();
+        let write_outcome = tokio::time::timeout(
+            request_timeout,
+            partial.remote_file_mut().write_all(&buffer[..bytes_read]),
+        );
+        tokio::pin!(write_outcome);
+
+        let result = tokio::select! {
+            timed_write = &mut write_outcome => match timed_write {
+                Ok(write_result) => write_result,
+                Err(_) => {
+                    // Server stopped acknowledging this WRITE.
+                    Err(io::Error::other(format!(
+                        "timed out after {request_timeout:?} waiting for the server to acknowledge a remote write"
+                    )))
+                }
+            },
+            () = cancel_watch(is_cancelled) => {
+                // The user cancelled; break out immediately. Cleanup is
+                // best-effort (a stalled server may not release the partial),
+                // but the outcome remains Cancelled — never relabeled as a
+                // cleanup failure (issue #319/#306).
+                let _ = partial.abort(false).await;
+                return Err(SftpError::Cancelled);
+            }
+        };
+        if let Err(err) = result {
             let cleanup_err = partial.abort(false).await?;
             return Err(SftpError::UploadFailed {
                 local: local.to_string(),
@@ -552,6 +591,18 @@ async fn upload_from_reader(
     }
 
     Ok(())
+}
+
+/// Awaits the transfer's cancellation flag becoming set. Used with
+/// [`tokio::select!`] so a blocked SFTP write can be interrupted by a cancel
+/// within one chunk (issue #306).
+async fn cancel_watch(is_cancelled: &impl Fn() -> bool) {
+    loop {
+        if is_cancelled() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 /// Error returned when a pipelined download flow fails.
@@ -819,6 +870,15 @@ where
 const PARTIAL_SUFFIX_BYTES: usize = 16;
 const MAX_PARTIAL_CREATE_ATTEMPTS: usize = 5;
 
+/// Timeout applied to each SFTP WRITE acknowledgement and to the `shutdown`
+/// (drain pending acks) during uploads.
+///
+/// The fork's `File::write_all` waits for the WRITE ack without a timeout,
+/// so a server that stops responding would hang the upload forever. This
+/// mirrors the session-level `connection_timeout_secs` applied to other
+/// outgoing requests (issue #306).
+const UPLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn random_partial_suffix() -> String {
     let mut bytes = [0_u8; PARTIAL_SUFFIX_BYTES];
     rand::rng()
@@ -881,16 +941,40 @@ impl<'a> PartialRemoteTransfer<'a> {
             .expect("partial remote file handle must exist before commit")
     }
 
+    fn client_timeout(&self) -> Duration {
+        self.client.upload_request_timeout
+    }
+
     async fn shutdown(&mut self) -> Result<(), SftpError> {
         if let Some(mut remote_file) = self.remote_file.take() {
-            remote_file
-                .shutdown()
-                .await
-                .map_err(|err| SftpError::UploadFailed {
-                    local: self.local.clone(),
-                    remote: self.remote.clone(),
-                    message: err.to_string(),
-                })?;
+            let request_timeout = self.client_timeout();
+            let local = self.local.clone();
+            let remote = self.remote.clone();
+            let shutdown = async move {
+                remote_file
+                    .shutdown()
+                    .await
+                    .map_err(|err| SftpError::UploadFailed {
+                        local,
+                        remote,
+                        message: err.to_string(),
+                    })
+            };
+            // `File::shutdown` drains pending WRITE acks without a timeout in
+            // the fork; a server that never acks would hang forever (issue
+            // #306). Bound it like the other SFTP requests.
+            match tokio::time::timeout(request_timeout, shutdown).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    return Err(SftpError::UploadFailed {
+                        local: self.local.clone(),
+                        remote: self.remote.clone(),
+                        message: format!(
+                            "timed out after {request_timeout:?} waiting for the server to acknowledge the final write (shutdown)"
+                        ),
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -927,18 +1011,32 @@ impl<'a> PartialRemoteTransfer<'a> {
         }
 
         if let Some(mut remote_file) = self.remote_file.take() {
-            if let Err(err) = remote_file.shutdown().await {
-                tracing::warn!(
-                    partial_remote_path = %self.partial_path,
-                    error = %err,
-                    "failed to close partial remote file during cleanup"
-                );
+            let request_timeout = self.client_timeout();
+            let close = async move { remote_file.shutdown().await.map_err(|err| err.to_string()) };
+            // Bound the close too: a hung WRITE ack would otherwise block the
+            // cleanup path forever after a timeout/cancel (issue #306).
+            match tokio::time::timeout(request_timeout, close).await {
+                Ok(Ok(())) => {}
+                Ok(Err(message)) => {
+                    tracing::warn!(
+                        partial_remote_path = %self.partial_path,
+                        error = %message,
+                        "failed to close partial remote file during cleanup"
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        partial_remote_path = %self.partial_path,
+                        "closing the partial remote file timed out during cleanup"
+                    );
+                }
             }
         }
 
-        match self.client.delete(&self.partial_path).await {
-            Ok(()) => Ok(None),
-            Err(err) if !strict => {
+        let delete_timeout = self.client_timeout();
+        match tokio::time::timeout(delete_timeout, self.client.delete(&self.partial_path)).await {
+            Ok(Ok(())) => Ok(None),
+            Ok(Err(err)) if !strict => {
                 tracing::warn!(
                     partial_remote_path = %self.partial_path,
                     error = %err,
@@ -949,9 +1047,23 @@ impl<'a> PartialRemoteTransfer<'a> {
                     message: err.to_string(),
                 }))
             }
-            Err(err) => Err(SftpError::CleanupFailed {
+            Ok(Err(err)) => Err(SftpError::CleanupFailed {
                 path: self.partial_path.clone(),
                 message: err.to_string(),
+            }),
+            Err(_) if !strict => {
+                tracing::warn!(
+                    partial_remote_path = %self.partial_path,
+                    "deleting the partial remote file timed out during cleanup"
+                );
+                Ok(Some(SftpError::CleanupFailed {
+                    path: self.partial_path.clone(),
+                    message: format!("deleted timed out after {delete_timeout:?}"),
+                }))
+            }
+            Err(_) => Err(SftpError::CleanupFailed {
+                path: self.partial_path.clone(),
+                message: format!("delete timed out after {delete_timeout:?}"),
             }),
         }
     }
@@ -1739,6 +1851,92 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, SftpError::UploadFailed { .. }));
         assert!(server.remote_partial_paths().is_empty(), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn upload_write_hang_times_out_and_cleans_up() {
+        // Given: a server that stalls on WRITE acks and a client with a short
+        // per-request timeout
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client =
+            SftpClient::new(&session).with_upload_request_timeout(Duration::from_millis(500));
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("hang.txt");
+        let payload = vec![0x4Du8; 1024 * 1024];
+        tokio::fs::write(&local_path, &payload).await.unwrap();
+
+        server.failures.hang_write.store(true, Ordering::SeqCst);
+
+        // When: the upload hits a WRITE that is never acknowledged
+        let started = std::time::Instant::now();
+        let err = client
+            .upload(&local_path, "/upload/hang.bin")
+            .await
+            .unwrap_err();
+
+        // Then: it fails with a timeout message within a bounded time instead
+        // of hanging forever on an unanswered WRITE.
+        assert!(matches!(err, SftpError::UploadFailed { .. }), "{err:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "upload must not hang forever on an unanswered WRITE"
+        );
+        assert!(
+            err.to_string().contains("timed out"),
+            "expected a timeout message, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_cancel_breaks_out_of_hung_write() {
+        // Given: a server that stalls on WRITE acks
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session).with_upload_request_timeout(Duration::from_secs(1));
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("hang-cancel.txt");
+        let payload = vec![0x33_u8; 2 * 1024 * 1024];
+        tokio::fs::write(&local_path, &payload).await.unwrap();
+
+        server.failures.hang_write.store(true, Ordering::SeqCst);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_flag = Arc::clone(&cancel);
+        let stop_cancel = Arc::clone(&cancel);
+
+        // When: a cancel is requested while the upload is blocked on a hung
+        // WRITE (cancel flag flips shortly after the transfer starts)
+        let cancel_handle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            cancel_flag.store(true, Ordering::Relaxed);
+        });
+
+        let started = std::time::Instant::now();
+        let err = client
+            .upload_cancellable(
+                &local_path,
+                "/upload/hang-cancel.bin",
+                262_144,
+                TransferOverwritePolicy::default(),
+                move || stop_cancel.load(Ordering::Relaxed),
+                |_| {},
+            )
+            .await
+            .unwrap_err();
+        cancel_handle.await.unwrap();
+
+        // Then: the upload exits promptly after cancel (no 30s+ stakes) and
+        // reports a cancellation-style error, with cleanup bounded by the
+        // per-request timeout.
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "cancel must break out of a blocked write and finish cleanup quickly, took {:?}",
+            started.elapsed()
+        );
+        assert!(
+            matches!(err, SftpError::Cancelled) || matches!(err, SftpError::UploadFailed { .. }),
+            "expected cancellation-style error, got: {err}"
+        );
     }
 
     #[tokio::test]
