@@ -33,8 +33,8 @@ struct DockBridgeApp: App {
             )
         }
         .defaultSize(
-            width: WindowLayout.mainMinWidth,
-            height: WindowLayout.mainMinHeight
+            width: WindowLayout.mainDefaultWidth,
+            height: WindowLayout.mainDefaultHeight
         )
         .commands {
             MainViewCommands(

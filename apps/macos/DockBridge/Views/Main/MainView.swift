@@ -8,10 +8,14 @@ struct MainView: View {
     @StateObject private var updateCheck = UpdateCheckViewModel()
 
     @Binding private var showSettings: Bool
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @SceneStorage("sidebarHidden") private var sidebarHidden = false
     @State private var showNewConnection = false
     @State private var editingProfile: ConnectionProfile?
-    @State private var isTransferQueueExpanded = true
+    @SceneStorage("isTransferQueueExpanded") private var isTransferQueueExpanded = true
+
+    private var columnVisibility: NavigationSplitViewVisibility {
+        sidebarHidden ? .detailOnly : .all
+    }
     @State private var settingsConfig = AppConfig.default
 
     init(
@@ -30,7 +34,12 @@ struct MainView: View {
     }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        NavigationSplitView(
+            columnVisibility: Binding(
+                get: { columnVisibility },
+                set: { sidebarHidden = $0 == .detailOnly }
+            )
+        ) {
             ConnectionListView(
                 viewModel: connectionList,
                 showNewConnection: $showNewConnection,
