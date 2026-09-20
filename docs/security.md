@@ -250,10 +250,11 @@ When signing is enabled, the release workflow will require these repository secr
 
 With `SIGN_AND_NOTARIZE=true`, release packaging runs `scripts/sign-and-notarize-macos.sh`, which:
 
-1. Signs the Release `.app` with a Developer ID Application certificate (`codesign --options runtime`)
-2. Submits the build to Apple's Notary Service (`notarytool submit --wait`)
-3. Staples the notarization ticket to the app bundle (`stapler staple`)
-4. Verifies Gatekeeper acceptance (`spctl --assess --type execute`)
+1. Signs the Release `.app` with a Developer ID Application certificate. The signature includes a **secure timestamp** (`--timestamp`) and Hardened Runtime (`--options runtime`). `--deep` is **not** used (deprecated by Apple); if nested code (frameworks / XPC helpers) is added later, it must be signed from the inside out.
+2. Submits the build to Apple's Notary Service (`notarytool submit --wait`).
+3. Staples the notarization ticket to the app bundle (`stapler staple`).
+4. Verifies Gatekeeper acceptance (`spctl -a -vv -t execute`).
+5. When `DMG_PATH` is provided, **also signs the DMG** (`codesign --timestamp`), notarizes and staples it, and validates it with `spctl -a -vv -t open` so the mounted image is accepted by Gatekeeper.
 
 If signing or notarization fails, the release workflow must stop before publishing assets.
 
