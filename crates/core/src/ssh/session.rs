@@ -243,7 +243,7 @@ impl SshSession {
             manager.merge_openssh_on_connect(config)?;
         }
 
-        let russh_config = build_client_config(config.connection_timeout_secs);
+        let russh_config = build_client_config(config);
 
         let handler = SshClientHandler {
             host: host.clone(),

@@ -136,6 +136,9 @@ pub enum SftpError {
     #[error("failed to clean up partial file at '{path}': {message}")]
     CleanupFailed { path: String, message: String },
 
+    #[error("directory is not empty: '{path}' (use recursive delete to remove its contents)")]
+    DirectoryNotEmpty { path: String },
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -276,6 +279,13 @@ pub enum ConfigError {
         value: usize,
         min: usize,
         max: usize,
+    },
+
+    #[error("invalid value for {field} ({value}): {reason}")]
+    InvalidValue {
+        field: &'static str,
+        value: u64,
+        reason: &'static str,
     },
 }
 
