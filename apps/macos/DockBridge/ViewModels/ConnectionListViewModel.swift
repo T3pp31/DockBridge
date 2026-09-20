@@ -306,10 +306,11 @@ final class ConnectionListViewModel: ObservableObject {
 
     func confirmCredentialPrompt(text: String, saveToKeychain: Bool) {
         guard let prompt = pendingCredentialPrompt else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Empty confirm must not dismiss the sheet or reconnect without credentials.
-        guard !trimmed.isEmpty else { return }
+        // Only the empty check trims: SSH passwords/passphrases may legitimately
+        // contain leading/trailing whitespace, which must be preserved both in
+        // the Keychain and in the override used for the connection.
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         let account = keychain.keychainAccount(for: prompt.profile.id, kind: "profile")
         let profile = prompt.profile
@@ -319,9 +320,9 @@ final class ConnectionListViewModel: ObservableObject {
             do {
                 switch kind {
                 case .password:
-                    try keychain.savePassword(trimmed, account: account)
+                    try keychain.savePassword(text, account: account)
                 case .passphrase:
-                    try keychain.savePassphrase(trimmed, account: account)
+                    try keychain.savePassphrase(text, account: account)
                 }
             } catch {
                 errorMessage = error.localizedDescription
@@ -331,9 +332,9 @@ final class ConnectionListViewModel: ObservableObject {
 
         switch kind {
         case .password:
-            promptPasswordOverride = trimmed
+            promptPasswordOverride = text
         case .passphrase:
-            promptPassphraseOverride = trimmed
+            promptPassphraseOverride = text
         }
 
         pendingCredentialPrompt = nil
