@@ -3,6 +3,10 @@ import SwiftUI
 struct ConnectionStatusBar: View {
     let status: ConnectionStatus
     var transferSummary: String?
+    var remoteEditSessions: [MainViewModel.RemoteEditSession] = []
+    var onRetryRemoteEditSession: (UUID) -> Void = { _ in }
+    var onStopRemoteEditSession: (MainViewModel.RemoteEditSession) -> Void = { _ in }
+    var onStopAllRemoteEditSessions: () -> Void = {}
 
     var body: some View {
         HStack(spacing: 8) {
@@ -23,10 +27,58 @@ struct ConnectionStatusBar: View {
                     .accessibilityLabel("Transfer activity: \(transferSummary)")
             }
 
+            if !remoteEditSessions.isEmpty {
+                Divider()
+                    .frame(height: 14)
+
+                Menu {
+                    ForEach(remoteEditSessions) { session in
+                        Section(session.localURL.lastPathComponent) {
+                            Label(session.state.title, systemImage: session.state.systemImage)
+
+                            if session.state.canRetry {
+                                Button("Retry Upload") {
+                                    onRetryRemoteEditSession(session.id)
+                                }
+                            }
+
+                            Button("Stop Watching", role: .destructive) {
+                                onStopRemoteEditSession(session)
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    Button("Stop All Watching", role: .destructive) {
+                        onStopAllRemoteEditSessions()
+                    }
+                } label: {
+                    Label(remoteEditSummary, systemImage: remoteEditSummaryImage)
+                        .lineLimit(1)
+                }
+                .menuStyle(.borderlessButton)
+                .accessibilityLabel(remoteEditSummary)
+            }
+
             Spacer()
         }
         .padding(.horizontal, DesignTokens.Spacing.statusBarHorizontal)
         .padding(.vertical, DesignTokens.Spacing.statusBarVertical)
         .background(.bar)
+    }
+
+    private var remoteEditSummary: String {
+        let failures = remoteEditSessions.filter { $0.state.canRetry }.count
+        if failures > 0 {
+            return "\(failures) edit upload(s) need attention"
+        }
+        return "Watching \(remoteEditSessions.count) external edit(s)"
+    }
+
+    private var remoteEditSummaryImage: String {
+        remoteEditSessions.contains { $0.state.canRetry }
+            ? "exclamationmark.triangle"
+            : "pencil.and.outline"
     }
 }

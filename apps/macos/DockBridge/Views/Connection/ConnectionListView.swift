@@ -5,66 +5,65 @@ struct ConnectionListView: View {
     @Binding var showNewConnection: Bool
     @Binding var editingProfile: ConnectionProfile?
 
-    var body: some View {
+    private var content: some View {
         Group {
             if viewModel.profiles.isEmpty {
-                ContentUnavailableView {
-                    Label("No connections", systemImage: "server.rack")
-                } description: {
-                    Text("Add a connection profile to connect to a remote host.")
-                } actions: {
-                    Button("Add Connection") {
-                        showNewConnection = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.capsule)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                emptyState
             } else {
-                List(selection: $viewModel.selectedProfileID) {
-                    profileRows
-                }
-                .contextMenu(forSelectionType: UUID.self) { ids in
-                    profileContextMenu(for: ids)
-                } primaryAction: { ids in
-                    guard let profile = singleSelectedProfile(from: ids) else { return }
-                    guard !viewModel.connectionStatus.isConnected,
-                          !viewModel.connectionStatus.isConnecting
-                    else { return }
-                    viewModel.requestConnect(profile: profile)
-                }
-                .searchable(text: $viewModel.searchText, prompt: "Search connections")
+                profileList
             }
         }
-        .navigationTitle("Connections")
-        .toolbar {
-            ToolbarItemGroup {
-                Button {
+        .alert("SSH Config Import", isPresented: Binding(
+            get: { viewModel.importResultMessage != nil },
+            set: { if !$0 { viewModel.importResultMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(viewModel.importResultMessage ?? "")
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItemGroup {
+            Menu {
+                Button("New Connection…") {
                     showNewConnection = true
-                } label: {
-                    Label("Add", systemImage: "plus")
                 }
-
-                if let selected = viewModel.profiles.first(where: { $0.id == viewModel.selectedProfileID }) {
-                    Button("Connect") {
-                        viewModel.requestConnect(profile: selected)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting)
-
-                    Button("Disconnect") {
-                        Task { await viewModel.disconnect() }
-                    }
-                    .disabled(!viewModel.connectionStatus.isConnected)
-
-                    Button("Reconnect") {
-                        viewModel.reconnect()
-                    }
-                    .disabled(viewModel.connectionStatus.isConnecting)
+                Button("Import from SSH Config…") {
+                    Task { await viewModel.importFromSSHConfig() }
                 }
+            } label: {
+                Label("Add", systemImage: "plus")
+            }
+
+            if let selected = viewModel.profiles.first(where: { $0.id == viewModel.selectedProfileID }) {
+                Button("Connect") {
+                    viewModel.requestConnect(profile: selected)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting)
+
+                Button("Disconnect") {
+                    Task { await viewModel.disconnect() }
+                }
+                .disabled(!viewModel.connectionStatus.isConnected)
+
+                Button("Reconnect") {
+                    viewModel.reconnect()
+                }
+                .disabled(viewModel.connectionStatus.isConnecting)
             }
         }
-        .alert(
+    }
+
+    var body: some View {
+        content
+            .navigationTitle("Connections")
+            .toolbar {
+                toolbarContent
+            }
+            .alert(
             "Connection endpoint changed",
             isPresented: $viewModel.showEndpointChangeWarning,
             presenting: viewModel.pendingEndpointChange
@@ -162,6 +161,24 @@ struct ConnectionListView: View {
                 onCancel: viewModel.cancelCredentialPrompt
             )
         }
+        .confirmationDialog(
+            "Delete Profile?",
+            isPresented: Binding(
+                get: { viewModel.confirmDeleteProfile != nil },
+                set: { if !$0 { viewModel.confirmDeleteProfile = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: viewModel.confirmDeleteProfile
+        ) { profile in
+            Button("Delete", role: .destructive) {
+                viewModel.delete(profile: profile)
+            }
+            Button("Cancel", role: .cancel) {
+                viewModel.confirmDeleteProfile = nil
+            }
+        } message: { profile in
+            Text("Delete \"\(profile.name)\"? The saved password/passphrase for this profile will also be removed from the Keychain.")
+        }
     }
 
     private struct CredentialPromptItem: Identifiable {
@@ -177,6 +194,37 @@ struct ConnectionListView: View {
     }
 
     @ViewBuilder
+    private var profileList: some View {
+        List(selection: $viewModel.selectedProfileID) {
+            profileRows
+        }
+        .contextMenu(forSelectionType: UUID.self) { ids in
+            profileContextMenu(for: ids)
+        } primaryAction: { ids in
+            guard let profile = singleSelectedProfile(from: ids) else { return }
+            guard !viewModel.connectionStatus.isConnected,
+                  !viewModel.connectionStatus.isConnecting
+            else { return }
+            viewModel.requestConnect(profile: profile)
+        }
+        .searchable(text: $viewModel.searchText, prompt: "Search connections")
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("No connections", systemImage: "server.rack")
+        } description: {
+            Text("Add a connection profile to connect to a remote host.")
+        } actions: {
+            Button("Add Connection") {
+                showNewConnection = true
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var profileRows: some View {
         ForEach(viewModel.filteredProfiles) { profile in
             HStack(spacing: 8) {
@@ -218,7 +266,7 @@ struct ConnectionListView: View {
             }
 
             Button("Delete", role: .destructive) {
-                viewModel.delete(profile: profile)
+                viewModel.requestDelete(profile: profile)
             }
             .disabled(isConnectedProfile(profile))
         }

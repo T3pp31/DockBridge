@@ -6,7 +6,11 @@ final class TransferQueueViewModel: ObservableObject {
     @Published var errorMessage: String?
 
     var activeTransferSummary: String? {
-        TransferProgressFormatter.activeTransferSummary(for: tasks)
+        let totalSpeed = transferSpeeds.values.reduce(0, +)
+        return TransferProgressFormatter.activeTransferSummary(
+            for: tasks,
+            totalBytesPerSecond: totalSpeed > 0 ? totalSpeed : nil
+        )
     }
 
     var hasFinishedTasks: Bool {
@@ -20,12 +24,12 @@ final class TransferQueueViewModel: ObservableObject {
         }
     }
 
-    private let bridge: RustBridgeService
+    private let bridge: any RemoteBridging
     private var refreshTask: Task<Void, Never>?
     private var progressSamples: [UInt64: (bytes: UInt64, date: Date)] = [:]
     private var transferSpeeds: [UInt64: Double] = [:]
 
-    init(bridge: RustBridgeService) {
+    init(bridge: any RemoteBridging) {
         self.bridge = bridge
     }
 
@@ -34,7 +38,16 @@ final class TransferQueueViewModel: ObservableObject {
         refreshTask = Task {
             while !Task.isCancelled {
                 await refresh()
-                try? await Task.sleep(for: .seconds(1))
+                // Poll every second while a transfer is active; back off to
+                // 5 seconds when idle to avoid unneeded FFI + redraws.
+                let hasActive = tasks.contains { task in
+                    switch task.status {
+                    case .pending, .inProgress: return true
+                    case .completed, .failed, .cancelled: return false
+                    }
+                }
+                let delay: Duration = hasActive ? .seconds(1) : .seconds(5)
+                try? await Task.sleep(for: delay)
             }
         }
     }
@@ -45,9 +58,10 @@ final class TransferQueueViewModel: ObservableObject {
     }
 
     func refresh() async {
+        // Do NOT clear tasks on disconnect: the user must be able to inspect
+        // and retry failed transfers after reconnecting. Progress speeds are
+        // stale once disconnected and are reset.
         guard bridge.isConnected else {
-            tasks = []
-            errorMessage = nil
             progressSamples.removeAll()
             transferSpeeds.removeAll()
             return
@@ -56,15 +70,17 @@ final class TransferQueueViewModel: ObservableObject {
         do {
             let fetched = try await bridge.fetchTransferTasks()
             guard bridge.isConnected else {
-                tasks = []
-                errorMessage = nil
                 progressSamples.removeAll()
                 transferSpeeds.removeAll()
                 return
             }
             updateProgressSamples(for: fetched)
-            tasks = fetched
-            errorMessage = nil
+            if fetched != tasks {
+                tasks = fetched
+            }
+            if errorMessage != nil {
+                errorMessage = nil
+            }
         } catch {
             errorMessage = error.dockBridgeUserMessage
         }
