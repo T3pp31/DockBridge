@@ -8,7 +8,7 @@ pub mod ssh;
 pub mod transfer;
 
 pub use config::{
-    clamp_transfer_chunk_size, ensure_known_hosts_parent, expand_tilde,
+    clamp_transfer_chunk_size, ensure_known_hosts_parent, expand_tilde, u64_to_usize_or_invalid,
     validate_transfer_chunk_size, AppConfig, DirectoryWalkLimits, DEFAULT_DIRECTORY_WALK_MAX_DEPTH,
     DEFAULT_DIRECTORY_WALK_MAX_FILES, DEFAULT_DIRECTORY_WALK_MAX_TOTAL_BYTES,
     DEFAULT_TRANSFER_CHUNK_SIZE_BYTES, DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,

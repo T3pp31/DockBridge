@@ -70,7 +70,6 @@ mkdir -p "$OUT_DIR"
 cargo cyclonedx \
   --format json \
   --spec-version "${SPEC_VERSION}" \
-  --all \
   --target all \
   --manifest-path "${SBOM_MANIFEST}" \
   --override-filename "${OVERRIDE_BASENAME}"
@@ -86,6 +85,14 @@ cp "$GENERATED_JSON" "$OUT_PATH"
 jq -e --arg spec "${SPEC_VERSION}" '
   .bomFormat == "CycloneDX" and .specVersion == $spec
 ' "$OUT_PATH" >/dev/null
+
+# The SBOM is generated from crates/uniffi (what ships inside the DMG), so the
+# uniffi runtime must be present. (`clap` may legitimately appear: uniffi
+# itself has clap in its build-dependencies, so it is not CLI-only.)
+if ! jq -e '[.components[]?.purl // empty | capture("pkg:cargo/(?<name>[^@]+)").name] | any(. == "uniffi")' "$OUT_PATH" >/dev/null; then
+  echo "SBOM validation failed: expected uniffi in components" >&2
+  exit 1
+fi
 
 (
   cd "$OUT_DIR"

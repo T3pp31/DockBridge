@@ -97,10 +97,19 @@ mkdir -p "$DIST_DIR"
 rm -f "$DMG_PATH" "$SHA256_PATH"
 
 STAGING_DIR="$(mktemp -d)"
+# On any failure, remove the staging dir AND a partial/empty DMG so a broken
+# artifact is never left behind for the next `-ov` build to assume exists.
+cleanup_on_error() {
+  rm -rf "$STAGING_DIR"
+  rm -f "$DMG_PATH" "$SHA256_PATH"
+}
+trap cleanup_on_error ERR
 trap 'rm -rf "$STAGING_DIR"' EXIT
 
 echo "Preparing DMG staging directory..."
-ditto "$APP_PATH" "${STAGING_DIR}/${APP_NAME}.app"
+# --norsrc --noextattr keep developer-machine xattrs (quarantine, provenance)
+# out of the distributed DMG.
+ditto --norsrc --noextattr "$APP_PATH" "${STAGING_DIR}/${APP_NAME}.app"
 ln -s /Applications "${STAGING_DIR}/Applications"
 
 echo "Creating DMG: ${DMG_PATH}"

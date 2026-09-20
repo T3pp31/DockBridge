@@ -17,8 +17,11 @@ KNOWN_HOSTS="$WORKDIR/known_hosts.json"
 CONFIG="$WORKDIR/config.toml"
 LOCAL_FILE="$WORKDIR/local-upload.txt"
 DOWNLOAD_FILE="$WORKDIR/local-download.txt"
-REMOTE_FILE="upload/e2e-verify.txt"
+REMOTE_FILE="/upload/e2e-verify.txt"
 LOG="$WORKDIR/e2e.log"
+KEYFILE="$WORKDIR/id_ed25519"
+KEYFILE_ENC="$WORKDIR/id_ed25519_enc"
+KEY_PASSPHRASE="${SFTP_KEY_PASSPHRASE:-testpassphrase}"
 
 CLI=(cargo run -q -p dockbridge-cli -- --config "$CONFIG")
 
@@ -49,37 +52,61 @@ check() {
 
 prepare_config() {
   rm -f "$KNOWN_HOSTS"
-  cat >"$CONFIG" <<EOF
-connection_timeout_secs = 30
-session_health_check_interval_secs = 10
-transfer_retry_count = 3
-known_hosts_path = "$KNOWN_HOSTS"
-EOF
+  # AppConfig has no serde(default) on most fields, so the generated TOML must
+  # contain every field. Base it on the committed default and override the
+  # test-specific paths / merge flag.
+  # Keep TOML string literals quoted: the outer double quotes around the
+  # replacement would be stripped by the shell before sed sees them.
+  sed     -e "s|^known_hosts_path = .*|known_hosts_path = \"$KNOWN_HOSTS\"|"     -e "s|^merge_openssh_known_hosts_on_connect = .*|merge_openssh_known_hosts_on_connect = false|"     -e "s|^openssh_known_hosts_path = .*|openssh_known_hosts_path = \"$WORKDIR/openssh_known_hosts\"|"     config/default.toml >"$CONFIG"
+  : >"$WORKDIR/openssh_known_hosts"
   echo "e2e upload $(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$LOCAL_FILE"
+}
+
+ensure_key() {
+  # Generate an unencrypted ed25519 key and a directly-encrypted copy for the
+  # private-key auth cases. The public keys are mounted into the container's
+  # /home/$USER/.ssh/keys directory so atmoz/sftp appends them to
+  # authorized_keys at startup.
+  if [[ ! -f "$KEYFILE" ]]; then
+    ssh-keygen -q -t ed25519 -N "" -f "$KEYFILE" >/dev/null 2>&1
+    ssh-keygen -q -t ed25519 -N "$KEY_PASSPHRASE" -f "$KEYFILE_ENC" >/dev/null 2>&1
+  fi
 }
 
 ensure_container() {
   if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
     return 0
   fi
+  ensure_key
   log "Starting Docker SFTP container $CONTAINER_NAME ..."
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   docker run -d --name "$CONTAINER_NAME" -p "${PORT}:22" -e SFTP_USER="$USER" \
+    -v "$WORKDIR/id_ed25519.pub:/home/$USER/.ssh/keys/id_ed25519.pub:ro" \
+    -v "$WORKDIR/id_ed25519_enc.pub:/home/$USER/.ssh/keys/id_ed25519_enc.pub:ro" \
     atmoz/sftp "${USER}:${PASSWORD}:::upload" >/dev/null
   sleep 3
 }
 
 host_key_reject() {
   prepare_config
-  { printf '%s\n' "$PASSWORD" "no"; } | "${CLI[@]}" list \
-    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin
+  # strict: an unknown host key must be rejected non-interactively, before any
+  # credential is consumed, and with the documented host-key exit code (3).
+  set +e
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy strict --path upload
+  local status=$?
+  set -e
+  [[ "$status" -eq 3 ]]
   test ! -s "$KNOWN_HOSTS"
 }
 
 host_key_accept() {
   prepare_config
-  { printf '%s\n' "$PASSWORD" "yes"; } | "${CLI[@]}" list \
-    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin
+  # accept-new: trust the unknown key non-interactively; stdin carries only $PASSWORD
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --path upload
   test -s "$KNOWN_HOSTS"
   grep -q '"entries"' "$KNOWN_HOSTS"
 }
@@ -87,12 +114,76 @@ host_key_accept() {
 host_key_no_reprompt() {
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    >/dev/null
+    --path upload >/dev/null
+}
+
+json_output() {
+  prepare_config
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --output json --path upload | \
+    python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d, list); assert d'
+}
+
+pwd_command() {
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" pwd \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new | grep -q '/'
+}
+
+mkdir_rename_delete() {
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" mkdir \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --remote "upload/rename-test"
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" rename \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --from "upload/rename-test" --to "upload/rename-test-2"
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" delete \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --remote "upload/rename-test-2"
+}
+
+recursive_upload_download() {
+  local tree="$WORKDIR/tree"
+  mkdir -p "$tree/sub"
+  echo one >"$tree/a.txt"
+  echo two >"$tree/sub/b.txt"
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" upload \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --local "$tree" --remote "upload" --recursive
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" download \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --remote "upload/tree" --local "$WORKDIR/dl" --recursive
+  cmp -s "$tree/a.txt" "$WORKDIR/dl/a.txt"
+  cmp -s "$tree/sub/b.txt" "$WORKDIR/dl/sub/b.txt"
+}
+
+private_key_auth_plain() {
+  ensure_key
+  prepare_config
+  # Seed the store with the host key first so the actual key-only run below
+  # never needs an interactive host-key prompt.
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --path upload >/dev/null
+  # Now authenticate with the key (host key already trusted)
+  "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" \
+    --identity "$WORKDIR/id_ed25519" --path upload >/dev/null
+}
+
+private_key_auth_encrypted() {
+  # Authenticate with an encrypted key; passphrase comes from --passphrase-stdin
+  printf '%s\n' "$KEY_PASSPHRASE" | "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" \
+    --identity "$WORKDIR/id_ed25519_enc" --passphrase-stdin \
+    --path upload >/dev/null
 }
 
 upload_file() {
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" upload \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new \
     --local "$LOCAL_FILE" --remote "$REMOTE_FILE"
 }
 
@@ -100,6 +191,7 @@ download_file() {
   rm -f "$DOWNLOAD_FILE"
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" download \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new \
     --remote "$REMOTE_FILE" --local "$DOWNLOAD_FILE"
   cmp -s "$LOCAL_FILE" "$DOWNLOAD_FILE"
 }
@@ -110,13 +202,18 @@ transfer_queue_states() {
 
 corrupted_known_hosts_errors() {
   prepare_config
-  { printf '%s\n' "$PASSWORD" "yes"; } | "${CLI[@]}" list \
-    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin >/dev/null
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new >/dev/null
   echo '{}' >"$KNOWN_HOSTS"
   local output
+  set +e
   output=$(printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    2>&1) && return 1
+    --host-key-policy accept-new 2>&1)
+  local status=$?
+  set -e
+  [[ "$status" -ne 0 ]]
   echo "$output" | grep -qi 'known hosts'
 }
 
@@ -143,9 +240,15 @@ main() {
   ensure_container
   prepare_config
 
-  check "host key reject does not persist trust" host_key_reject
+  check "host key reject does not persist trust (exit 3)" host_key_reject
   check "host key accept persists trusted entry" host_key_accept
   check "second connection skips host key prompt" host_key_no_reprompt
+  check "list --output json is parseable" json_output
+  check "pwd prints a remote path" pwd_command
+  check "mkdir/rename/delete round-trip" mkdir_rename_delete
+  check "recursive upload/download round-trip" recursive_upload_download
+  check "private-key auth (plain key)" private_key_auth_plain
+  check "private-key auth (encrypted key, --passphrase-stdin)" private_key_auth_encrypted
   check "upload succeeds" upload_file
   check "download matches uploaded content" download_file
   check "transfer queue lifecycle tests pass" transfer_queue_states
