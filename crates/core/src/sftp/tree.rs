@@ -20,6 +20,37 @@ pub struct RemoteFileEntry {
     pub relative_path: PathBuf,
 }
 
+/// An entry that could not be examined during a walk but did not abort it.
+///
+/// Used so a single unreadable subdirectory (permissions, vanished file)
+/// does not prevent the whole folder transfer (issue #316).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedEntry {
+    /// Path that could not be examined (local or remote).
+    pub path: PathBuf,
+    /// Human-readable reason, e.g. "permission denied" or "read error".
+    pub reason: String,
+}
+
+/// Result of a local directory walk: discovered files plus entries that were
+/// skipped (not transferred) without aborting the walk.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WalkResult {
+    /// Collectable files discovered during the walk.
+    pub files: Vec<LocalFileEntry>,
+    /// Entries that could not be examined; the reason is surfaced to the UI.
+    pub skipped: Vec<SkippedEntry>,
+}
+
+/// Result of a remote directory walk: discovered files plus skipped entries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemoteWalkResult {
+    /// Collectable files discovered during the walk.
+    pub files: Vec<RemoteFileEntry>,
+    /// Remote paths that could not be listed (unreadable subdirectory, etc.).
+    pub skipped: Vec<SkippedEntry>,
+}
+
 fn reject_parent_dir_segment(path: &str) -> Result<(), SftpError> {
     if path.contains('\0') || path.split('/').any(|segment| segment == "..") {
         return Err(SftpError::InvalidRemotePath {
@@ -307,15 +338,20 @@ impl DirectoryWalkAccumulator {
 ///
 /// Symlinks are not followed by default to avoid uploading unintended files outside the
 /// selected directory tree.
-pub async fn walk_local_directory(root: &Path) -> Result<Vec<LocalFileEntry>, SftpError> {
+pub async fn walk_local_directory(root: &Path) -> Result<WalkResult, SftpError> {
     walk_local_directory_with_options(root, WalkLocalDirectoryOptions::default()).await
 }
 
 /// Recursively walks a local directory with configurable symlink handling.
+///
+/// Root-level failures (the selected path cannot be stat'd) remain hard
+/// errors. Per-entry failures (an unreadable subdirectory, a vanished file)
+/// are collected in [`WalkResult::skipped`] so the rest of the tree still
+/// transfers (issue #316).
 pub async fn walk_local_directory_with_options(
     root: &Path,
     options: WalkLocalDirectoryOptions,
-) -> Result<Vec<LocalFileEntry>, SftpError> {
+) -> Result<WalkResult, SftpError> {
     let metadata = tokio::fs::metadata(root)
         .await
         .map_err(|err| SftpError::WalkFailed {
@@ -330,10 +366,13 @@ pub async fn walk_local_directory_with_options(
             .unwrap_or_else(|| PathBuf::from("file"));
         let mut accumulator = DirectoryWalkAccumulator::new(options.limits);
         accumulator.record_file(metadata.len(), &root.display().to_string())?;
-        return Ok(vec![LocalFileEntry {
-            local_path: root.to_path_buf(),
-            relative_path: file_name,
-        }]);
+        return Ok(WalkResult {
+            files: vec![LocalFileEntry {
+                local_path: root.to_path_buf(),
+                relative_path: file_name,
+            }],
+            skipped: Vec::new(),
+        });
     }
 
     if !metadata.is_dir() {
@@ -344,79 +383,114 @@ pub async fn walk_local_directory_with_options(
     }
 
     let mut entries = Vec::new();
+    let mut skipped = Vec::new();
     let mut pending = vec![(root.to_path_buf(), 0_u32)];
     let mut visited = HashSet::<PathBuf>::new();
     let mut accumulator = DirectoryWalkAccumulator::new(options.limits);
 
     while let Some((current, depth)) = pending.pop() {
         accumulator.check_depth(depth, &current.display().to_string())?;
-        let canonical =
-            tokio::fs::canonicalize(&current)
-                .await
-                .map_err(|err| SftpError::WalkFailed {
-                    path: current.display().to_string(),
-                    message: err.to_string(),
-                })?;
+        let canonical = match tokio::fs::canonicalize(&current).await {
+            Ok(canonical) => canonical,
+            Err(err) => {
+                if current == root {
+                    return Err(SftpError::WalkFailed {
+                        path: current.display().to_string(),
+                        message: err.to_string(),
+                    });
+                }
+                skipped.push(SkippedEntry {
+                    path: current.clone(),
+                    reason: err.to_string(),
+                });
+                continue;
+            }
+        };
         if !visited.insert(canonical) {
             continue;
         }
 
-        let mut read_dir =
-            tokio::fs::read_dir(&current)
-                .await
-                .map_err(|err| SftpError::WalkFailed {
-                    path: current.display().to_string(),
-                    message: err.to_string(),
-                })?;
+        let mut read_dir = match tokio::fs::read_dir(&current).await {
+            Ok(read_dir) => read_dir,
+            Err(err) => {
+                if current == root {
+                    return Err(SftpError::WalkFailed {
+                        path: current.display().to_string(),
+                        message: err.to_string(),
+                    });
+                }
+                skipped.push(SkippedEntry {
+                    path: current.clone(),
+                    reason: err.to_string(),
+                });
+                continue;
+            }
+        };
 
-        while let Some(entry) =
-            read_dir
-                .next_entry()
-                .await
-                .map_err(|err| SftpError::WalkFailed {
-                    path: current.display().to_string(),
-                    message: err.to_string(),
-                })?
-        {
+        loop {
+            let entry = match read_dir.next_entry().await {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(err) => {
+                    // A read error mid-listing: skip the rest of this dir but
+                    // keep walking siblings.
+                    skipped.push(SkippedEntry {
+                        path: current.clone(),
+                        reason: err.to_string(),
+                    });
+                    break;
+                }
+            };
+
             let path = entry.path();
-            let file_type = entry
-                .file_type()
-                .await
-                .map_err(|err| SftpError::WalkFailed {
-                    path: path.display().to_string(),
-                    message: err.to_string(),
-                })?;
+            let file_type = match entry.file_type().await {
+                Ok(file_type) => file_type,
+                Err(err) => {
+                    skipped.push(SkippedEntry {
+                        path: path.clone(),
+                        reason: err.to_string(),
+                    });
+                    continue;
+                }
+            };
 
             if file_type.is_symlink() {
                 if !options.follow_symlinks {
                     continue;
                 }
 
-                let target_metadata =
-                    tokio::fs::metadata(&path)
-                        .await
-                        .map_err(|err| SftpError::WalkFailed {
-                            path: path.display().to_string(),
-                            message: err.to_string(),
-                        })?;
+                let target_metadata = match tokio::fs::metadata(&path).await {
+                    Ok(metadata) => metadata,
+                    Err(err) => {
+                        skipped.push(SkippedEntry {
+                            path: path.clone(),
+                            reason: err.to_string(),
+                        });
+                        continue;
+                    }
+                };
 
                 if target_metadata.is_dir() {
                     let child_depth = depth.saturating_add(1);
                     accumulator.check_depth(child_depth, &path.display().to_string())?;
                     pending.push((path, child_depth));
                 } else if target_metadata.is_file() {
-                    let relative_path =
-                        path.strip_prefix(root).map(PathBuf::from).map_err(|err| {
-                            SftpError::WalkFailed {
-                                path: path.display().to_string(),
-                                message: err.to_string(),
-                            }
-                        })?;
-                    accumulator.record_file(target_metadata.len(), &path.display().to_string())?;
-                    entries.push(LocalFileEntry {
-                        local_path: path,
-                        relative_path,
-                    });
+                    match path.strip_prefix(root).map(PathBuf::from) {
+                        Ok(relative_path) => {
+                            accumulator
+                                .record_file(target_metadata.len(), &path.display().to_string())?;
+                            entries.push(LocalFileEntry {
+                                local_path: path,
+                                relative_path,
+                            });
+                        }
+                        Err(err) => {
+                            skipped.push(SkippedEntry {
+                                path: path.clone(),
+                                reason: err.to_string(),
+                            });
+                        }
+                    }
                 }
                 continue;
             }
@@ -426,29 +500,40 @@ pub async fn walk_local_directory_with_options(
                 accumulator.check_depth(child_depth, &path.display().to_string())?;
                 pending.push((path, child_depth));
             } else if file_type.is_file() {
-                let file_metadata =
-                    tokio::fs::metadata(&path)
-                        .await
-                        .map_err(|err| SftpError::WalkFailed {
-                            path: path.display().to_string(),
-                            message: err.to_string(),
-                        })?;
-                let relative_path = path.strip_prefix(root).map(PathBuf::from).map_err(|err| {
-                    SftpError::WalkFailed {
-                        path: path.display().to_string(),
-                        message: err.to_string(),
+                let file_metadata = match tokio::fs::metadata(&path).await {
+                    Ok(metadata) => metadata,
+                    Err(err) => {
+                        skipped.push(SkippedEntry {
+                            path: path.clone(),
+                            reason: err.to_string(),
+                        });
+                        continue;
                     }
-                })?;
-                accumulator.record_file(file_metadata.len(), &path.display().to_string())?;
-                entries.push(LocalFileEntry {
-                    local_path: path,
-                    relative_path,
-                });
+                };
+                match path.strip_prefix(root).map(PathBuf::from) {
+                    Ok(relative_path) => {
+                        accumulator
+                            .record_file(file_metadata.len(), &path.display().to_string())?;
+                        entries.push(LocalFileEntry {
+                            local_path: path,
+                            relative_path,
+                        });
+                    }
+                    Err(err) => {
+                        skipped.push(SkippedEntry {
+                            path: path.clone(),
+                            reason: err.to_string(),
+                        });
+                    }
+                }
             }
         }
     }
 
-    Ok(entries)
+    Ok(WalkResult {
+        files: entries,
+        skipped,
+    })
 }
 
 /// Recursively walks a remote directory and returns all files with relative paths.
@@ -458,18 +543,24 @@ pub async fn walk_local_directory_with_options(
 pub async fn walk_remote_directory<'a>(
     client: &SftpClient<'a>,
     root: &str,
-) -> Result<Vec<RemoteFileEntry>, SftpError> {
+) -> Result<RemoteWalkResult, SftpError> {
     walk_remote_directory_with_limits(client, root, DirectoryWalkLimits::default()).await
 }
 
 /// Recursively walks a remote directory with configurable resource limits.
+///
+/// The selected root must be listable (its failure is a hard error). An
+/// unreadable *subdirectory* or a mismatched listing entry is recorded in
+/// [`RemoteWalkResult::skipped`] so the rest of the tree still transfers
+/// (issue #316).
 pub async fn walk_remote_directory_with_limits<'a>(
     client: &SftpClient<'a>,
     root: &str,
     limits: DirectoryWalkLimits,
-) -> Result<Vec<RemoteFileEntry>, SftpError> {
+) -> Result<RemoteWalkResult, SftpError> {
     let normalized_root = normalize_remote_path(root)?;
     let mut files = Vec::new();
+    let mut skipped = Vec::new();
     let mut pending = vec![(normalized_root.clone(), PathBuf::new(), 0_u32)];
     let mut visited = HashSet::new();
     visited.insert(normalized_root.clone());
@@ -477,10 +568,38 @@ pub async fn walk_remote_directory_with_limits<'a>(
 
     while let Some((current_remote, relative_prefix, depth)) = pending.pop() {
         accumulator.check_depth(depth, &current_remote)?;
-        let entries = client.list_directory(&current_remote).await?;
+        let entries = match client.list_directory(&current_remote).await {
+            Ok(entries) => entries,
+            Err(err) => {
+                if current_remote == normalized_root {
+                    return Err(err);
+                }
+                skipped.push(SkippedEntry {
+                    path: PathBuf::from(current_remote),
+                    reason: err.to_string(),
+                });
+                continue;
+            }
+        };
         for entry in entries {
-            let child_remote = validated_remote_entry(&current_remote, &entry.name, &entry.path)?;
-            ensure_remote_path_within_root(&normalized_root, &child_remote)?;
+            let child_remote =
+                match validated_remote_entry(&current_remote, &entry.name, &entry.path) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        skipped.push(SkippedEntry {
+                            path: PathBuf::from(entry.path),
+                            reason: err.to_string(),
+                        });
+                        continue;
+                    }
+                };
+            if let Err(err) = ensure_remote_path_within_root(&normalized_root, &child_remote) {
+                skipped.push(SkippedEntry {
+                    path: PathBuf::from(child_remote),
+                    reason: err.to_string(),
+                });
+                continue;
+            }
 
             if entry.is_symlink {
                 continue;
@@ -508,7 +627,7 @@ pub async fn walk_remote_directory_with_limits<'a>(
         }
     }
 
-    Ok(files)
+    Ok(RemoteWalkResult { files, skipped })
 }
 
 /// Returns `true` when `path` is a local directory.
@@ -551,11 +670,16 @@ mod tests {
 
     #[test]
     fn validate_remote_entry_name_accepts_normal_names() {
-        // Given: a normal file name
+        // Given: normal file names, including names that contain ".." as a
+        // substring (only the exact "." / ".." entries are rejected)
         // When: validate_remote_entry_name is called
         // Then: validation succeeds
         assert!(validate_remote_entry_name("file.txt").is_ok());
         assert!(validate_remote_entry_name(".hidden").is_ok());
+        assert!(validate_remote_entry_name("a..b").is_ok());
+        assert!(validate_remote_entry_name("v1..v2.diff").is_ok());
+        assert!(validate_remote_entry_name("report..final.txt").is_ok());
+        assert!(validate_remote_entry_name("..hidden").is_ok());
     }
 
     #[tokio::test]
@@ -785,7 +909,7 @@ mod tests {
         fs::write(root.join("top.txt"), b"a").unwrap();
         fs::write(root.join("nested/inner.txt"), b"b").unwrap();
 
-        let entries = walk_local_directory(root).await.unwrap();
+        let entries = walk_local_directory(root).await.unwrap().files;
         let relatives: Vec<_> = entries
             .iter()
             .map(|entry| entry.relative_path.to_string_lossy().into_owned())
@@ -802,7 +926,7 @@ mod tests {
         let file = dir.path().join("only.txt");
         fs::write(&file, b"x").unwrap();
 
-        let entries = walk_local_directory(&file).await.unwrap();
+        let entries = walk_local_directory(&file).await.unwrap().files;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].relative_path, PathBuf::from("only.txt"));
     }
@@ -810,7 +934,7 @@ mod tests {
     #[tokio::test]
     async fn walk_local_directory_empty_directory() {
         let dir = tempdir().unwrap();
-        let entries = walk_local_directory(dir.path()).await.unwrap();
+        let entries = walk_local_directory(dir.path()).await.unwrap().files;
         assert!(entries.is_empty());
     }
 
@@ -826,7 +950,7 @@ mod tests {
             .unwrap();
         std::os::unix::fs::symlink(outside.path(), root.join("link_dir")).unwrap();
 
-        let entries = walk_local_directory(root).await.unwrap();
+        let entries = walk_local_directory(root).await.unwrap().files;
         let relatives: Vec<_> = entries
             .iter()
             .map(|entry| entry.relative_path.to_string_lossy().into_owned())
@@ -835,6 +959,55 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(relatives.contains(&"normal.txt".to_string()));
         assert!(!relatives.iter().any(|path| path.contains("secret")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn walk_local_directory_skips_unreadable_subdirectory_but_keeps_rest() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Given: a tree with an unreadable subdirectory and readable siblings
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir(root.join("locked")).unwrap();
+        fs::write(root.join("locked/secret.txt"), b"hidden").unwrap();
+        fs::write(root.join("ok.txt"), b"fine").unwrap();
+        fs::create_dir(root.join("okdir")).unwrap();
+        fs::write(root.join("okdir/inner.txt"), b"inner").unwrap();
+        // Make the subdirectory unreadable/uneXecutable so read_dir fails.
+        fs::set_permissions(root.join("locked"), std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // When: the tree is walked
+        let result = walk_local_directory(root).await.unwrap();
+
+        // Then: the readable entries are still collected, and the unreadable
+        // subdirectory is reported as skipped (not a hard failure).
+        let relatives: Vec<_> = result
+            .files
+            .iter()
+            .map(|entry| entry.relative_path.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            relatives.contains(&"ok.txt".to_string()),
+            "readable file must still be collected: {relatives:?}"
+        );
+        assert!(
+            relatives.contains(&"okdir/inner.txt".to_string()),
+            "readable nested file must still be collected: {relatives:?}"
+        );
+        assert!(
+            !relatives.iter().any(|path| path.contains("locked")),
+            "locked subtree must not appear in files: {relatives:?}"
+        );
+        assert_eq!(
+            result.skipped.len(),
+            1,
+            "the locked subdirectory must be reported as skipped: {:?}",
+            result.skipped
+        );
+
+        // Cleanup: restore permissions so the tempdir can be removed.
+        fs::set_permissions(root.join("locked"), std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[cfg(unix)]
@@ -855,7 +1028,8 @@ mod tests {
             },
         )
         .await
-        .unwrap();
+        .unwrap()
+        .files;
         let relatives: Vec<_> = entries
             .iter()
             .map(|entry| entry.relative_path.to_string_lossy().into_owned())
@@ -882,7 +1056,8 @@ mod tests {
             },
         )
         .await
-        .unwrap();
+        .unwrap()
+        .files;
         let relatives: Vec<_> = entries
             .iter()
             .map(|entry| entry.relative_path.to_string_lossy().into_owned())
@@ -911,7 +1086,8 @@ mod tests {
             },
         )
         .await
-        .unwrap();
+        .unwrap()
+        .files;
         let relatives: Vec<_> = entries
             .iter()
             .map(|entry| entry.relative_path.to_string_lossy().into_owned())
@@ -1036,7 +1212,8 @@ mod tests {
             },
         )
         .await
-        .unwrap();
+        .unwrap()
+        .files;
 
         assert_eq!(entries.len(), 2);
     }
