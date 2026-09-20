@@ -417,7 +417,7 @@ impl TransferManager {
                 .await
                 .map_err(transfer_error_from_sftp)?;
 
-            let files = walk_local_directory_with_options(
+            let result = walk_local_directory_with_options(
                 local_path,
                 WalkLocalDirectoryOptions {
                     limits: self.directory_walk_limits,
@@ -426,8 +426,8 @@ impl TransferManager {
             )
             .await
             .map_err(transfer_error_from_sftp)?;
-            let mut tasks = Vec::with_capacity(files.len());
-            for entry in files {
+            let mut tasks = Vec::with_capacity(result.files.len());
+            for entry in result.files {
                 let remote_path = join_remote_path(&remote_root, &entry.relative_path)
                     .map_err(transfer_error_from_sftp)?;
                 if let Some(parent) =
@@ -442,6 +442,12 @@ impl TransferManager {
                     .enqueue_upload(session, &entry.local_path, remote_path)
                     .await?;
                 tasks.push(task);
+            }
+            if !result.skipped.is_empty() {
+                tracing::warn!(
+                    skipped = ?result.skipped,
+                    "local directory walk skipped unreadable entries"
+                );
             }
             return Ok(tasks);
         }
@@ -499,12 +505,12 @@ impl TransferManager {
                 return Ok(Vec::new());
             }
 
-            let files =
+            let result =
                 walk_remote_directory_with_limits(&client, &normalized, self.directory_walk_limits)
                     .await
                     .map_err(transfer_error_from_sftp)?;
-            let mut tasks = Vec::with_capacity(files.len());
-            for entry in files {
+            let mut tasks = Vec::with_capacity(result.files.len());
+            for entry in result.files {
                 let local_path = local_root.join(&entry.relative_path);
                 ensure_local_path_within_root(&local_root, &local_path)
                     .map_err(transfer_error_from_sftp)?;
@@ -517,6 +523,12 @@ impl TransferManager {
                     .enqueue_download(session, &entry.remote_path, &local_path)
                     .await?;
                 tasks.push(task);
+            }
+            if !result.skipped.is_empty() {
+                tracing::warn!(
+                    skipped = ?result.skipped,
+                    "remote directory walk skipped unreadable entries"
+                );
             }
             Ok(tasks)
         } else {

@@ -406,7 +406,7 @@ impl<'a> SftpClient<'a> {
             let remote_root = join_remote_path(remote_directory, Path::new(&directory_name))?;
             self.create_directory_all(&remote_root).await?;
 
-            let files = walk_local_directory_with_options(
+            let result = walk_local_directory_with_options(
                 local_path,
                 WalkLocalDirectoryOptions {
                     limits: self.directory_walk_limits,
@@ -414,12 +414,18 @@ impl<'a> SftpClient<'a> {
                 },
             )
             .await?;
-            for entry in files {
+            for entry in result.files {
                 let remote_path = join_remote_path(&remote_root, &entry.relative_path)?;
                 if let Some(parent) = parent_remote_path(&remote_path)? {
                     self.create_directory_all(&parent).await?;
                 }
                 self.upload(&entry.local_path, &remote_path).await?;
+            }
+            if !result.skipped.is_empty() {
+                tracing::warn!(
+                    skipped = ?result.skipped,
+                    "local directory walk skipped unreadable entries"
+                );
             }
             return Ok(());
         }
@@ -460,10 +466,10 @@ impl<'a> SftpClient<'a> {
                 return Ok(());
             }
 
-            let files =
+            let result =
                 walk_remote_directory_with_limits(self, &normalized, self.directory_walk_limits)
                     .await?;
-            for entry in files {
+            for entry in result.files {
                 let local_path = local_root.join(&entry.relative_path);
                 ensure_local_path_within_root(&local_root, &local_path)?;
                 if let Some(parent) = local_path.parent() {
@@ -476,6 +482,12 @@ impl<'a> SftpClient<'a> {
                     })?;
                 }
                 self.download(&entry.remote_path, &local_path).await?;
+            }
+            if !result.skipped.is_empty() {
+                tracing::warn!(
+                    skipped = ?result.skipped,
+                    "remote directory walk skipped unreadable entries"
+                );
             }
             Ok(())
         } else {
@@ -2293,7 +2305,10 @@ mod tests {
 
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
-        let entries = walk_remote_directory(&client, "/download").await.unwrap();
+        let entries = walk_remote_directory(&client, "/download")
+            .await
+            .unwrap()
+            .files;
         let relatives: Vec<_> = entries
             .iter()
             .map(|entry| entry.relative_path.to_string_lossy().into_owned())
@@ -2512,7 +2527,7 @@ mod tests {
         let client = SftpClient::new(&session);
 
         // When: the remote directory is walked
-        let entries = walk_remote_directory(&client, "/walk").await.unwrap();
+        let entries = walk_remote_directory(&client, "/walk").await.unwrap().files;
 
         // Then: both files are collected with relative paths from the walk root
         assert_eq!(entries.len(), 2);
@@ -2570,7 +2585,10 @@ mod tests {
         let client = SftpClient::new(&session);
 
         // When: the empty directory is walked
-        let entries = walk_remote_directory(&client, "/emptywalk").await.unwrap();
+        let entries = walk_remote_directory(&client, "/emptywalk")
+            .await
+            .unwrap()
+            .files;
 
         // Then: an empty vector is returned rather than an error
         assert!(
@@ -2609,6 +2627,43 @@ mod tests {
             "partial remote files must not remain: {:?}",
             server.remote_partial_paths()
         );
+    }
+
+    #[tokio::test]
+    async fn walk_remote_directory_skips_unreadable_subdirectory() {
+        // Given: a remote tree with a subdirectory whose OPENDIR fails
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/walk/a.txt", b"a").await;
+        server
+            .write_remote_file("/walk/locked/secret.txt", b"secret")
+            .await;
+        server.write_remote_file("/walk/b.txt", b"b").await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // When: the walk hits the unreadable subdirectory (path-specific
+        // one-shot OPENDIR failure) — the root and other children still list.
+        *server.failures.fail_opendir_path.lock().unwrap() = Some("/walk/locked".to_string());
+        let result = walk_remote_directory(&client, "/walk").await.unwrap();
+
+        // Then: readable files are collected, and the failed subdirectory is
+        // reported as skipped rather than aborting the whole walk.
+        let relatives: Vec<_> = result
+            .files
+            .iter()
+            .map(|entry| entry.relative_path.to_string_lossy().into_owned())
+            .collect();
+        assert!(relatives.contains(&"a.txt".to_string()));
+        assert!(relatives.contains(&"b.txt".to_string()));
+        assert!(!relatives.iter().any(|p| p.contains("locked")));
+
+        assert_eq!(
+            result.skipped.len(),
+            1,
+            "unreadable subdirectory must be skipped: {:?}",
+            result.skipped
+        );
+        assert!(result.skipped[0].path.to_string_lossy().contains("locked"));
     }
 
     #[tokio::test]
@@ -2663,7 +2718,10 @@ mod tests {
         let client = SftpClient::new(&session);
 
         // When: the remote directory is walked
-        let entries = walk_remote_directory(&client, "/walkonce").await.unwrap();
+        let entries = walk_remote_directory(&client, "/walkonce")
+            .await
+            .unwrap()
+            .files;
 
         // Then: both files are collected and each directory is listed once
         // (no discarded root listing).
@@ -2699,7 +2757,10 @@ mod tests {
         let client = SftpClient::new(&session);
 
         // When: the empty directory is walked
-        let entries = walk_remote_directory(&client, "/emptyonce").await.unwrap();
+        let entries = walk_remote_directory(&client, "/emptyonce")
+            .await
+            .unwrap()
+            .files;
 
         // Then: no files are collected and the empty root is listed once
         assert!(
@@ -2819,7 +2880,10 @@ mod tests {
 
         // When: walk_remote_directory collects files under /benchwalk
         let started = std::time::Instant::now();
-        let entries = walk_remote_directory(&client, "/benchwalk").await.unwrap();
+        let entries = walk_remote_directory(&client, "/benchwalk")
+            .await
+            .unwrap()
+            .files;
         let elapsed_ms = started.elapsed().as_millis();
 
         // Then: collected file count is 40; elapsed time and OPENDIR count are reported
