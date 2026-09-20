@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches:
@@ -8,12 +11,13 @@ on:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   security-audit:
     name: Security audit
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       checks: write
@@ -21,6 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Audit dependencies
         uses: rustsec/audit-check@v2.0.0
@@ -30,11 +36,14 @@ jobs:
   rust:
     name: Rust
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
