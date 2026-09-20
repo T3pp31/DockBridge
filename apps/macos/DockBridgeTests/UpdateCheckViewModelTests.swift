@@ -38,11 +38,11 @@ final class UpdateCheckViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.showUpdateSheet)
     }
 
-    func testSkipUpdatePersistsSkippedVersionAndSuppressesRelaunch() async {
+    func testSkipVersionPersistsSkippedVersionAndSuppressesRelaunch() async {
         mockSession.responseJSON = newerReleaseJSON
 
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
-        viewModel.skipUpdate()
+        viewModel.skipVersion()
 
         XCTAssertEqual(settingsService.loadSkippedUpdateVersion(), "0.2.0")
         XCTAssertFalse(viewModel.showUpdateSheet)
@@ -55,6 +55,27 @@ final class UpdateCheckViewModelTests: XCTestCase {
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
 
         XCTAssertFalse(viewModel.showUpdateSheet)
+    }
+
+    func testLaterDismissesWithoutPersistingSkip() async {
+        mockSession.responseJSON = newerReleaseJSON
+
+        await viewModel.checkOnLaunch(isHostKeyBlocking: false)
+        viewModel.skipUpdate()
+
+        // "Later" dismisses the sheet but does NOT save the skipped version.
+        XCTAssertNil(settingsService.loadSkippedUpdateVersion())
+        XCTAssertFalse(viewModel.showUpdateSheet)
+
+        viewModel = UpdateCheckViewModel(
+            updateService: updateService,
+            downloadService: mockDownloadService,
+            settingsService: settingsService
+        )
+        await viewModel.checkOnLaunch(isHostKeyBlocking: false)
+
+        // The update is offered again on the next launch.
+        XCTAssertTrue(viewModel.showUpdateSheet)
     }
 
     func testCheckOnLaunchIgnoresNetworkFailure() async {

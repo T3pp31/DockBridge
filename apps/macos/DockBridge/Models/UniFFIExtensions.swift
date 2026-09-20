@@ -18,8 +18,14 @@ extension RemoteFileRecord: Identifiable {
             name: "..",
             path: parent,
             isDirectory: true,
+            isSymlink: false,
             size: 0,
-            modifiedAtSecs: nil
+            modifiedAtSecs: nil,
+            permissions: nil,
+            uid: nil,
+            gid: nil,
+            symlinkTarget: nil,
+            symlinkTargetIsDir: nil
         )
     }
 }
@@ -36,11 +42,21 @@ extension DockBridgeError {
 
     static func isConnectionLostMessage(_ message: String) -> Bool {
         let lowercased = message.lowercased()
-        return lowercased.contains("session closed")
+        if lowercased.contains("session closed")
             || lowercased.contains("connection reset")
             || lowercased.contains("broken pipe")
             || lowercased.contains("connection refused")
-            || lowercased.contains("eof")
+            || lowercased.contains("sender dropped")
+            || lowercased.contains("channel closed")
+            || lowercased.contains("recv error") {
+            return true
+        }
+        // "eof" only as its own token (not inside user-controlled path segments)
+        // so geoffrey / thereof.txt do not tear down a live session.
+        let tokens = lowercased.split {
+            !$0.isLetter && !$0.isNumber && $0 != "_"
+        }
+        return tokens.contains(where: { $0 == "eof" || $0 == "eof," })
     }
 
     /// Detects SSH authentication / private-key unlock failures from raw bridge messages.
