@@ -248,10 +248,7 @@ mod tests {
             Some("curve25519-sha256")
         );
         assert_eq!(
-            select_preferred(
-                preferred.kex.as_ref(),
-                &["diffie-hellman-group14-sha256"]
-            ),
+            select_preferred(preferred.kex.as_ref(), &["diffie-hellman-group14-sha256"]),
             Some("diffie-hellman-group14-sha256")
         );
     }
@@ -264,10 +261,7 @@ mod tests {
         let preferred = secure_client_preferred();
 
         assert_eq!(
-            select_preferred(
-                preferred.kex.as_ref(),
-                &["mlkem768x25519-sha256"]
-            ),
+            select_preferred(preferred.kex.as_ref(), &["mlkem768x25519-sha256"]),
             Some("mlkem768x25519-sha256")
         );
     }
