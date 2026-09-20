@@ -500,7 +500,7 @@ impl KnownHostsManager {
                         aliases,
                         excluded_aliases,
                         marker,
-                    });
+                    })?;
                     if outcome.added {
                         merged += 1;
                     }
@@ -651,7 +651,10 @@ impl KnownHostsManager {
         true
     }
 
-    fn merge_imported_entry(&mut self, imported: ImportedPlainEntry) -> MergeOutcome {
+    fn merge_imported_entry(
+        &mut self,
+        imported: ImportedPlainEntry,
+    ) -> Result<MergeOutcome, SecurityError> {
         let ImportedPlainEntry {
             host,
             port,
@@ -669,7 +672,7 @@ impl KnownHostsManager {
                     && entry_matches_host(entry, &host, port)
                     && fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256)
             }) {
-                return MergeOutcome::default();
+                return Ok(MergeOutcome::default());
             }
 
             self.entries.insert(
@@ -685,10 +688,10 @@ impl KnownHostsManager {
                     marker: Some(KnownHostMarker::Revoked),
                 },
             );
-            return MergeOutcome {
+            return Ok(MergeOutcome {
                 added: true,
                 changed: false,
-            };
+            });
         }
 
         if marker == Some(KnownHostMarker::CertAuthority) {
@@ -697,7 +700,7 @@ impl KnownHostsManager {
                     && entry_matches_host(entry, &host, port)
                     && fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256)
             }) {
-                return MergeOutcome::default();
+                return Ok(MergeOutcome::default());
             }
 
             self.entries.insert(
@@ -713,19 +716,23 @@ impl KnownHostsManager {
                     marker: Some(KnownHostMarker::CertAuthority),
                 },
             );
-            return MergeOutcome {
+            return Ok(MergeOutcome {
                 added: true,
                 changed: false,
-            };
+            });
         }
 
         if let Some(canonical_key) =
             self.find_canonical_key_by_fingerprint(port, &fingerprint_sha256)
         {
-            let entry = self
-                .entries
-                .get_mut(&canonical_key)
-                .expect("canonical key must exist");
+            let entry = self.entries.get_mut(&canonical_key).ok_or_else(|| {
+                SecurityError::KnownHostsWriteFailed {
+                    path: self.path.display().to_string(),
+                    message: format!(
+                        "internal known hosts index inconsistency: canonical key {canonical_key} missing"
+                    ),
+                }
+            })?;
 
             let mut changed = false;
             changed |= merge_trusted_alias(entry, &host, port);
@@ -744,18 +751,25 @@ impl KnownHostsManager {
                 changed = true;
             }
 
-            return MergeOutcome {
+            return Ok(MergeOutcome {
                 added: false,
                 changed,
-            };
+            });
         }
 
         if let Some(existing) = self.find_entry(&host, port) {
             let canonical_key = entry_key(&existing.host, existing.port);
-            let entry = self.entries.get_mut(&canonical_key).expect("entry exists");
+            let entry = self.entries.get_mut(&canonical_key).ok_or_else(|| {
+                SecurityError::KnownHostsWriteFailed {
+                    path: self.path.display().to_string(),
+                    message: format!(
+                        "internal known hosts index inconsistency: canonical key {canonical_key} missing"
+                    ),
+                }
+            })?;
 
             if !fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256) {
-                return MergeOutcome::default();
+                return Ok(MergeOutcome::default());
             }
 
             // Marked (revoked / cert-authority) entries keep their marker — it
@@ -772,10 +786,10 @@ impl KnownHostsManager {
                     entry.public_key_openssh = public_key_openssh;
                     changed = true;
                 }
-                return MergeOutcome {
+                return Ok(MergeOutcome {
                     added: false,
                     changed,
-                };
+                });
             }
 
             let mut changed = false;
@@ -791,10 +805,10 @@ impl KnownHostsManager {
                 changed = true;
             }
 
-            return MergeOutcome {
+            return Ok(MergeOutcome {
                 added: false,
                 changed,
-            };
+            });
         }
 
         self.entries.insert(
@@ -811,10 +825,10 @@ impl KnownHostsManager {
             },
         );
 
-        MergeOutcome {
+        Ok(MergeOutcome {
             added: true,
             changed: false,
-        }
+        })
     }
 
     fn persist(&self) -> Result<(), SecurityError> {
@@ -1065,17 +1079,20 @@ const MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS: usize = 5;
 /// file; owner-only permission checks already limit exposure.
 const MAX_KNOWN_HOSTS_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
-fn random_known_hosts_partial_suffix() -> String {
+fn random_known_hosts_partial_suffix(path: &Path) -> Result<String, SecurityError> {
     use rand::TryRng;
 
     let mut bytes = [0_u8; KNOWN_HOSTS_PARTIAL_SUFFIX_BYTES];
     rand::rng()
         .try_fill_bytes(&mut bytes)
-        .expect("failed to generate random partial suffix");
-    bytes
+        .map_err(|err| SecurityError::KnownHostsWriteFailed {
+            path: path.display().to_string(),
+            message: format!("failed to generate random partial suffix: {err}"),
+        })?;
+    Ok(bytes
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect::<String>()
+        .collect::<String>())
 }
 
 fn known_hosts_partial_file_name(suffix: &str) -> String {
@@ -1239,7 +1256,7 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
 
     for _ in 0..MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS {
         let candidate = parent.join(known_hosts_partial_file_name(
-            &random_known_hosts_partial_suffix(),
+            &random_known_hosts_partial_suffix(path)?,
         ));
         match open_exclusive_local_file_sync(&candidate) {
             Ok(opened) => {
@@ -1263,7 +1280,10 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
             "failed to create exclusive partial file after {MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS} attempts"
         ),
     })?;
-    let mut file = file.expect("partial file handle must exist when temp path was created");
+    let mut file = file.ok_or_else(|| SecurityError::KnownHostsWriteFailed {
+        path: path.display().to_string(),
+        message: "partial file handle missing after exclusive create".to_string(),
+    })?;
 
     if let Err(err) = file.write_all(data) {
         let _ = fs::remove_file(&temp_path);

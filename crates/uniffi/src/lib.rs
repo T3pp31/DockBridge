@@ -47,19 +47,24 @@ uniffi::custom_type!(SecretCredential, String, {
     try_lift: |v| Ok(SecretCredential(v)),
 });
 
-static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+static RUNTIME: OnceLock<Result<tokio::runtime::Runtime, DockBridgeError>> = OnceLock::new();
 
-fn runtime() -> &'static tokio::runtime::Runtime {
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("failed to create Tokio runtime")
-    })
+fn runtime() -> Result<&'static tokio::runtime::Runtime, DockBridgeError> {
+    RUNTIME
+        .get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|err| DockBridgeError::Generic {
+                    message: format!("failed to create Tokio runtime: {err}"),
+                })
+        })
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    runtime().block_on(future)
+fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, DockBridgeError> {
+    Ok(runtime()?.block_on(future))
 }
 
 /// Application configuration passed from Swift.
@@ -161,7 +166,7 @@ pub struct HostKeyChallenge {
 }
 
 /// Flat error type exposed to Swift.
-#[derive(Debug, uniffi::Error)]
+#[derive(Debug, Clone, uniffi::Error)]
 #[uniffi(flat_error)]
 pub enum DockBridgeError {
     Generic { message: String },
@@ -297,7 +302,7 @@ impl DockBridgeClient {
             &config,
             known_hosts,
             prompt,
-        ))
+        ))?
         .map_err(map_error)?;
 
         let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
@@ -306,14 +311,13 @@ impl DockBridgeClient {
                 .lock()
                 .await
                 .insert(session_id, Arc::new(session));
-        });
-        self.spawn_health_monitor(session_id);
+        })?;
+        self.spawn_health_monitor(session_id)?;
         Ok(session_id)
     }
 
     fn disconnect(&self, session_id: u64) -> Result<(), DockBridgeError> {
-        self.remove_session(session_id, false, String::new());
-        Ok(())
+        self.remove_session(session_id, false, String::new())
     }
 
     fn get_initial_directory(&self, session_id: u64) -> Result<String, DockBridgeError> {
@@ -329,7 +333,7 @@ impl DockBridgeClient {
                     .initial_directory()
                     .await
                     .map_err(map_error)
-            }),
+            })?,
         )
     }
 
@@ -350,7 +354,7 @@ impl DockBridgeClient {
                     .list_directory(&path)
                     .await
                     .map_err(map_error)
-            }),
+            })?,
         )?;
         Ok(files.into_iter().map(to_remote_file_record).collect())
     }
@@ -395,7 +399,7 @@ impl DockBridgeClient {
                     .await
                     .map_err(map_error)?;
                 Ok(())
-            }),
+            })?,
         )?;
         Ok(())
     }
@@ -422,7 +426,7 @@ impl DockBridgeClient {
                     .await
                     .map_err(map_error)?;
                 Ok(())
-            }),
+            })?,
         )?;
         Ok(())
     }
@@ -440,7 +444,7 @@ impl DockBridgeClient {
                     .delete(&remote_path)
                     .await
                     .map_err(map_error)
-            }),
+            })?,
         )?;
         Ok(())
     }
@@ -468,7 +472,7 @@ impl DockBridgeClient {
                     .delete_entry(&remote_path, recursive)
                     .await
                     .map_err(map_error)
-            }),
+            })?,
         )?;
         Ok(count as u64)
     }
@@ -486,7 +490,7 @@ impl DockBridgeClient {
                     .rename(&from, &to)
                     .await
                     .map_err(map_error)
-            }),
+            })?,
         )?;
         Ok(())
     }
@@ -508,7 +512,7 @@ impl DockBridgeClient {
                     .create_directory(&remote_path)
                     .await
                     .map_err(map_error)
-            }),
+            })?,
         )?;
         Ok(())
     }
@@ -554,25 +558,31 @@ impl DockBridgeClient {
                     .await
                     .map_err(map_error)?;
                 Ok(())
-            }),
+            })?,
         )?;
         Ok(())
     }
 }
 
 impl DockBridgeClient {
-    fn remove_session(&self, session_id: u64, notify: bool, reason: String) {
+    fn remove_session(
+        &self,
+        session_id: u64,
+        notify: bool,
+        reason: String,
+    ) -> Result<(), DockBridgeError> {
         block_on(async {
             if let Some(handle) = self.monitors.lock().await.remove(&session_id) {
                 handle.abort();
             }
             self.sessions.lock().await.remove(&session_id);
-        });
+        })?;
 
         if notify {
             self.connection_event_handler
                 .on_session_disconnected(session_id, reason);
         }
+        Ok(())
     }
 
     fn handle_session_result<T>(
@@ -582,20 +592,22 @@ impl DockBridgeClient {
     ) -> Result<T, DockBridgeError> {
         if let Err(DockBridgeError::Generic { ref message }) = result {
             if is_connection_lost_message(message) {
-                self.remove_session(session_id, true, message.clone());
+                if let Err(error) = self.remove_session(session_id, true, message.clone()) {
+                    eprintln!("failed to remove disconnected session {session_id}: {error}");
+                }
             }
         }
         result
     }
 
-    fn spawn_health_monitor(&self, session_id: u64) {
-        let interval_secs = self.config.session_health_check_interval_secs;
+    fn spawn_health_monitor(&self, session_id: u64) -> Result<(), DockBridgeError> {
+        let interval_secs = self.config.session_health_check_interval_secs.max(1);
         let sessions = Arc::clone(&self.sessions);
         let monitors = Arc::clone(&self.monitors);
         let monitors_in_task = Arc::clone(&monitors);
         let connection_event_handler = Arc::clone(&self.connection_event_handler);
 
-        let monitor_task = runtime().spawn(async move {
+        let monitor_task = runtime()?.spawn(async move {
             let interval = Duration::from_secs(interval_secs);
 
             loop {
@@ -627,7 +639,8 @@ impl DockBridgeClient {
 
         block_on(async {
             monitors.lock().await.insert(session_id, monitor_task);
-        });
+        })?;
+        Ok(())
     }
 }
 
