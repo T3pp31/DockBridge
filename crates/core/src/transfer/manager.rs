@@ -9,9 +9,10 @@ use rand::RngExt as _;
 use crate::config::{AppConfig, DirectoryWalkLimits};
 use crate::error::{RemoteStatusCode, SftpError, TransferError};
 use crate::sftp::{
-    ensure_local_path_within_root, is_local_directory, join_remote_path, local_entry_name,
-    normalize_remote_path, parent_remote_path, walk_local_directory_with_options,
-    walk_remote_directory_with_limits, SftpClient, WalkLocalDirectoryOptions,
+    ensure_local_path_within_root, is_local_directory, join_remote_path, local_directories,
+    local_entry_name, normalize_remote_path, parent_remote_path, remote_directories,
+    walk_local_directory_with_options, walk_remote_directory_with_limits, SftpClient,
+    WalkLocalDirectoryOptions,
 };
 use crate::ssh::SshSession;
 use crate::transfer::TransferOverwritePolicy;
@@ -43,6 +44,18 @@ pub struct TransferTask {
     pub status: TransferStatus,
     pub bytes_transferred: u64,
     pub total_bytes: u64,
+}
+
+/// Outcome of a directory (batch) transfer: per-file counts and skipped
+/// entries (unreadable during the walk).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BatchResult {
+    /// Tasks that completed successfully.
+    pub succeeded: u64,
+    /// Tasks that finished with a failure.
+    pub failed: u64,
+    /// Entries that were skipped during the walk and never enqueued.
+    pub skipped: u64,
 }
 
 /// Sequential transfer queue manager.
@@ -380,35 +393,61 @@ impl TransferManager {
         local_path: impl AsRef<Path>,
         remote_path: impl Into<String>,
     ) -> Result<TransferTask, TransferError> {
-        let local_path = local_path.as_ref().to_path_buf();
-        let remote_path = remote_path.into();
+        let task = self.make_task(
+            TransferDirection::Upload,
+            local_path.as_ref(),
+            &remote_path.into(),
+        );
+        self.run_upload_task(session, task).await
+    }
 
-        let task = TransferTask {
+    /// Builds a Pending task without registering it.
+    fn make_task(
+        &self,
+        direction: TransferDirection,
+        local_path: &Path,
+        remote_path: &str,
+    ) -> TransferTask {
+        TransferTask {
             id: self.next_id.fetch_add(1, Ordering::Relaxed),
-            direction: TransferDirection::Upload,
-            local_path: local_path.clone(),
-            remote_path: remote_path.clone(),
+            direction,
+            local_path: local_path.to_path_buf(),
+            remote_path: remote_path.to_string(),
             status: TransferStatus::Pending,
             bytes_transferred: 0,
             total_bytes: 0,
-        };
+        }
+    }
 
-        self.insert_task(task.clone());
-        self.register_cancellation_flag(task.id);
-        self.mark_in_flight(task.id);
-        self.update_task_status(task.id, TransferStatus::InProgress);
+    /// Registers an already-built task and executes it to completion.
+    async fn run_upload_task(
+        &self,
+        session: &SshSession,
+        task: TransferTask,
+    ) -> Result<TransferTask, TransferError> {
+        let task_id = task.id;
+        let local_path = task.local_path.clone();
+        let remote_path = task.remote_path.clone();
+        let original = task.clone();
 
-        if self.is_cancelled(task.id) {
-            self.finalize_task_result(task.id, Err(TransferError::Cancelled))?;
+        if self.find_task(task_id).is_none() {
+            self.insert_task(task);
+        }
+        self.register_cancellation_flag(task_id);
+        self.mark_in_flight(task_id);
+        self.update_task_status(task_id, TransferStatus::InProgress);
+
+        if self.is_cancelled(task_id) {
+            self.finalize_task_result(task_id, Err(TransferError::Cancelled))?;
         }
 
         let result = self
-            .run_upload_with_retries(session, task.id, &local_path, &remote_path)
+            .run_upload_with_retries(session, task_id, &local_path, &remote_path)
             .await;
 
-        self.finalize_task_result(task.id, result)?;
+        self.finalize_task_result(task_id, result)?;
 
-        Ok(self.find_task(task.id).unwrap_or(task))
+        Ok(self.find_task(task_id).unwrap_or(original))
     }
 
     /// Enqueues and immediately executes a single download task.
@@ -418,47 +457,62 @@ impl TransferManager {
         remote_path: impl Into<String>,
         local_path: impl AsRef<Path>,
     ) -> Result<TransferTask, TransferError> {
-        let remote_path = remote_path.into();
-        let local_path = local_path.as_ref().to_path_buf();
+        let task = self.make_task(
+            TransferDirection::Download,
+            local_path.as_ref(),
+            &remote_path.into(),
+        );
+        self.run_download_task(session, task).await
+    }
 
-        let task = TransferTask {
-            id: self.next_id.fetch_add(1, Ordering::Relaxed),
-            direction: TransferDirection::Download,
-            local_path: local_path.clone(),
-            remote_path: remote_path.clone(),
-            status: TransferStatus::Pending,
-            bytes_transferred: 0,
-            total_bytes: 0,
-        };
+    /// Registers an already-built task and executes it to completion.
+    async fn run_download_task(
+        &self,
+        session: &SshSession,
+        task: TransferTask,
+    ) -> Result<TransferTask, TransferError> {
+        let task_id = task.id;
+        let local_path = task.local_path.clone();
+        let remote_path = task.remote_path.clone();
+        let original = task.clone();
 
-        self.insert_task(task.clone());
-        self.register_cancellation_flag(task.id);
-        self.mark_in_flight(task.id);
-        self.update_task_status(task.id, TransferStatus::InProgress);
+        if self.find_task(task_id).is_none() {
+            self.insert_task(task);
+        }
+        self.register_cancellation_flag(task_id);
+        self.mark_in_flight(task_id);
+        self.update_task_status(task_id, TransferStatus::InProgress);
 
-        if self.is_cancelled(task.id) {
-            self.finalize_task_result(task.id, Err(TransferError::Cancelled))?;
+        if self.is_cancelled(task_id) {
+            self.finalize_task_result(task_id, Err(TransferError::Cancelled))?;
         }
 
         let result = self
-            .run_download_with_retries(session, task.id, &remote_path, &local_path)
+            .run_download_with_retries(session, task_id, &remote_path, &local_path)
             .await;
 
-        self.finalize_task_result(task.id, result)?;
+        self.finalize_task_result(task_id, result)?;
 
-        Ok(self.find_task(task.id).unwrap_or(task))
+        Ok(self.find_task(task_id).unwrap_or(original))
     }
 
     /// Enqueues and executes upload tasks for a local file or directory tree.
+    ///
+    /// All discovered files are registered as `Pending` tasks first (so they
+    /// are immediately visible in the queue), then each is executed. A
+    /// per-file transfer failure does NOT abort the batch: the task is left
+    /// `Failed` and remaining files still transfer (issue #311). A
+    /// [`BatchResult`] summarizes success / failure / skipped counts.
     pub async fn enqueue_upload_entry(
         &self,
         session: &SshSession,
         local_path: impl AsRef<std::path::Path>,
         remote_directory: impl Into<String>,
-    ) -> Result<Vec<TransferTask>, TransferError> {
+    ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
         let local_path = local_path.as_ref();
         let remote_directory = remote_directory.into();
         let client = SftpClient::new(session);
+        let mut batch = BatchResult::default();
 
         if is_local_directory(local_path)
             .await
@@ -468,10 +522,29 @@ impl TransferManager {
             let remote_root =
                 join_remote_path(&remote_directory, std::path::Path::new(&directory_name))
                     .map_err(transfer_error_from_sftp)?;
+            let mut created_dirs = Some(HashSet::new());
             client
-                .create_directory_all(&remote_root)
+                .create_directory_all_cached(&remote_root, &mut created_dirs)
                 .await
                 .map_err(transfer_error_from_sftp)?;
+
+            for relative_dir in local_directories(
+                local_path,
+                WalkLocalDirectoryOptions {
+                    limits: self.directory_walk_limits,
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(transfer_error_from_sftp)?
+            {
+                let remote_dir = join_remote_path(&remote_root, &relative_dir)
+                    .map_err(transfer_error_from_sftp)?;
+                client
+                    .create_directory_all_cached(&remote_dir, &mut created_dirs)
+                    .await
+                    .map_err(transfer_error_from_sftp)?;
+            }
 
             let result = walk_local_directory_with_options(
                 local_path,
@@ -482,30 +555,74 @@ impl TransferManager {
             )
             .await
             .map_err(transfer_error_from_sftp)?;
-            let mut tasks = Vec::with_capacity(result.files.len());
-            for entry in result.files {
-                let remote_path = join_remote_path(&remote_root, &entry.relative_path)
-                    .map_err(transfer_error_from_sftp)?;
+
+            // Register every task as Pending BEFORE running any of them, so a
+            // failure in one file never leaves later files unregistered.
+            let tasks: Vec<TransferTask> = result
+                .files
+                .iter()
+                .map(|entry| {
+                    join_remote_path(&remote_root, &entry.relative_path)
+                        .map_err(transfer_error_from_sftp)
+                        .map(|remote_path| {
+                            self.make_task(
+                                TransferDirection::Upload,
+                                &entry.local_path,
+                                &remote_path,
+                            )
+                        })
+                })
+                .collect::<Result<_, _>>()?;
+
+            // Ensure every file parent exists while reusing the batch cache.
+            for task in &tasks {
                 if let Some(parent) =
-                    parent_remote_path(&remote_path).map_err(transfer_error_from_sftp)?
+                    parent_remote_path(&task.remote_path).map_err(transfer_error_from_sftp)?
                 {
                     client
-                        .create_directory_all(&parent)
+                        .create_directory_all_cached(&parent, &mut created_dirs)
                         .await
                         .map_err(transfer_error_from_sftp)?;
                 }
-                let task = self
-                    .enqueue_upload(session, &entry.local_path, remote_path)
-                    .await?;
-                tasks.push(task);
             }
+
+            batch.skipped = result.skipped.len() as u64;
             if !result.skipped.is_empty() {
                 tracing::warn!(
                     skipped = ?result.skipped,
                     "local directory walk skipped unreadable entries"
                 );
             }
-            return Ok(tasks);
+
+            // Register all tasks (Pending), then execute each; failures
+            // continue to the next file.
+            for task in &tasks {
+                self.insert_task(task.clone());
+                self.register_cancellation_flag(task.id);
+            }
+
+            let mut executed = Vec::with_capacity(tasks.len());
+            for task in tasks {
+                let task_id = task.id;
+                let final_task = match self.run_upload_task(session, task).await {
+                    Ok(final_task) => final_task,
+                    Err(_) => {
+                        batch.failed += 1;
+                        executed.push(
+                            self.find_task(task_id)
+                                .ok_or(TransferError::TaskNotFound { task_id })?,
+                        );
+                        continue;
+                    }
+                };
+                match final_task.status {
+                    TransferStatus::Completed => batch.succeeded += 1,
+                    TransferStatus::Cancelled | TransferStatus::Failed { .. } => batch.failed += 1,
+                    _ => {}
+                }
+                executed.push(final_task);
+            }
+            return Ok((executed, batch));
         }
 
         let remote_path = join_remote_path(
@@ -522,30 +639,31 @@ impl TransferManager {
         let task = self
             .enqueue_upload(session, local_path, remote_path)
             .await?;
-        Ok(vec![task])
+        batch.succeeded += 1;
+        Ok((vec![task], batch))
     }
 
     /// Enqueues and executes download tasks for a remote file or directory tree.
+    ///
+    /// All discovered files are registered as `Pending` first, then executed
+    /// sequentially; a per-file failure does not abort the batch (issue #311).
     pub async fn enqueue_download_entry(
         &self,
         session: &SshSession,
         remote_path: impl Into<String>,
         local_directory: impl AsRef<std::path::Path>,
-    ) -> Result<Vec<TransferTask>, TransferError> {
+    ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
         let remote_path = remote_path.into();
         let local_directory = local_directory.as_ref();
         let normalized = normalize_remote_path(&remote_path).map_err(transfer_error_from_sftp)?;
         let client = SftpClient::new(session);
+        let mut batch = BatchResult::default();
 
         if client
             .remote_is_directory(&normalized)
             .await
             .map_err(transfer_error_from_sftp)?
         {
-            let entries = client
-                .list_directory(&normalized)
-                .await
-                .map_err(transfer_error_from_sftp)?;
             let directory_name = normalized
                 .trim_end_matches('/')
                 .rsplit('/')
@@ -557,37 +675,91 @@ impl TransferManager {
                 .await
                 .map_err(|err| transfer_error_from_message(err.to_string()))?;
 
-            if entries.is_empty() {
-                return Ok(Vec::new());
+            // Mirror the complete directory tree before any file transfer,
+            // including empty directories (issue #312).
+            let mut created_dirs = HashSet::new();
+            created_dirs.insert(local_root.clone());
+            for relative_dir in remote_directories(&client, &normalized, self.directory_walk_limits)
+                .await
+                .map_err(transfer_error_from_sftp)?
+            {
+                let local_dir = local_root.join(relative_dir);
+                ensure_local_path_within_root(&local_root, &local_dir)
+                    .await
+                    .map_err(transfer_error_from_sftp)?;
+                tokio::fs::create_dir_all(&local_dir)
+                    .await
+                    .map_err(|err| transfer_error_from_message(err.to_string()))?;
+                created_dirs.insert(local_dir);
             }
 
             let result =
                 walk_remote_directory_with_limits(&client, &normalized, self.directory_walk_limits)
                     .await
                     .map_err(transfer_error_from_sftp)?;
+
+            // Register every task as Pending before running any.
             let mut tasks = Vec::with_capacity(result.files.len());
-            for entry in result.files {
+            for entry in &result.files {
                 let local_path = local_root.join(&entry.relative_path);
                 ensure_local_path_within_root(&local_root, &local_path)
                     .await
                     .map_err(transfer_error_from_sftp)?;
-                if let Some(parent) = local_path.parent() {
+                tasks.push(self.make_task(
+                    TransferDirection::Download,
+                    &local_path,
+                    &entry.remote_path,
+                ));
+            }
+
+            // Create all local parent directories once, before transfers.
+            for task in &tasks {
+                if let Some(parent) = task.local_path.parent() {
+                    if created_dirs.contains(parent) {
+                        continue;
+                    }
                     tokio::fs::create_dir_all(parent)
                         .await
                         .map_err(|err| transfer_error_from_message(err.to_string()))?;
+                    created_dirs.insert(parent.to_path_buf());
                 }
-                let task = self
-                    .enqueue_download(session, &entry.remote_path, &local_path)
-                    .await?;
-                tasks.push(task);
             }
+
+            batch.skipped = result.skipped.len() as u64;
             if !result.skipped.is_empty() {
                 tracing::warn!(
                     skipped = ?result.skipped,
                     "remote directory walk skipped unreadable entries"
                 );
             }
-            Ok(tasks)
+
+            for task in &tasks {
+                self.insert_task(task.clone());
+                self.register_cancellation_flag(task.id);
+            }
+
+            let mut executed = Vec::with_capacity(tasks.len());
+            for task in tasks {
+                let task_id = task.id;
+                let final_task = match self.run_download_task(session, task).await {
+                    Ok(final_task) => final_task,
+                    Err(_) => {
+                        batch.failed += 1;
+                        executed.push(
+                            self.find_task(task_id)
+                                .ok_or(TransferError::TaskNotFound { task_id })?,
+                        );
+                        continue;
+                    }
+                };
+                match final_task.status {
+                    TransferStatus::Completed => batch.succeeded += 1,
+                    TransferStatus::Cancelled | TransferStatus::Failed { .. } => batch.failed += 1,
+                    _ => {}
+                }
+                executed.push(final_task);
+            }
+            Ok((executed, batch))
         } else {
             let file_name = normalized
                 .rsplit('/')
@@ -598,7 +770,8 @@ impl TransferManager {
             let task = self
                 .enqueue_download(session, &normalized, &local_path)
                 .await?;
-            Ok(vec![task])
+            batch.succeeded += 1;
+            Ok((vec![task], batch))
         }
     }
 
@@ -1802,5 +1975,117 @@ mod tests {
             .map(|task| task.status.clone())
             .unwrap();
         assert_eq!(status, TransferStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn enqueue_upload_entry_continues_after_one_file_failure() {
+        // Given: a manager without retries, a directory with 3 files, and a
+        // server whose first WRITE fails (one-shot).
+        let config = AppConfig {
+            transfer_retry_count: 0,
+            ..AppConfig::default()
+        };
+        let manager = TransferManager::new(&config);
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let local_dir = tempfile::tempdir().unwrap();
+        let root = local_dir.path().join("batchsrc");
+        std::fs::create_dir_all(&root).unwrap();
+        tokio::fs::write(root.join("a.txt"), b"aaaa").await.unwrap();
+        tokio::fs::write(root.join("b.txt"), b"bbbb").await.unwrap();
+        tokio::fs::write(root.join("c.txt"), b"cccc").await.unwrap();
+
+        server
+            .failures
+            .fail_remote_write
+            .store(true, Ordering::SeqCst);
+
+        // When: the whole directory is uploaded as a batch
+        let (tasks, batch) = manager
+            .enqueue_upload_entry(&session, &root, "/batchero")
+            .await
+            .expect("batch must complete even when a file fails");
+
+        // Then: exactly one file failed, the other two completed, and ALL
+        // files were enqueued (none silently dropped) (issue #311).
+        assert_eq!(tasks.len(), 3, "all discovered files must be enqueued");
+        assert_eq!(manager.get_transfer_queue().len(), 3);
+        let failed = tasks
+            .iter()
+            .filter(|task| matches!(task.status, TransferStatus::Failed { .. }))
+            .count();
+        let completed = tasks
+            .iter()
+            .filter(|task| matches!(task.status, TransferStatus::Completed))
+            .count();
+        assert_eq!(failed, 1, "exactly one file should fail: {tasks:?}");
+        assert_eq!(
+            completed, 2,
+            "the other files must still complete: {tasks:?}"
+        );
+        assert_eq!(batch.succeeded, 2);
+        assert_eq!(batch.failed, 1);
+
+        let remote_found = ["a.txt", "b.txt", "c.txt"]
+            .iter()
+            .filter(|name| server.remote_file_exists(&format!("/batchero/batchsrc/{name}")))
+            .count();
+        assert_eq!(remote_found, 2, "two remote files should be uploaded");
+    }
+
+    #[tokio::test]
+    async fn enqueue_download_entry_continues_after_one_file_failure() {
+        // Given: a manager without retries and three remote files whose first
+        // READ fails (one-shot).
+        let config = AppConfig {
+            transfer_retry_count: 0,
+            ..AppConfig::default()
+        };
+        let manager = TransferManager::new(&config);
+        let server = TestSftpServer::start().await;
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            server
+                .write_remote_file(&format!("/batchdir/{name}"), b"data")
+                .await;
+        }
+        let session = server.connect_session().await;
+        let local_dir = tempfile::tempdir().unwrap();
+
+        server
+            .failures
+            .fail_remote_read
+            .store(true, Ordering::SeqCst);
+
+        // When: the whole remote directory is downloaded as a batch
+        let (tasks, batch) = manager
+            .enqueue_download_entry(&session, "/batchdir", local_dir.path())
+            .await
+            .expect("batch must complete even when a file fails");
+
+        // Then: exactly one file failed, the other two completed, and ALL
+        // files were enqueued (issue #311).
+        assert_eq!(tasks.len(), 3, "all discovered files must be enqueued");
+        assert_eq!(manager.get_transfer_queue().len(), 3);
+        let failed = tasks
+            .iter()
+            .filter(|task| matches!(task.status, TransferStatus::Failed { .. }))
+            .count();
+        let completed = tasks
+            .iter()
+            .filter(|task| matches!(task.status, TransferStatus::Completed))
+            .count();
+        assert_eq!(failed, 1, "exactly one file should fail: {tasks:?}");
+        assert_eq!(
+            completed, 2,
+            "the other files must still complete: {tasks:?}"
+        );
+        assert_eq!(batch.succeeded, 2);
+        assert_eq!(batch.failed, 1);
+
+        let local_found = ["a.txt", "b.txt", "c.txt"]
+            .iter()
+            .filter(|name| local_dir.path().join("batchdir").join(name).is_file())
+            .count();
+        assert_eq!(local_found, 2, "two local files should be downloaded");
     }
 }

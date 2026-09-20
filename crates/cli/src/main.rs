@@ -402,14 +402,22 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
                 // so we never treat a file path as a directory (silent data
                 // loss / confusing rename).
                 reject_remote_file_destination(&session, &remote).await?;
-                let tasks = manager
+                let (tasks, batch) = manager
                     .enqueue_upload_entry(&session, &local, &remote)
                     .await?;
                 println!(
-                    "uploaded {} entr{}",
+                    "upload batch completed: {}/{} succeeded, {} failed, {} skipped",
+                    batch.succeeded,
                     tasks.len(),
-                    if tasks.len() == 1 { "y" } else { "ies" }
+                    batch.failed,
+                    batch.skipped
                 );
+                if batch.failed > 0 {
+                    anyhow::bail!(
+                        "upload batch completed with {} failed entries",
+                        batch.failed
+                    );
+                }
             } else {
                 let task = manager.enqueue_upload(&session, &local, remote).await?;
                 println!("upload completed (task #{})", task.id);
@@ -434,14 +442,22 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
                         local.display()
                     );
                 }
-                let tasks = manager
+                let (tasks, batch) = manager
                     .enqueue_download_entry(&session, &remote, &local)
                     .await?;
                 println!(
-                    "downloaded {} entr{}",
+                    "download batch completed: {}/{} succeeded, {} failed, {} skipped",
+                    batch.succeeded,
                     tasks.len(),
-                    if tasks.len() == 1 { "y" } else { "ies" }
+                    batch.failed,
+                    batch.skipped
                 );
+                if batch.failed > 0 {
+                    anyhow::bail!(
+                        "download batch completed with {} failed entries",
+                        batch.failed
+                    );
+                }
             } else {
                 let task = manager.enqueue_download(&session, remote, &local).await?;
                 println!("download completed (task #{})", task.id);
