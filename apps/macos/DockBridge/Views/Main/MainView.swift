@@ -83,7 +83,8 @@ struct MainView: View {
             }
             .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         }
-        .navigationTitle("DockBridge")
+        .navigationTitle(bridge.connectionStatus.endpointLabel ?? "DockBridge — Not Connected")
+        .navigationSubtitle(viewModel.remotePath)
         .toolbar {
             ToolbarItemGroup {
                 Button {
@@ -91,7 +92,6 @@ struct MainView: View {
                 } label: {
                     Label("Upload", systemImage: "square.and.arrow.up")
                 }
-                .buttonStyle(.borderedProminent)
                 .disabled(viewModel.selectedLocalItems.isEmpty || !viewModel.bridge.isConnected)
 
                 Button {
@@ -99,7 +99,6 @@ struct MainView: View {
                 } label: {
                     Label("Download", systemImage: "square.and.arrow.down")
                 }
-                .buttonStyle(.borderedProminent)
                 .disabled(viewModel.selectedRemoteItems.isEmpty || !viewModel.bridge.isConnected)
 
                 Button {
