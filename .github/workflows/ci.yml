@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 on:
   push:
     branches:
@@ -8,12 +11,13 @@ on:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   security-audit:
     name: Security audit
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       checks: write
@@ -21,6 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Audit dependencies
         uses: rustsec/audit-check@v2.0.0
@@ -30,11 +36,14 @@ jobs:
   rust:
     name: Rust
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -52,11 +61,31 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Shellcheck scripts
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck scripts/*.sh
+          else
+            echo 'shellcheck not installed; installing...'
+            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null
+            shellcheck scripts/*.sh
+          fi
+
+      - name: Check version consistency (Cargo.toml == release.toml)
+        run: |
+          cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          release_version="$(awk -F'"' '/^version = / { print $2; exit }' config/release.toml)"
+          if [[ "$cargo_version" != "$release_version" ]]; then
+            echo "error: Cargo.toml version ($cargo_version) != config/release.toml version ($release_version)" >&2
+            exit 1
+          fi
+          echo "version=$cargo_version"
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Test core crate
-        run: cargo test -p dockbridge-core
+      - name: Test workspace (all targets)
+        run: cargo test --workspace --all-targets
 
       - name: Build workspace
         run: cargo build --workspace
@@ -93,6 +122,25 @@ jobs:
             dist/*.cdx.json.sha256
           if-no-files-found: error
           retention-days: 14
+
+  # MSRV job: guards against unintentionally raising rust-version. Uses
+  # 1.91 (see [workspace.package] rust-version in Cargo.toml).
+  msrv:
+    name: MSRV (1.91)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.91.0
+
+      # --all-targets also compiles unit tests and build scripts, so a dep that
+      # only fails to link/codegen at 1.91 is caught here rather than at merge.
+      - name: Check workspace at MSRV
+        run: cargo check --workspace --all-targets
 
   # macOS job: compile/test only (unsigned). Release signing and notarization run in
   # .github/workflows/release.yml — see docs/security.md#release-signing-pipeline.
