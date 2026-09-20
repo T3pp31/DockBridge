@@ -31,7 +31,7 @@ final class UpdateCheckViewModel: ObservableObject {
             pendingUpdate = update
             presentIfAllowed(isHostKeyBlocking: isHostKeyBlocking)
         } catch {
-            return
+            AppLogging.update.error("update check failed on launch: \(error.localizedDescription, privacy: .public)")
         }
     }
 

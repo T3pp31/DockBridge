@@ -122,8 +122,25 @@ final class ConnectionListViewModel: ObservableObject {
         do {
             profiles = try store.delete(id: profile.id)
             let account = keychain.keychainAccount(for: profile.id, kind: "profile")
-            try? keychain.deletePassword(account: account)
-            try? keychain.deletePassphrase(account: account)
+            do {
+
+                try keychain.deletePassword(account: account)
+
+            } catch {
+
+                AppLogging.keychain.error("failed to delete keychain password: \(error.localizedDescription, privacy: .public)")
+
+            }
+
+            do {
+
+                try keychain.deletePassphrase(account: account)
+
+            } catch {
+
+                AppLogging.keychain.error("failed to delete keychain passphrase: \(error.localizedDescription, privacy: .public)")
+
+            }
             if selectedProfileID == profile.id {
                 selectedProfileID = profiles.first?.id
             }
