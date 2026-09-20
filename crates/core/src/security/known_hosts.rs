@@ -1502,7 +1502,7 @@ mod tests {
 
         let mut manager = KnownHostsManager::load(&path).unwrap();
         let merged = manager.import_openssh(&openssh_path).unwrap();
-        assert_eq!(merged, 2);
+        assert_eq!(merged.merged, 2);
 
         assert_eq!(
             manager.check_host_key("hostA", 22, &key, false),
@@ -1871,10 +1871,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let json_path = dir.path().join("known_hosts.json");
         let openssh_path = dir.path().join("known_hosts");
-        write_test_file_mode_0600(
-            &openssh_path,
-            "# comment line 1\n# another comment\n",
-        );
+        write_test_file_mode_0600(&openssh_path, "# comment line 1\n# another comment\n");
 
         let mut manager = KnownHostsManager::load(&json_path).unwrap();
         let summary = manager.import_openssh(&openssh_path).unwrap();
