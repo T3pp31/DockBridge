@@ -20,6 +20,7 @@ enum AppSettingsKeys {
     static let sessionHealthCheckIntervalSecs = "sessionHealthCheckIntervalSecs"
     static let transferRetryCount = "transferRetryCount"
     static let transferChunkSizeBytes = "transferChunkSizeBytes"
+    static let transferDownloadPipelineDepth = "transferDownloadPipelineDepth"
     static let sshInactivityTimeoutSecs = "sshInactivityTimeoutSecs"
     static let sshKeepaliveIntervalSecs = "sshKeepaliveIntervalSecs"
     static let defaultLocalPath = "defaultLocalPath"
@@ -49,6 +50,14 @@ private func nonNegative(_ value: Int?) -> Int? {
     return value
 }
 
+/// Loads an optional positive timeout. A stored zero is the explicit
+/// disabled sentinel; missing or corrupt negative values fall back to the
+/// registered application default.
+private func loadOptionalPositiveTimeout(_ value: Int?, defaultValue: UInt64?) -> UInt64? {
+    guard let value, value >= 0 else { return defaultValue }
+    return value == 0 ? nil : UInt64(value)
+}
+
 final class AppSettingsService: @unchecked Sendable {
     static let shared = AppSettingsService()
 
@@ -70,6 +79,7 @@ final class AppSettingsService: @unchecked Sendable {
             AppSettingsKeys.sessionHealthCheckIntervalSecs: Int(AppConfig.default.sessionHealthCheckIntervalSecs),
             AppSettingsKeys.transferRetryCount: Int(AppConfig.default.transferRetryCount),
             AppSettingsKeys.transferChunkSizeBytes: Int(AppConfig.default.transferChunkSizeBytes),
+            AppSettingsKeys.transferDownloadPipelineDepth: Int(AppConfig.default.transferDownloadPipelineDepth),
             AppSettingsKeys.sshInactivityTimeoutSecs: AppConfig.default.sshInactivityTimeoutSecs,
             AppSettingsKeys.sshKeepaliveIntervalSecs: Int(AppConfig.default.sshKeepaliveIntervalSecs),
             AppSettingsKeys.defaultLocalPath: AppConfig.default.defaultLocalPath,
@@ -91,21 +101,49 @@ final class AppSettingsService: @unchecked Sendable {
     }
 
     func loadConfig() -> AppConfig {
-        AppConfig(
-            connectionTimeoutSecs: UInt64(defaults.integer(forKey: AppSettingsKeys.connectionTimeoutSecs)),
+        // Integer fields are read clamp-safe: `UInt64(Int)` / `UInt32(Int)`
+        // trap at runtime on negative or out-of-range values, which a broken
+        // plist or a different app version can produce. Clamp instead of
+        // crashing so the app always launches.
+        let minChunk = 4_096
+        let maxChunk = 8_388_608
+        // Upper bounds keep runaway plist values from becoming effectively
+        // infinite retries/timeouts.
+        let maxRetryCount = 100
+        let maxTimeoutSecs = 86_400
+
+        let rawChunkSize = defaults.integer(forKey: AppSettingsKeys.transferChunkSizeBytes)
+        let chunkSize = rawChunkSize == 0
+            ? Int(AppConfig.default.transferChunkSizeBytes)
+            : rawChunkSize
+
+        return AppConfig(
+            connectionTimeoutSecs: UInt64(
+                clamping: min(
+                    maxTimeoutSecs,
+                    max(1, defaults.integer(forKey: AppSettingsKeys.connectionTimeoutSecs))
+                )
+            ),
             sessionHealthCheckIntervalSecs: UInt64(
-                defaults.integer(forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs)
+                clamping: max(1, defaults.integer(forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs))
             ),
-            transferRetryCount: UInt32(defaults.integer(forKey: AppSettingsKeys.transferRetryCount)),
+            transferRetryCount: UInt32(
+                clamping: min(
+                    maxRetryCount,
+                    max(0, defaults.integer(forKey: AppSettingsKeys.transferRetryCount))
+                )
+            ),
             transferChunkSizeBytes: UInt64(
-                defaults.object(forKey: AppSettingsKeys.transferChunkSizeBytes) as? Int
-                    ?? Int(AppConfig.default.transferChunkSizeBytes)
+                clamping: min(maxChunk, max(minChunk, chunkSize))
             ),
-            sshInactivityTimeoutSecs: nonNegative(
-                defaults.object(forKey: AppSettingsKeys.sshInactivityTimeoutSecs) as? Int
-            )
-                .map(UInt64.init)
-                ?? AppConfig.default.sshInactivityTimeoutSecs,
+            transferDownloadPipelineDepth: UInt64(
+                defaults.object(forKey: AppSettingsKeys.transferDownloadPipelineDepth) as? Int
+                    ?? Int(AppConfig.default.transferDownloadPipelineDepth)
+            ),
+            sshInactivityTimeoutSecs: loadOptionalPositiveTimeout(
+                defaults.object(forKey: AppSettingsKeys.sshInactivityTimeoutSecs) as? Int,
+                defaultValue: AppConfig.default.sshInactivityTimeoutSecs
+            ),
             sshKeepaliveIntervalSecs: UInt64(
                 nonNegative(
                     defaults.object(forKey: AppSettingsKeys.sshKeepaliveIntervalSecs) as? Int
@@ -127,16 +165,25 @@ final class AppSettingsService: @unchecked Sendable {
                 forKey: AppSettingsKeys.failConnectOnOpensshMergeError
             ),
             directoryWalkMaxFiles: UInt64(
-                defaults.object(forKey: AppSettingsKeys.directoryWalkMaxFiles) as? Int
-                    ?? Int(AppConfig.default.directoryWalkMaxFiles)
+                clamping: max(
+                    0,
+                    defaults.object(forKey: AppSettingsKeys.directoryWalkMaxFiles) as? Int
+                        ?? Int(clamping: AppConfig.default.directoryWalkMaxFiles)
+                )
             ),
             directoryWalkMaxDepth: UInt32(
-                defaults.object(forKey: AppSettingsKeys.directoryWalkMaxDepth) as? Int
-                    ?? Int(AppConfig.default.directoryWalkMaxDepth)
+                clamping: max(
+                    0,
+                    defaults.object(forKey: AppSettingsKeys.directoryWalkMaxDepth) as? Int
+                        ?? Int(clamping: AppConfig.default.directoryWalkMaxDepth)
+                )
             ),
             directoryWalkMaxTotalBytes: UInt64(
-                defaults.object(forKey: AppSettingsKeys.directoryWalkMaxTotalBytes) as? Int
-                    ?? Int(AppConfig.default.directoryWalkMaxTotalBytes)
+                clamping: max(
+                    0,
+                    defaults.object(forKey: AppSettingsKeys.directoryWalkMaxTotalBytes) as? Int
+                        ?? Int(clamping: AppConfig.default.directoryWalkMaxTotalBytes)
+                )
             ),
             transferOverwritePolicy: TransferOverwritePolicy(
                 rawValue: defaults.string(forKey: AppSettingsKeys.transferOverwritePolicy)
@@ -150,12 +197,14 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(Int(config.sessionHealthCheckIntervalSecs), forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs)
         defaults.set(Int(config.transferRetryCount), forKey: AppSettingsKeys.transferRetryCount)
         defaults.set(Int(config.transferChunkSizeBytes), forKey: AppSettingsKeys.transferChunkSizeBytes)
+        defaults.set(
+            Int(config.transferDownloadPipelineDepth),
+            forKey: AppSettingsKeys.transferDownloadPipelineDepth
+        )
         if let inactivity = config.sshInactivityTimeoutSecs {
             defaults.set(Int(inactivity), forKey: AppSettingsKeys.sshInactivityTimeoutSecs)
         } else {
-            // Persist an explicit "disabled" state instead of leaving a stale
-            // value from an earlier version that would resurface on relaunch.
-            defaults.removeObject(forKey: AppSettingsKeys.sshInactivityTimeoutSecs)
+            defaults.set(0, forKey: AppSettingsKeys.sshInactivityTimeoutSecs)
         }
         defaults.set(
             Int(config.sshKeepaliveIntervalSecs),

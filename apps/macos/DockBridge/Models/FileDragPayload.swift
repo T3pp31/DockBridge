@@ -25,6 +25,12 @@ struct LocalFileDragPayload: Codable, Hashable, Transferable {
     }
 
     static var transferRepresentation: some TransferRepresentation {
+        // External destinations (Finder, Mail, Terminal) receive the file
+        // URL itself; app-internal drops stay Codable. FileRepresentation
+        // comes first so external apps do not fall back to the custom UTType.
+        FileRepresentation(exportedContentType: .fileURL) { payload in
+            SentTransferredFile(payload.url)
+        }
         CodableRepresentation(contentType: .dockBridgeLocalFile)
     }
 
