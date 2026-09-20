@@ -504,12 +504,17 @@ mod tests {
         });
         let mut found_any = false;
         let entries = std::fs::read_dir(&config_dir_abs).unwrap_or_else(|err| {
-            panic!("cannot read config directory {}: {err}", config_dir_abs.display())
+            panic!(
+                "cannot read config directory {}: {err}",
+                config_dir_abs.display()
+            )
         });
         for entry in entries {
-            let path = entry.unwrap_or_else(|err| {
-                panic!("cannot read entry in {}: {err}", config_dir_abs.display())
-            }).path();
+            let path = entry
+                .unwrap_or_else(|err| {
+                    panic!("cannot read entry in {}: {err}", config_dir_abs.display())
+                })
+                .path();
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
