@@ -359,7 +359,10 @@ impl KnownHostsManager {
                     }
                 }
                 HostPatterns::Patterns(_) => {
-                    let (hosts, excluded_aliases) = openssh_host_patterns(entry.host_patterns());
+                    let (hosts, excluded_aliases) = openssh_host_patterns(
+                        entry.host_patterns(),
+                        marker == Some(KnownHostMarker::CertAuthority),
+                    );
                     if hosts.is_empty() {
                         continue;
                     }
@@ -809,7 +812,10 @@ fn openssh_host_pattern(host: &str, port: u16) -> String {
     }
 }
 
-fn openssh_host_patterns(patterns: &HostPatterns) -> (Vec<(String, u16)>, Vec<HostAlias>) {
+fn openssh_host_patterns(
+    patterns: &HostPatterns,
+    allow_wildcards: bool,
+) -> (Vec<(String, u16)>, Vec<HostAlias>) {
     match patterns {
         HostPatterns::HashedName { .. } => (Vec::new(), Vec::new()),
         HostPatterns::Patterns(items) => {
@@ -819,7 +825,7 @@ fn openssh_host_patterns(patterns: &HostPatterns) -> (Vec<(String, u16)>, Vec<Ho
                 let Some(parsed) = parse_openssh_host_pattern(pattern) else {
                     continue;
                 };
-                if parsed.host.contains('*') || parsed.host.contains('?') {
+                if !allow_wildcards && (parsed.host.contains('*') || parsed.host.contains('?')) {
                     tracing::warn!(
                         pattern = %pattern,
                         "unsupported wildcard pattern in known_hosts line skipped"
@@ -2327,7 +2333,7 @@ mod tests {
 
         let mut manager = KnownHostsManager::load(&json_path).unwrap();
         let merged = manager.import_openssh(&openssh_path).unwrap();
-        assert_eq!(merged, 0);
+        assert_eq!(merged.merged, 0);
 
         assert_eq!(
             manager.check_host_key("host.example.com", 22, &key, false),
