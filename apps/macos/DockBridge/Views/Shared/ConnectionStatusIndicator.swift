@@ -49,11 +49,17 @@ private extension ConnectionStatus {
     var accessibilityStatusLabel: String {
         switch self {
         case .disconnected:
-            return "Disconnected"
+            return String(localized: "Disconnected")
         case .connecting(let endpoint):
-            return "Connecting to \(endpoint)"
+            return String(
+                format: String(localized: "Connecting to %@"),
+                endpoint
+            )
         case .connected(let endpoint):
-            return "Connected to \(endpoint)"
+            return String(
+                format: String(localized: "Connected to %@"),
+                endpoint
+            )
         }
     }
 }

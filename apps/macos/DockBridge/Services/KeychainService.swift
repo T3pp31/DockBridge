@@ -11,22 +11,18 @@ enum KeychainServiceError: LocalizedError {
             return String(localized: "Failed to encode secret for Keychain storage.")
         case .unexpectedStatus(let status):
             if status == errSecAuthFailed {
-                return """
-                Keychain access was denied. This often happens after rebuilding with a different code signature. \
-                Delete the connection and save credentials again, or remove stale DockBridge entries in Keychain Access.
-                """
+                return String(localized: "Keychain access was denied. This often happens after rebuilding with a different code signature. Delete the connection and save credentials again, or remove stale DockBridge entries in Keychain Access.")
             }
             if status == errSecMissingEntitlement {
-                return """
-                Keychain is not available in the current app context. Rebuild from Xcode with your Development Team selected, \
-                or remove stale DockBridge entries in Keychain Access and save credentials again.
-                """
+                return String(localized: "Keychain is not available in the current app context. Rebuild from Xcode with your Development Team selected, or remove stale DockBridge entries in Keychain Access and save credentials again.")
             }
             if status >= 100_000, status < 200_000 {
                 let errno = status - 100_000
-                return "Keychain operation failed (errno \(errno)). Ensure the app is signed with your Development Team in Xcode (Signing & Capabilities), then rebuild."
+                let format = String(localized: "Keychain operation failed (errno %lld). Ensure the app is signed with your Development Team in Xcode (Signing & Capabilities), then rebuild.")
+                return String(format: format, Int64(errno))
             }
-            return "Keychain operation failed with status \(status). Ensure the app is signed with your Development Team in Xcode, then rebuild."
+            let format = String(localized: "Keychain operation failed with status %lld. Ensure the app is signed with your Development Team in Xcode, then rebuild.")
+            return String(format: format, Int64(status))
         }
     }
 }
@@ -35,13 +31,16 @@ final class KeychainService: @unchecked Sendable {
     static let shared = KeychainService()
 
     private let serviceName: String
+    private let useDataProtectionKeychain: Bool
 
     private init() {
         self.serviceName = "com.dockbridge"
+        self.useDataProtectionKeychain = true
     }
 
-    init(serviceName: String) {
+    init(serviceName: String, useDataProtectionKeychain: Bool = false) {
         self.serviceName = serviceName
+        self.useDataProtectionKeychain = useDataProtectionKeychain
     }
 
     func savePassword(_ password: String, account: String) throws {
@@ -92,12 +91,12 @@ final class KeychainService: @unchecked Sendable {
     }
 
     private func save(data: Data, account: String, kind: String) throws {
-        let query = makeQuery(account: account, kind: kind)
         let attributes: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
 
+        let query = makeQuery(account: account, kind: kind)
         let status = SecItemCopyMatching(query as CFDictionary, nil)
         switch status {
         case errSecSuccess:
@@ -109,11 +108,6 @@ final class KeychainService: @unchecked Sendable {
 
         case errSecItemNotFound:
             try addItem(account: account, kind: kind, attributes: attributes)
-
-        case errSecAuthFailed, errSecMissingEntitlement:
-            // Access and entitlement failures do not prove that the item is
-            // corrupt. Never delete data in response to either condition.
-            throw KeychainServiceError.unexpectedStatus(status)
 
         default:
             throw KeychainServiceError.unexpectedStatus(status)
@@ -149,11 +143,6 @@ final class KeychainService: @unchecked Sendable {
             // key and make existing encrypted profiles unrecoverable.
             throw KeychainServiceError.unexpectedStatus(status)
 
-        case errSecMissingEntitlement:
-            // Configuration error, not a user-data issue. Surface it rather
-            // than silently deleting a potentially valid item.
-            throw KeychainServiceError.unexpectedStatus(status)
-
         default:
             throw KeychainServiceError.unexpectedStatus(status)
         }
@@ -179,17 +168,36 @@ final class KeychainService: @unchecked Sendable {
         var addQuery = makeQuery(account: account, kind: kind)
         addQuery.merge(attributes) { _, new in new }
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-        guard addStatus == errSecSuccess else {
-            throw KeychainServiceError.unexpectedStatus(addStatus)
+        if addStatus == errSecSuccess {
+            return
         }
+        // A concurrent save may have created the item between our
+        // copy-matching check and this add. Treat duplicate as an update.
+        if addStatus == errSecDuplicateItem {
+            let updateStatus = SecItemUpdate(
+                makeQuery(account: account, kind: kind) as CFDictionary,
+                attributes as CFDictionary
+            )
+            if updateStatus == errSecSuccess {
+                return
+            }
+            throw KeychainServiceError.unexpectedStatus(updateStatus)
+        }
+        throw KeychainServiceError.unexpectedStatus(addStatus)
     }
 
     private func makeQuery(account: String, kind: String) -> [String: Any] {
-        [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
             kSecAttrAccount as String: accountLabel(account: account, kind: kind),
         ]
+        if useDataProtectionKeychain {
+            // Store items in the data-protection keychain so kSecAttrAccessible
+            // is honored and re-signing does not invalidate the ACL.
+            query[kSecUseDataProtectionKeychain as String] = true
+        }
+        return query
     }
 
     private func accountLabel(account: String, kind: String) -> String {

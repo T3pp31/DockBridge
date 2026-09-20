@@ -12,11 +12,11 @@ enum SecureLocalFileReaderError: LocalizedError {
         case .readFailed(let message):
             return message
         case .symlinkNotAllowed:
-            return "Refusing to follow symbolic link."
+            return String(localized: "Refusing to follow symbolic link.")
         case .ownerMismatch:
-            return "File is not owned by the current user."
+            return String(localized: "File is not owned by the current user.")
         case .insecurePermissions:
-            return "File has insecure permissions."
+            return String(localized: "File has insecure permissions.")
         }
     }
 }

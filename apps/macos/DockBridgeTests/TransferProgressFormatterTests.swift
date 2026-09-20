@@ -32,6 +32,7 @@ final class TransferProgressFormatterTests: XCTestCase {
         let tasks = [
             TransferTaskRecord(
                 id: 1,
+                sessionId: 1,
                 direction: .download,
                 localPath: "/tmp/file.bin",
                 remotePath: "/remote/file.bin",
@@ -54,6 +55,7 @@ final class TransferProgressFormatterTests: XCTestCase {
         let tasks = [
             TransferTaskRecord(
                 id: 1,
+                sessionId: 1,
                 direction: .download,
                 localPath: "/tmp/a.bin",
                 remotePath: "/remote/a.bin",
@@ -63,6 +65,7 @@ final class TransferProgressFormatterTests: XCTestCase {
             ),
             TransferTaskRecord(
                 id: 2,
+                sessionId: 1,
                 direction: .download,
                 localPath: "/tmp/b.bin",
                 remotePath: "/remote/b.bin",
@@ -92,6 +95,7 @@ final class TransferProgressFormatterTests: XCTestCase {
         let tasks = [
             TransferTaskRecord(
                 id: 1,
+                sessionId: 1,
                 direction: .upload,
                 localPath: "/tmp/file.txt",
                 remotePath: "/remote/file.txt",

@@ -14,12 +14,14 @@ struct DockBridgeApp: App {
         let connectionList = ConnectionListViewModel(bridge: bridge)
         let transferQueue = TransferQueueViewModel(bridge: bridge)
         let main = MainViewModel(bridge: bridge, connectionList: connectionList, transferQueue: transferQueue)
+        let config = AppSettingsService.shared.loadConfig()
 
         _bridge = StateObject(wrappedValue: bridge)
         _connectionList = StateObject(wrappedValue: connectionList)
         _transferQueue = StateObject(wrappedValue: transferQueue)
         _mainViewModel = StateObject(wrappedValue: main)
-        _settingsConfig = State(initialValue: AppSettingsService.shared.loadConfig())
+        _settingsConfig = State(initialValue: config)
+        TransferNotificationService.requestAuthorizationIfNeeded(for: config)
     }
 
     var body: some Scene {
@@ -31,10 +33,14 @@ struct DockBridgeApp: App {
                 viewModel: mainViewModel,
                 showSettings: $showSettings
             )
+            .onReceive(NotificationCenter.default.publisher(for: .appConfigDidChange)) { notification in
+                guard let config = notification.object as? AppConfig else { return }
+                TransferNotificationService.requestAuthorizationIfNeeded(for: config)
+            }
         }
         .defaultSize(
-            width: WindowLayout.mainMinWidth,
-            height: WindowLayout.mainMinHeight
+            width: WindowLayout.mainDefaultWidth,
+            height: WindowLayout.mainDefaultHeight
         )
         .commands {
             MainViewCommands(
@@ -45,7 +51,9 @@ struct DockBridgeApp: App {
         }
 
         Settings {
-            SettingsView(config: settingsConfig) { config in
+            SettingsView(
+                config: AppSettingsService.shared.loadConfig()
+            ) { config in
                 AppSettingsService.shared.saveConfig(config)
                 settingsConfig = config
             }

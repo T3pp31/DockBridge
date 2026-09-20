@@ -9,7 +9,11 @@ struct GoToPathSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(viewModel.goToPathPane == .local ? "Go to Local Path" : "Go to Remote Path")
+            Text(
+                viewModel.goToPathPane == .local
+                    ? String(localized: "Go to Local Path")
+                    : String(localized: "Go to Remote Path")
+            )
                 .font(.title3)
                 .bold()
 

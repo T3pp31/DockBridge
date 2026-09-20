@@ -6,7 +6,7 @@ enum RemoteEntryNameError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidCharacters:
-            return String(localized: "The name cannot contain '/', '..', or null characters.")
+            return String(localized: "The name cannot be '.'/'..' or contain '/' or null characters.")
         }
     }
 }
@@ -25,10 +25,8 @@ enum RemotePathError: LocalizedError {
 
 enum RemotePath {
     static func isValidEntryName(_ name: String) -> Bool {
-        guard !name.isEmpty else { return false }
-        if name.contains("/") { return false }
-        if name.contains("\0") { return false }
-        if name.contains("..") { return false }
+        guard !name.isEmpty, name != ".", name != ".." else { return false }
+        if name.contains("/") || name.contains("\0") { return false }
         return true
     }
 

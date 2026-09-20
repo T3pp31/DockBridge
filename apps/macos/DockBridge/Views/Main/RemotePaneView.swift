@@ -3,17 +3,47 @@ import SwiftUI
 struct RemotePaneView: View {
     @ObservedObject var viewModel: MainViewModel
     @State private var isDropTargeted = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: WindowLayout.paneSpacing) {
             RemotePanePathBar(viewModel: viewModel)
 
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField(String(localized: "Filter files"), text: $viewModel.remoteFilter)
+                    .textFieldStyle(.plain)
+                if !viewModel.remoteFilter.isEmpty {
+                    Button {
+                        viewModel.remoteFilter = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 6)
+
             Divider()
 
             if viewModel.bridge.isConnected {
                 ExpandingFrame { size in
-                    RemoteFileTable(viewModel: viewModel)
-                        .frame(width: size.width, height: size.height)
+                    Group {
+                        if viewModel.remoteItems.allSatisfy(\.isParentDirectory), !viewModel.isLoadingRemote {
+                            ContentUnavailableView(
+                                String(localized: "Folder is Empty"),
+                                systemImage: "folder",
+                                description: Text(String(localized: "No items in this directory."))
+                            )
+                        } else {
+                            RemoteFileTable(viewModel: viewModel)
+                                .opacity(viewModel.isLoadingRemote ? 0.5 : 1)
+                                .allowsHitTesting(!viewModel.isLoadingRemote)
+                        }
+                    }
+                    .frame(width: size.width, height: size.height)
                         .contextMenu(forSelectionType: String.self) { ids in
                             let items = transferableRemoteItems(from: ids)
                             if !items.isEmpty {
@@ -26,12 +56,21 @@ struct RemotePaneView: View {
                                     }
                                 }
 
-                                Button(items.count == 1 ? "Download" : "Download \(items.count) Items") {
+                                let downloadTitle = items.count == 1
+                                    ? String(localized: "Download")
+                                    : String(
+                                        format: String(localized: "Download %lld Items"),
+                                        Int64(items.count)
+                                    )
+                                Button(downloadTitle) {
                                     viewModel.selectedRemoteItemIDs = Set(items.map(\.id))
                                     Task { await viewModel.downloadSelected() }
                                 }
 
                                 if items.count == 1, let item = items.first {
+                                    Button(String(localized: "Get Info")) {
+                                        viewModel.showRemoteInfo(item)
+                                    }
                                     Button(String(localized: "Rename")) {
                                         viewModel.beginRename(item: item)
                                     }
@@ -62,12 +101,12 @@ struct RemotePaneView: View {
                                 .transition(.opacity.combined(with: .scale(scale: 0.98)))
                             }
                         }
-                        .animation(.easeInOut(duration: 0.2), value: isDropTargeted)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isDropTargeted)
                 }
                 .layoutPriority(0)
             } else {
                 ContentUnavailableView(
-                    "Not connected to a remote host",
+                    String(localized: "Not connected to a remote host"),
                     systemImage: "network.slash",
                     description: Text(String(localized: "Select a connection profile and press Connect."))
                 )
@@ -110,6 +149,37 @@ struct RemotePaneView: View {
         }
         .sheet(isPresented: $viewModel.showMkdirPrompt) {
             RemoteNewFolderSheet(viewModel: viewModel)
+        }
+        .sheet(item: $viewModel.remoteInfoItem) { item in
+            let title = String(
+                format: String(localized: "Info — %@"),
+                item.name
+            )
+            GetInfoSheet(
+                title: title,
+                rows: [
+                    (String(localized: "Path"), item.path),
+                    (
+                        String(localized: "Kind"),
+                        item.isDirectory ? String(localized: "Folder") : String(localized: "File")
+                    ),
+                    (String(localized: "Size"), ByteCountFormatter.string(
+                        fromByteCount: Int64(clamping: item.size),
+                        countStyle: .file
+                    )),
+                    (String(localized: "Modified"), item.modifiedAtSecs.map { secs in
+                        DateFormatter.localizedString(
+                            from: Date(timeIntervalSince1970: TimeInterval(secs)),
+                            dateStyle: .medium,
+                            timeStyle: .medium
+                        )
+                    } ?? "—"),
+                    (
+                        String(localized: "Permissions"),
+                        item.permissions.map(PermissionFormatter.string(from:)) ?? "—"
+                    ),
+                ]
+            )
         }
     }
 

@@ -11,6 +11,34 @@ struct MainViewCommands: Commands {
     @Binding var showSettings: Bool
 
     var body: some Commands {
+        CommandMenu(String(localized: "Go")) {
+            Button(String(localized: "Back")) {
+                Task { await viewModel.navigateRemoteBack() }
+            }
+            .keyboardShortcut("[", modifiers: [.command])
+            .disabled(!viewModel.bridge.isConnected)
+
+            Button(String(localized: "Forward")) {
+                Task { await viewModel.navigateRemoteForward() }
+            }
+            .keyboardShortcut("]", modifiers: [.command])
+            .disabled(!viewModel.bridge.isConnected)
+
+            Button(String(localized: "Enclosing Folder")) {
+                Task { await viewModel.navigateRemoteUp() }
+            }
+            .keyboardShortcut(.upArrow, modifiers: [.command])
+            .disabled(!viewModel.bridge.isConnected)
+
+            Divider()
+
+            Button(String(localized: "Go to Folder…")) {
+                viewModel.beginGoToPathForFocusedPane()
+            }
+            .keyboardShortcut("g", modifiers: [.command, .shift])
+            .disabled(!viewModel.bridge.isConnected)
+        }
+
         CommandMenu(String(localized: "Transfer")) {
             Button {
                 Task { await viewModel.uploadSelected() }
@@ -25,31 +53,40 @@ struct MainViewCommands: Commands {
             } label: {
                 Label(String(localized: "Download"), systemImage: "square.and.arrow.down")
             }
-            .keyboardShortcut("d", modifiers: [.command])
+            .keyboardShortcut("d", modifiers: [.command, .shift])
             .disabled(viewModel.selectedRemoteItems.isEmpty || !viewModel.bridge.isConnected)
         }
 
-        // Replace the system New Item group so ⌘N binds to New Folder instead of
-        // colliding with New Window / New Document.
-        CommandGroup(replacing: .newItem) {
+        // New Folder uses ⇧⌘N (like Finder) so ⌘N stays as New Window.
+        CommandGroup(after: .newItem) {
             Button(String(localized: "New Folder")) {
                 viewModel.showMkdirPrompt = true
             }
-            .keyboardShortcut("n", modifiers: [.command])
+            .keyboardShortcut("n", modifiers: [.command, .shift])
             .disabled(!viewModel.bridge.isConnected)
         }
 
         CommandGroup(after: .saveItem) {
-            Button(String(localized: "Go to Path…")) {
-                viewModel.beginGoToPathForFocusedPane()
+            Button(String(localized: "Get Info")) {
+                Task { await viewModel.showInfoForFocusedPane() }
             }
-            .keyboardShortcut("g", modifiers: [.command, .shift])
+            .keyboardShortcut("i", modifiers: [.command])
+            .disabled(!viewModel.canShowInfoForFocusedPane)
 
             Button(String(localized: "Refresh")) {
                 viewModel.reloadLocal()
                 Task { await viewModel.reloadRemote() }
             }
             .keyboardShortcut("r", modifiers: [.command])
+
+            Toggle(
+                String(localized: "Show Hidden Files"),
+                isOn: Binding(
+                    get: { viewModel.showHiddenFiles },
+                    set: { viewModel.setShowHiddenFiles($0) }
+                )
+            )
+            .keyboardShortcut(".", modifiers: [.command, .shift])
 
             Button(String(localized: "Delete")) {
                 // Destructive: require exactly one selection (never Set.first under multi-select).
@@ -58,7 +95,7 @@ struct MainViewCommands: Commands {
                       !item.isParentDirectory else { return }
                 viewModel.requestDeleteRemote(item: item)
             }
-            .keyboardShortcut(.delete, modifiers: [])
+            .keyboardShortcut(.delete, modifiers: [.command])
             .disabled(
                 viewModel.selectedRemoteItemIDs.count != 1
                     || viewModel.selectedRemoteTableItem == nil

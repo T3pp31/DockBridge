@@ -9,6 +9,7 @@ struct UpdateAvailableView: View {
     let downloadErrorMessage: String?
     let onDownload: () -> Void
     let onLater: () -> Void
+    let onSkipVersion: () -> Void
 
     var body: some View {
         DialogCard(title: String(localized: "Update Available")) {
@@ -36,20 +37,17 @@ struct UpdateAvailableView: View {
 
             if inAppUpdateInstallationEnabled {
                 DialogFootnote(
-                    text: "Download the latest DMG, verify its signature, then replace the app in Applications."
+                    text: String(localized: "Download the latest DMG, verify its signature, then replace the app in Applications.")
                 )
             } else {
                 DialogFootnote(
-                    text: """
-                    In-app installation is disabled until signed and notarized releases are available. \
-                    Open the release page to download the DMG manually and verify it before installing.
-                    """
+                    text: String(localized: "In-app installation is disabled until signed and notarized releases are available. Open the release page to download the DMG manually and verify it before installing.")
                 )
             }
 
             if let downloadErrorMessage {
                 Text(downloadErrorMessage)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(DesignTokens.Status.error)
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -66,7 +64,14 @@ struct UpdateAvailableView: View {
         } footer: {
             Button(String(localized: "Later"), role: .cancel, action: onLater)
                 .disabled(isDownloading)
-            Button(inAppUpdateInstallationEnabled ? "Download" : "Open Release Page", action: onDownload)
+            Button(String(localized: "Skip This Version"), action: onSkipVersion)
+                .disabled(isDownloading)
+            Button(
+                inAppUpdateInstallationEnabled
+                    ? String(localized: "Download")
+                    : String(localized: "Open Release Page"),
+                action: onDownload
+            )
                 .keyboardShortcut(.defaultAction)
                 .disabled(isDownloading)
         }

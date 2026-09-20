@@ -73,13 +73,7 @@ struct SettingsView: View {
                     isOn: $config.failConnectOnOpensshMergeError
                 )
 
-                Text(
-                    """
-                    The sandboxed app cannot read ~/.ssh/known_hosts directly. \
-                    Select your OpenSSH known_hosts file here to merge trusted keys before connecting. \
-                    @cert-authority entries are imported but not used for host trust.
-                    """
-                )
+                Text(String(localized: "The sandboxed app cannot read ~/.ssh/known_hosts directly. Select your OpenSSH known_hosts file here to merge trusted keys before connecting. @cert-authority entries are imported but not used for host trust."))
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -95,11 +89,91 @@ struct SettingsView: View {
                         Text(policy.label).tag(policy)
                     }
                 }
+                Toggle(
+                    String(localized: "Notify when transfers finish"),
+                    isOn: $config.notifyWhenTransfersFinish
+                )
+                Toggle(
+                    String(localized: "Play notification sound"),
+                    isOn: $config.playTransferNotificationSound
+                )
+                .disabled(!config.notifyWhenTransfersFinish)
+            }
+
+            Section(String(localized: "Advanced")) {
+                Stepper(
+                    String(
+                        format: String(localized: "Health check interval: %llds"),
+                        Int64(config.sessionHealthCheckIntervalSecs)
+                    ),
+                    value: Binding(
+                        get: { Int(config.sessionHealthCheckIntervalSecs) },
+                        set: { config.sessionHealthCheckIntervalSecs = UInt64($0) }
+                    ),
+                    in: 1...300
+                )
+                .help(String(localized: "How often the app checks the SFTP session is still alive."))
+
+                Stepper(
+                    String(
+                        format: String(localized: "Chunk size: %lld bytes"),
+                        Int64(config.transferChunkSizeBytes)
+                    ),
+                    value: Binding(
+                        get: { Int(config.transferChunkSizeBytes) },
+                        set: { config.transferChunkSizeBytes = UInt64($0) }
+                    ),
+                    in: 4096...8_388_608,
+                    step: 4096
+                )
+                .help(String(localized: "SFTP read/write chunk size (4 KiB ... 8 MiB)."))
+
+                Stepper(
+                    String(
+                        format: String(localized: "Upload pipeline depth: %lld"),
+                        Int64(config.transferUploadPipelineDepth)
+                    ),
+                    value: Binding(
+                        get: { Int(config.transferUploadPipelineDepth) },
+                        set: { config.transferUploadPipelineDepth = UInt64($0) }
+                    ),
+                    in: 1...256
+                )
+                .help(String(localized: "Maximum concurrent in-flight SFTP WRITE requests (1 ... 256)."))
+
+                Stepper(
+                    String(
+                        format: String(localized: "Directory walk max files: %lld"),
+                        Int64(config.directoryWalkMaxFiles)
+                    ),
+                    value: Binding(
+                        get: { Int(config.directoryWalkMaxFiles) },
+                        set: { config.directoryWalkMaxFiles = UInt64($0) }
+                    ),
+                    in: 1000...1_000_000,
+                    step: 1000
+                )
+
+                Stepper(
+                    String(
+                        format: String(localized: "Directory walk max depth: %lld"),
+                        Int64(config.directoryWalkMaxDepth)
+                    ),
+                    value: Binding(
+                        get: { Int(config.directoryWalkMaxDepth) },
+                        set: { config.directoryWalkMaxDepth = UInt32($0) }
+                    ),
+                    in: 1...1024
+                )
             }
         }
         .formStyle(.grouped)
 
         HStack(spacing: 12) {
+            Button(String(localized: "Reset to Defaults")) {
+                config = AppConfig.default
+            }
+            .help(String(localized: "Restore all settings to their defaults (bookmarks are kept)."))
             Spacer()
             Button(String(localized: "Cancel"), role: .cancel) {
                 dismiss()

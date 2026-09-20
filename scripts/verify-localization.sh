@@ -19,6 +19,8 @@ fi
 
 python3 - "$XCS" <<'PY'
 import json
+import pathlib
+import re
 import sys
 
 path = sys.argv[1]
@@ -34,6 +36,22 @@ source_language = data.get("sourceLanguage", "en")
 print(f"Verifying {len(strings)} keys (sourceLanguage={source_language})")
 
 errors = []
+format_pattern = re.compile(r"%(?:(\d+)\$)?(lld|@)")
+
+
+def format_signature(value):
+    signature = []
+    next_index = 1
+    for match in format_pattern.finditer(value):
+        if match.group(1) is None:
+            index = next_index
+            next_index += 1
+        else:
+            index = int(match.group(1))
+        signature.append((index, match.group(2)))
+    return sorted(signature)
+
+
 for key in sorted(strings):
     entry = strings[key]
     localizations = entry.get("localizations", {})
@@ -58,6 +76,41 @@ for key in sorted(strings):
         value = loc.get("stringUnit", {}).get("value")
         if value is None or value == "":
             errors.append(f"{key!r}: empty {target} value")
+        elif en and format_signature(value) != format_signature(en):
+            errors.append(
+                f"{key!r}: {target} format arguments {format_signature(value)} "
+                f"do not match {source_language} {format_signature(en)}"
+            )
+
+# Every explicit String(localized:) literal must have a catalog entry. Dynamic
+# interpolation inside the localization key is rejected so placeholder keys
+# cannot silently diverge from what Xcode extracts.
+source_root = pathlib.Path(path).parent.parent
+localized_call = re.compile(
+    r'String\s*\(\s*localized:\s*"((?:\\.|[^"\\])*)"',
+    re.DOTALL,
+)
+for source_path in sorted(source_root.rglob("*.swift")):
+    if "Generated" in source_path.parts:
+        continue
+    source = source_path.read_text(encoding="utf-8")
+    for match in localized_call.finditer(source):
+        raw_key = match.group(1)
+        line = source.count("\n", 0, match.start()) + 1
+        location = f"{source_path.relative_to(source_root)}:{line}"
+        if r"\(" in raw_key:
+            errors.append(
+                f"{location}: interpolate values with String(format:) outside "
+                "String(localized:)"
+            )
+            continue
+        try:
+            key = json.loads(f'"{raw_key}"')
+        except json.JSONDecodeError as error:
+            errors.append(f"{location}: invalid localized string literal: {error}")
+            continue
+        if key not in strings:
+            errors.append(f"{location}: missing catalog key {key!r}")
 
 if errors:
     for message in errors:

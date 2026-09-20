@@ -19,8 +19,8 @@ enum DropKind {
     var overlayTitle: String {
         switch self {
         case .none: return ""
-        case .remoteDownload: return "Drop to download"
-        case .localMove: return "Drop to move"
+        case .remoteDownload: return String(localized: "Drop to download")
+        case .localMove: return String(localized: "Drop to move")
         }
     }
 }
@@ -303,19 +303,25 @@ struct LocalFileTable: View {
     @State private var sortOrder = [KeyPathComparator(\LocalFileItem.name, order: .forward)]
 
     private var sortedItems: [LocalFileItem] {
-        viewModel.localItems.sorted(using: sortOrder)
+        // Apply the column sort first, then stable-sort folders to the front
+        // (KeyPathComparator cannot order `Bool`, so folder-first is applied
+        // as a stable secondary pass).
+        let columnSorted = viewModel.localItems.sorted(using: sortOrder)
+        return columnSorted.sorted { lhs, rhs in
+            lhs.isDirectory && !rhs.isDirectory
+        }
     }
 
     var body: some View {
         Table(of: LocalFileItem.self, selection: $viewModel.selectedLocalItemIDs, sortOrder: $sortOrder) {
-            TableColumn("Name", value: \.name) { item in
+            TableColumn(String(localized: "Name"), value: \.name) { item in
                 folderDropHighlightLabel(name: item.name, isDirectory: item.isDirectory)
             }
             .width(
                 min: FileTableColumnLayout.nameMinWidth,
                 ideal: FileTableColumnLayout.nameIdealWidth
             )
-            TableColumn("Size", value: \.size) { item in
+            TableColumn(String(localized: "Size"), value: \.size) { item in
                 Text(item.isDirectory ? "—" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file))
                     .monospacedDigit()
             }
@@ -323,7 +329,7 @@ struct LocalFileTable: View {
                 min: FileTableColumnLayout.sizeMinWidth,
                 ideal: FileTableColumnLayout.sizeIdealWidth
             )
-            TableColumn("Modified", value: \.modificationSortKey) { item in
+            TableColumn(String(localized: "Modified"), value: \.modificationSortKey) { item in
                 modifiedCell(item.modificationDate)
             }
             .width(
@@ -401,19 +407,22 @@ struct RemoteFileTable: View {
     @State private var sortOrder = [KeyPathComparator(\RemoteFileRecord.name, order: .forward)]
 
     private var sortedItems: [RemoteFileRecord] {
-        viewModel.remoteItems.sorted(using: sortOrder)
+        let columnSorted = viewModel.remoteItems.sorted(using: sortOrder)
+        return columnSorted.sorted { lhs, rhs in
+            lhs.isDirectory && !rhs.isDirectory
+        }
     }
 
     var body: some View {
         Table(of: RemoteFileRecord.self, selection: $viewModel.selectedRemoteItemIDs, sortOrder: $sortOrder) {
-            TableColumn("Name", value: \.name) { item in
+            TableColumn(String(localized: "Name"), value: \.name) { item in
                 folderDropHighlightLabel(name: item.name, isDirectory: item.isDirectory)
             }
             .width(
                 min: FileTableColumnLayout.nameMinWidth,
                 ideal: FileTableColumnLayout.nameIdealWidth
             )
-            TableColumn("Size", value: \.size) { item in
+            TableColumn(String(localized: "Size"), value: \.size) { item in
                 Text(remoteSizeLabel(for: item))
                     .monospacedDigit()
             }
@@ -421,7 +430,7 @@ struct RemoteFileTable: View {
                 min: FileTableColumnLayout.sizeMinWidth,
                 ideal: FileTableColumnLayout.sizeIdealWidth
             )
-            TableColumn("Modified", value: \.modificationSortKey) { item in
+            TableColumn(String(localized: "Modified"), value: \.modificationSortKey) { item in
                 modifiedCell(item.modificationDate)
             }
             .width(

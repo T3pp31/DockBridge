@@ -19,11 +19,17 @@ enum TransferProgressFormatter {
 
         if let bytesPerSecond, bytesPerSecond > 0 {
             let speedLabel = byteFormatter.string(fromByteCount: Int64(bytesPerSecond))
-            label += " · \(speedLabel)/s"
+            label += String(
+                format: String(localized: " · %@/s"),
+                speedLabel
+            )
             let remainingBytes = Double(total) - Double(transferred)
             if remainingBytes > 0 {
                 let seconds = remainingBytes / bytesPerSecond
-                label += " · ETA \(formattedDuration(seconds))"
+                label += String(
+                    format: String(localized: " · ETA %@"),
+                    formattedDuration(seconds)
+                )
             }
         }
 
@@ -32,7 +38,8 @@ enum TransferProgressFormatter {
 
     static func activeTransferSummary(
         for tasks: [TransferTaskRecord],
-        prefix: String = "Transferring"
+        totalBytesPerSecond: Double? = nil,
+        prefix: String = String(localized: "Transferring")
     ) -> String? {
         let inProgressTasks = tasks.filter { $0.status == .inProgress }
         guard let primary = inProgressTasks.first,
@@ -46,11 +53,16 @@ enum TransferProgressFormatter {
 
         let additionalCount = inProgressTasks.count - 1
         if additionalCount > 0 {
-            let format = String(localized: "Transferring: %@ +%lld more")
-            return String(format: format, label, additionalCount)
+            if let totalBytesPerSecond, totalBytesPerSecond > 0 {
+                let speed = byteFormatter.string(fromByteCount: Int64(totalBytesPerSecond))
+                let format = String(localized: "%@: %@ +%lld more · %@/s total")
+                return String(format: format, prefix, label, Int64(additionalCount), speed)
+            }
+            let format = String(localized: "%@: %@ +%lld more")
+            return String(format: format, prefix, label, Int64(additionalCount))
         }
-        let format = String(localized: "Transferring: %@")
-        return String(format: format, label)
+        let format = String(localized: "%@: %@")
+        return String(format: format, prefix, label)
     }
 
     private static func formattedDuration(_ seconds: Double) -> String {

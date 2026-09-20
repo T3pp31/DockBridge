@@ -9,9 +9,11 @@ enum ProfileTrustSigningKeyStoreError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .randomGenerationFailed(let status):
-            return "Failed to generate profile trust signing key (status \(status))."
+            let format = String(localized: "Failed to generate profile trust signing key (status %lld).")
+            return String(format: format, Int64(status))
         case .unexpectedStatus(let status):
-            return "Profile trust signing key Keychain operation failed with status \(status)."
+            let format = String(localized: "Profile trust signing key Keychain operation failed with status %lld.")
+            return String(format: format, Int64(status))
         }
     }
 }
@@ -19,6 +21,8 @@ enum ProfileTrustSigningKeyStoreError: LocalizedError {
 /// Stores the HMAC signing key for `trusted_endpoints.json` in Keychain.
 final class ProfileTrustSigningKeyStore: @unchecked Sendable {
     static let shared = ProfileTrustSigningKeyStore()
+    // Serialize in-process calls; SecItemAdd resolves races with other processes.
+    private static let keychainLock = NSLock()
 
     private let serviceName: String
     private let account = "profile-trust.hmac-key"
@@ -28,10 +32,15 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
     }
 
     var hasExistingKey: Bool {
-        (try? loadKeyData()) != nil
+        Self.keychainLock.lock()
+        defer { Self.keychainLock.unlock() }
+        return (try? loadKeyData()) != nil
     }
 
     func loadOrCreateKey() throws -> SymmetricKey {
+        Self.keychainLock.lock()
+        defer { Self.keychainLock.unlock() }
+
         if let data = try loadKeyData() {
             return SymmetricKey(data: data)
         }
@@ -43,11 +52,13 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
         }
 
         let data = Data(bytes)
-        try saveKeyData(data)
-        return SymmetricKey(data: data)
+        return SymmetricKey(data: try addKeyDataUnlessAlreadyCreated(data))
     }
 
     func deleteKey() throws {
+        Self.keychainLock.lock()
+        defer { Self.keychainLock.unlock() }
+
         let query = makeQuery()
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
@@ -73,27 +84,23 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
         }
     }
 
-    private func saveKeyData(_ data: Data) throws {
-        let query = makeQuery()
+    private func addKeyDataUnlessAlreadyCreated(_ data: Data) throws -> Data {
+        var query = makeQuery()
         let attributes: [String: Any] = [
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
+        query.merge(attributes) { _, new in new }
 
-        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        let status = SecItemAdd(query as CFDictionary, nil)
         switch status {
         case errSecSuccess:
-            let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-            guard updateStatus == errSecSuccess else {
-                throw ProfileTrustSigningKeyStoreError.unexpectedStatus(updateStatus)
+            return data
+        case errSecDuplicateItem:
+            if let existingData = try loadKeyData() {
+                return existingData
             }
-        case errSecItemNotFound:
-            var addQuery = query
-            addQuery.merge(attributes) { _, new in new }
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
-                throw ProfileTrustSigningKeyStoreError.unexpectedStatus(addStatus)
-            }
+            throw ProfileTrustSigningKeyStoreError.unexpectedStatus(status)
         default:
             throw ProfileTrustSigningKeyStoreError.unexpectedStatus(status)
         }

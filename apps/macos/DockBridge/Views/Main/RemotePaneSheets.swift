@@ -35,7 +35,7 @@ struct RemoteEntryNameSheet: View {
                 if let validationMessage {
                     Text(validationMessage)
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(DesignTokens.Status.error)
                 }
             }
             .formStyle(.grouped)

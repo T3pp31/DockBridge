@@ -3188,6 +3188,2131 @@
         }
       }
     },
+    "%@ Use Browse… to try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ Use Browse… to try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 「参照…」を使ってもう一度選択してください。"
+          }
+        }
+      }
+    },
+    "%@ failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ failed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@に失敗しました"
+          }
+        }
+      }
+    },
+    "%@ finished": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ finished"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@が完了しました"
+          }
+        }
+      }
+    },
+    "%@: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@: %2$@"
+          }
+        }
+      }
+    },
+    "%@: %@ +%lld more": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %@ +%lld more"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@: %2$@、ほか %3$lld 件"
+          }
+        }
+      }
+    },
+    "%@: %@ +%lld more · %@/s total": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@: %@ +%lld more · %@/s total"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@: %2$@、ほか %3$lld 件 · 合計 %4$@/秒"
+          }
+        }
+      }
+    },
+    "%lld edit upload(s) need attention": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld edit upload(s) need attention"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "編集ファイルのアップロード %lld 件を確認してください"
+          }
+        }
+      }
+    },
+    "A connection is already in progress.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A connection is already in progress."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すでに接続処理が進行中です。"
+          }
+        }
+      }
+    },
+    "A connection is still in progress.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A connection is still in progress."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続処理がまだ進行中です。"
+          }
+        }
+      }
+    },
+    "A file or folder named '%@' already exists.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A file or folder named '%@' already exists."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%@」という名前のファイルまたはフォルダはすでに存在します。"
+          }
+        }
+      }
+    },
+    "AES-GCM seal returned no combined payload.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-GCM seal returned no combined payload."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AES-GCM の暗号化結果に結合済みペイロードがありません。"
+          }
+        }
+      }
+    },
+    "Accept only if you trust this fingerprint.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accept only if you trust this fingerprint."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このフィンガープリントを信頼できる場合のみ承認してください。"
+          }
+        }
+      }
+    },
+    "Advanced": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Advanced"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "詳細"
+          }
+        }
+      }
+    },
+    "Chunk size: %lld bytes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chunk size: %lld bytes"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "チャンクサイズ: %lld バイト"
+          }
+        }
+      }
+    },
+    "Close": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "閉じる"
+          }
+        }
+      }
+    },
+    "Compare both fingerprints with a value the server administrator confirms out-of-band. If you did not change the server key, Reject to be safe.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compare both fingerprints with a value the server administrator confirms out-of-band. If you did not change the server key, Reject to be safe."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "両方のフィンガープリントを、サーバー管理者が別経路で確認した値と比較してください。サーバー鍵を変更していない場合は、安全のため拒否してください。"
+          }
+        }
+      }
+    },
+    "Compare the fingerprint above with a value the server administrator or hosting provider publishes out-of-band (their website, setup email, or console). Match the characters exactly before accepting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compare the fingerprint above with a value the server administrator or hosting provider publishes out-of-band (their website, setup email, or console). Match the characters exactly before accepting."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上のフィンガープリントを、サーバー管理者またはホスティング事業者が別経路（Webサイト、設定メール、コンソールなど）で公開している値と比較してください。文字列が完全に一致することを確認してから承認してください。"
+          }
+        }
+      }
+    },
+    "Connected to %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connected to %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ に接続済み"
+          }
+        }
+      }
+    },
+    "Connecting to %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connecting to %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ に接続中"
+          }
+        }
+      }
+    },
+    "Connection profile store has an unsupported or corrupt encrypted format.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connection profile store has an unsupported or corrupt encrypted format."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続プロファイルの保存データは、未対応または破損した暗号化形式です。"
+          }
+        }
+      }
+    },
+    "Connection profiles could not be decoded: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connection profiles could not be decoded: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続プロファイルをデコードできませんでした: %@"
+          }
+        }
+      }
+    },
+    "Could not create recovery metadata for %@: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not create recovery metadata for %@: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ の復旧用メタデータを作成できませんでした: %2$@"
+          }
+        }
+      }
+    },
+    "Could not inspect the downloaded file at %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not inspect the downloaded file at %@."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ にあるダウンロード済みファイルを確認できませんでした。"
+          }
+        }
+      }
+    },
+    "Could not open %@ in its default application.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not open %@ in its default application."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ をデフォルトのアプリケーションで開けませんでした。"
+          }
+        }
+      }
+    },
+    "Could not protect the edited local copy before upload: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not protect the edited local copy before upload: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アップロード前に編集済みローカルコピーを保護できませんでした: %@"
+          }
+        }
+      }
+    },
+    "Could not read SSH config file: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not read SSH config file: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH 設定ファイルを読み込めませんでした: %@"
+          }
+        }
+      }
+    },
+    "Delete \"%@\"? The saved password/passphrase for this profile will also be removed from the Keychain.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete \"%@\"? The saved password/passphrase for this profile will also be removed from the Keychain."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "「%@」を削除しますか？このプロファイルに保存されたパスワード／パスフレーズも Keychain から削除されます。"
+          }
+        }
+      }
+    },
+    "Delete Profile?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete Profile?"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロファイルを削除しますか？"
+          }
+        }
+      }
+    },
+    "Directory walk max depth: %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directory walk max depth: %lld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ディレクトリ走査の最大深度: %lld"
+          }
+        }
+      }
+    },
+    "Directory walk max files: %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directory walk max files: %lld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ディレクトリ走査の最大ファイル数: %lld"
+          }
+        }
+      }
+    },
+    "DockBridge found new saved connections without trusted endpoints. Trust only profiles you added yourself.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DockBridge found new saved connections without trusted endpoints. Trust only profiles you added yourself."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DockBridge は信頼済みエンドポイントのない新しい保存済み接続を検出しました。自分で追加したプロファイルだけを信頼してください。"
+          }
+        }
+      }
+    },
+    "DockBridge will remember the host, port, and username for your saved connections to detect unauthorized changes. Confirm only if these profiles belong to you.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DockBridge will remember the host, port, and username for your saved connections to detect unauthorized changes. Confirm only if these profiles belong to you."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DockBridge は不正な変更を検出するため、保存済み接続のホスト、ポート、ユーザー名を記憶します。これらが自分のプロファイルである場合のみ確認してください。"
+          }
+        }
+      }
+    },
+    "DockBridge — Not Connected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DockBridge — Not Connected"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DockBridge — 未接続"
+          }
+        }
+      }
+    },
+    "Download %lld Items": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download %lld Items"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 項目をダウンロード"
+          }
+        }
+      }
+    },
+    "Download the latest DMG, verify its signature, then replace the app in Applications.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download the latest DMG, verify its signature, then replace the app in Applications."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最新の DMG をダウンロードして署名を検証し、「アプリケーション」内のアプリを置き換えます。"
+          }
+        }
+      }
+    },
+    "Drop to download": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drop to download"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ドロップしてダウンロード"
+          }
+        }
+      }
+    },
+    "Drop to move": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drop to move"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ドロップして移動"
+          }
+        }
+      }
+    },
+    "Enclosing Folder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enclosing Folder"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "内包フォルダ"
+          }
+        }
+      }
+    },
+    "Error": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Error"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "エラー"
+          }
+        }
+      }
+    },
+    "Failed to generate profile trust signing key (status %lld).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to generate profile trust signing key (status %lld)."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロファイル信頼用の署名鍵を生成できませんでした（ステータス %lld）。"
+          }
+        }
+      }
+    },
+    "Failed to move to Trash: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to move to Trash: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ゴミ箱へ移動できませんでした: %@"
+          }
+        }
+      }
+    },
+    "Failed to upload edited file to %@. The local copy was preserved at %@. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to upload edited file to %@. The local copy was preserved at %@. %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "編集済みファイルを %1$@ へアップロードできませんでした。ローカルコピーは %2$@ に保持されています。%3$@"
+          }
+        }
+      }
+    },
+    "File": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイル"
+          }
+        }
+      }
+    },
+    "File has insecure permissions.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File has insecure permissions."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルの権限設定が安全ではありません。"
+          }
+        }
+      }
+    },
+    "File is not owned by the current user.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File is not owned by the current user."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルの所有者が現在のユーザーではありません。"
+          }
+        }
+      }
+    },
+    "Filter files": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Filter files"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルを絞り込み"
+          }
+        }
+      }
+    },
+    "Folder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folder"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フォルダ"
+          }
+        }
+      }
+    },
+    "Folder is Empty": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folder is Empty"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フォルダは空です"
+          }
+        }
+      }
+    },
+    "Get Info": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Get Info"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "情報を見る"
+          }
+        }
+      }
+    },
+    "Go to Folder…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Go to Folder…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フォルダへ移動…"
+          }
+        }
+      }
+    },
+    "Health check interval: %llds": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Health check interval: %llds"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ヘルスチェック間隔: %lld秒"
+          }
+        }
+      }
+    },
+    "How often the app checks the SFTP session is still alive.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "How often the app checks the SFTP session is still alive."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SFTP セッションが有効かどうかをアプリが確認する間隔です。"
+          }
+        }
+      }
+    },
+    "Import": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "読み込む"
+          }
+        }
+      }
+    },
+    "Import from SSH Config…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import from SSH Config…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH 設定から読み込む…"
+          }
+        }
+      }
+    },
+    "Imported %lld profile(s).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Imported %lld profile(s)."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 件のプロファイルを読み込みました。"
+          }
+        }
+      }
+    },
+    "In-app installation is disabled until signed and notarized releases are available. Open the release page to download the DMG manually and verify it before installing.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In-app installation is disabled until signed and notarized releases are available. Open the release page to download the DMG manually and verify it before installing."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "署名および公証済みリリースが利用可能になるまで、アプリ内インストールは無効です。リリースページを開いて DMG を手動でダウンロードし、検証してからインストールしてください。"
+          }
+        }
+      }
+    },
+    "Info — %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Info — %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "情報 — %@"
+          }
+        }
+      }
+    },
+    "Keychain access was denied. This often happens after rebuilding with a different code signature. Delete the connection and save credentials again, or remove stale DockBridge entries in Keychain Access.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keychain access was denied. This often happens after rebuilding with a different code signature. Delete the connection and save credentials again, or remove stale DockBridge entries in Keychain Access."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keychain へのアクセスが拒否されました。異なるコード署名で再ビルドした場合によく発生します。接続を削除して認証情報を保存し直すか、Keychain Access で古い DockBridge 項目を削除してください。"
+          }
+        }
+      }
+    },
+    "Keychain is not available in the current app context. Rebuild from Xcode with your Development Team selected, or remove stale DockBridge entries in Keychain Access and save credentials again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keychain is not available in the current app context. Rebuild from Xcode with your Development Team selected, or remove stale DockBridge entries in Keychain Access and save credentials again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現在のアプリ環境では Keychain を利用できません。Xcode で Development Team を選択して再ビルドするか、Keychain Access で古い DockBridge 項目を削除して認証情報を保存し直してください。"
+          }
+        }
+      }
+    },
+    "Keychain operation failed (errno %lld). Ensure the app is signed with your Development Team in Xcode (Signing & Capabilities), then rebuild.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keychain operation failed (errno %lld). Ensure the app is signed with your Development Team in Xcode (Signing & Capabilities), then rebuild."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keychain 操作に失敗しました（errno %lld）。Xcode の「Signing & Capabilities」で Development Team による署名を確認してから再ビルドしてください。"
+          }
+        }
+      }
+    },
+    "Keychain operation failed with status %lld. Ensure the app is signed with your Development Team in Xcode, then rebuild.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keychain operation failed with status %lld. Ensure the app is signed with your Development Team in Xcode, then rebuild."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keychain 操作がステータス %lld で失敗しました。Xcode で Development Team による署名を確認してから再ビルドしてください。"
+          }
+        }
+      }
+    },
+    "Kind": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kind"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "種類"
+          }
+        }
+      }
+    },
+    "Master encryption key is missing from Keychain.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Master encryption key is missing from Keychain."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "マスター暗号化鍵が Keychain にありません。"
+          }
+        }
+      }
+    },
+    "Maximum concurrent in-flight SFTP WRITE requests (1 ... 256).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Maximum concurrent in-flight SFTP WRITE requests (1 ... 256)."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同時に処理中にできる SFTP WRITE リクエストの最大数です（1〜256）。"
+          }
+        }
+      }
+    },
+    "Modified": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modified"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更新日時"
+          }
+        }
+      }
+    },
+    "Move to Trash": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move to Trash"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ゴミ箱に入れる"
+          }
+        }
+      }
+    },
+    "New Connection…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Connection…"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新しい接続…"
+          }
+        }
+      }
+    },
+    "No importable Host blocks found. Match and Include sections are not expanded.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No importable Host blocks found. Match and Include sections are not expanded."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "読み込み可能な Host ブロックが見つかりません。Match および Include セクションは展開されません。"
+          }
+        }
+      }
+    },
+    "No items in this directory.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No items in this directory."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このディレクトリに項目はありません。"
+          }
+        }
+      }
+    },
+    "No key selected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No key selected"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "鍵が選択されていません"
+          }
+        }
+      }
+    },
+    "No profiles were imported; all %lld host alias(es) already exist.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No profiles were imported; all %lld host alias(es) already exist."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロファイルは読み込まれませんでした。%lld 件のホスト別名はすべて既に存在します。"
+          }
+        }
+      }
+    },
+    "Not connected": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not connected"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未接続"
+          }
+        }
+      }
+    },
+    "Not connected to a remote host": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not connected to a remote host"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモートホストに接続されていません"
+          }
+        }
+      }
+    },
+    "Notify when transfers finish": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notify when transfers finish"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "転送完了時に通知"
+          }
+        }
+      }
+    },
+    "Open Release Page": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open Release Page"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リリースページを開く"
+          }
+        }
+      }
+    },
+    "Open each of the %lld private-key profile(s) and use Browse… to grant file access.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open each of the %lld private-key profile(s) and use Browse… to grant file access."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 件の秘密鍵プロファイルをそれぞれ開き、「参照…」を使ってファイルへのアクセスを許可してください。"
+          }
+        }
+      }
+    },
+    "Permissions": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permissions"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アクセス権"
+          }
+        }
+      }
+    },
+    "Play notification sound": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Play notification sound"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通知音を再生"
+          }
+        }
+      }
+    },
+    "Preserved %lld unsynced external edit(s) in %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preserved %lld unsynced external edit(s) in %@."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未同期の外部編集 %1$lld 件を %2$@ に保持しました。"
+          }
+        }
+      }
+    },
+    "Private key": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Private key"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "秘密鍵"
+          }
+        }
+      }
+    },
+    "Profile trust signing key Keychain operation failed with status %lld.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Profile trust signing key Keychain operation failed with status %lld."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロファイル信頼用署名鍵の Keychain 操作がステータス %lld で失敗しました。"
+          }
+        }
+      }
+    },
+    "Refusing to follow symbolic link.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Refusing to follow symbolic link."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "シンボリックリンクの追跡を拒否しました。"
+          }
+        }
+      }
+    },
+    "Reject unless you intentionally changed the server key.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reject unless you intentionally changed the server key."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サーバー鍵を意図的に変更した場合を除き、拒否してください。"
+          }
+        }
+      }
+    },
+    "Rename Local Item": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rename Local Item"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローカル項目の名前を変更"
+          }
+        }
+      }
+    },
+    "Reset to Defaults": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset to Defaults"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "デフォルトに戻す"
+          }
+        }
+      }
+    },
+    "Restore all settings to their defaults (bookmarks are kept).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore all settings to their defaults (bookmarks are kept)."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべての設定をデフォルトに戻します（ブックマークは保持されます）。"
+          }
+        }
+      }
+    },
+    "Retry Upload": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retry Upload"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アップロードを再試行"
+          }
+        }
+      }
+    },
+    "SFTP read/write chunk size (4 KiB ... 8 MiB).": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SFTP read/write chunk size (4 KiB ... 8 MiB)."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SFTP の読み書きに使うチャンクサイズです（4 KiB〜8 MiB）。"
+          }
+        }
+      }
+    },
+    "SSH Config Import": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH Config Import"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH 設定の読み込み"
+          }
+        }
+      }
+    },
+    "Show Hidden Files": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Hidden Files"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "隠しファイルを表示"
+          }
+        }
+      }
+    },
+    "Size": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Size"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "サイズ"
+          }
+        }
+      }
+    },
+    "Skip This Version": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skip This Version"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このバージョンをスキップ"
+          }
+        }
+      }
+    },
+    "Skipped %lld existing alias(es), including %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skipped %lld existing alias(es), including %@."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%2$@ を含む既存の別名 %1$lld 件をスキップしました。"
+          }
+        }
+      }
+    },
+    "Stop All Watching": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop All Watching"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "すべての監視を停止"
+          }
+        }
+      }
+    },
+    "Stop Watching": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop Watching"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "監視を停止"
+          }
+        }
+      }
+    },
+    "Stopped watching %@. The unsynced local copy was preserved at %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopped watching %@. The unsynced local copy was preserved at %@."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ の監視を停止しました。未同期のローカルコピーは %2$@ に保持されています。"
+          }
+        }
+      }
+    },
+    "The edit was uploaded, but its recovery metadata could not be saved. The local copy remains at %@. %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The edit was uploaded, but its recovery metadata could not be saved. The local copy remains at %@. %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "編集内容はアップロードされましたが、復旧用メタデータを保存できませんでした。ローカルコピーは %1$@ に残っています。%2$@"
+          }
+        }
+      }
+    },
+    "The edited local file is temporarily unavailable at %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The edited local file is temporarily unavailable at %@."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "編集済みローカルファイルは現在 %1$@ で利用できません。"
+          }
+        }
+      }
+    },
+    "The host key for %@:%@ has changed. This may indicate a man-in-the-middle attack. Verify the new fingerprint with the server administrator before accepting.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The host key for %@:%@ has changed. This may indicate a man-in-the-middle attack. Verify the new fingerprint with the server administrator before accepting."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@:%2$@ のホスト鍵が変更されました。中間者攻撃の可能性があります。承認する前に、新しいフィンガープリントをサーバー管理者へ確認してください。"
+          }
+        }
+      }
+    },
+    "The name cannot be '.'/'..' or contain '/' or null characters.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The name cannot be '.'/'..' or contain '/' or null characters."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "名前を「.」または「..」にすることや、「/」またはヌル文字を含めることはできません。"
+          }
+        }
+      }
+    },
+    "The profile \"%@\" now points to %@. It previously used %@. If you did not make this change, restore the previous endpoint.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The profile \"%@\" now points to %@. It previously used %@. If you did not make this change, restore the previous endpoint."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロファイル「%1$@」の接続先が %2$@ に変更されています。以前は %3$@ を使用していました。この変更に心当たりがない場合は、以前の接続先へ戻してください。"
+          }
+        }
+      }
+    },
+    "This connection uses an RSA private key. RSA key authentication may be vulnerable to timing attacks (Marvin Attack). Prefer Ed25519 or ECDSA keys when possible.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This connection uses an RSA private key. RSA key authentication may be vulnerable to timing attacks (Marvin Attack). Prefer Ed25519 or ECDSA keys when possible."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この接続では RSA 秘密鍵を使用します。RSA 鍵認証はタイミング攻撃（Marvin Attack）の影響を受ける可能性があります。可能であれば Ed25519 または ECDSA 鍵を使用してください。"
+          }
+        }
+      }
+    },
+    "Transferring": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transferring"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "転送中"
+          }
+        }
+      }
+    },
+    "Unknown error": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown error"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不明なエラー"
+          }
+        }
+      }
+    },
+    "Upload failed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload failed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アップロード失敗"
+          }
+        }
+      }
+    },
+    "Upload pipeline depth: %lld": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload pipeline depth: %lld"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アップロードのパイプライン深度: %lld"
+          }
+        }
+      }
+    },
+    "Uploading": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uploading"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アップロード中"
+          }
+        }
+      }
+    },
+    "Waiting for connection": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for connection"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続待ち"
+          }
+        }
+      }
+    },
+    "Waiting for file": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for file"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイル待ち"
+          }
+        }
+      }
+    },
+    "Watching": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Watching"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "監視中"
+          }
+        }
+      }
+    },
+    "Watching %lld external edit(s)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Watching %lld external edit(s)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 件の外部編集を監視中"
+          }
+        }
+      }
+    },
+    "The authenticity of host %@:%@ can't be established.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The authenticity of host %@:%@ can't be established."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@:%2$@ の真正性を確認できません。"
+          }
+        }
+      }
+    },
+    " · %@/s": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " · %@/s"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " · %@/秒"
+          }
+        }
+      }
+    },
+    " · ETA %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " · ETA %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": " · 残り %@"
+          }
+        }
+      }
+    },
+    "Failed to read connection profiles: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to read connection profiles: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続プロファイルの読み込みに失敗しました: %@"
+          }
+        }
+      }
+    },
+    "Failed to save connection profiles: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to save connection profiles: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続プロファイルの保存に失敗しました: %@"
+          }
+        }
+      }
+    },
+    "Connection profiles could not be decrypted. The encrypted store or its Keychain master key may be corrupt. Remove ~/Library/Application Support/DockBridge/profiles.json and recreate profiles, or restore both profiles.json and Keychain items from backup.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connection profiles could not be decrypted. The encrypted store or its Keychain master key may be corrupt. Remove ~/Library/Application Support/DockBridge/profiles.json and recreate profiles, or restore both profiles.json and Keychain items from backup."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続プロファイルを復号できませんでした。暗号化された保存データまたは Keychain のマスター鍵が破損している可能性があります。~/Library/Application Support/DockBridge/profiles.json を削除してプロファイルを作り直すか、profiles.json と Keychain 項目の両方をバックアップから復元してください。"
+          }
+        }
+      }
+    },
+    "Connection profiles were created by a newer version of DockBridge and cannot be read by this build. Update the app instead of deleting profiles.json. (%@)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connection profiles were created by a newer version of DockBridge and cannot be read by this build. Update the app instead of deleting profiles.json. (%@)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続プロファイルは新しいバージョンの DockBridge で作成されているため、このビルドでは読み込めません。profiles.json を削除せず、アプリを更新してください。（%@）"
+          }
+        }
+      }
+    },
+    "Unsupported profiles.json format.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unsupported profiles.json format."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未対応の profiles.json 形式です。"
+          }
+        }
+      }
+    },
+    "Failed to read trusted profile endpoints: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to read trusted profile endpoints: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "信頼済みプロファイルの接続先を読み込めませんでした: %@"
+          }
+        }
+      }
+    },
+    "Failed to save trusted profile endpoints: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to save trusted profile endpoints: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "信頼済みプロファイルの接続先を保存できませんでした: %@"
+          }
+        }
+      }
+    },
+    "Trusted profile endpoints failed integrity verification. Re-confirm trust for your connection profiles.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trusted profile endpoints failed integrity verification. Re-confirm trust for your connection profiles."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "信頼済みプロファイル接続先の整合性検証に失敗しました。接続プロファイルの信頼を再確認してください。"
+          }
+        }
+      }
+    },
+    "Unrecognized trusted endpoints file format.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unrecognized trusted endpoints file format."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "信頼済み接続先ファイルの形式を認識できません。"
+          }
+        }
+      }
+    },
+    "Go to Local Path": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Go to Local Path"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ローカルパスへ移動"
+          }
+        }
+      }
+    },
+    "Go to Remote Path": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Go to Remote Path"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモートパスへ移動"
+          }
+        }
+      }
+    },
     "%lld active transfers": {
       "localizations": {
         "en": {

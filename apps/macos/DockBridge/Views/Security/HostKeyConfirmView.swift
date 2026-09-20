@@ -34,7 +34,11 @@ struct HostKeyConfirmView: View {
 
     private var unknownContent: some View {
         Group {
-            Text(String(localized: "The authenticity of host \(challenge.host):\(challenge.port.portLabel) can't be established."))
+            Text(String(
+                format: String(localized: "The authenticity of host %@:%@ can't be established."),
+                challenge.host,
+                challenge.port.portLabel
+            ))
                 .fixedSize(horizontal: false, vertical: true)
 
             DialogDetailSection(String(localized: "SHA256 Fingerprint")) {
@@ -44,31 +48,22 @@ struct HostKeyConfirmView: View {
             }
 
             DialogDetailSection(String(localized: "How to verify")) {
-                Text(
-                    """
-                    Compare the fingerprint above with a value the server \
-                    administrator or hosting provider publishes out-of-band \
-                    (their website, setup email, or console). Match the \
-                    characters exactly before accepting.
-                    """
-                )
+                Text(String(localized: "Compare the fingerprint above with a value the server administrator or hosting provider publishes out-of-band (their website, setup email, or console). Match the characters exactly before accepting."))
                 .font(.callout)
                 .foregroundStyle(.secondary)
             }
 
-            DialogFootnote(text: "Accept only if you trust this fingerprint.")
+            DialogFootnote(text: String(localized: "Accept only if you trust this fingerprint."))
         }
     }
 
     private var mismatchContent: some View {
         Group {
-            Text(
-                """
-                The host key for \(challenge.host):\(challenge.port.portLabel) has changed. \
-                This may indicate a man-in-the-middle attack. \
-                Verify the new fingerprint with the server administrator before accepting.
-                """
-            )
+            Text(String(
+                format: String(localized: "The host key for %@:%@ has changed. This may indicate a man-in-the-middle attack. Verify the new fingerprint with the server administrator before accepting."),
+                challenge.host,
+                challenge.port.portLabel
+            ))
             .fixedSize(horizontal: false, vertical: true)
 
             HStack(alignment: .top, spacing: 12) {
@@ -86,18 +81,12 @@ struct HostKeyConfirmView: View {
             }
 
             DialogDetailSection(String(localized: "How to verify")) {
-                Text(
-                    """
-                    Compare both fingerprints with a value the server \
-                    administrator confirms out-of-band. If you did not \
-                    change the server key, Reject to be safe.
-                    """
-                )
+                Text(String(localized: "Compare both fingerprints with a value the server administrator confirms out-of-band. If you did not change the server key, Reject to be safe."))
                 .font(.callout)
                 .foregroundStyle(.secondary)
             }
 
-            DialogFootnote(text: "Reject unless you intentionally changed the server key.")
+            DialogFootnote(text: String(localized: "Reject unless you intentionally changed the server key."))
         }
     }
 }

@@ -5,6 +5,10 @@ struct AppConfig: Codable, Equatable, Sendable {
     var sessionHealthCheckIntervalSecs: UInt64
     var transferRetryCount: UInt32
     var transferChunkSizeBytes: UInt64
+    var transferDownloadPipelineDepth: UInt64
+    var transferUploadPipelineDepth: UInt64 = 64
+    var sshInactivityTimeoutSecs: UInt64?
+    var sshKeepaliveIntervalSecs: UInt64
     var defaultLocalPath: String
     var defaultLocalBookmark: Data?
     var confirmBeforeDelete: Bool
@@ -18,12 +22,18 @@ struct AppConfig: Codable, Equatable, Sendable {
     var directoryWalkMaxDepth: UInt32
     var directoryWalkMaxTotalBytes: UInt64
     var transferOverwritePolicy: TransferOverwritePolicy = .replace
+    var notifyWhenTransfersFinish: Bool = true
+    var playTransferNotificationSound: Bool = true
 
     static let `default` = AppConfig(
         connectionTimeoutSecs: 30,
         sessionHealthCheckIntervalSecs: 10,
         transferRetryCount: 3,
         transferChunkSizeBytes: 262_144,
+        transferDownloadPipelineDepth: 64,
+        transferUploadPipelineDepth: 64,
+        sshInactivityTimeoutSecs: 600,
+        sshKeepaliveIntervalSecs: 30,
         defaultLocalPath: DefaultLocalPathResolver.containerHomeURL().path,
         defaultLocalBookmark: nil,
         confirmBeforeDelete: true,
@@ -36,17 +46,23 @@ struct AppConfig: Codable, Equatable, Sendable {
         directoryWalkMaxFiles: 100_000,
         directoryWalkMaxDepth: 64,
         directoryWalkMaxTotalBytes: 107_374_182_400,
-        transferOverwritePolicy: .replace
+        transferOverwritePolicy: .replace,
+        notifyWhenTransfersFinish: true,
+        playTransferNotificationSound: true
     )
 
-    /// Builds the UniFFI config record. `transferOverwritePolicy` is omitted because
-    /// `AppConfigRecord` does not yet include that field (Swift pre-check only for now).
+    /// Builds the UniFFI config record. The overwrite policy is passed per
+    /// transfer after the Swift UI resolves the `ask` behavior.
     func toRecord(knownHostsPath: String, opensshKnownHostsPath: String) -> AppConfigRecord {
         AppConfigRecord(
             connectionTimeoutSecs: connectionTimeoutSecs,
             sessionHealthCheckIntervalSecs: sessionHealthCheckIntervalSecs,
             transferRetryCount: transferRetryCount,
             transferChunkSizeBytes: transferChunkSizeBytes,
+            transferDownloadPipelineDepth: transferDownloadPipelineDepth,
+            transferUploadPipelineDepth: transferUploadPipelineDepth,
+            sshInactivityTimeoutSecs: sshInactivityTimeoutSecs,
+            sshKeepaliveIntervalSecs: sshKeepaliveIntervalSecs,
             knownHostsPath: knownHostsPath,
             opensshKnownHostsPath: opensshKnownHostsPath,
             mergeOpensshKnownHostsOnConnect: mergeOpensshKnownHostsOnConnect,

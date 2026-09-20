@@ -3,6 +3,9 @@ import CoreGraphics
 enum WindowLayout {
     static let mainMinWidth: CGFloat = 960
     static let mainMinHeight: CGFloat = 640
+    /// Larger default so the two-pane layout matches common desktop expectations.
+    static let mainDefaultWidth: CGFloat = 1280
+    static let mainDefaultHeight: CGFloat = 800
     static let sidebarMinWidth: CGFloat = 240
     static let paneMinWidth: CGFloat = 280
     static let panePadding: CGFloat = DesignTokens.Spacing.panePadding

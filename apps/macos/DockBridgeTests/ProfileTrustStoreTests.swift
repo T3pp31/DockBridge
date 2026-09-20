@@ -25,6 +25,23 @@ final class ProfileTrustStoreTests: XCTestCase {
         super.tearDown()
     }
 
+    func testConcurrentKeyCreationReturnsSameKey() async throws {
+        let keyStore = signingKeyStore!
+
+        let keys = try await withThrowingTaskGroup(of: Data.self) { group in
+            for _ in 0..<32 {
+                group.addTask {
+                    let key = try keyStore.loadOrCreateKey()
+                    return key.withUnsafeBytes { Data($0) }
+                }
+            }
+
+            return try await group.reduce(into: []) { $0.append($1) }
+        }
+
+        XCTAssertEqual(Set(keys).count, 1)
+    }
+
     func testDetectEndpointChangesRequiresInitialTrustConfirmation() throws {
         let profile = ConnectionProfile(
             name: "Test",
@@ -199,7 +216,7 @@ final class ProfileTrustStoreTests: XCTestCase {
             guard case ProfileTrustStoreError.readFailed(let message) = error else {
                 return XCTFail("Expected readFailed, got \(error)")
             }
-            XCTAssertTrue(message.contains("symbolic link"))
+            XCTAssertEqual(message, String(localized: "Refusing to follow symbolic link."))
         }
     }
 }

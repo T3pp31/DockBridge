@@ -4,6 +4,12 @@ import Foundation
 enum ProfileEncryptionError: LocalizedError {
     case encryptionFailed(String)
     case decryptionFailed(String)
+    /// The AES-GCM tag verified but the decrypted payload failed to decode as
+    /// `[StoredConnectionProfile]`. Usually means the file was written by a
+    /// NEWER app version (schema drift) or is otherwise structurally invalid —
+    /// NOT a Keychain/master-key problem, so the UI must not suggest deleting
+    /// the file.
+    case decodeFailed(String)
     case invalidEnvelope
 
     var errorDescription: String? {
@@ -12,8 +18,10 @@ enum ProfileEncryptionError: LocalizedError {
             return String(format: String(localized: "Failed to encrypt connection profiles: %@"), message)
         case .decryptionFailed(let message):
             return String(format: String(localized: "Failed to decrypt connection profiles: %@"), message)
+        case .decodeFailed(let message):
+            return String(format: String(localized: "Connection profiles could not be decoded: %@"), message)
         case .invalidEnvelope:
-            return "Connection profile store has an unsupported or corrupt encrypted format."
+            return String(localized: "Connection profile store has an unsupported or corrupt encrypted format.")
         }
     }
 }
@@ -53,7 +61,9 @@ final class ProfileEncryptionService: @unchecked Sendable {
             let key = try loadOrCreateMasterKey()
             let sealed = try AES.GCM.seal(plaintext, using: key)
             guard let combined = sealed.combined else {
-                throw ProfileEncryptionError.encryptionFailed("AES-GCM seal returned no combined payload.")
+                throw ProfileEncryptionError.encryptionFailed(
+                    String(localized: "AES-GCM seal returned no combined payload.")
+                )
             }
             return EncryptedProfilesEnvelope(payload: combined)
         } catch let error as ProfileEncryptionError {
@@ -74,7 +84,14 @@ final class ProfileEncryptionService: @unchecked Sendable {
             let plaintext = try AES.GCM.open(sealed, using: key)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            return try decoder.decode([StoredConnectionProfile].self, from: plaintext)
+            do {
+                return try decoder.decode([StoredConnectionProfile].self, from: plaintext)
+            } catch {
+                // Signature was valid; the payload itself is not the shape we
+                // expect. Distinguish this from a Keychain / tamper problem so
+                // the UI does not recommend deleting a possibly-valid newer file.
+                throw ProfileEncryptionError.decodeFailed(error.localizedDescription)
+            }
         } catch let error as ProfileEncryptionError {
             throw error
         } catch {
@@ -96,7 +113,7 @@ final class ProfileEncryptionService: @unchecked Sendable {
     private func requireMasterKey() throws -> SymmetricKey {
         guard let existing = try keychain.loadKeyData(account: Self.masterKeyAccount) else {
             throw ProfileEncryptionError.decryptionFailed(
-                "Master encryption key is missing from Keychain."
+                String(localized: "Master encryption key is missing from Keychain.")
             )
         }
         return SymmetricKey(data: existing)

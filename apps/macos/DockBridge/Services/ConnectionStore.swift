@@ -4,17 +4,30 @@ enum ConnectionStoreError: LocalizedError {
     case readFailed(String)
     case writeFailed(String)
     case corruptEncryptedStore
+    /// The decrypted payload decodes for verification but is not the shape
+    /// this build supports — usually written by a newer DockBridge (schema
+    /// drift). Do NOT suggest deleting the file.
+    case incompatibleSchema(String)
 
     var errorDescription: String? {
         switch self {
-        case .readFailed(let message): "Failed to read connection profiles: \(message)"
-        case .writeFailed(let message): "Failed to save connection profiles: \(message)"
+        case .readFailed(let message):
+            return String(
+                format: String(localized: "Failed to read connection profiles: %@"),
+                message
+            )
+        case .writeFailed(let message):
+            return String(
+                format: String(localized: "Failed to save connection profiles: %@"),
+                message
+            )
         case .corruptEncryptedStore:
-            """
-            Connection profiles could not be decrypted. The encrypted store or its Keychain \
-            master key may be corrupt. Remove ~/Library/Application Support/DockBridge/profiles.json \
-            and recreate profiles, or restore both profiles.json and Keychain items from backup.
-            """
+            return String(localized: "Connection profiles could not be decrypted. The encrypted store or its Keychain master key may be corrupt. Remove ~/Library/Application Support/DockBridge/profiles.json and recreate profiles, or restore both profiles.json and Keychain items from backup.")
+        case .incompatibleSchema(let message):
+            return String(
+                format: String(localized: "Connection profiles were created by a newer version of DockBridge and cannot be read by this build. Update the app instead of deleting profiles.json. (%@)"),
+                message
+            )
         }
     }
 }
@@ -166,6 +179,10 @@ final class ConnectionStore: @unchecked Sendable {
                 switch error {
                 case .invalidEnvelope, .decryptionFailed:
                     throw ConnectionStoreError.corruptEncryptedStore
+                case .decodeFailed(let message):
+                    // Signature verified; the payload shape is unexpected —
+                    // do not recommend deleting a possibly-newer valid file.
+                    throw ConnectionStoreError.incompatibleSchema(message)
                 case .encryptionFailed(let message):
                     throw ConnectionStoreError.readFailed(message)
                 }
@@ -177,6 +194,10 @@ final class ConnectionStore: @unchecked Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         if let legacyProfiles = try? decoder.decode([ConnectionProfile].self, from: data) {
+            // Keep a timestamped backup before the one-way legacy -> encrypted
+            // migration so the plaintext is recoverable if the master key is
+            // later lost.
+            try backupProfilesFileIfPresent()
             let stored = legacyProfiles.map(StoredConnectionProfile.init(from:))
             do {
                 try writeEncryptedProfiles(stored, updateTrust: false, sourceProfiles: legacyProfiles)
@@ -188,7 +209,26 @@ final class ConnectionStore: @unchecked Sendable {
             }
         }
 
-        throw ConnectionStoreError.readFailed("Unsupported profiles.json format.")
+        throw ConnectionStoreError.readFailed(
+            String(localized: "Unsupported profiles.json format.")
+        )
+    }
+
+    /// Copies `profiles.json` to `profiles.json.bak-<timestamp>` when the file
+    /// exists. Used before the legacy plaintext → encrypted migration.
+    private func backupProfilesFileIfPresent() throws {
+        let url = profilesURL
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        // Colon and '+' are both replaced so the stamp stays filesystem-safe
+        // on every platform (offset renders as e.g. `+09-00` otherwise).
+        let stamp = formatter.string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: "+", with: "-")
+        let backup = url.deletingLastPathComponent()
+            .appendingPathComponent("profiles.json.bak-\(stamp)", isDirectory: false)
+        try FileManager.default.copyItem(at: url, to: backup)
     }
 
     private func writeEncryptedProfiles(

@@ -204,7 +204,7 @@ final class ConnectionStoreTests: XCTestCase {
             guard case ConnectionStoreError.readFailed(let message) = error else {
                 return XCTFail("Expected readFailed, got \(error)")
             }
-            XCTAssertTrue(message.contains("symbolic link"))
+            XCTAssertEqual(message, String(localized: "Refusing to follow symbolic link."))
         }
     }
 

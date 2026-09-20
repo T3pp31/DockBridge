@@ -54,13 +54,14 @@ struct ConnectionFormView: View {
                     if profile.authType == .password {
                         SecureField(String(localized: "Password"), text: $password.text)
                     } else {
-                        HStack {
-                            TextField(String(localized: "Private key path"), text: Binding(
-                                get: { profile.privateKeyPath ?? "" },
-                                set: { profile.privateKeyPath = $0.isEmpty ? nil : $0 }
-                            ))
-                            .disabled(true)
-                            Button(String(localized: "Browse…")) { pickPrivateKey() }
+                        LabeledContent(String(localized: "Private key")) {
+                            HStack {
+                                Text(profile.privateKeyPath ?? String(localized: "No key selected"))
+                                    .textSelection(.enabled)
+                                    .foregroundStyle(profile.privateKeyPath == nil ? .secondary : .primary)
+                                Spacer()
+                                Button(String(localized: "Browse…")) { pickPrivateKey() }
+                            }
                         }
                         if profile.privateKeyBookmark == nil {
                             Text(String(localized: "Use Browse… to grant access to the private key file."))
@@ -156,7 +157,10 @@ struct ConnectionFormView: View {
         } catch {
             profile.privateKeyPath = nil
             profile.privateKeyBookmark = nil
-            pickerErrorMessage = "\(error.localizedDescription) Use Browse… to try again."
+            pickerErrorMessage = String(
+                format: String(localized: "%@ Use Browse… to try again."),
+                error.localizedDescription
+            )
         }
     }
 }

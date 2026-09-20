@@ -18,8 +18,14 @@ extension RemoteFileRecord: Identifiable {
             name: "..",
             path: parent,
             isDirectory: true,
+            isSymlink: false,
             size: 0,
-            modifiedAtSecs: nil
+            modifiedAtSecs: nil,
+            permissions: nil,
+            uid: nil,
+            gid: nil,
+            symlinkTarget: nil,
+            symlinkTargetIsDir: nil
         )
     }
 }
@@ -36,11 +42,21 @@ extension DockBridgeError {
 
     static func isConnectionLostMessage(_ message: String) -> Bool {
         let lowercased = message.lowercased()
-        return lowercased.contains("session closed")
+        if lowercased.contains("session closed")
             || lowercased.contains("connection reset")
             || lowercased.contains("broken pipe")
             || lowercased.contains("connection refused")
-            || lowercased.contains("eof")
+            || lowercased.contains("sender dropped")
+            || lowercased.contains("channel closed")
+            || lowercased.contains("recv error") {
+            return true
+        }
+        // "eof" only as its own token (not inside user-controlled path segments)
+        // so geoffrey / thereof.txt do not tear down a live session.
+        let tokens = lowercased.split {
+            !$0.isLetter && !$0.isNumber && $0 != "_"
+        }
+        return tokens.contains(where: { $0 == "eof" || $0 == "eof," })
     }
 
     /// Detects SSH authentication / private-key unlock failures from raw bridge messages.
@@ -68,45 +84,43 @@ extension DockBridgeError {
         let lowercased = message.lowercased()
 
         if lowercased.contains("known hosts") || lowercased.contains("known_hosts") {
-            return """
-            Unable to load the host key store. Quit the app, back up or remove known_hosts.json, then reconnect.
-            """
+            return String(localized: "Unable to load the host key store. Quit the app, back up or remove known_hosts.json, then reconnect.")
         }
 
         if lowercased.contains("host key mismatch") || lowercased.contains("mismatch") {
-            return "The server's identity has changed. Disconnect and verify with your server administrator."
+            return String(localized: "The server's identity has changed. Disconnect and verify with your server administrator.")
         }
 
         if lowercased.contains("host key rejected") {
-            return "Connection aborted because the host key was not approved."
+            return String(localized: "Connection aborted because the host key was not approved.")
         }
 
         if lowercased.contains("authentication") || lowercased.contains("auth failed") {
-            return "Check the username and password."
+            return String(localized: "Check the username and password.")
         }
 
         if lowercased.contains("timed out") || lowercased.contains("timeout") {
-            return "Check the host, port, and network connection."
+            return String(localized: "Check the host, port, and network connection.")
         }
 
         if lowercased.contains("session closed") {
-            return "The connection was closed. Reconnect and try again."
+            return String(localized: "The connection was closed. Reconnect and try again.")
         }
 
         if lowercased.contains("permission denied") {
-            return "You do not have write permission on the remote side. Check the remote working directory."
+            return String(localized: "You do not have write permission on the remote side. Check the remote working directory.")
         }
 
         if lowercased.contains("failed to create directory") {
-            return "Unable to create the remote working directory. Check the path and write permissions."
+            return String(localized: "Unable to create the remote working directory. Check the path and write permissions.")
         }
 
         if lowercased.contains("failed to upload") && lowercased.contains("no such file") {
-            return "The remote destination directory does not exist. Open a valid directory in the remote pane and try again."
+            return String(localized: "The remote destination directory does not exist. Open a valid directory in the remote pane and try again.")
         }
 
         if lowercased.contains("not found") {
-            return "The file or directory was not found."
+            return String(localized: "The file or directory was not found.")
         }
 
         return message
