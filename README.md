@@ -40,6 +40,24 @@ printf '%s\n' "$PASSWORD" | cargo run -q -p dockbridge-cli -- list \
   --host 127.0.0.1 --user demo --password-stdin --path upload
 ```
 
+### CLI private-key authentication
+
+For servers that only allow key authentication (`PasswordAuthentication no`), use `--identity` (short `-i`). `~` in the path is expanded to the home directory:
+
+```bash
+cargo run -q -p dockbridge-cli -- list \
+  --host 127.0.0.1 --user demo --identity ~/.ssh/id_ed25519 --path upload
+```
+
+Encrypted keys are unlocked with `--passphrase-stdin` (which reads from stdin exactly like `--password-stdin` and reuses the same zeroize-on-drop handling):
+
+```bash
+printf '%s\n' "$KEY_PASSPHRASE" | cargo run -q -p dockbridge-cli -- list \
+  --host 127.0.0.1 --user demo --identity ~/.ssh/id_ed25519 --passphrase-stdin
+```
+
+`--identity` is mutually exclusive with `--password-stdin`. Keys whose algorithm is outside the supported set (ed25519, ec/ecdsa, rsa) are rejected with a clear error before any connection is attempted.
+
 **Development builds** (`cargo build` / `cargo run` without extra features) include `--password` for local testing. Passwords on the command line may appear in shell history and process listings (CWE-214). In CI and release builds, the CLI prints a warning when `--password` is used.
 
 **Release builds** (`.github/workflows/release.yml`) compile the CLI with `--features disable-cli-password`, which removes `--password` at compile time. Release artifacts accept only `--password-stdin`. To reproduce a release build locally:
@@ -152,13 +170,16 @@ Swift bindings were generated from a different library than the one linked into 
 ## Project layout
 
 ```text
-crates/core/     Rust SFTP core
-crates/uniffi/   UniFFI bridge
-crates/cli/      Development CLI
-apps/macos/      SwiftUI macOS app
-config/          CLI default configuration
-docs/            Product and architecture docs
-scripts/         Build helpers
+crates/core/       Rust SFTP core
+crates/uniffi/     UniFFI bridge
+crates/cli/        Development CLI
+apps/macos/        SwiftUI macOS app
+config/            CLI default configuration
+docs/              Product / architecture / security docs
+scripts/           Build, packaging, and verification helpers (e2e-verify.sh, verify-*.sh)
+website/           GitHub Pages download site
+.cargo/            Rust toolchain and cargo-audit ignore policy
+.github/           Workflows, issue/PR templates, SECURITY.md, CONTRIBUTING.md
 ```
 
 ## License

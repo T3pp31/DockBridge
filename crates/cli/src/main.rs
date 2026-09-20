@@ -1,15 +1,15 @@
 mod password;
 
 use std::io::{BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use dockbridge_core::{
-    AppConfig, AppError, AuthType, ConnectionError, ConnectionProfile, HostKeyPrompt,
-    KnownHostsManager, SecretPassword, SecurityError, SftpClient, SftpError, SshSession,
-    TransferError, TransferManager,
+    expand_tilde, inspect_private_key_algorithm, AppConfig, AppError, AuthType, ConnectionError,
+    ConnectionProfile, HostKeyPrompt, KnownHostsManager, PrivateKeyAlgorithm, SecretPassword,
+    SecurityError, SftpClient, SftpError, SshSession, TransferError, TransferManager,
 };
 use serde::Serialize;
 use tokio::sync::Mutex;
@@ -27,8 +27,11 @@ const EXIT_CANCELLED: u8 = 6;
 #[cfg(feature = "disable-cli-password")]
 const AFTER_HELP: &str = "\
 Authentication:\n  \
-Use --password-stdin for scripts, CI, and production. Example:\n  \
+Use --password-stdin for scripts, CI, and production, or authenticate with a\n  \
+private key via --identity (add --passphrase-stdin for an encrypted key).\n  \
+Examples:\n  \
   printf '%s\\n' \"$PASSWORD\" | dockbridge list --host HOST --user USER --password-stdin\n\n\
+  dockbridge list --host HOST --user USER --identity ~/.ssh/id_ed25519\n\n\
 Host key verification (--host-key-policy):\n  \
   ask         prompt on /dev/tty when a key is unknown or changed (default)\n  \
   accept-new  trust unknown keys automatically, still reject changed keys\n  \
@@ -45,8 +48,11 @@ Exit codes:\n  \
 #[cfg(not(feature = "disable-cli-password"))]
 const AFTER_HELP: &str = "\
 Authentication:\n  \
-Prefer --password-stdin for scripts, CI, and production. Example:\n  \
-  printf '%s\\n' \"$PASSWORD\" | dockbridge list --host HOST --user USER --password-stdin\n\n  \
+Prefer --password-stdin for scripts, CI, and production, or authenticate with\n  \
+a private key via --identity (add --passphrase-stdin for an encrypted key).\n  \
+Examples:\n  \
+  printf '%s\\n' \"$PASSWORD\" | dockbridge list --host HOST --user USER --password-stdin\n  \
+  dockbridge list --host HOST --user USER --identity ~/.ssh/id_ed25519\n\n  \
 --password is for local development and testing only. Passwords passed on the \
 command line may appear in argv, shell history, and process listings (CWE-214).\n\n\
 Host key verification (--host-key-policy):\n  \
@@ -65,13 +71,16 @@ Exit codes:\n  \
 #[derive(Parser, Debug)]
 #[command(
     name = "dockbridge",
+    version = env!("CARGO_PKG_VERSION"),
     about = "DockBridge SFTP CLI",
     after_help = AFTER_HELP
 )]
 struct Cli {
-    /// Path to TOML config file.
-    #[arg(long, default_value = "config/default.toml")]
-    config: PathBuf,
+    /// Path to TOML config file. When omitted, DockBridge searches
+    /// `$DOCKBRIDGE_CONFIG`, `$XDG_CONFIG_HOME/dockbridge/config.toml`, and
+    /// `~/.dockbridge/config.toml` before falling back to the built-in defaults.
+    #[arg(long)]
+    config: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Commands,
@@ -162,8 +171,14 @@ struct ConnectionArgs {
     #[arg(long, conflicts_with = "password_stdin")]
     password: Option<String>,
     /// Read password from standard input (recommended for scripts, CI, and production).
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["identity", "passphrase_stdin"])]
     password_stdin: bool,
+    /// Authenticate with a private key file. `~` is expanded to the home directory.
+    #[arg(short = 'i', long)]
+    identity: Option<PathBuf>,
+    /// Read the private key passphrase from standard input instead of prompting.
+    #[arg(long, requires = "identity")]
+    passphrase_stdin: bool,
     /// How to handle an unknown or changed host key.
     #[arg(long, value_enum, default_value = "ask")]
     host_key_policy: HostKeyPolicy,
@@ -171,6 +186,35 @@ struct ConnectionArgs {
 
 impl ConnectionArgs {
     fn into_profile(self) -> anyhow::Result<ConnectionProfile> {
+        if let Some(key_path) = self.identity {
+            // --identity conflicts with --password-stdin / --passphrase-stdin
+            // are already enforced declaratively by clap (conflicts_with_all).
+            // Read the passphrase first so encrypted keys can be inspected and,
+            // later, unlocked by the core authenticator.
+            let passphrase = password::resolve_passphrase(self.passphrase_stdin)?
+                .map(|value| SecretPassword::new(value.as_str()));
+            let key_path = expand_tilde(&key_path);
+            let algorithm =
+                inspect_private_key_algorithm(&key_path, passphrase.as_ref().map(|p| p.expose()))?;
+            if !is_supported_key_algorithm(&algorithm) {
+                anyhow::bail!(
+                    "private key at '{}' uses unsupported algorithm {:?}; \
+                     supported algorithms are ed25519, ec (ecdsa), and rsa",
+                    key_path.display(),
+                    algorithm
+                );
+            }
+            return Ok(ConnectionProfile {
+                host: self.host,
+                port: self.port,
+                username: self.user,
+                auth: AuthType::PrivateKey {
+                    key_path,
+                    passphrase,
+                },
+            });
+        }
+
         let password = password::resolve_password(
             #[cfg(not(feature = "disable-cli-password"))]
             self.password,
@@ -207,6 +251,13 @@ enum OutputFormat {
 
 struct CliHostKeyPrompt {
     policy: HostKeyPolicy,
+}
+
+/// Whether the CLI supports authenticating with a key algorithm. Keys outside
+/// this allow-list are rejected with a clear error before any network I/O.
+fn is_supported_key_algorithm(algorithm: &PrivateKeyAlgorithm) -> bool {
+    use PrivateKeyAlgorithm::{Ecdsa, Ed25519, Rsa};
+    matches!(algorithm, Ed25519 | Ecdsa | Rsa)
 }
 
 impl HostKeyPrompt for CliHostKeyPrompt {
@@ -311,7 +362,7 @@ async fn run() -> ExitCode {
 }
 
 async fn execute(cli: Cli) -> anyhow::Result<()> {
-    let config = load_config(&cli.config)?;
+    let config = load_config(cli.config.as_deref())?;
     let known_hosts = Arc::new(Mutex::new(KnownHostsManager::load(
         config.known_hosts_path(),
     )?));
@@ -491,12 +542,62 @@ fn exit_code_for_error(err: &anyhow::Error) -> u8 {
     EXIT_OTHER
 }
 
-fn load_config(path: &PathBuf) -> anyhow::Result<AppConfig> {
-    if path.exists() {
-        AppConfig::from_toml_file(path).map_err(Into::into)
-    } else {
-        Ok(AppConfig::default())
+/// Loads CLI configuration from an explicitly provided path, a well-known
+/// config location, or the built-in defaults.
+///
+/// When `--config` is given explicitly, a missing file is an error
+/// (`ConfigError::NotFound`). When omitted, `$DOCKBRIDGE_CONFIG`,
+/// `$XDG_CONFIG_HOME/dockbridge/config.toml`, and `~/.dockbridge/config.toml`
+/// are searched in that order; the chosen source (or the built-in default) is
+/// logged.
+fn load_config(explicit: Option<&Path>) -> anyhow::Result<AppConfig> {
+    if let Some(path) = explicit {
+        return AppConfig::from_toml_file(path).map_err(Into::into);
     }
+
+    // An explicitly set $DOCKBRIDGE_CONFIG is treated like --config: a missing
+    // file is an error rather than a silent fall-back to other locations.
+    if let Some(path) = std::env::var_os("DOCKBRIDGE_CONFIG") {
+        let path = PathBuf::from(path);
+        tracing::info!(path = %path.display(), "using $DOCKBRIDGE_CONFIG configuration file");
+        return AppConfig::from_toml_file(&path).map_err(Into::into);
+    }
+
+    let candidates = [
+        // XDG_CONFIG_HOME must be absolute (per the XDG Base Directory spec);
+        // a relative value would silently depend on the CWD.
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .map(|dir| dir.join("dockbridge/config.toml")),
+        home_dir_path().map(|home| home.join(".dockbridge/config.toml")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+
+    for candidate in &candidates {
+        tracing::debug!(path = %candidate.display(), "checking configuration file");
+        if candidate.exists() {
+            tracing::info!(path = %candidate.display(), "using configuration file");
+            return AppConfig::from_toml_file(candidate).map_err(Into::into);
+        }
+    }
+
+    tracing::info!(
+        paths = ?candidates,
+        "no configuration file found; using built-in default configuration"
+    );
+    Ok(AppConfig::default())
+}
+
+fn home_dir_path() -> Option<PathBuf> {
+    let home = if cfg!(target_os = "windows") {
+        std::env::var_os("USERPROFILE")
+    } else {
+        std::env::var_os("HOME")
+    };
+    home.map(PathBuf::from).filter(|p| p.is_absolute())
 }
 
 async fn connect(
@@ -520,10 +621,7 @@ async fn connect(
 /// Fails the whole command loudly rather than silently misinterpreting a file
 /// path as a directory (which could place files in an unexpected location or
 /// error only after transfer began).
-async fn reject_remote_file_destination(
-    session: &SshSession,
-    remote: &str,
-) -> anyhow::Result<()> {
+async fn reject_remote_file_destination(session: &SshSession, remote: &str) -> anyhow::Result<()> {
     let client = SftpClient::new(session);
     // None = path does not exist (the directory will be created); Some(true) =
     // directory; Some(false) = existing non-directory which must be rejected.
@@ -537,14 +635,9 @@ async fn reject_remote_file_destination(
 
 #[cfg(test)]
 mod tests {
-    use dockbridge_core::{
-        AppError, AuthError, ConnectionError, SecurityError, SftpError, TransferError,
-    };
-
-    use super::{
-        exit_code_for_error, json_listing, EXIT_AUTH, EXIT_CANCELLED, EXIT_HOST_KEY, EXIT_OTHER,
-        EXIT_TRANSFER, EXIT_USAGE_CONFIG,
-    };
+    use super::*;
+    use dockbridge_core::AuthError;
+    use serial_test::serial;
 
     #[test]
     fn exit_code_mapping_covers_categories() {
@@ -672,5 +765,174 @@ mod tests {
             assert_eq!(HostKeyPolicy::from_str(text, true).ok(), Some(expected));
         }
         assert!(HostKeyPolicy::from_str("bogus", true).is_err());
+    }
+
+    // Snapshot the three env vars the search reads, run `f`, then restore.
+    // Tests mutating process-wide env are also marked #[serial].
+    fn with_config_env(f: impl FnOnce()) {
+        const VARS: [&str; 3] = ["DOCKBRIDGE_CONFIG", "XDG_CONFIG_HOME", "HOME"];
+        let saved: Vec<(&str, Option<std::ffi::OsString>)> = VARS
+            .iter()
+            .map(|name| (*name, std::env::var_os(name)))
+            .collect();
+        for (name, _) in &saved {
+            std::env::remove_var(name);
+        }
+
+        struct Guard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                for (name, value) in self.0.drain(..).rev() {
+                    match value {
+                        Some(v) => std::env::set_var(name, v),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+        let _guard = Guard(saved);
+
+        f();
+    }
+
+    fn app_config_matches_default(config: &AppConfig) -> bool {
+        config.connection_timeout_secs == AppConfig::default().connection_timeout_secs
+            && config.transfer_retry_count == AppConfig::default().transfer_retry_count
+    }
+
+    fn write_temp_toml(dir: &Path, contents: &str) -> PathBuf {
+        let path = dir.join("config.toml");
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    fn write_temp_config(dir: &Path, timeout: u32, retry: u32) -> PathBuf {
+        write_temp_toml(
+            dir,
+            &format!(
+                "connection_timeout_secs = {timeout}\n\
+                 session_health_check_interval_secs = 10\n\
+                 transfer_retry_count = {retry}\n\
+                 transfer_chunk_size_bytes = 262144\n\
+                 transfer_download_pipeline_depth = 64\n\
+                 known_hosts_path = \"{}/known_hosts.json\"\n\
+                 openssh_known_hosts_path = \"/dev/null\"\n\
+                 merge_openssh_known_hosts_on_connect = false\n\
+                 known_hosts_strict_mode = true\n\
+                 fail_connect_on_openssh_merge_error = false\n\
+                 directory_walk_max_files = 100000\n\
+                 directory_walk_max_depth = 64\n\
+                 directory_walk_max_total_bytes = 107374182400\n",
+                dir.display()
+            ),
+        )
+    }
+
+    #[test]
+    fn explicit_missing_config_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.toml");
+        let err = load_config(Some(&missing)).unwrap_err();
+        assert!(
+            err.to_string().contains("not found") || err.to_string().contains("No such file"),
+            "expected a not-found error, got: {err}"
+        );
+    }
+
+    #[serial]
+    #[test]
+    fn environment_missing_config_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.toml");
+        with_config_env(|| {
+            std::env::set_var("DOCKBRIDGE_CONFIG", missing.as_os_str());
+            let err = load_config(None).unwrap_err();
+            assert!(
+                err.to_string().contains("not found"),
+                "expected a not-found error, got: {err}"
+            );
+        });
+    }
+
+    #[serial]
+    #[test]
+    fn environment_config_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_temp_config(dir.path(), 42, 7);
+        with_config_env(|| {
+            std::env::set_var("DOCKBRIDGE_CONFIG", path.as_os_str());
+            let config = load_config(None).unwrap();
+            assert_eq!(config.connection_timeout_secs, 42);
+            assert_eq!(config.transfer_retry_count, 7);
+        });
+    }
+
+    #[serial]
+    #[test]
+    fn xdg_config_home_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join("dockbridge");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        write_temp_config(&config_dir, 99, 3);
+
+        with_config_env(|| {
+            std::env::set_var("XDG_CONFIG_HOME", dir.path().as_os_str());
+            let config = load_config(None).unwrap();
+            assert_eq!(config.connection_timeout_secs, 99);
+        });
+    }
+
+    #[serial]
+    #[test]
+    fn relative_xdg_config_home_is_ignored() {
+        // A relative XDG_CONFIG_HOME must not be used (spec requires absolute).
+        with_config_env(|| {
+            std::env::set_var("XDG_CONFIG_HOME", "relative/path");
+            let config = load_config(None).unwrap();
+            assert!(
+                app_config_matches_default(&config),
+                "relative XDG_CONFIG_HOME must be ignored"
+            );
+        });
+    }
+
+    #[serial]
+    #[test]
+    fn home_config_is_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".dockbridge");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        write_temp_config(&config_dir, 123, 3);
+
+        with_config_env(|| {
+            std::env::set_var("HOME", dir.path().as_os_str());
+            let config = load_config(None).unwrap();
+            assert_eq!(config.connection_timeout_secs, 123);
+        });
+    }
+
+    #[serial]
+    #[test]
+    fn no_config_falls_back_to_default() {
+        let dir = tempfile::tempdir().unwrap();
+        with_config_env(|| {
+            let config = load_config(None).unwrap();
+            assert!(app_config_matches_default(&config));
+        });
+        drop(dir);
+    }
+
+    #[test]
+    fn supported_key_algorithms_are_accepted() {
+        assert!(is_supported_key_algorithm(&PrivateKeyAlgorithm::Ed25519));
+        assert!(is_supported_key_algorithm(&PrivateKeyAlgorithm::Ecdsa));
+        assert!(is_supported_key_algorithm(&PrivateKeyAlgorithm::Rsa));
+    }
+
+    #[test]
+    fn unknown_key_algorithms_are_rejected() {
+        assert!(!is_supported_key_algorithm(&PrivateKeyAlgorithm::Other(
+            "dss".to_string()
+        )));
     }
 }
