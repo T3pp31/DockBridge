@@ -671,6 +671,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
         let task = TransferTaskRecord(
             id: 1,
+            sessionId: 1,
             direction: .upload,
             localPath: "/local/a.bin",
             remotePath: "/remote/a.bin",

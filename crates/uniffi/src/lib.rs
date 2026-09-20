@@ -177,6 +177,8 @@ pub enum PrivateKeyAlgorithmRecord {
 #[derive(uniffi::Record)]
 pub struct TransferTaskRecord {
     pub id: u64,
+    /// ID of the SSH session that enqueued this transfer.
+    pub session_id: u64,
     pub direction: TransferDirectionRecord,
     pub local_path: String,
     pub remote_path: String,
@@ -565,8 +567,9 @@ impl DockBridgeClient {
                     })?
                 };
                 transfer_manager
-                    .enqueue_upload_entry_with_policy(
+                    .enqueue_upload_entry_for_session_with_policy(
                         session.as_ref(),
+                        session_id,
                         &local_path,
                         remote_directory,
                         overwrite_policy,
@@ -599,8 +602,9 @@ impl DockBridgeClient {
                     })?
                 };
                 transfer_manager
-                    .enqueue_download_entry_with_policy(
+                    .enqueue_download_entry_for_session_with_policy(
                         session.as_ref(),
+                        session_id,
                         remote_path,
                         &local_directory,
                         overwrite_policy,
@@ -893,6 +897,7 @@ fn to_remote_file_record(file: RemoteFile) -> RemoteFileRecord {
 fn to_transfer_task_record(task: TransferTask) -> TransferTaskRecord {
     TransferTaskRecord {
         id: task.id,
+        session_id: task.session_id,
         direction: match task.direction {
             TransferDirection::Upload => TransferDirectionRecord::Upload,
             TransferDirection::Download => TransferDirectionRecord::Download,
@@ -950,6 +955,7 @@ mod tests {
     fn task(status: TransferStatus) -> TransferTask {
         TransferTask {
             id: 1,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/local.txt"),
             remote_path: "/remote.txt".to_string(),
@@ -993,6 +999,7 @@ mod tests {
         // When: converted to TransferTaskRecord
         // Then: directions round-trip to the correct record variants
         let upload = to_transfer_task_record(task(TransferStatus::Pending));
+        assert_eq!(upload.session_id, 1);
         assert!(
             std::mem::discriminant(&upload.direction)
                 == std::mem::discriminant(&TransferDirectionRecord::Upload)

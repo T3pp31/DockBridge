@@ -25,12 +25,34 @@ final class TransferQueueViewModel: ObservableObject {
     }
 
     private let bridge: any RemoteBridging
+    /// Rust-side session ID whose transfer tasks this queue shows.
+    ///
+    /// When set, only tasks belonging to that session are surfaced (the
+    /// transfer queue is global in the Rust engine, so each window/tab filters
+    /// to its own session). `nil` shows all sessions (legacy behavior).
+    var sessionId: UInt64? {
+        didSet {
+            guard sessionId != oldValue else { return }
+            // Never leave tasks from the previously selected session visible
+            // while waiting for the next poll.
+            tasks = []
+            progressSamples.removeAll()
+            transferSpeeds.removeAll()
+        }
+    }
     private var refreshTask: Task<Void, Never>?
     private var progressSamples: [UInt64: (bytes: UInt64, date: Date)] = [:]
     private var transferSpeeds: [UInt64: Double] = [:]
 
     init(bridge: any RemoteBridging) {
         self.bridge = bridge
+    }
+
+    /// Returns tasks filtered to this queue's session (or all when nil).
+    /// Internal so the session-scoping behavior can be unit-tested.
+    func filteredTasks(from fetched: [TransferTaskRecord]) -> [TransferTaskRecord] {
+        guard let sessionId else { return fetched }
+        return fetched.filter { $0.sessionId == sessionId }
     }
 
     func startPolling() {
@@ -74,9 +96,10 @@ final class TransferQueueViewModel: ObservableObject {
                 transferSpeeds.removeAll()
                 return
             }
-            updateProgressSamples(for: fetched)
-            if fetched != tasks {
-                tasks = fetched
+            let sessionTasks = filteredTasks(from: fetched)
+            updateProgressSamples(for: sessionTasks)
+            if sessionTasks != tasks {
+                tasks = sessionTasks
             }
             if errorMessage != nil {
                 errorMessage = nil

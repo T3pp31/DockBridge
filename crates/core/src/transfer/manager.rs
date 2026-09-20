@@ -38,6 +38,8 @@ pub enum TransferStatus {
 #[derive(Debug, Clone)]
 pub struct TransferTask {
     pub id: u64,
+    /// ID of the SSH session that enqueued this transfer.
+    pub session_id: u64,
     pub direction: TransferDirection,
     pub local_path: PathBuf,
     pub remote_path: String,
@@ -190,8 +192,9 @@ impl TransferManager {
 
         match task.direction {
             TransferDirection::Upload => {
-                self.enqueue_upload_with_policy(
+                self.enqueue_upload_for_session_with_policy(
                     session,
+                    task.session_id,
                     &task.local_path,
                     &task.remote_path,
                     overwrite_policy,
@@ -199,8 +202,9 @@ impl TransferManager {
                 .await
             }
             TransferDirection::Download => {
-                self.enqueue_download_with_policy(
+                self.enqueue_download_for_session_with_policy(
                     session,
+                    task.session_id,
                     &task.remote_path,
                     &task.local_path,
                     overwrite_policy,
@@ -438,8 +442,21 @@ impl TransferManager {
         local_path: impl AsRef<Path>,
         remote_path: impl Into<String>,
     ) -> Result<TransferTask, TransferError> {
-        self.enqueue_upload_with_policy(
+        self.enqueue_upload_for_session(session, 0, local_path, remote_path)
+            .await
+    }
+
+    /// Enqueues an upload and associates it with the originating SSH session.
+    pub async fn enqueue_upload_for_session(
+        &self,
+        session: &SshSession,
+        session_id: u64,
+        local_path: impl AsRef<Path>,
+        remote_path: impl Into<String>,
+    ) -> Result<TransferTask, TransferError> {
+        self.enqueue_upload_for_session_with_policy(
             session,
+            session_id,
             local_path,
             remote_path,
             TransferOverwritePolicy::default(),
@@ -454,7 +471,26 @@ impl TransferManager {
         remote_path: impl Into<String>,
         overwrite_policy: TransferOverwritePolicy,
     ) -> Result<TransferTask, TransferError> {
+        self.enqueue_upload_for_session_with_policy(
+            session,
+            0,
+            local_path,
+            remote_path,
+            overwrite_policy,
+        )
+        .await
+    }
+
+    pub async fn enqueue_upload_for_session_with_policy(
+        &self,
+        session: &SshSession,
+        session_id: u64,
+        local_path: impl AsRef<Path>,
+        remote_path: impl Into<String>,
+        overwrite_policy: TransferOverwritePolicy,
+    ) -> Result<TransferTask, TransferError> {
         let task = self.make_task(
+            session_id,
             TransferDirection::Upload,
             local_path.as_ref(),
             &remote_path.into(),
@@ -465,12 +501,14 @@ impl TransferManager {
     /// Builds a Pending task without registering it.
     fn make_task(
         &self,
+        session_id: u64,
         direction: TransferDirection,
         local_path: &Path,
         remote_path: &str,
     ) -> TransferTask {
         TransferTask {
             id: self.next_id.fetch_add(1, Ordering::Relaxed),
+            session_id,
             direction,
             local_path: local_path.to_path_buf(),
             remote_path: remote_path.to_string(),
@@ -525,8 +563,21 @@ impl TransferManager {
         remote_path: impl Into<String>,
         local_path: impl AsRef<Path>,
     ) -> Result<TransferTask, TransferError> {
-        self.enqueue_download_with_policy(
+        self.enqueue_download_for_session(session, 0, remote_path, local_path)
+            .await
+    }
+
+    /// Enqueues a download and associates it with the originating SSH session.
+    pub async fn enqueue_download_for_session(
+        &self,
+        session: &SshSession,
+        session_id: u64,
+        remote_path: impl Into<String>,
+        local_path: impl AsRef<Path>,
+    ) -> Result<TransferTask, TransferError> {
+        self.enqueue_download_for_session_with_policy(
             session,
+            session_id,
             remote_path,
             local_path,
             TransferOverwritePolicy::default(),
@@ -541,7 +592,26 @@ impl TransferManager {
         local_path: impl AsRef<Path>,
         overwrite_policy: TransferOverwritePolicy,
     ) -> Result<TransferTask, TransferError> {
+        self.enqueue_download_for_session_with_policy(
+            session,
+            0,
+            remote_path,
+            local_path,
+            overwrite_policy,
+        )
+        .await
+    }
+
+    pub async fn enqueue_download_for_session_with_policy(
+        &self,
+        session: &SshSession,
+        session_id: u64,
+        remote_path: impl Into<String>,
+        local_path: impl AsRef<Path>,
+        overwrite_policy: TransferOverwritePolicy,
+    ) -> Result<TransferTask, TransferError> {
         let task = self.make_task(
+            session_id,
             TransferDirection::Download,
             local_path.as_ref(),
             &remote_path.into(),
@@ -601,8 +671,20 @@ impl TransferManager {
         local_path: impl AsRef<std::path::Path>,
         remote_directory: impl Into<String>,
     ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
-        self.enqueue_upload_entry_with_policy(
+        self.enqueue_upload_entry_for_session(session, 0, local_path, remote_directory)
+            .await
+    }
+
+    pub async fn enqueue_upload_entry_for_session(
+        &self,
+        session: &SshSession,
+        session_id: u64,
+        local_path: impl AsRef<std::path::Path>,
+        remote_directory: impl Into<String>,
+    ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
+        self.enqueue_upload_entry_for_session_with_policy(
             session,
+            session_id,
             local_path,
             remote_directory,
             TransferOverwritePolicy::default(),
@@ -613,6 +695,24 @@ impl TransferManager {
     pub async fn enqueue_upload_entry_with_policy(
         &self,
         session: &SshSession,
+        local_path: impl AsRef<std::path::Path>,
+        remote_directory: impl Into<String>,
+        overwrite_policy: TransferOverwritePolicy,
+    ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
+        self.enqueue_upload_entry_for_session_with_policy(
+            session,
+            0,
+            local_path,
+            remote_directory,
+            overwrite_policy,
+        )
+        .await
+    }
+
+    pub async fn enqueue_upload_entry_for_session_with_policy(
+        &self,
+        session: &SshSession,
+        session_id: u64,
         local_path: impl AsRef<std::path::Path>,
         remote_directory: impl Into<String>,
         overwrite_policy: TransferOverwritePolicy,
@@ -674,6 +774,7 @@ impl TransferManager {
                         .map_err(transfer_error_from_sftp)
                         .map(|remote_path| {
                             self.make_task(
+                                session_id,
                                 TransferDirection::Upload,
                                 &entry.local_path,
                                 &remote_path,
@@ -745,7 +846,13 @@ impl TransferManager {
                 .map_err(transfer_error_from_sftp)?;
         }
         let task = self
-            .enqueue_upload_with_policy(session, local_path, remote_path, overwrite_policy)
+            .enqueue_upload_for_session_with_policy(
+                session,
+                session_id,
+                local_path,
+                remote_path,
+                overwrite_policy,
+            )
             .await?;
         batch.succeeded += 1;
         Ok((vec![task], batch))
@@ -761,8 +868,20 @@ impl TransferManager {
         remote_path: impl Into<String>,
         local_directory: impl AsRef<std::path::Path>,
     ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
-        self.enqueue_download_entry_with_policy(
+        self.enqueue_download_entry_for_session(session, 0, remote_path, local_directory)
+            .await
+    }
+
+    pub async fn enqueue_download_entry_for_session(
+        &self,
+        session: &SshSession,
+        session_id: u64,
+        remote_path: impl Into<String>,
+        local_directory: impl AsRef<std::path::Path>,
+    ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
+        self.enqueue_download_entry_for_session_with_policy(
             session,
+            session_id,
             remote_path,
             local_directory,
             TransferOverwritePolicy::default(),
@@ -773,6 +892,24 @@ impl TransferManager {
     pub async fn enqueue_download_entry_with_policy(
         &self,
         session: &SshSession,
+        remote_path: impl Into<String>,
+        local_directory: impl AsRef<std::path::Path>,
+        overwrite_policy: TransferOverwritePolicy,
+    ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
+        self.enqueue_download_entry_for_session_with_policy(
+            session,
+            0,
+            remote_path,
+            local_directory,
+            overwrite_policy,
+        )
+        .await
+    }
+
+    pub async fn enqueue_download_entry_for_session_with_policy(
+        &self,
+        session: &SshSession,
+        session_id: u64,
         remote_path: impl Into<String>,
         local_directory: impl AsRef<std::path::Path>,
         overwrite_policy: TransferOverwritePolicy,
@@ -830,6 +967,7 @@ impl TransferManager {
                     .await
                     .map_err(transfer_error_from_sftp)?;
                 tasks.push(self.make_task(
+                    session_id,
                     TransferDirection::Download,
                     &local_path,
                     &entry.remote_path,
@@ -895,7 +1033,13 @@ impl TransferManager {
                 .unwrap_or("download");
             let local_path = local_directory.join(file_name);
             let task = self
-                .enqueue_download_with_policy(session, &normalized, &local_path, overwrite_policy)
+                .enqueue_download_for_session_with_policy(
+                    session,
+                    session_id,
+                    &normalized,
+                    &local_path,
+                    overwrite_policy,
+                )
                 .await?;
             batch.succeeded += 1;
             Ok((vec![task], batch))
@@ -1198,10 +1342,24 @@ mod tests {
     }
 
     #[test]
+    fn make_task_records_originating_session_id() {
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = manager.make_task(
+            42,
+            TransferDirection::Upload,
+            Path::new("/tmp/file.txt"),
+            "/remote/file.txt",
+        );
+
+        assert_eq!(task.session_id, 42);
+    }
+
+    #[test]
     fn insert_task_records_pending_status() {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 1,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -1222,6 +1380,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 42,
+            session_id: 1,
             direction: TransferDirection::Download,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -1242,6 +1401,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 7,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -1319,6 +1479,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 8,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -1399,6 +1560,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 99,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -1460,6 +1622,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 23,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -1484,6 +1647,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 11,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -1510,6 +1674,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 13,
+            session_id: 1,
             direction: TransferDirection::Download,
             local_path: PathBuf::from("/tmp/downloaded.txt"),
             remote_path: "/remote/downloaded.txt".to_string(),
@@ -1541,6 +1706,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 12,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -1569,6 +1735,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 14,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -1615,6 +1782,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 15,
+            session_id: 1,
             direction: TransferDirection::Download,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -1652,6 +1820,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 16,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -1677,6 +1846,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 3,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.txt"),
             remote_path: "/remote/file.txt".to_string(),
@@ -1708,6 +1878,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 100,
+            session_id: 1,
             direction: TransferDirection::Download,
             local_path: PathBuf::from("/tmp/file.bin"),
             remote_path: "/remote/file.bin".to_string(),
@@ -1731,6 +1902,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 101,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/file.bin"),
             remote_path: "/remote/file.bin".to_string(),
@@ -1754,6 +1926,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 102,
+            session_id: 1,
             direction: TransferDirection::Download,
             local_path: PathBuf::from("/tmp/file.bin"),
             remote_path: "/remote/file.bin".to_string(),
@@ -1778,6 +1951,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         let task = TransferTask {
             id: 103,
+            session_id: 1,
             direction: TransferDirection::Download,
             local_path: PathBuf::from("/tmp/file.bin"),
             remote_path: "/remote/file.bin".to_string(),
@@ -1800,6 +1974,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         manager.insert_task(TransferTask {
             id: 1,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/a.txt"),
             remote_path: "/remote/a.txt".to_string(),
@@ -1809,6 +1984,7 @@ mod tests {
         });
         manager.insert_task(TransferTask {
             id: 2,
+            session_id: 1,
             direction: TransferDirection::Download,
             local_path: PathBuf::from("/tmp/b.txt"),
             remote_path: "/remote/b.txt".to_string(),
@@ -1829,6 +2005,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         manager.insert_task(TransferTask {
             id: 1,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/a.txt"),
             remote_path: "/remote/a.txt".to_string(),
@@ -1860,7 +2037,7 @@ mod tests {
         // When: a download task is enqueued (goes through the retry loop and the
         // pipelined download path)
         let task = manager
-            .enqueue_download(&session, "/download/e2e.bin", &local_path)
+            .enqueue_download_for_session(&session, 1, "/download/e2e.bin", &local_path)
             .await
             .expect("download should succeed");
 
@@ -1961,6 +2138,7 @@ mod tests {
         tokio::fs::write(&local_path, b"replacement").await.unwrap();
 
         let mut task = manager.make_task(
+            1,
             TransferDirection::Upload,
             &local_path,
             "/upload/retry-policy.txt",
@@ -2002,6 +2180,7 @@ mod tests {
 
         let task = TransferTask {
             id: 42,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: local_path.clone(),
             remote_path: "/upload/retry-race.txt".to_string(),
@@ -2048,6 +2227,7 @@ mod tests {
 
         let task = TransferTask {
             id: 43,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: local_path.clone(),
             remote_path: "/upload/retry-ok.txt".to_string(),
@@ -2384,6 +2564,7 @@ mod tests {
         let manager = TransferManager::new(&AppConfig::default());
         manager.insert_task(TransferTask {
             id: 44,
+            session_id: 1,
             direction: TransferDirection::Upload,
             local_path: PathBuf::from("/tmp/x.txt"),
             remote_path: "/upload/x.txt".to_string(),

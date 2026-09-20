@@ -1,7 +1,11 @@
+import Combine
 import Foundation
 
 @MainActor
 final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostKeyHandler, ConnectionEventHandler {
+    /// Published state for the *active* session (kept for API compatibility with
+    /// existing views). When multiple sessions exist, these reflect the
+    /// currently selected session.
     @Published private(set) var connectionStatus: ConnectionStatus = .disconnected
     @Published private(set) var connectedProfileID: UUID?
     @Published private(set) var lastDisconnectReason: String?
@@ -12,11 +16,19 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
 
     var isConnected: Bool { connectionStatus.isConnected }
 
+    /// All open sessions keyed by `RemoteSession.id`.
+    private(set) var sessions: [UUID: RemoteSession] = [:]
+    /// The session currently surfaced through the published properties above.
+    private(set) var activeSessionID: UUID?
+
     private var client: DockBridgeClient?
-    private var sessionId: UInt64?
     private let settings: AppSettingsService
     private let hostKeyStore: HostKeyStore
     private let bookmarkService: SecurityScopedBookmarkService
+    private var sessionCancellables: [UUID: AnyCancellable] = [:]
+    /// Insertion order of open sessions; used to pick a fallback active
+    /// session without depending on Rust-side sessionId reuse.
+    private var sessionOrder: [UUID] = []
 
     init(
         settings: AppSettingsService = .shared,
@@ -30,6 +42,9 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     }
 
     func prepareClient() throws {
+        // One DockBridgeClient owns the Rust-side session registry. Replacing
+        // it while sessions are open would orphan every existing session.
+        guard client == nil else { return }
         try hostKeyStore.ensureStoreDirectoryExists()
         let record = settings.buildAppConfigRecord(knownHostsPath: hostKeyStore.knownHostsPath.path)
         client = try DockBridgeClient(
@@ -39,22 +54,53 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         )
     }
 
-    func connect(
+    // MARK: - Session management
+
+    /// Returns the active session, or the last connected one if none is marked active.
+    var activeSession: RemoteSession? {
+        if let id = activeSessionID, let session = sessions[id] {
+            return session
+        }
+        // Fall back to the most recently opened session for API compat.
+        return sessionOrder.compactMap { sessions[$0] }.last
+    }
+
+    /// All sessions in creation order (oldest first).
+    var allSessions: [RemoteSession] {
+        sessionOrder.compactMap { sessions[$0] }
+    }
+
+    /// Returns the session with the given id, if open.
+    func session(id: UUID) -> RemoteSession? {
+        sessions[id]
+    }
+
+    /// Switches which session is surfaced via the published properties.
+    func setActiveSession(_ session: RemoteSession) {
+        guard sessions[session.id] === session else { return }
+        activeSessionID = session.id
+        syncPublishedState(from: session)
+    }
+
+    /// Connects to a profile, creating a new `RemoteSession` that can coexist
+    /// with other open sessions. Returns the new session.
+    @discardableResult
+    func connectToNewSession(
         profile: ConnectionProfile,
         password: String?,
         passphrase: String?
-    ) async throws {
+    ) async throws -> RemoteSession {
         let config = settings.loadConfig()
         if let bookmark = config.opensshKnownHostsBookmark {
-            try await bookmarkService.withAccess(to: bookmark) { _ in
-                try await performConnect(
+            return try await bookmarkService.withAccess(to: bookmark) { _ in
+                try await performConnectNewSession(
                     profile: profile,
                     password: password,
                     passphrase: passphrase
                 )
             }
         } else {
-            try await performConnect(
+            return try await performConnectNewSession(
                 profile: profile,
                 password: password,
                 passphrase: passphrase
@@ -62,92 +108,46 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         }
     }
 
-    private func performConnect(
+    // MARK: - Legacy single-session API (delegates to active session)
+
+    func connect(
         profile: ConnectionProfile,
         password: String?,
         passphrase: String?
     ) async throws {
-        // Serialize connect attempts: if a connection is already in progress,
-        // reject the second call instead of letting two sessions race (the
-        // second one would orphan the first session id). The check and the
-        // status flip below are both synchronous on the main actor, so no
-        // interleaving can occur between them.
-        if connectionStatus.isConnecting {
-            throw DockBridgeError.Generic(message: "A connection is already in progress.")
-        }
-        connectionStatus = .connecting(endpoint: profile.endpointLabel)
-        lastDisconnectReason = nil
-
-        try prepareClient()
-        guard let client else {
-            connectionStatus = .disconnected
-            throw DockBridgeError.Generic(message: "Rust client is not initialized.")
-        }
-
-        connectedProfileID = profile.id
-
-        var password = password
-        var passphrase = passphrase
-        defer {
-            SensitiveString.clear(&password)
-            SensitiveString.clear(&passphrase)
-        }
-
-        var newSessionIdForCatch: UInt64?
-        do {
-            var record = profile.toRecord(password: password, passphrase: passphrase)
-            defer { record.clearCredentials() }
-
-            let newSessionId = try await Task.detached(priority: .userInitiated) {
-                try client.connect(profile: record)
-            }.value
-            newSessionIdForCatch = newSessionId
-
-            let rawInitialDirectory = try await Task.detached(priority: .userInitiated) {
-                try client.getInitialDirectory(sessionId: newSessionId)
-            }.value
-
-            let resolvedDirectory = try await resolveWorkingDirectory(
-                rawInitialDirectory,
-                username: profile.username,
-                isRootUser: profile.isRootUser,
-                client: client,
-                sessionId: newSessionId
-            )
-
-            // If another connect() replaced `self.client` while we were
-            // awaiting (shouldn't happen with the in-progress guard above, but
-            // keep the invariant), tear down this session so it does not leak.
-            guard self.client === client else {
-                try? client.disconnect(sessionId: newSessionId)
-                return
-            }
-
-            sessionId = newSessionId
-            newSessionIdForCatch = nil
-            connectedUsername = profile.username
-            initialRemoteDirectory = resolvedDirectory
-            connectionStatus = .connected(endpoint: profile.endpointLabel)
-        } catch {
-            // Best-effort teardown of the Rust session created by this connect
-            // attempt so its health-monitor task does not keep running. Only
-            // use `newSessionIdForCatch`: `sessionId` still refers to a
-            // previously established session, which must not be torn down here.
-            if let pendingSessionId = newSessionIdForCatch {
-                try? client.disconnect(sessionId: pendingSessionId)
-            }
-            sessionId = nil
-            clearConnectionState()
-            throw error
-        }
+        _ = try await connectToNewSession(
+            profile: profile,
+            password: password,
+            passphrase: passphrase
+        )
     }
 
     func disconnect() async throws {
-        guard let client, let sessionId else { return }
-        try await Task.detached(priority: .userInitiated) {
-            try client.disconnect(sessionId: sessionId)
-        }.value
-        clearConnectionState()
+        guard let session = activeSession else { return }
+        try await disconnect(session: session)
+    }
+
+    /// Disconnects one session without affecting other open sessions.
+    func disconnect(session: RemoteSession) async throws {
+        guard sessions[session.id] === session else { return }
+        guard !session.isConnecting else {
+            throw DockBridgeError.Generic(message: "A connection is still in progress.")
+        }
+
+        var disconnectError: Error?
+        if let client, let rustSessionId = session.sessionId {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try client.disconnect(sessionId: rustSessionId)
+                }.value
+            } catch {
+                disconnectError = error
+            }
+        }
+        removeSession(session)
+        if let disconnectError {
+            throw disconnectError
+        }
     }
 
     func getInitialDirectory() async throws -> String {
@@ -163,11 +163,11 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     }
 
     func firstExistingHomeDirectoryCandidate(for username: String) async -> String? {
-        guard let client, let sessionId, isConnected else { return nil }
+        guard let client, let rustSessionId = activeSession?.sessionId, isConnected else { return nil }
         for candidate in Self.homeDirectoryCandidates(for: username) {
             let isDirectory = await Task.detached(priority: .userInitiated) {
                 (try? client.stat(
-                    sessionId: sessionId,
+                    sessionId: rustSessionId,
                     path: candidate,
                     followSymlinks: true
                 ))?.isDirectory == true
@@ -233,7 +233,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
 
     func fetchTransferTasks() async throws -> [TransferTaskRecord] {
         guard let client else { return [] }
-        return try await Task.detached(priority: .userInitiated) {
+        return await Task.detached(priority: .userInitiated) {
             client.getTransferQueue()
         }.value
     }
@@ -247,7 +247,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
 
     func clearCompletedTransfers() async throws {
         guard let client else { return }
-        try await Task.detached(priority: .userInitiated) {
+        await Task.detached(priority: .userInitiated) {
             client.clearCompletedTransfers()
         }.value
     }
@@ -275,9 +275,6 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     // MARK: - HostKeyHandler
 
     nonisolated func promptUnknownHost(challenge: HostKeyChallenge) -> Bool {
-        // The HostKeyHandler protocol requires a non-throwing Bool return, so
-        // any error from the synchronous bridge is treated as a rejection —
-        // the safe default for an unverified host key.
         do {
             return try DropOperationSync.run { @MainActor in
                 await self.awaitHostKeyDecision(for: challenge)
@@ -307,8 +304,6 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
                 do {
                     try await Task.sleep(for: .seconds(timeoutSecs))
                 } catch is CancellationError {
-                    // The decision task completed first. Cooperatively stop
-                    // without touching a later host-key challenge.
                     return false
                 } catch {
                     return false
@@ -317,8 +312,6 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
                 return false
             }
 
-            // Avoid force-unwrapping; default to false (reject) if the group
-            // unexpectedly yields no result.
             let result = await group.next() ?? false
             group.cancelAll()
             return result
@@ -333,29 +326,25 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
 
     nonisolated func onSessionDisconnected(sessionId: UInt64, reason: String) {
         Task { @MainActor in
-            guard self.sessionId == sessionId else { return }
-            self.handleImplicitDisconnect(reason: reason)
+            handleSessionDisconnected(sessionId: sessionId, reason: reason)
         }
     }
 
-    private func handleImplicitDisconnect(reason: String) {
-        guard connectionStatus.isConnected || connectionStatus.isConnecting else { return }
-        lastDisconnectReason = reason
-        resetSessionFields()
-        connectedProfileID = nil
+    private func handleSessionDisconnected(sessionId: UInt64, reason: String) {
+        guard let target = sessions.values.first(where: { $0.sessionId == sessionId }) else {
+            return
+        }
+        target.markLost(reason: reason)
+        if target.id == activeSessionID {
+            syncPublishedState(from: target)
+        }
     }
 
-    private func clearConnectionState() {
-        resetSessionFields()
-        connectedProfileID = nil
-        client = nil
-    }
-
-    private func resetSessionFields() {
-        sessionId = nil
+    private func resetPublishedSessionFields() {
         initialRemoteDirectory = nil
         connectedUsername = nil
         connectionStatus = .disconnected
+        connectedProfileID = nil
     }
 
     private func refreshTransferQueue() async {
@@ -399,22 +388,149 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     private func runOnBridge<T: Sendable>(
         _ operation: @escaping @Sendable (DockBridgeClient, UInt64) throws -> T
     ) async throws -> T {
-        guard let client, let sessionId else {
+        guard
+            let client,
+            let targetSession = activeSession,
+            let rustSessionId = targetSession.sessionId
+        else {
             throw DockBridgeError.Generic(message: "Not connected to a remote host.")
         }
 
         do {
             return try await Task.detached(priority: .userInitiated) {
-                try operation(client, sessionId)
+                try operation(client, rustSessionId)
             }.value
         } catch {
             if error.isConnectionLost {
                 let reason = error.dockBridgeUserMessage
-                Task { @MainActor in
-                    self.handleImplicitDisconnect(reason: reason)
+                if sessions[targetSession.id] === targetSession,
+                   targetSession.sessionId == rustSessionId {
+                    targetSession.markLost(reason: reason)
+                    if activeSessionID == targetSession.id {
+                        syncPublishedState(from: targetSession)
+                    }
                 }
             }
             throw error
+        }
+    }
+
+    // MARK: - Private session helpers
+
+    private func performConnectNewSession(
+        profile: ConnectionProfile,
+        password: String?,
+        passphrase: String?
+    ) async throws -> RemoteSession {
+        guard !sessions.values.contains(where: \.isConnecting) else {
+            throw DockBridgeError.Generic(message: "A connection is already in progress.")
+        }
+
+        try prepareClient()
+        guard let client else {
+            throw DockBridgeError.Generic(message: "Rust client is not initialized.")
+        }
+
+        let session = RemoteSession(
+            profileID: profile.id,
+            endpointLabel: profile.endpointLabel
+        )
+        sessions[session.id] = session
+        sessionOrder.append(session.id)
+        activeSessionID = session.id
+        observe(session)
+        session.markConnecting()
+        syncPublishedState(from: session)
+
+        var password = password
+        var passphrase = passphrase
+        defer {
+            SensitiveString.clear(&password)
+            SensitiveString.clear(&passphrase)
+        }
+
+        var newSessionIdForCatch: UInt64?
+        do {
+            var record = profile.toRecord(password: password, passphrase: passphrase)
+            defer { record.clearCredentials() }
+
+            let newSessionId = try await Task.detached(priority: .userInitiated) { [record] in
+                var detachedRecord = record
+                defer { detachedRecord.clearCredentials() }
+                return try client.connect(profile: detachedRecord)
+            }.value
+            newSessionIdForCatch = newSessionId
+
+            let rawInitialDirectory = try await Task.detached(priority: .userInitiated) {
+                try client.getInitialDirectory(sessionId: newSessionId)
+            }.value
+
+            let resolvedDirectory = try await resolveWorkingDirectory(
+                rawInitialDirectory,
+                username: profile.username,
+                isRootUser: profile.isRootUser,
+                client: client,
+                sessionId: newSessionId
+            )
+
+            session.markConnected(
+                sessionId: newSessionId,
+                username: profile.username,
+                initialDirectory: resolvedDirectory
+            )
+            newSessionIdForCatch = nil
+            if activeSessionID == session.id {
+                syncPublishedState(from: session)
+            }
+            return session
+        } catch {
+            if let pendingSessionId = newSessionIdForCatch {
+                _ = try? await Task.detached(priority: .userInitiated) {
+                    try client.disconnect(sessionId: pendingSessionId)
+                }.value
+            }
+            removeSession(session)
+            throw error
+        }
+    }
+
+    private func observe(_ session: RemoteSession) {
+        guard sessionCancellables[session.id] == nil else { return }
+        sessionCancellables[session.id] = session.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshActiveSessionState()
+            }
+        }
+    }
+
+    private func removeSession(_ session: RemoteSession) {
+        sessions.removeValue(forKey: session.id)
+        sessionOrder.removeAll { $0 == session.id }
+        sessionCancellables.removeValue(forKey: session.id)
+        if activeSessionID == session.id {
+            activeSessionID = nil
+        }
+        if let next = allSessions.last {
+            setActiveSession(next)
+        } else {
+            resetPublishedSessionFields()
+            client = nil
+        }
+    }
+
+    /// Copies the given session's state into the legacy published properties
+    /// that existing views/ViewModels observe.
+    private func syncPublishedState(from session: RemoteSession) {
+        connectedProfileID = session.isConnected || session.isConnecting ? session.profileID : nil
+        connectionStatus = session.connectionStatus
+        lastDisconnectReason = session.lastDisconnectReason
+        initialRemoteDirectory = session.initialRemoteDirectory
+        connectedUsername = session.connectedUsername
+    }
+
+    private func refreshActiveSessionState() {
+        if let session = activeSession {
+            syncPublishedState(from: session)
         }
     }
 }
@@ -436,17 +552,53 @@ extension RustBridgeService {
         status: ConnectionStatus,
         profileID: UUID? = nil
     ) {
-        connectionStatus = status
-        connectedProfileID = profileID
+        guard let profileID else {
+            sessions.removeAll()
+            sessionOrder.removeAll()
+            sessionCancellables.removeAll()
+            activeSessionID = nil
+            client = nil
+            connectionStatus = status
+            connectedProfileID = nil
+            initialRemoteDirectory = nil
+            connectedUsername = nil
+            return
+        }
+        let session = RemoteSession(profileID: profileID, endpointLabel: "test@example.com")
+        sessions[session.id] = session
+        sessionOrder.append(session.id)
+        activeSessionID = session.id
+        switch status {
+        case .disconnected:
+            session.markConnecting()
+            session.markDisconnected()
+        case .connecting:
+            session.markConnecting()
+        case .connected:
+            session.markConnecting()
+            session.markConnected(sessionId: 1, username: "test", initialDirectory: "/")
+        }
+        // Publish state once through the session observation path.
+        syncPublishedState(from: session)
     }
 
     func setSessionIdForTesting(_ id: UInt64?) {
-        sessionId = id
+        guard let session = activeSession else { return }
+        if let id {
+            session.markConnected(
+                sessionId: id,
+                username: session.connectedUsername ?? "test",
+                initialDirectory: session.initialRemoteDirectory ?? "/"
+            )
+        } else {
+            session.markDisconnected()
+        }
+        syncPublishedState(from: session)
     }
 
     func simulateSessionDisconnectedForTesting(sessionId: UInt64, reason: String) {
-        guard self.sessionId == sessionId else { return }
-        handleImplicitDisconnect(reason: reason)
+        // Synchronous so tests can assert immediately after the call.
+        handleSessionDisconnected(sessionId: sessionId, reason: reason)
     }
 }
 #endif

@@ -1560,6 +1560,10 @@ public func FfiConverterTypeRemoteFileRecord_lower(_ value: RemoteFileRecord) ->
  */
 public struct TransferTaskRecord: Equatable, Hashable {
     public var id: UInt64
+    /**
+     * ID of the SSH session that enqueued this transfer.
+     */
+    public var sessionId: UInt64
     public var direction: TransferDirectionRecord
     public var localPath: String
     public var remotePath: String
@@ -1569,8 +1573,12 @@ public struct TransferTaskRecord: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: UInt64, direction: TransferDirectionRecord, localPath: String, remotePath: String, status: TransferStatusRecord, bytesTransferred: UInt64, totalBytes: UInt64) {
+    public init(id: UInt64, 
+        /**
+         * ID of the SSH session that enqueued this transfer.
+         */sessionId: UInt64, direction: TransferDirectionRecord, localPath: String, remotePath: String, status: TransferStatusRecord, bytesTransferred: UInt64, totalBytes: UInt64) {
         self.id = id
+        self.sessionId = sessionId
         self.direction = direction
         self.localPath = localPath
         self.remotePath = remotePath
@@ -1596,6 +1604,7 @@ public struct FfiConverterTypeTransferTaskRecord: FfiConverterRustBuffer {
         return
             try TransferTaskRecord(
                 id: FfiConverterUInt64.read(from: &buf), 
+                sessionId: FfiConverterUInt64.read(from: &buf), 
                 direction: FfiConverterTypeTransferDirectionRecord.read(from: &buf), 
                 localPath: FfiConverterString.read(from: &buf), 
                 remotePath: FfiConverterString.read(from: &buf), 
@@ -1607,6 +1616,7 @@ public struct FfiConverterTypeTransferTaskRecord: FfiConverterRustBuffer {
 
     public static func write(_ value: TransferTaskRecord, into buf: inout [UInt8]) {
         FfiConverterUInt64.write(value.id, into: &buf)
+        FfiConverterUInt64.write(value.sessionId, into: &buf)
         FfiConverterTypeTransferDirectionRecord.write(value.direction, into: &buf)
         FfiConverterString.write(value.localPath, into: &buf)
         FfiConverterString.write(value.remotePath, into: &buf)
