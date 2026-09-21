@@ -1200,15 +1200,20 @@ final class MainViewModel: ObservableObject {
 
     func uploadSelected() async {
         guard !selectedLocalItems.isEmpty else { return }
+        // Capture the destination once so a folder change during the batch
+        // cannot silently retarget the remaining files (issue #574).
+        let destination = remotePath
         for item in selectedLocalItems {
-            await upload(localURL: item.url, toRemoteDirectory: remotePath)
+            await upload(localURL: item.url, toRemoteDirectory: destination)
         }
     }
 
     func downloadSelected() async {
         guard !selectedRemoteItems.isEmpty else { return }
+        // Capture the destination once (issue #574).
+        let destination = localPath
         for item in selectedRemoteItems {
-            await download(remotePath: item.path, toLocalDirectory: localPath)
+            await download(remotePath: item.path, toLocalDirectory: destination)
         }
     }
 
