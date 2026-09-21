@@ -30,12 +30,12 @@ protocol RemoteBridging {
         localPath: String,
         remoteDirectory: String,
         overwritePolicy: TransferOverwritePolicy
-    ) async throws
+    ) async throws -> BatchResultRecord
     func download(
         remotePath: String,
         localDirectory: String,
         overwritePolicy: TransferOverwritePolicy
-    ) async throws
+    ) async throws -> BatchResultRecord
     func deleteRemote(path: String) async throws
     func renameRemote(from: String, to: String) async throws
     func mkdirRemote(path: String) async throws

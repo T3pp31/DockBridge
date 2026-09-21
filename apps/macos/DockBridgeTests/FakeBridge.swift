@@ -87,22 +87,24 @@ final class FakeBridge: RemoteBridging {
         localPath: String,
         remoteDirectory: String,
         overwritePolicy: TransferOverwritePolicy
-    ) async throws {
+    ) async throws -> BatchResultRecord {
         uploaded.append((localPath, remoteDirectory, overwritePolicy))
         if uploadFails {
             throw DockBridgeError.Generic(message: "simulated upload failure")
         }
+        return BatchResultRecord(succeeded: 0, failed: 0, skipped: 0)
     }
 
     func download(
         remotePath: String,
         localDirectory: String,
         overwritePolicy: TransferOverwritePolicy
-    ) async throws {
+    ) async throws -> BatchResultRecord {
         downloaded.append((remotePath, localDirectory, overwritePolicy))
         if downloadFails {
             throw DockBridgeError.Generic(message: "simulated download failure")
         }
+        return BatchResultRecord(succeeded: 0, failed: 0, skipped: 0)
     }
 
     func deleteRemote(path: String) async throws {
