@@ -486,22 +486,25 @@ final class MainViewModel: ObservableObject {
         do {
             try await prepareRemoteWorkingDirectory()
             if let profileID = lastConnectedProfileID ?? bridge.connectedProfileID,
-               let profile = connectionList.profiles.first(where: { $0.id == profileID }),
-               let savedRemotePath = profile.lastRemotePath,
-               !savedRemotePath.isEmpty {
-                if await remoteDirectoryExists(savedRemotePath) {
-                    applyRemotePath(savedRemotePath, recordHistory: false)
-                    remoteHistory.reset(to: savedRemotePath)
+               let profile = connectionList.profiles.first(where: { $0.id == profileID }) {
+                // A configured initial path takes priority; the last visited
+                // path is only a fallback.
+                let targetRemote = profile.initialRemotePath ?? profile.lastRemotePath
+                if let savedRemotePath = targetRemote, !savedRemotePath.isEmpty {
+                    if await remoteDirectoryExists(savedRemotePath) {
+                        applyRemotePath(savedRemotePath, recordHistory: false)
+                        remoteHistory.reset(to: savedRemotePath)
+                    }
                 }
-                // Missing lastRemotePath keeps the initial-directory result from prepareRemoteWorkingDirectory().
             }
             await reloadRemote()
             if let profileID = lastConnectedProfileID ?? bridge.connectedProfileID,
-               let profile = connectionList.profiles.first(where: { $0.id == profileID }),
-               let savedLocalPath = profile.lastLocalPath,
-               !savedLocalPath.isEmpty {
-                applyLocalPath(URL(fileURLWithPath: savedLocalPath, isDirectory: true), recordHistory: false)
-                reloadLocal()
+               let profile = connectionList.profiles.first(where: { $0.id == profileID }) {
+                let targetLocal = profile.initialLocalPath ?? profile.lastLocalPath
+                if let savedLocalPath = targetLocal, !savedLocalPath.isEmpty {
+                    applyLocalPath(URL(fileURLWithPath: savedLocalPath, isDirectory: true), recordHistory: false)
+                    reloadLocal()
+                }
             }
             refreshPathBookmarks()
             startRemoteEditMonitoring()
