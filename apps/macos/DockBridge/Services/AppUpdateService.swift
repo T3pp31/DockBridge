@@ -87,7 +87,7 @@ final class AppUpdateService: @unchecked Sendable {
         )
     }
 
-    private func fetchLatestRelease() async throws -> GitHubReleaseResponse? {
+    private func fetchLatestRelease(unconditioned: Bool = false) async throws -> GitHubReleaseResponse? {
         var request = URLRequest(url: AppUpdateConfig.releasesLatestURL)
         // Keep startup snappy even when api.github.com is slow / blocked.
         request.timeoutInterval = 15
@@ -95,7 +95,9 @@ final class AppUpdateService: @unchecked Sendable {
         request.setValue(AppUpdateConfig.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue(AppUpdateConfig.githubAPIVersion, forHTTPHeaderField: "X-GitHub-Api-Version")
 
-        let savedETag = AppUpdateConfig.showExistingETag()
+        // When unconditioned we deliberately skip If-None-Match (issue #573)
+        // so a 304 with no cached body can be recovered by re-fetching.
+        let savedETag = unconditioned ? nil : AppUpdateConfig.showExistingETag()
         if let savedETag {
             request.setValue(savedETag, forHTTPHeaderField: "If-None-Match")
         }
@@ -105,9 +107,16 @@ final class AppUpdateService: @unchecked Sendable {
             throw AppUpdateServiceError.invalidResponse
         }
 
-        // 304: the stored ETag matched; no new release.
+        // 304: the server payload is unchanged, but an uninstalled update may
+        // still need to be offered again (e.g. the user tapped "Later"). Return
+        // the cached release body so the caller re-runs the version comparison;
+        // if no body was ever cached, re-fetch without If-None-Match (issue #573).
         if httpResponse.statusCode == 304 {
-            return nil
+            if let cached = AppUpdateConfig.showCachedReleaseBody(),
+               let release = try? JSONDecoder().decode(GitHubReleaseResponse.self, from: cached) {
+                return release
+            }
+            return try await fetchLatestRelease(unconditioned: true)
         }
 
         guard (200...299).contains(httpResponse.statusCode) else {
@@ -126,7 +135,10 @@ final class AppUpdateService: @unchecked Sendable {
             AppUpdateConfig.persistETag(etag)
         }
 
-        return try JSONDecoder().decode(GitHubReleaseResponse.self, from: data)
+        let release = try JSONDecoder().decode(GitHubReleaseResponse.self, from: data)
+        // Cache the decoded body together with the ETag (issue #573).
+        AppUpdateConfig.persistReleaseBody(data)
+        return release
     }
 
     private func dmgDownloadURL(from release: GitHubReleaseResponse, version: String) -> URL? {
