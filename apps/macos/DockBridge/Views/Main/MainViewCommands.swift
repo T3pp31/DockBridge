@@ -13,22 +13,22 @@ struct MainViewCommands: Commands {
     var body: some Commands {
         CommandMenu(String(localized: "Go")) {
             Button(String(localized: "Back")) {
-                Task { await viewModel.navigateRemoteBack() }
+                Task { await viewModel.navigateBackForFocusedPane() }
             }
             .keyboardShortcut("[", modifiers: [.command])
-            .disabled(!viewModel.bridge.isConnected)
+            .disabled(!viewModel.canNavigateBackForFocusedPane)
 
             Button(String(localized: "Forward")) {
-                Task { await viewModel.navigateRemoteForward() }
+                Task { await viewModel.navigateForwardForFocusedPane() }
             }
             .keyboardShortcut("]", modifiers: [.command])
-            .disabled(!viewModel.bridge.isConnected)
+            .disabled(!viewModel.canNavigateForwardForFocusedPane)
 
             Button(String(localized: "Enclosing Folder")) {
-                Task { await viewModel.navigateRemoteUp() }
+                Task { await viewModel.navigateUpForFocusedPane() }
             }
             .keyboardShortcut(.upArrow, modifiers: [.command])
-            .disabled(!viewModel.bridge.isConnected)
+            .disabled(!viewModel.canNavigateUpForFocusedPane)
 
             Divider()
 
@@ -36,7 +36,7 @@ struct MainViewCommands: Commands {
                 viewModel.beginGoToPathForFocusedPane()
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
-            .disabled(!viewModel.bridge.isConnected)
+            .disabled(viewModel.focusedGoToPathPane == .remote && !viewModel.bridge.isConnected)
         }
 
         CommandMenu(String(localized: "Transfer")) {
@@ -60,10 +60,10 @@ struct MainViewCommands: Commands {
         // New Folder uses ⇧⌘N (like Finder) so ⌘N stays as New Window.
         CommandGroup(after: .newItem) {
             Button(String(localized: "New Folder")) {
-                viewModel.showMkdirPrompt = true
+                viewModel.requestNewFolderForFocusedPane()
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
-            .disabled(!viewModel.bridge.isConnected)
+            .disabled(viewModel.focusedGoToPathPane == .remote && !viewModel.bridge.isConnected)
         }
 
         CommandGroup(after: .saveItem) {
@@ -89,19 +89,10 @@ struct MainViewCommands: Commands {
             .keyboardShortcut(".", modifiers: [.command, .shift])
 
             Button(String(localized: "Delete")) {
-                // Destructive: require exactly one selection (never Set.first under multi-select).
-                guard viewModel.selectedRemoteItemIDs.count == 1,
-                      let item = viewModel.selectedRemoteTableItem,
-                      !item.isParentDirectory else { return }
-                viewModel.requestDeleteRemote(item: item)
+                viewModel.requestDeleteForFocusedPane()
             }
             .keyboardShortcut(.delete, modifiers: [.command])
-            .disabled(
-                viewModel.selectedRemoteItemIDs.count != 1
-                    || viewModel.selectedRemoteTableItem == nil
-                    || viewModel.selectedRemoteTableItem?.isParentDirectory == true
-                    || !viewModel.bridge.isConnected
-            )
+            .disabled(!viewModel.canRequestDeleteForFocusedPane)
         }
 
         CommandGroup(after: .toolbar) {

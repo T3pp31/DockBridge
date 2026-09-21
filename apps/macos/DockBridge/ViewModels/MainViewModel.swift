@@ -732,6 +732,50 @@ final class MainViewModel: ObservableObject {
             selectedRemoteItemIDs = []
     }
 
+    // MARK: - Focus-aware navigation (Issue #581)
+
+    var canNavigateUpForFocusedPane: Bool {
+        switch focusedGoToPathPane {
+        case .local: return canNavigateLocalUp
+        case .remote: return bridge.isConnected && canNavigateRemoteUp
+        }
+    }
+
+    var canNavigateBackForFocusedPane: Bool {
+        switch focusedGoToPathPane {
+        case .local: return canNavigateLocalBack
+        case .remote: return bridge.isConnected && canNavigateRemoteBack
+        }
+    }
+
+    var canNavigateForwardForFocusedPane: Bool {
+        switch focusedGoToPathPane {
+        case .local: return canNavigateLocalForward
+        case .remote: return bridge.isConnected && canNavigateRemoteForward
+        }
+    }
+
+    func navigateUpForFocusedPane() {
+        switch focusedGoToPathPane {
+        case .local: navigateLocalUp()
+        case .remote: navigateRemoteUp()
+        }
+    }
+
+    func navigateBackForFocusedPane() {
+        switch focusedGoToPathPane {
+        case .local: navigateLocalBack()
+        case .remote: navigateRemoteBack()
+        }
+    }
+
+    func navigateForwardForFocusedPane() {
+        switch focusedGoToPathPane {
+        case .local: navigateLocalForward()
+        case .remote: navigateRemoteForward()
+        }
+    }
+
     private func applyRemotePath(_ path: String, recordHistory: Bool = true) {
         isApplyingNavigationHistory = !recordHistory
         remotePath = path
@@ -1471,6 +1515,41 @@ final class MainViewModel: ObservableObject {
             await reloadRemote()
         } catch {
             errorMessage = error.dockBridgeUserMessage
+        }
+    }
+
+    // MARK: - Focus-aware file operations (Issue #581)
+
+    var canRequestDeleteForFocusedPane: Bool {
+        switch focusedGoToPathPane {
+        case .local:
+            return selectedLocalTableItem?.isParentDirectory == false
+        case .remote:
+            return bridge.isConnected
+                && selectedRemoteItemIDs.count == 1
+                && selectedRemoteTableItem?.isParentDirectory == false
+        }
+    }
+
+    func requestNewFolderForFocusedPane() {
+        switch focusedGoToPathPane {
+        case .local:
+            showLocalMkdirPrompt = true
+        case .remote:
+            showMkdirPrompt = true
+        }
+    }
+
+    func requestDeleteForFocusedPane() {
+        switch focusedGoToPathPane {
+        case .local:
+            guard let item = selectedLocalTableItem, !item.isParentDirectory else { return }
+            Task { await trashLocalItems([item]) }
+        case .remote:
+            guard bridge.isConnected,
+                  let item = selectedRemoteTableItem,
+                  !item.isParentDirectory else { return }
+            requestDeleteRemote(item: item)
         }
     }
 
