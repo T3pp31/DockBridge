@@ -1062,9 +1062,9 @@ final class MainViewModel: ObservableObject {
 
     private var currentRemoteEditConnectionIdentity: String? {
         guard bridge.isConnected else { return nil }
-        if let profileID = bridge.connectedProfileID {
-            return "profile:\(profileID.uuidString.lowercased())"
-        }
+        // Use the actual connected endpoint (host/port/username), not the
+        // profile UUID: editing the profile to point at another server must
+        // NOT re-target pending external edits to the new host (issue #569).
         guard let endpoint = bridge.connectionStatus.endpointLabel else { return nil }
         return "endpoint:\(endpoint.lowercased())"
     }
