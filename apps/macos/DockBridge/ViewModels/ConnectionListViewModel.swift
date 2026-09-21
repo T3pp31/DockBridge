@@ -665,4 +665,35 @@ final class ConnectionListViewModel: ObservableObject {
             errorMessage = error.localizedDescription
         }
     }
+
+    /// Handles an sftp:// URL open: connects to a matching profile, or offers
+    /// a prefilled profile when none matches (Issue #371).
+    func handleSFTPURL(_ url: URL) {
+        guard url.scheme?.lowercased() == "sftp", let host = url.host else { return }
+        let port = UInt16(url.port ?? 22)
+        let username = url.user.map { $0.removingPercentEncoding ?? $0 } ?? ""
+
+        if let profile = profiles.first(where: {
+            $0.host.caseInsensitiveCompare(host) == .orderedSame
+                && $0.port == port
+                && (username.isEmpty || $0.username == username)
+        }) {
+            selectedProfileID = profile.id
+            requestConnect(profile: profile)
+            return
+        }
+
+        // Prefill a new profile from the URL so the user can save and connect.
+        var profile = ConnectionProfile(name: "", host: host, port: port, username: username)
+        if !url.path.isEmpty, url.path != "/" {
+            profile.initialRemotePath = url.path
+        }
+        do {
+            profile = try store.upsert(profile).first ?? profile
+            profiles = try store.loadProfiles()
+            selectedProfileID = profile.id
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 }

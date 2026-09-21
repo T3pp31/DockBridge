@@ -43,6 +43,17 @@ struct ConnectionFormView: View {
                     TextField(String(localized: "Username"), text: $profile.username)
                 }
 
+                Section(String(localized: "Start Paths")) {
+                    TextField(String(localized: "Remote start path (optional)"), text: Binding(
+                        get: { profile.initialRemotePath ?? "" },
+                        set: { profile.initialRemotePath = $0.isEmpty ? nil : $0 }
+                    ))
+                    TextField(String(localized: "Local start path (optional)"), text: Binding(
+                        get: { profile.initialLocalPath ?? "" },
+                        set: { profile.initialLocalPath = $0.isEmpty ? nil : $0 }
+                    ))
+                }
+
                 Section(String(localized: "Authentication")) {
                     Picker(String(localized: "Method"), selection: $profile.authType) {
                         ForEach(AuthType.allCases) { type in
