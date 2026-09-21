@@ -214,6 +214,16 @@ impl TransferManager {
         }
     }
 
+    /// Returns the session id that enqueued the given task.
+    pub fn task_session_id(&self, task_id: u64) -> Option<u64> {
+        self.tasks.lock().ok().and_then(|tasks| {
+            tasks
+                .iter()
+                .find(|task| task.id == task_id)
+                .map(|t| t.session_id)
+        })
+    }
+
     /// Cancels a pending or in-progress transfer task.
     pub fn cancel_transfer(&self, task_id: u64) -> Result<(), TransferError> {
         let mut tasks = self
@@ -1726,6 +1736,27 @@ mod tests {
         assert!(matches!(err, TransferError::Cancelled));
         let queue = manager.get_transfer_queue();
         assert_eq!(queue[0].status, TransferStatus::Cancelled);
+    }
+
+    #[test]
+    fn task_session_id_returns_enqueuing_session() {
+        let config = AppConfig::default();
+        let manager = TransferManager::new(&config);
+        manager.insert_task(TransferTask {
+            id: 42,
+            session_id: 7,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("a"),
+            remote_path: "/a".to_string(),
+            status: TransferStatus::Failed {
+                message: "boom".to_string(),
+            },
+            bytes_transferred: 0,
+            total_bytes: 0,
+        });
+
+        assert_eq!(manager.task_session_id(42), Some(7));
+        assert_eq!(manager.task_session_id(999), None);
     }
 
     #[test]
