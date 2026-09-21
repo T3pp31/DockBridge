@@ -23,6 +23,17 @@ enum AppUpdateConfig {
         UserDefaults.standard.string(forKey: etagDefaultsKey)
     }
 
+    /// Cached, decoded release body from the last successful 200 response.
+    /// Used to re-evaluate `304 Not Modified` responses: the ETag only tells
+    /// us the *server* payload is unchanged, not that the update was applied.
+    static let releaseBodyDefaultsKey = "updateCheckReleaseBody"
+    static func persistReleaseBody(_ body: Data) {
+        UserDefaults.standard.set(body, forKey: releaseBodyDefaultsKey)
+    }
+    static func showCachedReleaseBody() -> Data? {
+        UserDefaults.standard.data(forKey: releaseBodyDefaultsKey)
+    }
+
     static let allowedDownloadHosts: Set<String> = ["github.com", "objects.githubusercontent.com"]
     static let githubReleaseDownloadPathPrefix = "/T3pp31/DockBridge/releases/download/"
     static let githubReleasePagePathPrefix = "/T3pp31/DockBridge/releases/"
