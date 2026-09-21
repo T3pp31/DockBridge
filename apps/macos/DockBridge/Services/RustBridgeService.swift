@@ -514,7 +514,6 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
             setActiveSession(next)
         } else {
             resetPublishedSessionFields()
-            client = nil
         }
     }
 
