@@ -454,6 +454,11 @@ final class MainViewModel: ObservableObject {
         isApplyingNavigationHistory = !recordHistory
         localPath = url
         isApplyingNavigationHistory = false
+        // A path change invalidates the previous listing: never leave old
+        // rows visible under the new folder (issue #575).
+        localItems = []
+        selectedLocalItemIDs = []
+        reloadLocal()
     }
 
     func onConnectionChanged(isConnected: Bool) async {
