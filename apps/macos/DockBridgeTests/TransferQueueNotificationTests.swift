@@ -30,7 +30,7 @@ final class TransferQueueNotificationTests: XCTestCase {
         XCTAssertEqual(finished.map { $0.id }, [UInt64(1), UInt64(2)])
     }
 
-    func testUnchangedAndPreviouslyUnknownTasksDoNotProduceNotifications() {
+    func testFastCompletedTaskAppearingBetweenPollsProducesNotification() {
         let queue = TransferQueueViewModel(bridge: FakeBridge())
         let previous = [
             makeTask(id: 1, status: .completed),
@@ -44,7 +44,9 @@ final class TransferQueueNotificationTests: XCTestCase {
 
         let finished = queue.finishedTransitions(from: previous, to: current)
 
-        XCTAssertTrue(finished.isEmpty)
+        // Task 3 was created and finished between polls; it is new and
+        // terminal, so it must notify exactly once.
+        XCTAssertEqual(finished.map { $0.id }, [UInt64(3)])
     }
 
     private func makeTask(id: UInt64, status: TransferStatusRecord) -> TransferTaskRecord {
