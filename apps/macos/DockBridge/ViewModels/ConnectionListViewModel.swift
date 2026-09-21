@@ -556,11 +556,13 @@ final class ConnectionListViewModel: ObservableObject {
             ? try keychain.loadPassphrase(account: account)
             : nil
 
-        if password == nil, let override = promptPasswordOverride {
+        // A one-time override from the credential prompt always takes
+        // precedence over a saved (possibly stale) Keychain value (issue #571).
+        if let override = promptPasswordOverride {
             password = override
             promptPasswordOverride = nil
         }
-        if passphrase == nil, let override = promptPassphraseOverride {
+        if let override = promptPassphraseOverride {
             passphrase = override
             promptPassphraseOverride = nil
         }
