@@ -554,6 +554,21 @@ fn exit_code_for_error(err: &anyhow::Error) -> u8 {
         {
             return EXIT_USAGE_CONFIG;
         }
+        if let Some(transfer) = cause.downcast_ref::<TransferError>() {
+            return if matches!(transfer, TransferError::Cancelled) {
+                EXIT_CANCELLED
+            } else {
+                EXIT_TRANSFER
+            };
+        }
+        // Bare typed errors from the SFTP client / TransferManager (issue #580).
+        if let Some(sftp) = cause.downcast_ref::<SftpError>() {
+            return if matches!(sftp, SftpError::Cancelled) {
+                EXIT_CANCELLED
+            } else {
+                EXIT_TRANSFER
+            };
+        }
     }
     EXIT_OTHER
 }
@@ -731,6 +746,50 @@ mod tests {
     fn unknown_anyhow_error_maps_to_other() {
         let err = anyhow::anyhow!("something else went wrong");
         assert_eq!(exit_code_for_error(&err), EXIT_OTHER);
+    }
+
+    #[test]
+    fn bare_sftp_error_maps_to_transfer_exit_code() {
+        let err = anyhow::Error::new(SftpError::ListFailed {
+            path: "/missing".to_string(),
+            message: "no such file".to_string(),
+        });
+        assert_eq!(exit_code_for_error(&err), EXIT_TRANSFER);
+
+        let err = anyhow::Error::new(SftpError::UploadFailed {
+            local: "l".to_string(),
+            remote: "r".to_string(),
+            message: "permission denied".to_string(),
+        });
+        assert_eq!(exit_code_for_error(&err), EXIT_TRANSFER);
+    }
+
+    #[test]
+    fn bare_sftp_cancelled_maps_to_cancelled_exit_code() {
+        let err = anyhow::Error::new(SftpError::Cancelled);
+        assert_eq!(exit_code_for_error(&err), EXIT_CANCELLED);
+    }
+
+    #[test]
+    fn bare_transfer_error_maps_to_transfer_exit_code() {
+        let err = anyhow::Error::new(TransferError::RetriesExhausted {
+            attempts: 3,
+            message: "timeout".to_string(),
+        });
+        assert_eq!(exit_code_for_error(&err), EXIT_TRANSFER);
+
+        let err = anyhow::Error::new(TransferError::Cancelled);
+        assert_eq!(exit_code_for_error(&err), EXIT_CANCELLED);
+    }
+
+    #[test]
+    fn context_around_bare_transfer_error_still_classifies() {
+        let err: anyhow::Error = anyhow::Error::new(TransferError::RetriesExhausted {
+            attempts: 2,
+            message: "write failed".to_string(),
+        })
+        .context("upload failed");
+        assert_eq!(exit_code_for_error(&err), EXIT_TRANSFER);
     }
 
     #[test]
