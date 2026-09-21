@@ -164,6 +164,27 @@ pub enum TransferStatusRecord {
     Cancelled,
 }
 
+/// Aggregate outcome of a directory (batch) transfer.
+#[derive(uniffi::Record)]
+pub struct BatchResultRecord {
+    /// Tasks that completed successfully.
+    pub succeeded: u64,
+    /// Tasks that finished with a failure.
+    pub failed: u64,
+    /// Entries that were skipped during the walk and never enqueued.
+    pub skipped: u64,
+}
+
+impl From<dockbridge_core::BatchResult> for BatchResultRecord {
+    fn from(value: dockbridge_core::BatchResult) -> Self {
+        Self {
+            succeeded: value.succeeded,
+            failed: value.failed,
+            skipped: value.skipped,
+        }
+    }
+}
+
 /// Private key algorithm classification exposed to Swift.
 #[derive(uniffi::Enum)]
 pub enum PrivateKeyAlgorithmRecord {
@@ -533,7 +554,7 @@ impl DockBridgeClient {
         local_path: String,
         remote_path: String,
         overwrite_policy: TransferOverwritePolicyRecord,
-    ) -> Result<(), DockBridgeError> {
+    ) -> Result<BatchResultRecord, DockBridgeError> {
         self.upload_entry(session_id, local_path, remote_path, overwrite_policy)
     }
 
@@ -543,7 +564,7 @@ impl DockBridgeClient {
         remote_path: String,
         local_path: String,
         overwrite_policy: TransferOverwritePolicyRecord,
-    ) -> Result<(), DockBridgeError> {
+    ) -> Result<BatchResultRecord, DockBridgeError> {
         self.download_entry(session_id, remote_path, local_path, overwrite_policy)
     }
 
@@ -553,33 +574,30 @@ impl DockBridgeClient {
         local_path: String,
         remote_directory: String,
         overwrite_policy: TransferOverwritePolicyRecord,
-    ) -> Result<(), DockBridgeError> {
+    ) -> Result<BatchResultRecord, DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
         let transfer_manager = Arc::clone(&self.transfer_manager);
         let overwrite_policy: TransferOverwritePolicy = overwrite_policy.into();
-        self.handle_session_result(
-            session_id,
-            block_on(async move {
-                let session = {
-                    let sessions = sessions.lock().await;
-                    sessions.get(&session_id).cloned().ok_or_else(|| {
-                        map_error_string(format!("session {session_id} not found"))
-                    })?
-                };
-                transfer_manager
-                    .enqueue_upload_entry_for_session_with_policy(
-                        session.as_ref(),
-                        session_id,
-                        &local_path,
-                        remote_directory,
-                        overwrite_policy,
-                    )
-                    .await
-                    .map_err(map_error)?;
-                Ok(())
-            })?,
-        )?;
-        Ok(())
+        block_on(async move {
+            let session = {
+                let sessions = sessions.lock().await;
+                sessions
+                    .get(&session_id)
+                    .cloned()
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?
+            };
+            transfer_manager
+                .enqueue_upload_entry_for_session_with_policy(
+                    session.as_ref(),
+                    session_id,
+                    &local_path,
+                    remote_directory,
+                    overwrite_policy,
+                )
+                .await
+                .map(|(_tasks, batch)| BatchResultRecord::from(batch))
+                .map_err(map_error)
+        })?
     }
 
     fn download_entry(
@@ -588,33 +606,30 @@ impl DockBridgeClient {
         remote_path: String,
         local_directory: String,
         overwrite_policy: TransferOverwritePolicyRecord,
-    ) -> Result<(), DockBridgeError> {
+    ) -> Result<BatchResultRecord, DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
         let transfer_manager = Arc::clone(&self.transfer_manager);
         let overwrite_policy: TransferOverwritePolicy = overwrite_policy.into();
-        self.handle_session_result(
-            session_id,
-            block_on(async move {
-                let session = {
-                    let sessions = sessions.lock().await;
-                    sessions.get(&session_id).cloned().ok_or_else(|| {
-                        map_error_string(format!("session {session_id} not found"))
-                    })?
-                };
-                transfer_manager
-                    .enqueue_download_entry_for_session_with_policy(
-                        session.as_ref(),
-                        session_id,
-                        remote_path,
-                        &local_directory,
-                        overwrite_policy,
-                    )
-                    .await
-                    .map_err(map_error)?;
-                Ok(())
-            })?,
-        )?;
-        Ok(())
+        block_on(async move {
+            let session = {
+                let sessions = sessions.lock().await;
+                sessions
+                    .get(&session_id)
+                    .cloned()
+                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?
+            };
+            transfer_manager
+                .enqueue_download_entry_for_session_with_policy(
+                    session.as_ref(),
+                    session_id,
+                    remote_path,
+                    &local_directory,
+                    overwrite_policy,
+                )
+                .await
+                .map(|(_tasks, batch)| BatchResultRecord::from(batch))
+                .map_err(map_error)
+        })?
     }
 
     fn delete(&self, session_id: u64, remote_path: String) -> Result<(), DockBridgeError> {
@@ -1012,6 +1027,22 @@ mod tests {
             std::mem::discriminant(&download.direction)
                 == std::mem::discriminant(&TransferDirectionRecord::Download)
         );
+    }
+
+    #[test]
+    fn batch_result_record_maps_counts() {
+        // Given: a BatchResult with per-file outcomes
+        // When: converted to the UniFFI record
+        // Then: failed/skipped counts are preserved so Swift can surface them
+        let batch = dockbridge_core::BatchResult {
+            succeeded: 3,
+            failed: 2,
+            skipped: 1,
+        };
+        let record = BatchResultRecord::from(batch);
+        assert_eq!(record.succeeded, 3);
+        assert_eq!(record.failed, 2);
+        assert_eq!(record.skipped, 1);
     }
 
     #[test]

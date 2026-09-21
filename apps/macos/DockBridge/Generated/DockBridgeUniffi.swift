@@ -617,9 +617,9 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
     
     func disconnect(sessionId: UInt64) throws 
     
-    func download(sessionId: UInt64, remotePath: String, localPath: String, overwritePolicy: TransferOverwritePolicyRecord) throws 
+    func download(sessionId: UInt64, remotePath: String, localPath: String, overwritePolicy: TransferOverwritePolicyRecord) throws  -> BatchResultRecord
     
-    func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws 
+    func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws  -> BatchResultRecord
     
     func getInitialDirectory(sessionId: UInt64) throws  -> String
     
@@ -660,9 +660,9 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
      */
     func stat(sessionId: UInt64, path: String, followSymlinks: Bool) throws  -> RemoteFileRecord
     
-    func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord) throws 
+    func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord) throws  -> BatchResultRecord
     
-    func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws 
+    func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws  -> BatchResultRecord
     
 }
 /**
@@ -815,7 +815,8 @@ open func disconnect(sessionId: UInt64)throws   {try rustCallWithError(FfiConver
 }
 }
     
-open func download(sessionId: UInt64, remotePath: String, localPath: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+open func download(sessionId: UInt64, remotePath: String, localPath: String, overwritePolicy: TransferOverwritePolicyRecord)throws  -> BatchResultRecord  {
+    return try  FfiConverterTypeBatchResultRecord_lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download(
             self.uniffiCloneHandle(),
@@ -824,10 +825,11 @@ open func download(sessionId: UInt64, remotePath: String, localPath: String, ove
         FfiConverterString.lower(localPath),
         FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
-}
+})
 }
     
-open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String, overwritePolicy: TransferOverwritePolicyRecord)throws  -> BatchResultRecord  {
+    return try  FfiConverterTypeBatchResultRecord_lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download_entry(
             self.uniffiCloneHandle(),
@@ -836,7 +838,7 @@ open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: S
         FfiConverterString.lower(localDirectory),
         FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
-}
+})
 }
     
 open func getInitialDirectory(sessionId: UInt64)throws  -> String  {
@@ -983,7 +985,8 @@ open func stat(sessionId: UInt64, path: String, followSymlinks: Bool)throws  -> 
 })
 }
     
-open func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+open func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord)throws  -> BatchResultRecord  {
+    return try  FfiConverterTypeBatchResultRecord_lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload(
             self.uniffiCloneHandle(),
@@ -992,10 +995,11 @@ open func upload(sessionId: UInt64, localPath: String, remotePath: String, overw
         FfiConverterString.lower(remotePath),
         FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
-}
+})
 }
     
-open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String, overwritePolicy: TransferOverwritePolicyRecord)throws  -> BatchResultRecord  {
+    return try  FfiConverterTypeBatchResultRecord_lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload_entry(
             self.uniffiCloneHandle(),
@@ -1004,7 +1008,7 @@ open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: Str
         FfiConverterString.lower(remoteDirectory),
         FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
-}
+})
 }
     
 
@@ -1165,6 +1169,85 @@ public func FfiConverterTypeAppConfigRecord_lift(_ buf: RustBuffer) throws -> Ap
 #endif
 public func FfiConverterTypeAppConfigRecord_lower(_ value: AppConfigRecord) -> RustBuffer {
     return FfiConverterTypeAppConfigRecord.lower(value)
+}
+
+
+/**
+ * Aggregate outcome of a directory (batch) transfer.
+ */
+public struct BatchResultRecord: Equatable, Hashable {
+    /**
+     * Tasks that completed successfully.
+     */
+    public var succeeded: UInt64
+    /**
+     * Tasks that finished with a failure.
+     */
+    public var failed: UInt64
+    /**
+     * Entries that were skipped during the walk and never enqueued.
+     */
+    public var skipped: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Tasks that completed successfully.
+         */succeeded: UInt64, 
+        /**
+         * Tasks that finished with a failure.
+         */failed: UInt64, 
+        /**
+         * Entries that were skipped during the walk and never enqueued.
+         */skipped: UInt64) {
+        self.succeeded = succeeded
+        self.failed = failed
+        self.skipped = skipped
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BatchResultRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBatchResultRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BatchResultRecord {
+        return
+            try BatchResultRecord(
+                succeeded: FfiConverterUInt64.read(from: &buf), 
+                failed: FfiConverterUInt64.read(from: &buf), 
+                skipped: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BatchResultRecord, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.succeeded, into: &buf)
+        FfiConverterUInt64.write(value.failed, into: &buf)
+        FfiConverterUInt64.write(value.skipped, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBatchResultRecord_lift(_ buf: RustBuffer) throws -> BatchResultRecord {
+    return try FfiConverterTypeBatchResultRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBatchResultRecord_lower(_ value: BatchResultRecord) -> RustBuffer {
+    return FfiConverterTypeBatchResultRecord.lower(value)
 }
 
 
@@ -2773,10 +2856,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_disconnect() != 49600) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download() != 36615) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download() != 2790) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download_entry() != 18406) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download_entry() != 11500) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_initial_directory() != 50950) {
@@ -2818,10 +2901,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_stat() != 5879) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload() != 4786) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload() != 56210) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload_entry() != 4078) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload_entry() != 54401) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_constructor_dockbridgeclient_new() != 38617) {
