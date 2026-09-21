@@ -728,6 +728,18 @@ impl DockBridgeClient {
     }
 
     fn retry_transfer(&self, session_id: u64, task_id: u64) -> Result<(), DockBridgeError> {
+        // A failed task belongs to the session that enqueued it.
+        // Refuse to retry it against a different session so bytes never go
+        // to the wrong host (issue #568).
+        let original_session_id = self
+            .transfer_manager
+            .task_session_id(task_id)
+            .ok_or_else(|| map_error_string(format!("task {task_id} not found")))?;
+        if original_session_id != session_id {
+            return Err(map_error_string(format!(
+                "task {task_id} belongs to session {original_session_id}, not {session_id}"
+            )));
+        }
         let sessions = Arc::clone(&self.sessions);
         let transfer_manager = Arc::clone(&self.transfer_manager);
         self.handle_session_result(
