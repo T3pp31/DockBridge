@@ -300,6 +300,8 @@ final class MainViewModel: ObservableObject {
     private let trashLocalItemOperation: @Sendable (URL) throws -> Void
     private var localInfoLoadGeneration = 0
     private var defaultLocalAccessURL: URL?
+    private var lastAppliedDefaultLocalPath: String
+    private var lastAppliedDefaultLocalBookmark: Data?
     private var pathBookmarkAccessURL: URL?
     private var localLoadGeneration = 0
     @Published private(set) var isLoadingRemote = false
@@ -347,6 +349,8 @@ final class MainViewModel: ObservableObject {
         self.showHiddenFiles = config.showHiddenFiles
         let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
         self.defaultLocalAccessURL = resolution.accessURL
+        self.lastAppliedDefaultLocalPath = config.defaultLocalPath
+        self.lastAppliedDefaultLocalBookmark = config.defaultLocalBookmark
         self.localHistory = PathNavigationHistory(current: resolution.url.path)
         isApplyingNavigationHistory = true
         self.localPath = resolution.url
@@ -360,20 +364,33 @@ final class MainViewModel: ObservableObject {
     func applyDefaultLocalConfig(_ config: AppConfig) {
         let hiddenFilesChanged = showHiddenFiles != config.showHiddenFiles
         showHiddenFiles = config.showHiddenFiles
-        if let previous = defaultLocalAccessURL {
-            bookmarkService.stopAccessing(previous)
-            defaultLocalAccessURL = nil
-        }
 
-        let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
-        defaultLocalAccessURL = resolution.accessURL
-        applyLocalPath(resolution.url, recordHistory: false)
-        localHistory.reset(to: resolution.url.path)
-        if case .bookmarkFailed(_, let error) = resolution {
-            errorMessage = DefaultLocalPathResolver.userMessage(for: error)
-        }
+        // Only re-resolve the default local folder when that setting actually
+        // changed. Unrelated settings (hidden files, notification sound, ...)
+        // must not reset the current directory or history (issue #577).
+        let defaultPathChanged = lastAppliedDefaultLocalPath != config.defaultLocalPath
+            || lastAppliedDefaultLocalBookmark != config.defaultLocalBookmark
+        if defaultPathChanged {
+            if let previous = defaultLocalAccessURL {
+                bookmarkService.stopAccessing(previous)
+                defaultLocalAccessURL = nil
+            }
+
+            let resolution = DefaultLocalPathResolver.resolve(config: config, bookmarkService: bookmarkService)
+            defaultLocalAccessURL = resolution.accessURL
+            applyLocalPath(resolution.url, recordHistory: false)
+            localHistory.reset(to: resolution.url.path)
             selectedLocalItemIDs = []
-        reloadLocal()
+            if case .bookmarkFailed(_, let error) = resolution {
+                errorMessage = DefaultLocalPathResolver.userMessage(for: error)
+            }
+            reloadLocal()
+        } else if hiddenFilesChanged {
+            // Keep the current directory; just re-list with the new filter.
+            reloadLocal()
+        }
+        lastAppliedDefaultLocalPath = config.defaultLocalPath
+        lastAppliedDefaultLocalBookmark = config.defaultLocalBookmark
         if hiddenFilesChanged {
             Task { await reloadRemote() }
         }
