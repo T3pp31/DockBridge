@@ -831,13 +831,27 @@ final class MainViewModel: ObservableObject {
             return
         }
 
-        let didDownload = await download(remotePath: item.path, toLocalDirectory: sessionDirectory)
+        // Keep downloaded content in a dedicated `content` subdirectory so
+        // files named like the internal metadata (e.g. `.dockbridge-session.json`,
+        // `.dockbridge-unsynced`) can never collide with it (issue #567).
+        let contentDirectory = sessionDirectory.appendingPathComponent("content", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(
+                at: contentDirectory,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            errorMessage = error.dockBridgeUserMessage
+            return
+        }
+
+        let didDownload = await download(remotePath: item.path, toLocalDirectory: contentDirectory)
         guard didDownload else {
             try? FileManager.default.removeItem(at: sessionDirectory)
             return
         }
 
-        let localFile = sessionDirectory.appendingPathComponent(item.name, isDirectory: false)
+        let localFile = contentDirectory.appendingPathComponent(item.name, isDirectory: false)
         guard FileManager.default.fileExists(atPath: localFile.path) else {
             let format = String(localized: "Downloaded file was not found at %@.")
             errorMessage = String(format: format, localFile.path)
@@ -1018,7 +1032,9 @@ final class MainViewModel: ObservableObject {
     /// Removes clean leftovers from previous runs. Any directory carrying an
     /// unsynced marker is deliberately retained for manual recovery.
     func cleanupRemoteOpenTemp() {
-        let trackedURLs = Set(remoteEditSessions.map { $0.localURL.deletingLastPathComponent() })
+        let trackedURLs = Set(remoteEditSessions.map {
+            $0.localURL.deletingLastPathComponent().deletingLastPathComponent()
+        })
         guard let directories = try? FileManager.default.contentsOfDirectory(
             at: remoteEditTempRoot,
             includingPropertiesForKeys: [.isDirectoryKey],
@@ -1041,7 +1057,8 @@ final class MainViewModel: ObservableObject {
                 preserved.append(dir)
                 continue
             }
-            let localFile = dir.appendingPathComponent(metadata.localFileName, isDirectory: false)
+            let localFile = dir.appendingPathComponent("content", isDirectory: true)
+                .appendingPathComponent(metadata.localFileName, isDirectory: false)
             guard let currentSnapshot = remoteEditFileSnapshot(at: localFile),
                   currentSnapshot == metadata.lastUploadedSnapshot else {
                 preserved.append(dir)
@@ -1085,6 +1102,7 @@ final class MainViewModel: ObservableObject {
 
     private func pendingMarkerURL(for session: RemoteEditSession) -> URL {
         session.localURL.deletingLastPathComponent()
+            .deletingLastPathComponent()
             .appendingPathComponent(Self.remoteEditPendingMarkerName, isDirectory: false)
     }
 
@@ -1095,6 +1113,7 @@ final class MainViewModel: ObservableObject {
 
     private func recoveryMetadataURL(for session: RemoteEditSession) -> URL {
         session.localURL.deletingLastPathComponent()
+            .deletingLastPathComponent()
             .appendingPathComponent(Self.remoteEditMetadataFileName, isDirectory: false)
     }
 
