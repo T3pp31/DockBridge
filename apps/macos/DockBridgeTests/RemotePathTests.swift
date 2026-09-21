@@ -26,6 +26,16 @@ final class RemotePathTests: XCTestCase {
         XCTAssertEqual(try RemotePath.normalize("//foo//bar"), "/foo/bar")
     }
 
+    func testNormalizeDropsDotSegments() throws {
+        XCTAssertEqual(try RemotePath.normalize("/srv/./"), "/srv")
+        XCTAssertEqual(try RemotePath.normalize("/srv/./file.txt"), "/srv/file.txt")
+    }
+
+    func testNormalizeCollapsesTripleSlash() throws {
+        XCTAssertEqual(try RemotePath.normalize("/srv///"), "/srv")
+        XCTAssertEqual(try RemotePath.normalize("/srv///file.txt"), "/srv/file.txt")
+    }
+
     func testDirectoryPathAddsTrailingSlash() throws {
         XCTAssertEqual(try RemotePath.directoryPath("/var/www"), "/var/www/")
     }
