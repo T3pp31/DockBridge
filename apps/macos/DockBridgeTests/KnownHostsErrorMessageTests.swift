@@ -134,7 +134,7 @@ final class KnownHostsErrorMessageTests: XCTestCase {
     }
 
     func testAuthenticationFailureInspectsGenericMessageBeforeFriendlyMapping() {
-        let error = DockBridgeError.Generic(
+        let error = DockBridgeError.Other(
             message: "authentication failed for user 'demo'"
         )
         XCTAssertTrue(error.isAuthenticationFailure)
@@ -143,7 +143,7 @@ final class KnownHostsErrorMessageTests: XCTestCase {
             String(localized: "Check the username and password.")
         )
 
-        let keyError = DockBridgeError.Generic(
+        let keyError = DockBridgeError.Other(
             message: "failed to load private key from /tmp/key: decrypt failed"
         )
         XCTAssertTrue(keyError.isAuthenticationFailure)

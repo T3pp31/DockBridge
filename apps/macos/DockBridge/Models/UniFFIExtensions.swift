@@ -136,20 +136,28 @@ extension Error {
     }
 
     var isConnectionLost: Bool {
-        if let error = self as? DockBridgeError, case .Generic(let message) = error {
-            return DockBridgeError.isConnectionLostMessage(message)
+        if let error = self as? DockBridgeError {
+            if case .ConnectionLost = error { return true }
+            if case .Other(let message) = error {
+                return DockBridgeError.isConnectionLostMessage(message)
+            }
+            return false
         }
-        return false
+        return DockBridgeError.isConnectionLostMessage(localizedDescription)
     }
 
     /// True when the error represents an authentication / key-passphrase failure.
     /// Inspects the raw `DockBridgeError.Generic` message when available.
     var isAuthenticationFailure: Bool {
-        if let error = self as? DockBridgeError, case .Generic(let message) = error {
-            return DockBridgeError.isAuthenticationMessage(message)
-        }
-        if DockBridgeError.isAuthenticationMessage(localizedDescription) {
-            return true
+        if let error = self as? DockBridgeError {
+            switch error {
+            case .AuthFailed, .PrivateKeyLoadFailed:
+                return true
+            case .Other(let message), .ConnectionLost(let message), .Config(let message):
+                return DockBridgeError.isAuthenticationMessage(message)
+            default:
+                return false
+            }
         }
         return DockBridgeError.isAuthenticationMessage(dockBridgeUserMessage)
     }

@@ -53,7 +53,7 @@ final class FakeBridge: RemoteBridging {
         connectedUsername = profile.username
         if failConnect {
             connectionStatus = .disconnected
-            throw DockBridgeError.Generic(message: "simulated connect failure")
+            throw DockBridgeError.Other(message: "simulated connect failure")
         }
         connectionStatus = .connected(endpoint: profile.endpointLabel)
     }
@@ -72,7 +72,7 @@ final class FakeBridge: RemoteBridging {
     func listDirectory(path: String) async throws -> [RemoteFileRecord] {
         listedDirectories.append(path)
         if let items = directoryListings[path] { return items }
-        throw DockBridgeError.Generic(message: "listing not found: \(path)")
+        throw DockBridgeError.Other(message: "listing not found: \(path)")
     }
 
     func firstExistingHomeDirectoryCandidate(for username: String) async -> String? {
@@ -90,7 +90,7 @@ final class FakeBridge: RemoteBridging {
     ) async throws {
         uploaded.append((localPath, remoteDirectory, overwritePolicy))
         if uploadFails {
-            throw DockBridgeError.Generic(message: "simulated upload failure")
+            throw DockBridgeError.Other(message: "simulated upload failure")
         }
     }
 
@@ -101,28 +101,28 @@ final class FakeBridge: RemoteBridging {
     ) async throws {
         downloaded.append((remotePath, localDirectory, overwritePolicy))
         if downloadFails {
-            throw DockBridgeError.Generic(message: "simulated download failure")
+            throw DockBridgeError.Other(message: "simulated download failure")
         }
     }
 
     func deleteRemote(path: String) async throws {
         deleted.append(path)
         if deleteFails {
-            throw DockBridgeError.Generic(message: "simulated delete failure")
+            throw DockBridgeError.Other(message: "simulated delete failure")
         }
     }
 
     func renameRemote(from: String, to: String) async throws {
         renamed.append((from, to))
         if failTransfers {
-            throw DockBridgeError.Generic(message: "simulated rename failure")
+            throw DockBridgeError.Other(message: "simulated rename failure")
         }
     }
 
     func mkdirRemote(path: String) async throws {
         createdDirectories.append(path)
         if failTransfers {
-            throw DockBridgeError.Generic(message: "simulated mkdir failure")
+            throw DockBridgeError.Other(message: "simulated mkdir failure")
         }
     }
 
