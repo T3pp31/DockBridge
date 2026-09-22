@@ -1726,8 +1726,21 @@ enum DockBridgeError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErro
 
     
     
-    case Generic(message: String)
-    
+    case ConnectionLost(message: String
+    )
+    case HostKeyMismatch(host: String, port: UInt16
+    )
+    case HostKeyRejected(host: String, port: UInt16
+    )
+    case AuthFailed(username: String
+    )
+    case PrivateKeyLoadFailed(path: String, message: String
+    )
+    case Cancelled
+    case Config(message: String
+    )
+    case Other(message: String
+    )
 
     
 
@@ -1757,12 +1770,33 @@ public struct FfiConverterTypeDockBridgeError: FfiConverterRustBuffer {
         
 
         
-        case 1: return .Generic(
+        case 1: return .ConnectionLost(
             message: try FfiConverterString.read(from: &buf)
-        )
-        
+            )
+        case 2: return .HostKeyMismatch(
+            host: try FfiConverterString.read(from: &buf), 
+            port: try FfiConverterUInt16.read(from: &buf)
+            )
+        case 3: return .HostKeyRejected(
+            host: try FfiConverterString.read(from: &buf), 
+            port: try FfiConverterUInt16.read(from: &buf)
+            )
+        case 4: return .AuthFailed(
+            username: try FfiConverterString.read(from: &buf)
+            )
+        case 5: return .PrivateKeyLoadFailed(
+            path: try FfiConverterString.read(from: &buf), 
+            message: try FfiConverterString.read(from: &buf)
+            )
+        case 6: return .Cancelled
+        case 7: return .Config(
+            message: try FfiConverterString.read(from: &buf)
+            )
+        case 8: return .Other(
+            message: try FfiConverterString.read(from: &buf)
+            )
 
-        default: throw UniffiInternalError.unexpectedEnumCase
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -1772,10 +1806,48 @@ public struct FfiConverterTypeDockBridgeError: FfiConverterRustBuffer {
         
 
         
-        case .Generic(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-
         
+        case let .ConnectionLost(message):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(message, into: &buf)
+            
+        
+        case let .HostKeyMismatch(host,port):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(host, into: &buf)
+            FfiConverterUInt16.write(port, into: &buf)
+            
+        
+        case let .HostKeyRejected(host,port):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(host, into: &buf)
+            FfiConverterUInt16.write(port, into: &buf)
+            
+        
+        case let .AuthFailed(username):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(username, into: &buf)
+            
+        
+        case let .PrivateKeyLoadFailed(path,message):
+            writeInt(&buf, Int32(5))
+            FfiConverterString.write(path, into: &buf)
+            FfiConverterString.write(message, into: &buf)
+            
+        
+        case .Cancelled:
+            writeInt(&buf, Int32(6))
+        
+        
+        case let .Config(message):
+            writeInt(&buf, Int32(7))
+            FfiConverterString.write(message, into: &buf)
+            
+        
+        case let .Other(message):
+            writeInt(&buf, Int32(8))
+            FfiConverterString.write(message, into: &buf)
+            
         }
     }
 }
