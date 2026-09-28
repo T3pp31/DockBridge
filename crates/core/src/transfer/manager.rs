@@ -214,6 +214,28 @@ impl TransferManager {
         }
     }
 
+    /// Cancels every pending or in-progress transfer task owned by a session.
+    ///
+    /// Used when a session is being torn down (explicit disconnect, connection
+    /// loss) so transfers keep writing to a server the user has left (issue #570).
+    pub fn cancel_session_transfers(&self, session_id: u64) {
+        let task_ids: Vec<u64> = self
+            .get_transfer_queue()
+            .into_iter()
+            .filter(|task| {
+                task.session_id == session_id
+                    && matches!(
+                        task.status,
+                        TransferStatus::Pending | TransferStatus::InProgress
+                    )
+            })
+            .map(|task| task.id)
+            .collect();
+        for task_id in task_ids {
+            let _ = self.cancel_transfer(task_id);
+        }
+    }
+
     /// Cancels a pending or in-progress transfer task.
     pub fn cancel_transfer(&self, task_id: u64) -> Result<(), TransferError> {
         let mut tasks = self
@@ -1726,6 +1748,47 @@ mod tests {
         assert!(matches!(err, TransferError::Cancelled));
         let queue = manager.get_transfer_queue();
         assert_eq!(queue[0].status, TransferStatus::Cancelled);
+    }
+
+    #[test]
+    fn cancel_session_transfers_cancels_only_that_session() {
+        // Given: tasks owned by two different sessions
+        // When: the session-owned tasks are cancelled
+        // Then: only that session.s tasks become Cancelled; the other session is untouched
+        let config = AppConfig::default();
+        let manager = TransferManager::new(&config);
+        manager.insert_task(TransferTask {
+            id: 1,
+            session_id: 10,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("a"),
+            remote_path: "/a".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 100,
+        });
+        manager.insert_task(TransferTask {
+            id: 2,
+            session_id: 20,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("b"),
+            remote_path: "/b".to_string(),
+            status: TransferStatus::Pending,
+            bytes_transferred: 0,
+            total_bytes: 100,
+        });
+
+        manager.cancel_session_transfers(10);
+
+        let queue = manager.get_transfer_queue();
+        assert_eq!(
+            queue.iter().find(|t| t.id == 1).unwrap().status,
+            TransferStatus::Cancelled
+        );
+        assert_eq!(
+            queue.iter().find(|t| t.id == 2).unwrap().status,
+            TransferStatus::Pending
+        );
     }
 
     #[test]

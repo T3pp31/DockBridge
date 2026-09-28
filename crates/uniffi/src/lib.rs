@@ -757,6 +757,7 @@ impl DockBridgeClient {
         notify: bool,
         reason: String,
     ) -> Result<(), DockBridgeError> {
+        self.transfer_manager.cancel_session_transfers(session_id);
         block_on(async {
             if let Some(handle) = self.monitors.lock().await.remove(&session_id) {
                 handle.abort();
