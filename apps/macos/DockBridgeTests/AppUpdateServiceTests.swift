@@ -290,6 +290,22 @@ extension AppUpdateServiceTests {
         XCTAssertNil(update, "304 Not Modified must mean no new update")
     }
 
+    func testCheckForUpdateClearsCorruptCacheOn304() async throws {
+        // Given: a cached release body is corrupted and the server answers 304
+        UserDefaults.standard.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
+        UserDefaults.standard.set(Data("not json".utf8), forKey: AppUpdateConfig.releaseBodyDefaultsKey)
+        defer {
+            UserDefaults.standard.removeObject(forKey: AppUpdateConfig.etagDefaultsKey)
+            UserDefaults.standard.removeObject(forKey: AppUpdateConfig.releaseBodyDefaultsKey)
+        }
+
+        let service = AppUpdateService(session: MockURLSession(statusCode: 304, data: Data()))
+        let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+
+        XCTAssertNil(update)
+        XCTAssertNil(AppUpdateConfig.showCachedReleaseBody(), "corrupt cache must be cleared")
+    }
+
     func testCheckForUpdateSurfacesRateLimit() async {
         // Given: the server responds 429 (rate limited)
         let service = AppUpdateService(session: MockURLSession(statusCode: 429, data: Data()))

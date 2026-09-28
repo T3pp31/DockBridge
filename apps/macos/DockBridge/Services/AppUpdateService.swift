@@ -112,9 +112,15 @@ final class AppUpdateService: @unchecked Sendable {
         // the cached release body so the caller re-runs the version comparison;
         // if no body was ever cached, re-fetch without If-None-Match (issue #573).
         if httpResponse.statusCode == 304 {
-            if let cached = AppUpdateConfig.showCachedReleaseBody(),
-               let release = try? JSONDecoder().decode(GitHubReleaseResponse.self, from: cached) {
-                return release
+            if let cached = AppUpdateConfig.showCachedReleaseBody() {
+                do {
+                    let release = try JSONDecoder().decode(GitHubReleaseResponse.self, from: cached)
+                    return release
+                } catch {
+                    // A corrupted/stale cache can never decode; clear it so
+                    // the next check re-fetches instead of failing on 304.
+                    AppUpdateConfig.clearReleaseBody()
+                }
             }
             // Avoid an infinite 304 loop: without a cached body there is
             // nothing to re-evaluate, and an unconditioned request can still

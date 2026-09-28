@@ -33,6 +33,9 @@ enum AppUpdateConfig {
     static func showCachedReleaseBody() -> Data? {
         UserDefaults.standard.data(forKey: releaseBodyDefaultsKey)
     }
+    static func clearReleaseBody() {
+        UserDefaults.standard.removeObject(forKey: releaseBodyDefaultsKey)
+    }
 
     static let allowedDownloadHosts: Set<String> = ["github.com", "objects.githubusercontent.com"]
     static let githubReleaseDownloadPathPrefix = "/T3pp31/DockBridge/releases/download/"
