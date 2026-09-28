@@ -239,10 +239,16 @@ impl std::fmt::Display for DockBridgeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ConnectionLost { message } => write!(f, "{message}"),
-            Self::HostKeyMismatch { host, port } => write!(f, "host key mismatch for {host}:{port}"),
-            Self::HostKeyRejected { host, port } => write!(f, "host key rejected for {host}:{port}"),
+            Self::HostKeyMismatch { host, port } => {
+                write!(f, "host key mismatch for {host}:{port}")
+            }
+            Self::HostKeyRejected { host, port } => {
+                write!(f, "host key rejected for {host}:{port}")
+            }
             Self::AuthFailed { username } => write!(f, "authentication failed for {username}"),
-            Self::PrivateKeyLoadFailed { path, message } => write!(f, "failed to load private key from {path}: {message}"),
+            Self::PrivateKeyLoadFailed { path, message } => {
+                write!(f, "failed to load private key from {path}: {message}")
+            }
             Self::Cancelled => write!(f, "transfer was cancelled"),
             Self::Config { message } => write!(f, "{message}"),
             Self::Other { message } => write!(f, "{message}"),
@@ -790,7 +796,11 @@ impl DockBridgeClient {
         session_id: u64,
         result: Result<T, DockBridgeError>,
     ) -> Result<T, DockBridgeError> {
-        if let Err(DockBridgeError::Other { ref message } | DockBridgeError::ConnectionLost { ref message }) = result {
+        if let Err(
+            DockBridgeError::Other { ref message }
+            | DockBridgeError::ConnectionLost { ref message },
+        ) = result
+        {
             if is_connection_lost_message(message) {
                 if let Err(error) = self.remove_session(session_id, true, message.clone()) {
                     eprintln!("failed to remove disconnected session {session_id}: {error}");
@@ -939,28 +949,39 @@ fn map_error(error: impl std::fmt::Display) -> DockBridgeError {
 }
 
 fn map_app_error(error: dockbridge_core::AppError) -> DockBridgeError {
-    use dockbridge_core::{AppError as App, AuthError, ConnectionError, SecurityError, SftpError, TransferError};
+    use dockbridge_core::{
+        AppError as App, AuthError, ConnectionError, SecurityError, SftpError, TransferError,
+    };
     match error {
         App::Connection(ConnectionError::HostKeyRejected) => DockBridgeError::HostKeyRejected {
             host: String::new(),
             port: 0,
         },
-        App::Connection(ConnectionError::ConnectFailed { host, port, message }) => {
+        App::Connection(ConnectionError::ConnectFailed {
+            host,
+            port,
+            message,
+        }) => {
             if message.to_lowercase().contains("host key") {
                 DockBridgeError::HostKeyRejected { host, port }
             } else {
                 DockBridgeError::Other { message }
             }
         }
-        App::Auth(dockbridge_core::AuthError::Failed { username }) => DockBridgeError::AuthFailed { username },
+        App::Auth(dockbridge_core::AuthError::Failed { username }) => {
+            DockBridgeError::AuthFailed { username }
+        }
         App::Auth(AuthError::PrivateKeyLoadFailed { path, message }) => {
             DockBridgeError::PrivateKeyLoadFailed { path, message }
         }
         App::Security(dockbridge_core::SecurityError::HostKeyMismatch { host, port, .. }) => {
             DockBridgeError::HostKeyMismatch { host, port }
         }
-        App::Security(SecurityError::HostKeyRejected { host, port }) => DockBridgeError::HostKeyRejected { host, port },
-        App::Sftp(dockbridge_core::SftpError::Cancelled) | App::Transfer(TransferError::Cancelled) => DockBridgeError::Cancelled,
+        App::Security(SecurityError::HostKeyRejected { host, port }) => {
+            DockBridgeError::HostKeyRejected { host, port }
+        }
+        App::Sftp(dockbridge_core::SftpError::Cancelled)
+        | App::Transfer(TransferError::Cancelled) => DockBridgeError::Cancelled,
         other => DockBridgeError::Other {
             message: other.to_string(),
         },
@@ -1115,23 +1136,29 @@ mod tests {
 
     #[test]
     fn map_app_error_classifies_known_categories() {
-        let auth = map_app_error(dockbridge_core::AppError::Auth(dockbridge_core::AuthError::Failed {
-            username: "alice".to_string(),
-        }));
+        let auth = map_app_error(dockbridge_core::AppError::Auth(
+            dockbridge_core::AuthError::Failed {
+                username: "alice".to_string(),
+            },
+        ));
         match auth {
             DockBridgeError::AuthFailed { username } => assert_eq!(username, "alice"),
             other => panic!("expected AuthFailed, got {other:?}"),
         }
 
-        let cancelled = map_app_error(dockbridge_core::AppError::Sftp(dockbridge_core::SftpError::Cancelled));
+        let cancelled = map_app_error(dockbridge_core::AppError::Sftp(
+            dockbridge_core::SftpError::Cancelled,
+        ));
         assert!(matches!(cancelled, DockBridgeError::Cancelled));
 
-        let mismatch = map_app_error(dockbridge_core::AppError::Security(dockbridge_core::SecurityError::HostKeyMismatch {
-            host: "h".to_string(),
-            port: 22,
-            expected: "a".to_string(),
-            actual: "b".to_string(),
-        }));
+        let mismatch = map_app_error(dockbridge_core::AppError::Security(
+            dockbridge_core::SecurityError::HostKeyMismatch {
+                host: "h".to_string(),
+                port: 22,
+                expected: "a".to_string(),
+                actual: "b".to_string(),
+            },
+        ));
         match mismatch {
             DockBridgeError::HostKeyMismatch { host, port } => {
                 assert_eq!(host, "h");
@@ -1140,5 +1167,4 @@ mod tests {
             other => panic!("expected HostKeyMismatch, got {other:?}"),
         }
     }
-
 }
