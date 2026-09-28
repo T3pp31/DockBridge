@@ -544,7 +544,7 @@ fn exit_code_for_error(err: &anyhow::Error) -> u8 {
                 AppError::Security(
                     SecurityError::HostKeyMismatch { .. } | SecurityError::HostKeyRejected { .. },
                 ) => EXIT_HOST_KEY,
-                AppError::Connection(ConnectionError::HostKeyRejected) => EXIT_HOST_KEY,
+                AppError::Connection(ConnectionError::HostKeyRejected { .. }) => EXIT_HOST_KEY,
                 _ => EXIT_OTHER,
             };
         }
@@ -694,7 +694,10 @@ mod tests {
         }));
         assert_eq!(exit_code_for_error(&err), EXIT_HOST_KEY);
 
-        let err = anyhow::Error::new(AppError::Connection(ConnectionError::HostKeyRejected));
+        let err = anyhow::Error::new(AppError::Connection(ConnectionError::HostKeyRejected {
+            host: "h".to_string(),
+            port: 22,
+        }));
         assert_eq!(exit_code_for_error(&err), EXIT_HOST_KEY);
 
         let err = anyhow::Error::new(AppError::Config(dockbridge_core::ConfigError::NotFound {

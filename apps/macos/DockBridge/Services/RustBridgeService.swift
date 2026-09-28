@@ -131,7 +131,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     func disconnect(session: RemoteSession) async throws {
         guard sessions[session.id] === session else { return }
         guard !session.isConnecting else {
-            throw DockBridgeError.Generic(message: String(localized: "A connection is still in progress."))
+            throw DockBridgeError.Other(message: String(localized: "A connection is still in progress."))
         }
 
         var disconnectError: Error?
@@ -393,7 +393,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
             let targetSession = activeSession,
             let rustSessionId = targetSession.sessionId
         else {
-            throw DockBridgeError.Generic(message: String(localized: "Not connected to a remote host."))
+            throw DockBridgeError.Other(message: String(localized: "Not connected to a remote host."))
         }
 
         do {
@@ -423,12 +423,12 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         passphrase: String?
     ) async throws -> RemoteSession {
         guard !sessions.values.contains(where: \.isConnecting) else {
-            throw DockBridgeError.Generic(message: String(localized: "A connection is already in progress."))
+            throw DockBridgeError.Other(message: String(localized: "A connection is already in progress."))
         }
 
         try prepareClient()
         guard let client else {
-            throw DockBridgeError.Generic(message: String(localized: "Rust client is not initialized."))
+            throw DockBridgeError.Other(message: String(localized: "Rust client is not initialized."))
         }
 
         let session = RemoteSession(

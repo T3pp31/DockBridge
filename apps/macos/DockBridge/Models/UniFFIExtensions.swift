@@ -35,8 +35,14 @@ extension TransferTaskRecord: Identifiable {}
 extension DockBridgeError {
     var userFriendlyMessage: String {
         switch self {
-        case .Generic(let message):
+        case .HostKeyMismatch, .HostKeyRejected:
+            return String(localized: "The server's identity has changed. Disconnect and verify with your server administrator.")
+        case .AuthFailed, .PrivateKeyLoadFailed:
+            return String(localized: "Check the username and password.")
+        case .ConnectionLost(let message), .Other(let message), .Config(let message):
             return Self.friendlyMessage(for: message)
+        case .Cancelled:
+            return String(localized: "Cancelled")
         }
     }
 
@@ -136,21 +142,32 @@ extension Error {
     }
 
     var isConnectionLost: Bool {
-        if let error = self as? DockBridgeError, case .Generic(let message) = error {
-            return DockBridgeError.isConnectionLostMessage(message)
+        if let error = self as? DockBridgeError {
+            if case .ConnectionLost = error { return true }
+            if case .Other(let message) = error {
+                return DockBridgeError.isConnectionLostMessage(message)
+            }
+            return false
         }
+        // Non-DockBridge errors carry no typed category; match only what we
+        // created ourselves so localized/system messages cannot be misread.
         return false
     }
 
     /// True when the error represents an authentication / key-passphrase failure.
-    /// Inspects the raw `DockBridgeError.Generic` message when available.
     var isAuthenticationFailure: Bool {
-        if let error = self as? DockBridgeError, case .Generic(let message) = error {
-            return DockBridgeError.isAuthenticationMessage(message)
+        if let error = self as? DockBridgeError {
+            switch error {
+            case .AuthFailed, .PrivateKeyLoadFailed:
+                return true
+            // ConnectionLost is a transport failure, never an auth failure;
+            // only untyped categories keep the message-based fallback.
+            case .Other(let message), .Config(let message):
+                return DockBridgeError.isAuthenticationMessage(message)
+            default:
+                return false
+            }
         }
-        if DockBridgeError.isAuthenticationMessage(localizedDescription) {
-            return true
-        }
-        return DockBridgeError.isAuthenticationMessage(dockBridgeUserMessage)
+        return false
     }
 }

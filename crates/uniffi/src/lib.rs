@@ -56,7 +56,7 @@ fn runtime() -> Result<&'static tokio::runtime::Runtime, DockBridgeError> {
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
-                .map_err(|err| DockBridgeError::Generic {
+                .map_err(|err| DockBridgeError::Other {
                     message: format!("failed to create Tokio runtime: {err}"),
                 })
         })
@@ -224,15 +224,34 @@ pub struct KnownHostEntryRecord {
 
 /// Flat error type exposed to Swift.
 #[derive(Debug, Clone, uniffi::Error)]
-#[uniffi(flat_error)]
 pub enum DockBridgeError {
-    Generic { message: String },
+    ConnectionLost { message: String },
+    HostKeyMismatch { host: String, port: u16 },
+    HostKeyRejected { host: String, port: u16 },
+    AuthFailed { username: String },
+    PrivateKeyLoadFailed { path: String, message: String },
+    Cancelled,
+    Config { message: String },
+    Other { message: String },
 }
 
 impl std::fmt::Display for DockBridgeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Generic { message } => write!(f, "{message}"),
+            Self::ConnectionLost { message } => write!(f, "{message}"),
+            Self::HostKeyMismatch { host, port } => {
+                write!(f, "host key mismatch for {host}:{port}")
+            }
+            Self::HostKeyRejected { host, port } => {
+                write!(f, "host key rejected for {host}:{port}")
+            }
+            Self::AuthFailed { username } => write!(f, "authentication failed for {username}"),
+            Self::PrivateKeyLoadFailed { path, message } => {
+                write!(f, "failed to load private key from {path}: {message}")
+            }
+            Self::Cancelled => write!(f, "transfer was cancelled"),
+            Self::Config { message } => write!(f, "{message}"),
+            Self::Other { message } => write!(f, "{message}"),
         }
     }
 }
@@ -367,7 +386,7 @@ impl DockBridgeClient {
             known_hosts,
             prompt,
         ))?
-        .map_err(map_error)?;
+        .map_err(map_app_error)?;
 
         let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed);
         block_on(async {
@@ -777,7 +796,11 @@ impl DockBridgeClient {
         session_id: u64,
         result: Result<T, DockBridgeError>,
     ) -> Result<T, DockBridgeError> {
-        if let Err(DockBridgeError::Generic { ref message }) = result {
+        if let Err(
+            DockBridgeError::Other { ref message }
+            | DockBridgeError::ConnectionLost { ref message },
+        ) = result
+        {
             if is_connection_lost_message(message) {
                 if let Err(error) = self.remove_session(session_id, true, message.clone()) {
                     eprintln!("failed to remove disconnected session {session_id}: {error}");
@@ -918,13 +941,56 @@ fn to_transfer_task_record(task: TransferTask) -> TransferTaskRecord {
 }
 
 fn map_error(error: impl std::fmt::Display) -> DockBridgeError {
-    DockBridgeError::Generic {
+    // Fallback for errors reachable only through their Display string.
+    // Callers with a strongly typed error should use `map_app_error` so
+    // known categories keep their variants instead of a flat message.
+    DockBridgeError::Other {
         message: error.to_string(),
     }
 }
 
+fn map_app_error(error: dockbridge_core::AppError) -> DockBridgeError {
+    use dockbridge_core::{
+        AppError as App, AuthError, ConnectionError, SecurityError, TransferError,
+    };
+    match error {
+        App::Connection(ConnectionError::HostKeyRejected { host, port }) => {
+            DockBridgeError::HostKeyRejected { host, port }
+        }
+        App::Connection(ConnectionError::ConnectFailed { message, .. }) => {
+            if is_connection_lost_message(&message) {
+                DockBridgeError::ConnectionLost { message }
+            } else {
+                DockBridgeError::Other { message }
+            }
+        }
+        App::Connection(ConnectionError::Timeout { timeout_secs }) => {
+            DockBridgeError::ConnectionLost {
+                message: format!("connection timed out after {timeout_secs} seconds"),
+            }
+        }
+        App::Auth(dockbridge_core::AuthError::Failed { username }) => {
+            DockBridgeError::AuthFailed { username }
+        }
+        App::Auth(AuthError::PrivateKeyLoadFailed { path, message }) => {
+            DockBridgeError::PrivateKeyLoadFailed { path, message }
+        }
+        App::Security(dockbridge_core::SecurityError::HostKeyMismatch { host, port, .. }) => {
+            DockBridgeError::HostKeyMismatch { host, port }
+        }
+        App::Security(SecurityError::HostKeyRejected { host, port }) => {
+            DockBridgeError::HostKeyRejected { host, port }
+        }
+        App::Sftp(dockbridge_core::SftpError::Cancelled)
+        | App::Transfer(TransferError::Cancelled) => DockBridgeError::Cancelled,
+        other => DockBridgeError::Other {
+            message: other.to_string(),
+        },
+    }
+}
+
 fn map_error_string(message: impl Into<String>) -> DockBridgeError {
-    DockBridgeError::Generic {
+    DockBridgeError::Other {
         message: message.into(),
     }
 }
@@ -1064,7 +1130,94 @@ mod tests {
 
         let err = map_error(TestError);
         match err {
-            DockBridgeError::Generic { message } => assert_eq!(message, "test display error"),
+            DockBridgeError::Other { message } => assert_eq!(message, "test display error"),
+            _ => panic!("unexpected dockbridge error variant"),
+        }
+    }
+
+    #[test]
+    fn map_app_error_classifies_known_categories() {
+        let auth = map_app_error(dockbridge_core::AppError::Auth(
+            dockbridge_core::AuthError::Failed {
+                username: "alice".to_string(),
+            },
+        ));
+        match auth {
+            DockBridgeError::AuthFailed { username } => assert_eq!(username, "alice"),
+            other => panic!("expected AuthFailed, got {other:?}"),
+        }
+
+        let cancelled = map_app_error(dockbridge_core::AppError::Sftp(
+            dockbridge_core::SftpError::Cancelled,
+        ));
+        assert!(matches!(cancelled, DockBridgeError::Cancelled));
+
+        let mismatch = map_app_error(dockbridge_core::AppError::Security(
+            dockbridge_core::SecurityError::HostKeyMismatch {
+                host: "h".to_string(),
+                port: 22,
+                expected: "a".to_string(),
+                actual: "b".to_string(),
+            },
+        ));
+        match mismatch {
+            DockBridgeError::HostKeyMismatch { host, port } => {
+                assert_eq!(host, "h");
+                assert_eq!(port, 22);
+            }
+            other => panic!("expected HostKeyMismatch, got {other:?}"),
+        }
+
+        let rejected = map_app_error(dockbridge_core::AppError::Connection(
+            dockbridge_core::ConnectionError::HostKeyRejected {
+                host: "example.com".to_string(),
+                port: 2222,
+            },
+        ));
+        match rejected {
+            DockBridgeError::HostKeyRejected { host, port } => {
+                assert_eq!(host, "example.com");
+                assert_eq!(port, 2222);
+            }
+            other => panic!("expected HostKeyRejected, got {other:?}"),
+        }
+
+        let connect_lost = map_app_error(dockbridge_core::AppError::Connection(
+            dockbridge_core::ConnectionError::ConnectFailed {
+                host: "example.com".to_string(),
+                port: 2222,
+                message: "connection refused by peer".to_string(),
+            },
+        ));
+        match connect_lost {
+            DockBridgeError::ConnectionLost { message } => {
+                assert_eq!(message, "connection refused by peer");
+            }
+            other => panic!("expected ConnectionLost, got {other:?}"),
+        }
+
+        let connect_other = map_app_error(dockbridge_core::AppError::Connection(
+            dockbridge_core::ConnectionError::ConnectFailed {
+                host: "example.com".to_string(),
+                port: 2222,
+                message: "authentication method mismatch".to_string(),
+            },
+        ));
+        match connect_other {
+            DockBridgeError::Other { message } => {
+                assert_eq!(message, "authentication method mismatch");
+            }
+            other => panic!("expected Other, got {other:?}"),
+        }
+
+        let timeout = map_app_error(dockbridge_core::AppError::Connection(
+            dockbridge_core::ConnectionError::Timeout { timeout_secs: 30 },
+        ));
+        match timeout {
+            DockBridgeError::ConnectionLost { message } => {
+                assert!(message.contains("timed out"));
+            }
+            other => panic!("expected ConnectionLost, got {other:?}"),
         }
     }
 }
