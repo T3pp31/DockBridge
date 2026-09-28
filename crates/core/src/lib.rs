@@ -31,5 +31,6 @@ pub use ssh::{
     HostKeyPrompt, PrivateKeyAlgorithm, SecretPassword, SshSession,
 };
 pub use transfer::{
-    TransferDirection, TransferManager, TransferOverwritePolicy, TransferStatus, TransferTask,
+    BatchResult, TransferDirection, TransferManager, TransferOverwritePolicy, TransferStatus,
+    TransferTask,
 };
