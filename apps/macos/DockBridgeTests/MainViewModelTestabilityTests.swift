@@ -665,6 +665,53 @@ final class MainViewModelTestabilityTests: XCTestCase {
         )
     }
 
+    // MARK: - Legacy session compatibility
+
+    func testCleanupPreservesLegacySessionWithoutContentDirectory() throws {
+        // A session created before the `content` subdirectory existed stored
+        // the file directly under the session directory. Cleanup must not
+        // delete it just because the new layout is absent (#567).
+        let legacyDirectory = remoteEditTempRoot
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: legacyDirectory,
+            withIntermediateDirectories: true
+        )
+        let legacyFile = legacyDirectory.appendingPathComponent("config.txt")
+        try "changed".write(to: legacyFile, atomically: true, encoding: .utf8)
+        let snapshot = MainViewModel.RemoteEditFileSnapshot(
+            modifiedAt: Date(),
+            size: 7,
+            fileIdentifier: "1"
+        )
+        let metadata = MainViewModel.RemoteEditRecoveryMetadata(
+            remotePath: "/srv/config.txt",
+            connectionIdentity: "endpoint:user@example.com:22",
+            localFileName: "config.txt",
+            lastUploadedSnapshot: snapshot
+        )
+        let data = try JSONEncoder().encode(metadata)
+        try data.write(to: legacyDirectory.appendingPathComponent(".dockbridge-session.json"))
+
+        let recoveryViewModel = MainViewModel(
+            settings: settings,
+            bookmarkService: bookmarkService,
+            pathBookmarkStore: pathBookmarkStore,
+            bridge: bridge,
+            connectionList: connectionList,
+            transferQueue: transferQueue,
+            remoteEditTempRoot: remoteEditTempRoot,
+            openFileOperation: { _ in true }
+        )
+
+        recoveryViewModel.cleanupRemoteOpenTemp()
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: legacyDirectory.path),
+            "legacy session with an unsynced snapshot must be preserved"
+        )
+    }
+
     // MARK: - Path saving on disconnect
 
     func testDisconnectSavesCurrentPathsToConnectedProfile() async throws {
