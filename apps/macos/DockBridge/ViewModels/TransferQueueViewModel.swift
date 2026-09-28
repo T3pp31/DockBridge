@@ -38,6 +38,7 @@ final class TransferQueueViewModel: ObservableObject {
             // while waiting for the next poll.
             tasks = []
             previousTasks = nil
+            notifiedTaskIDs.removeAll()
             progressSamples.removeAll()
             transferSpeeds.removeAll()
             refreshGeneration &+= 1
@@ -52,6 +53,10 @@ final class TransferQueueViewModel: ObservableObject {
     /// Previous snapshot used to detect active -> completed/failed transitions.
     /// `nil` until the first fetch so already-finished tasks are not re-notified.
     private var previousTasks: [TransferTaskRecord]?
+    /// Task IDs whose terminal transition has already been notified. Guards
+    /// against re-notifying a task that disappears and reappears between
+    /// polls (filtering, partial responses) or after a session change.
+    private var notifiedTaskIDs: Set<UInt64> = []
 
     init(
         bridge: any RemoteBridging,
@@ -116,6 +121,9 @@ final class TransferQueueViewModel: ObservableObject {
             let sessionTasks = filteredTasks(from: fetched)
             updateProgressSamples(for: sessionTasks)
             let finished = finishedTransitions(from: previousTasks, to: sessionTasks)
+            // Remember terminal tasks so a later reappearance is not treated
+            // as a brand-new fast transfer.
+            markFinishedTasksNotified(finished)
             // Advance the snapshot before posting notifications. Together
             // with the generation check, this prevents overlapping refreshes
             // from reporting the same transition or applying stale results.
@@ -180,6 +188,10 @@ final class TransferQueueViewModel: ObservableObject {
     /// background (otherwise the queue UI is the feedback). The first fetch
     /// has no previous snapshot and never notifies (no spurious notifications
     /// for tasks that finished before the app looked at them).
+    ///
+    /// Terminal tasks returned here are remembered by `markFinishedTasksNotified`
+    /// so a task that disappears and reappears between polls is not notified
+    /// again.
     func finishedTransitions(
         from old: [TransferTaskRecord]?,
         to new: [TransferTaskRecord]
@@ -187,16 +199,29 @@ final class TransferQueueViewModel: ObservableObject {
         guard let old else { return [] }
         let oldMap = Dictionary(uniqueKeysWithValues: old.map { ($0.id, $0) })
 
-        return new.filter { task in
-            guard let previous = oldMap[task.id] else { return false }
-            let wasActive = previous.status == .inProgress || previous.status == .pending
+     return new.filter { task in
+            let isTerminal: Bool
             switch task.status {
             case .completed, .failed:
-                return wasActive
+                isTerminal = true
             case .cancelled, .pending, .inProgress:
-                return false
+                isTerminal = false
             }
+            guard isTerminal else { return false }
+            guard !notifiedTaskIDs.contains(task.id) else { return false }
+            // A task that is already terminal but was not in the previous
+            // snapshot was created and finished between two polls (a fast
+            // transfer). Notify it once; the next snapshot suppresses it.
+            guard let previous = oldMap[task.id] else { return true }
+            let wasActive = previous.status == .inProgress || previous.status == .pending
+            return wasActive
         }
+    }
+
+    /// Records terminal task IDs as notified so they are not reported again
+    /// if the task disappears and reappears in a later snapshot.
+    func markFinishedTasksNotified(_ finished: [TransferTaskRecord]) {
+        notifiedTaskIDs.formUnion(finished.map { $0.id })
     }
 
     private func notifyFinishedTransitions(_ finished: [TransferTaskRecord]) {
