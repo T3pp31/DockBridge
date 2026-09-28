@@ -49,6 +49,30 @@ final class TransferQueueNotificationTests: XCTestCase {
         XCTAssertEqual(finished.map { $0.id }, [UInt64(3)])
     }
 
+    func testTerminalTaskReappearingIsNotNotifiedTwice() {
+        let queue = TransferQueueViewModel(bridge: FakeBridge())
+        // A task progresses from in-progress to completed; it notifies once.
+        let previous = [makeTask(id: 3, status: .inProgress)]
+        let completed = [makeTask(id: 3, status: .completed)]
+        let firstFinished = queue.finishedTransitions(from: previous, to: completed)
+        XCTAssertEqual(firstFinished.map { $0.id }, [UInt64(3)])
+
+        // Mark it notified like refresh() does, then simulate the task
+        // disappearing and reappearing between polls.
+        queue.markFinishedTasksNotified(firstFinished)
+        let reappearedFromActive = [makeTask(id: 3, status: .completed)]
+        let again = queue.finishedTransitions(from: previous, to: reappearedFromActive)
+        XCTAssertTrue(again.isEmpty, "already-notified terminal task must not notify again")
+
+        // A task that appeared and finished between polls also notifies once,
+        // then stays silent on reappearance.
+        let fastFinished = queue.finishedTransitions(from: [], to: [makeTask(id: 4, status: .completed)])
+        XCTAssertEqual(fastFinished.map { $0.id }, [UInt64(4)])
+        queue.markFinishedTasksNotified(fastFinished)
+        let reappearedFast = queue.finishedTransitions(from: [], to: [makeTask(id: 4, status: .completed)])
+        XCTAssertTrue(reappearedFast.isEmpty)
+    }
+
     private func makeTask(id: UInt64, status: TransferStatusRecord) -> TransferTaskRecord {
         TransferTaskRecord(
             id: id,
