@@ -571,7 +571,18 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertEqual(viewModel.remoteEditSessions.first?.state, .watching)
     }
 
-    func testRemoteEditSessionWaitsForItsOriginalConnection() async throws {
+    func testEndpointIdentityNormalizationIsCaseInsensitive() {
+        XCTAssertEqual(
+            MainViewModel.normalizedEndpointIdentity("User@Example.COM: 22"),
+            MainViewModel.normalizedEndpointIdentity("user@example.com:22")
+        )
+        XCTAssertEqual(
+            MainViewModel.normalizedEndpointIdentity("alice@[::1]:2222"),
+            MainViewModel.normalizedEndpointIdentity("alice@[::1]:2222")
+        )
+    }
+
+    func testRemoteEditSessionDoesNotTransferWhenEndpointChanges() async throws {
         let tracked = try makeTrackedRemoteEditFile()
         let originalEndpoint = bridge.connectionStatus.endpointLabel
         try "changed".write(to: tracked.file, atomically: true, encoding: .utf8)
@@ -586,6 +597,10 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
         if let originalEndpoint {
             bridge.connectionStatus = .connected(endpoint: originalEndpoint)
+        } else {
+            // Defensive: the helper always connects, but keep the test usable
+            // if a future refactor changes how the endpoint is supplied.
+            XCTFail("expected a connected endpoint from makeTrackedRemoteEditFile")
         }
         await viewModel.checkRemoteEditSessions()
 

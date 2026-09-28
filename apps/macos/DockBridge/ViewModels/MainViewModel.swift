@@ -1066,7 +1066,15 @@ final class MainViewModel: ObservableObject {
         // profile UUID: editing the profile to point at another server must
         // NOT re-target pending external edits to the new host (issue #569).
         guard let endpoint = bridge.connectionStatus.endpointLabel else { return nil }
-        return "endpoint:\(endpoint.lowercased())"
+        return "endpoint:" + Self.normalizedEndpointIdentity(endpoint)
+    }
+
+    /// Lowercases and strips whitespace so the same host/port/username
+    /// always maps to the same identity regardless of casing (issue #569).
+    /// IPv6 canonicalization is intentionally conservative: only casing and
+    /// whitespace are normalized, avoiding unstable re-expansion of addresses.
+    static func normalizedEndpointIdentity(_ endpoint: String) -> String {
+        endpoint.lowercased().components(separatedBy: .whitespaces).joined()
     }
 
     private func remoteEditFileSnapshot(at url: URL) -> RemoteEditFileSnapshot? {
