@@ -356,6 +356,13 @@ impl KnownHostsManager {
             return HostKeyCheckResult::Trust;
         }
 
+        // A hashed entry can also match this host with a *different* key:
+        // detect that as a Mismatch so accept-new / ask policies never treat
+        // a changed key as an unknown host (issue #566).
+        if let Some(entry) = self.find_hashed_entry_for_host(host, port) {
+            return fingerprint_check_hashed(entry, &actual);
+        }
+
         HostKeyCheckResult::Unknown
     }
 
@@ -782,6 +789,15 @@ impl KnownHostsManager {
         })
     }
 
+    /// Finds a trusted (non-revoked, non-cert-authority) hashed entry that
+    /// matches the given host, regardless of whether the presented key matches.
+    fn find_hashed_entry_for_host(&self, host: &str, port: u16) -> Option<&HashedHostEntry> {
+        self.hashed_entries.iter().find(|entry| {
+            entry.marker != Some(KnownHostMarker::Revoked)
+                && entry.marker != Some(KnownHostMarker::CertAuthority)
+                && hashed_entry_matches_host(entry, host, port)
+        })
+    }
     fn find_canonical_key_by_fingerprint(&self, port: u16, fingerprint: &str) -> Option<String> {
         self.entries.iter().find_map(|(key, entry)| {
             if entry.port == port
@@ -1291,6 +1307,17 @@ fn fingerprint_check(entry: &KnownHostEntry, actual: &str) -> HostKeyCheckResult
     }
 }
 
+fn fingerprint_check_hashed(entry: &HashedHostEntry, actual: &str) -> HostKeyCheckResult {
+    if fingerprints_match(&entry.fingerprint_sha256, actual) {
+        HostKeyCheckResult::Trust
+    } else {
+        HostKeyCheckResult::Mismatch {
+            expected_fingerprint: entry.fingerprint_sha256.clone(),
+            actual_fingerprint: actual.to_string(),
+        }
+    }
+}
+
 fn entry_matches_host(entry: &KnownHostEntry, host: &str, port: u16) -> bool {
     if entry_is_excluded_for_host(entry, host, port) {
         return false;
@@ -1768,6 +1795,13 @@ mod tests {
     use tempfile::tempdir;
 
     fn test_public_key() -> PublicKey {
+        PrivateKey::random(&mut rng(), Algorithm::Ed25519)
+            .unwrap()
+            .public_key()
+            .clone()
+    }
+
+    fn test_other_public_key() -> PublicKey {
         PrivateKey::random(&mut rng(), Algorithm::Ed25519)
             .unwrap()
             .public_key()
@@ -2258,6 +2292,40 @@ mod tests {
             manager.check_host_key("other.example.com", 22, &key, false),
             HostKeyCheckResult::Unknown
         );
+    }
+
+    #[test]
+    fn hashed_entry_changed_key_is_mismatch_not_unknown() {
+        // Given: a hashed OpenSSH entry for example.com with key K1
+        // When: a different key K2 is presented for the same host
+        // Then: Mismatch is returned so accept-new/ask never auto-approve it
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key1 = test_public_key();
+        let key2 = test_other_public_key();
+        let openssh_key = key1.to_openssh().unwrap();
+        let host = "changed-hashed.example.com";
+        let salt = b"change-salt-00001";
+        let hash = openssh_hostname_hash(salt, host, 22);
+        let openssh_path = dir.path().join("known_hosts");
+        let salt_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, salt);
+        let hash_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, hash);
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("|1|{salt_b64}|{hash_b64} {openssh_key}"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        assert_eq!(
+            manager.check_host_key(host, 22, &key1, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key(host, 22, &key2, false) {
+            HostKeyCheckResult::Mismatch { .. } => {}
+            other => panic!("expected Mismatch, got {other:?}"),
+        }
     }
 
     #[test]
