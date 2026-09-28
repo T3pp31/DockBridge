@@ -573,16 +573,20 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
     func testRemoteEditSessionWaitsForItsOriginalConnection() async throws {
         let tracked = try makeTrackedRemoteEditFile()
-        let originalProfileID = try XCTUnwrap(bridge.connectedProfileID)
+        let originalEndpoint = bridge.connectionStatus.endpointLabel
         try "changed".write(to: tracked.file, atomically: true, encoding: .utf8)
-        bridge.connectedProfileID = UUID()
+        // Change the actual connected endpoint (host/port/username), as the
+        // app now identifies pending external edits by real endpoint (#569).
+        bridge.connectionStatus = .connected(endpoint: "other@example.com:22")
 
         await viewModel.checkRemoteEditSessions()
 
         XCTAssertTrue(bridge.uploaded.isEmpty)
         XCTAssertEqual(viewModel.remoteEditSessions.first?.state, .waitingForConnection)
 
-        bridge.connectedProfileID = originalProfileID
+        if let originalEndpoint {
+            bridge.connectionStatus = .connected(endpoint: originalEndpoint)
+        }
         await viewModel.checkRemoteEditSessions()
 
         XCTAssertEqual(bridge.uploaded.count, 1)
