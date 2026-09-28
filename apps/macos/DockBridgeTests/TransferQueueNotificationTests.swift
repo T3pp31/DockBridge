@@ -73,6 +73,31 @@ final class TransferQueueNotificationTests: XCTestCase {
         XCTAssertTrue(reappearedFast.isEmpty)
     }
 
+    func testSessionChangeResetsNotifiedTaskIDs() {
+        let queue = TransferQueueViewModel(bridge: FakeBridge())
+        let previous = [makeTask(id: 1, status: .inProgress)]
+        let completed = [makeTask(id: 1, status: .completed)]
+        let firstFinished = queue.finishedTransitions(from: previous, to: completed)
+        XCTAssertEqual(firstFinished.map { $0.id }, [UInt64(1)])
+        queue.markFinishedTasksNotified(firstFinished)
+
+        // Switching sessions must forget notified IDs so a reused ID in the
+        // new session can notify again.
+        queue.sessionId = 2
+        let newPrevious = [makeTask(id: 1, status: .inProgress)]
+        let newCompleted = [makeTask(id: 1, status: .completed)]
+        let again = queue.finishedTransitions(from: newPrevious, to: newCompleted)
+        XCTAssertEqual(again.map { $0.id }, [UInt64(1)], "new session must not inherit old notified IDs")
+    }
+
+    func testCancelledTaskDoesNotNotifyLater() {
+        let queue = TransferQueueViewModel(bridge: FakeBridge())
+        let previous = [makeTask(id: 1, status: .inProgress)]
+        let cancelled = [makeTask(id: 1, status: .cancelled)]
+        let finished = queue.finishedTransitions(from: previous, to: cancelled)
+        XCTAssertTrue(finished.isEmpty, "cancelled transitions are not notifications")
+    }
+
     private func makeTask(id: UInt64, status: TransferStatusRecord) -> TransferTaskRecord {
         TransferTaskRecord(
             id: id,
