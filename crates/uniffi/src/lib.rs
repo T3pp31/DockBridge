@@ -958,7 +958,16 @@ fn map_app_error(error: dockbridge_core::AppError) -> DockBridgeError {
             DockBridgeError::HostKeyRejected { host, port }
         }
         App::Connection(ConnectionError::ConnectFailed { message, .. }) => {
-            DockBridgeError::Other { message }
+            if is_connection_lost_message(&message) {
+                DockBridgeError::ConnectionLost { message }
+            } else {
+                DockBridgeError::Other { message }
+            }
+        }
+        App::Connection(ConnectionError::Timeout { timeout_secs }) => {
+            DockBridgeError::ConnectionLost {
+                message: format!("connection timed out after {timeout_secs} seconds"),
+            }
         }
         App::Auth(dockbridge_core::AuthError::Failed { username }) => {
             DockBridgeError::AuthFailed { username }
@@ -1173,18 +1182,42 @@ mod tests {
             other => panic!("expected HostKeyRejected, got {other:?}"),
         }
 
-        let connect_failed = map_app_error(dockbridge_core::AppError::Connection(
+        let connect_lost = map_app_error(dockbridge_core::AppError::Connection(
             dockbridge_core::ConnectionError::ConnectFailed {
                 host: "example.com".to_string(),
                 port: 2222,
-                message: "connection refused".to_string(),
+                message: "connection refused by peer".to_string(),
             },
         ));
-        match connect_failed {
+        match connect_lost {
+            DockBridgeError::ConnectionLost { message } => {
+                assert_eq!(message, "connection refused by peer");
+            }
+            other => panic!("expected ConnectionLost, got {other:?}"),
+        }
+
+        let connect_other = map_app_error(dockbridge_core::AppError::Connection(
+            dockbridge_core::ConnectionError::ConnectFailed {
+                host: "example.com".to_string(),
+                port: 2222,
+                message: "authentication method mismatch".to_string(),
+            },
+        ));
+        match connect_other {
             DockBridgeError::Other { message } => {
-                assert_eq!(message, "connection refused");
+                assert_eq!(message, "authentication method mismatch");
             }
             other => panic!("expected Other, got {other:?}"),
+        }
+
+        let timeout = map_app_error(dockbridge_core::AppError::Connection(
+            dockbridge_core::ConnectionError::Timeout { timeout_secs: 30 },
+        ));
+        match timeout {
+            DockBridgeError::ConnectionLost { message } => {
+                assert!(message.contains("timed out"));
+            }
+            other => panic!("expected ConnectionLost, got {other:?}"),
         }
     }
 }

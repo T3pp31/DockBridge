@@ -155,13 +155,14 @@ extension Error {
     }
 
     /// True when the error represents an authentication / key-passphrase failure.
-    /// Inspects the raw `DockBridgeError.Generic` message when available.
     var isAuthenticationFailure: Bool {
         if let error = self as? DockBridgeError {
             switch error {
             case .AuthFailed, .PrivateKeyLoadFailed:
                 return true
-            case .Other(let message), .ConnectionLost(let message), .Config(let message):
+            // ConnectionLost is a transport failure, never an auth failure;
+            // only untyped categories keep the message-based fallback.
+            case .Other(let message), .Config(let message):
                 return DockBridgeError.isAuthenticationMessage(message)
             default:
                 return false
