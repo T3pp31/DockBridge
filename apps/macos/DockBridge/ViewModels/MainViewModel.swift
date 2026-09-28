@@ -373,8 +373,6 @@ final class MainViewModel: ObservableObject {
         if case .bookmarkFailed(_, let error) = resolution {
             errorMessage = DefaultLocalPathResolver.userMessage(for: error)
         }
-            selectedLocalItemIDs = []
-        reloadLocal()
         if hiddenFilesChanged {
             Task { await reloadRemote() }
         }
@@ -424,37 +422,37 @@ final class MainViewModel: ObservableObject {
     func navigateLocal(into item: LocalFileItem) {
         guard item.isDirectory else { return }
         applyLocalPath(item.url)
-            selectedLocalItemIDs = []
     }
 
     func navigateLocal(to path: String) {
         applyLocalPath(URL(fileURLWithPath: path, isDirectory: true))
-            selectedLocalItemIDs = []
     }
 
     func navigateLocalUp() {
         let parent = localPath.deletingLastPathComponent()
         guard parent.path != localPath.path else { return }
         applyLocalPath(parent)
-            selectedLocalItemIDs = []
     }
 
     func navigateLocalBack() {
         guard let path = localHistory.goBack() else { return }
         applyLocalPath(URL(fileURLWithPath: path, isDirectory: true), recordHistory: false)
-            selectedLocalItemIDs = []
     }
 
     func navigateLocalForward() {
         guard let path = localHistory.goForward() else { return }
         applyLocalPath(URL(fileURLWithPath: path, isDirectory: true), recordHistory: false)
-            selectedLocalItemIDs = []
     }
 
     private func applyLocalPath(_ url: URL, recordHistory: Bool = true) {
         isApplyingNavigationHistory = !recordHistory
         localPath = url
         isApplyingNavigationHistory = false
+        // A path change invalidates the previous listing: never leave old
+        // rows visible under the new folder (issue #575).
+        localItems = []
+        selectedLocalItemIDs = []
+        reloadLocal()
     }
 
     func onConnectionChanged(isConnected: Bool) async {
