@@ -92,7 +92,9 @@ final class FakeBridge: RemoteBridging {
         if uploadFails {
             throw DockBridgeError.Generic(message: "simulated upload failure")
         }
-        return BatchResultRecord(succeeded: 0, failed: 0, skipped: 0)
+        // One file per call; reflect success in the result record so tests
+        // can assert on aggregate counts.
+        return BatchResultRecord(succeeded: 1, failed: 0, skipped: 0)
     }
 
     func download(
@@ -104,7 +106,9 @@ final class FakeBridge: RemoteBridging {
         if downloadFails {
             throw DockBridgeError.Generic(message: "simulated download failure")
         }
-        return BatchResultRecord(succeeded: 0, failed: 0, skipped: 0)
+        // One file per call; reflect success in the result record so tests
+        // can assert on aggregate counts.
+        return BatchResultRecord(succeeded: 1, failed: 0, skipped: 0)
     }
 
     func deleteRemote(path: String) async throws {
