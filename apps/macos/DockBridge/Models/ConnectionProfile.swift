@@ -12,6 +12,8 @@ struct ConnectionProfile: Identifiable, Codable, Equatable, Sendable {
     var lastConnectedAt: Date?
     var lastLocalPath: String?
     var lastRemotePath: String?
+    var initialRemotePath: String?
+    var initialLocalPath: String?
 
     init(
         id: UUID = UUID(),
@@ -24,7 +26,9 @@ struct ConnectionProfile: Identifiable, Codable, Equatable, Sendable {
         privateKeyBookmark: Data? = nil,
         lastConnectedAt: Date? = nil,
         lastLocalPath: String? = nil,
-        lastRemotePath: String? = nil
+        lastRemotePath: String? = nil,
+        initialRemotePath: String? = nil,
+        initialLocalPath: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -37,6 +41,8 @@ struct ConnectionProfile: Identifiable, Codable, Equatable, Sendable {
         self.lastConnectedAt = lastConnectedAt
         self.lastLocalPath = lastLocalPath
         self.lastRemotePath = lastRemotePath
+        self.initialRemotePath = initialRemotePath
+        self.initialLocalPath = initialLocalPath
     }
 
     var displayName: String {

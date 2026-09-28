@@ -667,4 +667,71 @@ final class ConnectionListViewModel: ObservableObject {
             errorMessage = error.localizedDescription
         }
     }
+
+    /// Handles an sftp:// URL open: connects to a matching profile, or offers
+    /// a prefilled profile when none matches (Issue #371).
+    func handleSFTPURL(_ url: URL) {
+        guard url.scheme?.lowercased() == "sftp", let host = url.host else { return }
+        let username = url.user.map { $0.removingPercentEncoding ?? $0 } ?? ""
+        // A profile cannot be connected without a username (the form also
+        // requires one), so keep the unsaved prefill out of the store.
+        guard !username.isEmpty else { return }
+        // URL.port is only populated for well-formed values; reject anything
+        // outside the valid UInt16 range instead of crashing on conversion.
+        let port: UInt16
+        if let raw = url.port {
+            guard let converted = UInt16(exactly: raw), converted > 0 else {
+                errorMessage = "Invalid port in sftp URL."
+                return
+            }
+            port = converted
+        } else {
+            port = 22
+        }
+
+        // sftp URLs carry a remote path; normalize it to an absolute path.
+        let remotePath: String?
+        if url.path.isEmpty || url.path == "/" {
+            remotePath = nil
+        } else {
+            let decoded = url.path.removingPercentEncoding ?? url.path
+            remotePath = decoded.hasPrefix("/") ? decoded : "/" + decoded
+        }
+
+        if let profile = profiles.first(where: {
+            $0.host.caseInsensitiveCompare(host) == .orderedSame
+                && $0.port == port
+                && $0.username == username
+        }) {
+            selectedProfileID = profile.id
+            // Carry the URL path into the matched profile so reconnects keep
+            // the same starting directory the user opened (issue #371).
+            let connectProfile: ConnectionProfile
+            if let remotePath {
+                var updated = profile
+                updated.initialRemotePath = remotePath
+                connectProfile = updated
+                do {
+                    profiles = try store.upsert(updated)
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            } else {
+                connectProfile = profile
+            }
+            requestConnect(profile: connectProfile)
+            return
+        }
+
+        // Prefill a new profile from the URL so the user can save and connect.
+        var profile = ConnectionProfile(name: "", host: host, port: port, username: username)
+        profile.initialRemotePath = remotePath
+        do {
+            profile = try store.upsert(profile).first ?? profile
+            profiles = try store.loadProfiles()
+            selectedProfileID = profile.id
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
 }

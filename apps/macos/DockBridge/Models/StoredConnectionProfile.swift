@@ -13,6 +13,8 @@ struct StoredConnectionProfile: Identifiable, Codable, Equatable, Sendable {
     var lastConnectedAt: Date?
     var lastLocalPath: String?
     var lastRemotePath: String?
+    var initialRemotePath: String?
+    var initialLocalPath: String?
 
     init(from profile: ConnectionProfile) {
         id = profile.id
@@ -25,6 +27,8 @@ struct StoredConnectionProfile: Identifiable, Codable, Equatable, Sendable {
         lastConnectedAt = profile.lastConnectedAt
         lastLocalPath = profile.lastLocalPath
         lastRemotePath = profile.lastRemotePath
+        initialRemotePath = profile.initialRemotePath
+        initialLocalPath = profile.initialLocalPath
     }
 
     func toConnectionProfile() -> ConnectionProfile {
@@ -38,7 +42,9 @@ struct StoredConnectionProfile: Identifiable, Codable, Equatable, Sendable {
             privateKeyBookmark: privateKeyBookmark,
             lastConnectedAt: lastConnectedAt,
             lastLocalPath: lastLocalPath,
-            lastRemotePath: lastRemotePath
+            lastRemotePath: lastRemotePath,
+            initialRemotePath: initialRemotePath,
+            initialLocalPath: initialLocalPath
         )
         profile.hydrateDisplayKeyPathFromBookmark()
         return profile

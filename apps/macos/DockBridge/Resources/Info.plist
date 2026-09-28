@@ -28,6 +28,17 @@
 	<string>Copyright © 2026 DockBridge. All rights reserved.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>dev.dockbridge.sftp</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>sftp</string>
+			</array>
+		</dict>
+	</array>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

@@ -37,6 +37,9 @@ struct DockBridgeApp: App {
                 guard let config = notification.object as? AppConfig else { return }
                 TransferNotificationService.requestAuthorizationIfNeeded(for: config)
             }
+            .onOpenURL { url in
+                connectionList.handleSFTPURL(url)
+            }
         }
         .defaultSize(
             width: WindowLayout.mainDefaultWidth,
