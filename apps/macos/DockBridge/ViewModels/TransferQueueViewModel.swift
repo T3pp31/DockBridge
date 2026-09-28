@@ -221,7 +221,7 @@ final class TransferQueueViewModel: ObservableObject {
     /// Records terminal task IDs as notified so they are not reported again
     /// if the task disappears and reappears in a later snapshot.
     func markFinishedTasksNotified(_ finished: [TransferTaskRecord]) {
-        notifiedTaskIDs.formUnion(finished.map(.id))
+        notifiedTaskIDs.formUnion(finished.map { $0.id })
     }
 
     private func notifyFinishedTransitions(_ finished: [TransferTaskRecord]) {
