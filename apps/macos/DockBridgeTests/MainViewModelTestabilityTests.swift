@@ -576,9 +576,17 @@ final class MainViewModelTestabilityTests: XCTestCase {
             MainViewModel.normalizedEndpointIdentity("User@Example.COM: 22"),
             MainViewModel.normalizedEndpointIdentity("user@example.com:22")
         )
+    }
+
+    func testEndpointIdentityNormalizesIPv6EquivalentForms() {
+        // `::1` and its fully expanded form must map to the same identity.
         XCTAssertEqual(
             MainViewModel.normalizedEndpointIdentity("alice@[::1]:2222"),
-            MainViewModel.normalizedEndpointIdentity("alice@[::1]:2222")
+            MainViewModel.normalizedEndpointIdentity("alice@[0:0:0:0:0:0:0:1]:2222")
+        )
+        XCTAssertEqual(
+            MainViewModel.normalizedEndpointIdentity("alice@[2001:db8::1]:22"),
+            MainViewModel.normalizedEndpointIdentity("alice@[2001:0db8:0000:0000:0000:0000:0000:0001]:22")
         )
     }
 
@@ -595,13 +603,11 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertTrue(bridge.uploaded.isEmpty)
         XCTAssertEqual(viewModel.remoteEditSessions.first?.state, .waitingForConnection)
 
-        if let originalEndpoint {
-            bridge.connectionStatus = .connected(endpoint: originalEndpoint)
-        } else {
-            // Defensive: the helper always connects, but keep the test usable
-            // if a future refactor changes how the endpoint is supplied.
-            XCTFail("expected a connected endpoint from makeTrackedRemoteEditFile")
-        }
+        let originalEndpoint = try XCTUnwrap(
+            bridge.connectionStatus.endpointLabel,
+            "expected a connected endpoint from makeTrackedRemoteEditFile"
+        )
+        bridge.connectionStatus = .connected(endpoint: originalEndpoint)
         await viewModel.checkRemoteEditSessions()
 
         XCTAssertEqual(bridge.uploaded.count, 1)
