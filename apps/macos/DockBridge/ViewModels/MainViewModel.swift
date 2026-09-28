@@ -1105,11 +1105,47 @@ final class MainViewModel: ObservableObject {
 
     private var currentRemoteEditConnectionIdentity: String? {
         guard bridge.isConnected else { return nil }
-        if let profileID = bridge.connectedProfileID {
-            return "profile:\(profileID.uuidString.lowercased())"
-        }
+        // Use the actual connected endpoint (host/port/username), not the
+        // profile UUID: editing the profile to point at another server must
+        // NOT re-target pending external edits to the new host (issue #569).
         guard let endpoint = bridge.connectionStatus.endpointLabel else { return nil }
-        return "endpoint:\(endpoint.lowercased())"
+        return "endpoint:" + Self.normalizedEndpointIdentity(endpoint)
+    }
+
+    /// Lowercases and strips whitespace so the same host/port/username
+    /// always maps to the same identity regardless of casing (issue #569).
+    /// IPv6 literals are canonicalized through inet_pton/inet_ntop so
+    /// equivalent forms (e.g. `::1` and `0:0:0:0:0:0:0:1`) collide.
+    static func normalizedEndpointIdentity(_ endpoint: String) -> String {
+        let trimmed = endpoint.lowercased().components(separatedBy: .whitespaces).joined()
+        return canonicalizeIPv6EndpointIfNeeded(trimmed)
+    }
+
+    private static func canonicalizeIPv6EndpointIfNeeded(_ endpoint: String) -> String {
+        // Split `user@[host]:port` / `host:port` into components; only IPv6
+        // addresses contain multiple colons, so look for a bracketed literal.
+        guard let open = endpoint.firstIndex(of: "["),
+              let close = endpoint[open...].firstIndex(of: "]") else {
+            return endpoint
+        }
+        let literal = String(endpoint[open...].dropFirst()[..<close])
+        guard let canonical = canonicalizeIPv6Literal(literal) else { return endpoint }
+        let prefix = String(endpoint[..<open])
+        let suffix = String(endpoint[endpoint.index(after: close)...])
+        return prefix + "[" + canonical + "]" + suffix
+    }
+
+    private static func canonicalizeIPv6Literal(_ literal: String) -> String? {
+        var storage = [UInt8](repeating: 0, count: 16)
+        let ok = literal.withCString { cString in
+            inet_pton(AF_INET6, cString, &storage)
+        }
+        guard ok == 1 else { return nil }
+        var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+        guard inet_ntop(AF_INET6, &storage, &buffer, socklen_t(buffer.count)) != nil else {
+            return nil
+        }
+        return String(cString: buffer)
     }
 
     private func remoteEditFileSnapshot(at url: URL) -> RemoteEditFileSnapshot? {
