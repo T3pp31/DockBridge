@@ -950,7 +950,7 @@ fn map_error(error: impl std::fmt::Display) -> DockBridgeError {
 
 fn map_app_error(error: dockbridge_core::AppError) -> DockBridgeError {
     use dockbridge_core::{
-        AppError as App, AuthError, ConnectionError, SecurityError, SftpError, TransferError,
+        AppError as App, AuthError, ConnectionError, SecurityError, TransferError,
     };
     match error {
         App::Connection(ConnectionError::HostKeyRejected) => DockBridgeError::HostKeyRejected {
