@@ -137,7 +137,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@8d8cc9a8e0d47b64af669de71110e76860d6afbd  # 1.91.0
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # 1.91.0
 
       # --all-targets also compiles unit tests and build scripts, so a dep that
       # only fails to link/codegen at 1.91 is caught here rather than at merge.
