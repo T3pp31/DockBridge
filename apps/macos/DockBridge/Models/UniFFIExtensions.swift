@@ -149,7 +149,9 @@ extension Error {
             }
             return false
         }
-        return DockBridgeError.isConnectionLostMessage(localizedDescription)
+        // Non-DockBridge errors carry no typed category; match only what we
+        // created ourselves so localized/system messages cannot be misread.
+        return false
     }
 
     /// True when the error represents an authentication / key-passphrase failure.
@@ -165,6 +167,6 @@ extension Error {
                 return false
             }
         }
-        return DockBridgeError.isAuthenticationMessage(dockBridgeUserMessage)
+        return false
     }
 }

@@ -170,7 +170,10 @@ impl client::Handler for SshClientHandler {
 
         match check {
             HostKeyCheckResult::Trust => Ok(true),
-            HostKeyCheckResult::Reject => Err(ConnectionError::HostKeyRejected),
+            HostKeyCheckResult::Reject => Err(ConnectionError::HostKeyRejected {
+                host: self.host.clone(),
+                port: self.port,
+            }),
             HostKeyCheckResult::Mismatch {
                 expected_fingerprint,
                 actual_fingerprint,

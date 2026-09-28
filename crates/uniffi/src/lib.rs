@@ -941,8 +941,9 @@ fn to_transfer_task_record(task: TransferTask) -> TransferTaskRecord {
 }
 
 fn map_error(error: impl std::fmt::Display) -> DockBridgeError {
-    // Error display strings are not a stable API; prefer typed mapping for
-    // known categories. This fallback keeps unknown/foreign errors visible.
+    // Fallback for errors reachable only through their Display string.
+    // Callers with a strongly typed error should use `map_app_error` so
+    // known categories keep their variants instead of a flat message.
     DockBridgeError::Other {
         message: error.to_string(),
     }
@@ -953,20 +954,11 @@ fn map_app_error(error: dockbridge_core::AppError) -> DockBridgeError {
         AppError as App, AuthError, ConnectionError, SecurityError, TransferError,
     };
     match error {
-        App::Connection(ConnectionError::HostKeyRejected) => DockBridgeError::HostKeyRejected {
-            host: String::new(),
-            port: 0,
-        },
-        App::Connection(ConnectionError::ConnectFailed {
-            host,
-            port,
-            message,
-        }) => {
-            if message.to_lowercase().contains("host key") {
-                DockBridgeError::HostKeyRejected { host, port }
-            } else {
-                DockBridgeError::Other { message }
-            }
+        App::Connection(ConnectionError::HostKeyRejected { host, port }) => {
+            DockBridgeError::HostKeyRejected { host, port }
+        }
+        App::Connection(ConnectionError::ConnectFailed { message, .. }) => {
+            DockBridgeError::Other { message }
         }
         App::Auth(dockbridge_core::AuthError::Failed { username }) => {
             DockBridgeError::AuthFailed { username }
@@ -1165,6 +1157,34 @@ mod tests {
                 assert_eq!(port, 22);
             }
             other => panic!("expected HostKeyMismatch, got {other:?}"),
+        }
+
+        let rejected = map_app_error(dockbridge_core::AppError::Connection(
+            dockbridge_core::ConnectionError::HostKeyRejected {
+                host: "example.com".to_string(),
+                port: 2222,
+            },
+        ));
+        match rejected {
+            DockBridgeError::HostKeyRejected { host, port } => {
+                assert_eq!(host, "example.com");
+                assert_eq!(port, 2222);
+            }
+            other => panic!("expected HostKeyRejected, got {other:?}"),
+        }
+
+        let connect_failed = map_app_error(dockbridge_core::AppError::Connection(
+            dockbridge_core::ConnectionError::ConnectFailed {
+                host: "example.com".to_string(),
+                port: 2222,
+                message: "connection refused".to_string(),
+            },
+        ));
+        match connect_failed {
+            DockBridgeError::Other { message } => {
+                assert_eq!(message, "connection refused");
+            }
+            other => panic!("expected Other, got {other:?}"),
         }
     }
 }

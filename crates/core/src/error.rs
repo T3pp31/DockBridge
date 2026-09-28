@@ -38,8 +38,8 @@ pub enum ConnectionError {
     #[error("connection timed out after {timeout_secs} seconds")]
     Timeout { timeout_secs: u64 },
 
-    #[error("host key verification failed")]
-    HostKeyRejected,
+    #[error("host key rejected for {host}:{port}")]
+    HostKeyRejected { host: String, port: u16 },
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
