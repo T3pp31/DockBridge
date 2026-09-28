@@ -279,10 +279,10 @@ extension AppUpdateServiceTests {
     func testCheckForUpdateTreats304AsNoUpdate() async throws {
         // Given: the server returns 304 (If-None-Match matched)
         UserDefaults.standard.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
-        UserDefaults.standard.removeObject(forKey: AppUpdateConfig.releaseBodyDefaultsKey)
+        AppUpdateConfig.clearReleaseBody()
         defer {
             UserDefaults.standard.removeObject(forKey: AppUpdateConfig.etagDefaultsKey)
-            UserDefaults.standard.removeObject(forKey: AppUpdateConfig.releaseBodyDefaultsKey)
+            AppUpdateConfig.clearReleaseBody()
         }
 
         let service = AppUpdateService(session: MockURLSession(statusCode: 304, data: Data()))
@@ -293,10 +293,10 @@ extension AppUpdateServiceTests {
     func testCheckForUpdateClearsCorruptCacheOn304() async throws {
         // Given: a cached release body is corrupted and the server answers 304
         UserDefaults.standard.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
-        UserDefaults.standard.set(Data("not json".utf8), forKey: AppUpdateConfig.releaseBodyDefaultsKey)
+        AppUpdateConfig.persistReleaseBody(Data("not json".utf8))
         defer {
             UserDefaults.standard.removeObject(forKey: AppUpdateConfig.etagDefaultsKey)
-            UserDefaults.standard.removeObject(forKey: AppUpdateConfig.releaseBodyDefaultsKey)
+            AppUpdateConfig.clearReleaseBody()
         }
 
         let service = AppUpdateService(session: MockURLSession(statusCode: 304, data: Data()))
@@ -304,6 +304,21 @@ extension AppUpdateServiceTests {
 
         XCTAssertNil(update)
         XCTAssertNil(AppUpdateConfig.showCachedReleaseBody(), "corrupt cache must be cleared")
+    }
+
+    func testCachedReleaseBodyExpires() async throws {
+        // Given: a cache entry that is older than the maximum age
+        AppUpdateConfig.clearReleaseBody()
+        defer { AppUpdateConfig.clearReleaseBody() }
+        let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(AppUpdateConfig.releaseBodyCacheFileName)
+        let stale = ReleaseBodyCacheEntry(
+            storedAt: Date().addingTimeInterval(-25 * 60 * 60),
+            body: Data("{}".utf8)
+        )
+        try JSONEncoder().encode(stale).write(to: cacheURL)
+
+        XCTAssertNil(AppUpdateConfig.showCachedReleaseBody(), "stale cache must be invalidated")
     }
 
     func testCheckForUpdateSurfacesRateLimit() async {
