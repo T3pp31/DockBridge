@@ -108,10 +108,17 @@ final class MainViewModelTestabilityTests: XCTestCase {
         bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
         bridge.connectedProfileID = UUID()
 
-        let directory = remoteEditTempRoot
+        // Downloaded content lives in a dedicated `content` subdirectory so
+        // files whose names match internal metadata cannot collide (#567).
+        let sessionDirectory = remoteEditTempRoot
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let file = directory.appendingPathComponent((remotePath as NSString).lastPathComponent)
+        let contentDirectory = sessionDirectory
+            .appendingPathComponent("content", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: contentDirectory,
+            withIntermediateDirectories: true
+        )
+        let file = contentDirectory.appendingPathComponent((remotePath as NSString).lastPathComponent)
         try contents.write(to: file, atomically: true, encoding: .utf8)
         let session = try XCTUnwrap(
             viewModel.trackRemoteEditFile(localURL: file, remotePath: remotePath)
@@ -532,6 +539,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertTrue(
             FileManager.default.fileExists(
                 atPath: tracked.file.deletingLastPathComponent()
+                    .deletingLastPathComponent()
                     .appendingPathComponent(".dockbridge-unsynced").path
             )
         )
@@ -547,6 +555,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertFalse(
             FileManager.default.fileExists(
                 atPath: tracked.file.deletingLastPathComponent()
+                    .deletingLastPathComponent()
                     .appendingPathComponent(".dockbridge-unsynced").path
             )
         )
@@ -601,7 +610,8 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
     func testStoppingDirtyRemoteEditPreservesRecoverableLocalCopy() throws {
         let tracked = try makeTrackedRemoteEditFile()
-        let directory = tracked.file.deletingLastPathComponent()
+        let sessionDirectory = tracked.file.deletingLastPathComponent()
+            .deletingLastPathComponent()
         try "unsynced".write(to: tracked.file, atomically: true, encoding: .utf8)
 
         viewModel.stopRemoteEditSession(tracked.session)
@@ -610,7 +620,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: tracked.file.path))
         XCTAssertTrue(
             FileManager.default.fileExists(
-                atPath: directory.appendingPathComponent(".dockbridge-unsynced").path
+                atPath: sessionDirectory.appendingPathComponent(".dockbridge-unsynced").path
             )
         )
         XCTAssertTrue(viewModel.errorMessage?.contains(tracked.file.path) == true)
@@ -620,7 +630,9 @@ final class MainViewModelTestabilityTests: XCTestCase {
         let clean = try makeTrackedRemoteEditFile(remotePath: "/srv/clean.txt")
         let dirty = try makeTrackedRemoteEditFile(remotePath: "/srv/dirty.txt")
         let cleanDirectory = clean.file.deletingLastPathComponent()
+            .deletingLastPathComponent()
         let dirtyDirectory = dirty.file.deletingLastPathComponent()
+            .deletingLastPathComponent()
         // Simulate an app termination before the one-second poll has had a
         // chance to create the explicit unsynced marker.
         try "changed before polling".write(
