@@ -188,7 +188,13 @@ final class TransferQueueViewModel: ObservableObject {
         let oldMap = Dictionary(uniqueKeysWithValues: old.map { ($0.id, $0) })
 
         return new.filter { task in
-            let isTerminal = task.status == .completed || task.status == .failed
+            let isTerminal: Bool
+            switch task.status {
+            case .completed, .failed:
+                isTerminal = true
+            case .cancelled, .pending, .inProgress:
+                isTerminal = false
+            }
             guard isTerminal else { return false }
             // A task that is already terminal but was not in the previous
             // snapshot was created and finished between two polls (a fast
