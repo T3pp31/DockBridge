@@ -592,7 +592,6 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
     func testRemoteEditSessionDoesNotTransferWhenEndpointChanges() async throws {
         let tracked = try makeTrackedRemoteEditFile()
-        let originalEndpoint = bridge.connectionStatus.endpointLabel
         try "changed".write(to: tracked.file, atomically: true, encoding: .utf8)
         // Change the actual connected endpoint (host/port/username), as the
         // app now identifies pending external edits by real endpoint (#569).
