@@ -712,6 +712,50 @@ final class MainViewModelTestabilityTests: XCTestCase {
         )
     }
 
+    func testCleanupPreservesLegacySessionWhenFileIsMissing() throws {
+        // A legacy session whose local file was deleted (or never downloaded)
+        // must still be preserved: deleting the directory would lose the
+        // recovery metadata the user may still need (#567).
+        let legacyDirectory = remoteEditTempRoot
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: legacyDirectory,
+            withIntermediateDirectories: true
+        )
+        let snapshot = MainViewModel.RemoteEditFileSnapshot(
+            modifiedAt: Date(),
+            size: 7,
+            fileIdentifier: "1"
+        )
+        let metadata = MainViewModel.RemoteEditRecoveryMetadata(
+            remotePath: "/srv/config.txt",
+            connectionIdentity: "endpoint:user@example.com:22",
+            localFileName: "config.txt",
+            lastUploadedSnapshot: snapshot
+        )
+        try JSONEncoder().encode(metadata).write(
+            to: legacyDirectory.appendingPathComponent(".dockbridge-session.json")
+        )
+
+        let recoveryViewModel = MainViewModel(
+            settings: settings,
+            bookmarkService: bookmarkService,
+            pathBookmarkStore: pathBookmarkStore,
+            bridge: bridge,
+            connectionList: connectionList,
+            transferQueue: transferQueue,
+            remoteEditTempRoot: remoteEditTempRoot,
+            openFileOperation: { _ in true }
+        )
+
+        recoveryViewModel.cleanupRemoteOpenTemp()
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: legacyDirectory.path),
+            "legacy session with a missing local file must be preserved"
+        )
+    }
+
     // MARK: - Path saving on disconnect
 
     func testDisconnectSavesCurrentPathsToConnectedProfile() async throws {

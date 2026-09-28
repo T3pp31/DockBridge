@@ -1073,9 +1073,18 @@ final class MainViewModel: ObservableObject {
             // New layouts keep content under `content/`; legacy sessions stored
             // it directly in the session directory. Pick whichever exists so
             // upgrades do not delete user data.
-            let localFile = FileManager.default.fileExists(atPath: contentFile.path)
-                ? contentFile
-                : legacyFile
+            let localFile: URL
+            if FileManager.default.fileExists(atPath: contentFile.path) {
+                localFile = contentFile
+            } else if FileManager.default.fileExists(atPath: legacyFile.path) {
+                localFile = legacyFile
+            } else {
+                // Neither layout has the expected file (user removed it, or
+                // the download never completed). Never delete the directory:
+                // the user may still need the metadata for recovery.
+                preserved.append(dir)
+                continue
+            }
             guard let currentSnapshot = remoteEditFileSnapshot(at: localFile),
                   currentSnapshot == metadata.lastUploadedSnapshot else {
                 preserved.append(dir)
@@ -1119,6 +1128,11 @@ final class MainViewModel: ObservableObject {
 
     /// Returns the session directory containing the file (two levels up for
     /// `content/<file>`, one level up for legacy `<file>` layout).
+    ///
+    /// The check keys off the immediate parent directory name; because the
+    /// local file is always written into the `content` subdirectory, a remote
+    /// file literally named `content` resolves to `<session>/content/content`
+    /// whose parent is still the `content` directory, so this stays correct.
     private func sessionDirectoryURL(for session: RemoteEditSession) -> URL {
         let directory = session.localURL.deletingLastPathComponent()
         if directory.lastPathComponent == Self.remoteEditContentDirectoryName {
