@@ -678,10 +678,22 @@ final class ConnectionListViewModel: ObservableObject {
         // outside the valid UInt16 range instead of crashing on conversion.
         let port: UInt16
         if let raw = url.port {
-            guard let converted = UInt16(exactly: raw), converted > 0 else { return }
+            guard let converted = UInt16(exactly: raw), converted > 0 else {
+                errorMessage = "Invalid port in sftp URL."
+                return
+            }
             port = converted
         } else {
             port = 22
+        }
+
+        // sftp URLs carry a remote path; normalize it to an absolute path.
+        let remotePath: String?
+        if url.path.isEmpty || url.path == "/" {
+            remotePath = nil
+        } else {
+            let decoded = url.path.removingPercentEncoding ?? url.path
+            remotePath = decoded.hasPrefix("/") ? decoded : "/" + decoded
         }
 
         if let profile = profiles.first(where: {
@@ -690,15 +702,28 @@ final class ConnectionListViewModel: ObservableObject {
                 && $0.username == username
         }) {
             selectedProfileID = profile.id
-            requestConnect(profile: profile)
+            // Carry the URL path into the matched profile so reconnects keep
+            // the same starting directory the user opened (issue #371).
+            let connectProfile: ConnectionProfile
+            if let remotePath {
+                var updated = profile
+                updated.initialRemotePath = remotePath
+                connectProfile = updated
+                do {
+                    profiles = try store.upsert(updated)
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            } else {
+                connectProfile = profile
+            }
+            requestConnect(profile: connectProfile)
             return
         }
 
         // Prefill a new profile from the URL so the user can save and connect.
         var profile = ConnectionProfile(name: "", host: host, port: port, username: username)
-        if !url.path.isEmpty, url.path != "/" {
-            profile.initialRemotePath = url.path.removingPercentEncoding ?? url.path
-        }
+        profile.initialRemotePath = remotePath
         do {
             profile = try store.upsert(profile).first ?? profile
             profiles = try store.loadProfiles()

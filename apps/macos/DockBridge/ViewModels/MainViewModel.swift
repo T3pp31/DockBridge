@@ -502,8 +502,14 @@ final class MainViewModel: ObservableObject {
                let profile = connectionList.profiles.first(where: { $0.id == profileID }) {
                 let targetLocal = profile.initialLocalPath ?? profile.lastLocalPath
                 if let savedLocalPath = targetLocal, !savedLocalPath.isEmpty {
-                    applyLocalPath(URL(fileURLWithPath: savedLocalPath, isDirectory: true), recordHistory: false)
-                    reloadLocal()
+                    let localURL = URL(fileURLWithPath: savedLocalPath, isDirectory: true)
+                    // Only apply the saved path if it still exists; a stale
+                    // path (deleted folder, renamed volume) must not break
+                    // the freshly established connection.
+                    if FileManager.default.fileExists(atPath: localURL.path) {
+                        applyLocalPath(localURL, recordHistory: false)
+                        reloadLocal()
+                    }
                 }
             }
             refreshPathBookmarks()
