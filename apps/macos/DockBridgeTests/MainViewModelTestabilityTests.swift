@@ -108,10 +108,17 @@ final class MainViewModelTestabilityTests: XCTestCase {
         bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
         bridge.connectedProfileID = UUID()
 
-        let directory = remoteEditTempRoot
+        // Downloaded content lives in a dedicated `content` subdirectory so
+        // files whose names match internal metadata cannot collide (#567).
+        let sessionDirectory = remoteEditTempRoot
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let file = directory.appendingPathComponent((remotePath as NSString).lastPathComponent)
+        let contentDirectory = sessionDirectory
+            .appendingPathComponent("content", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: contentDirectory,
+            withIntermediateDirectories: true
+        )
+        let file = contentDirectory.appendingPathComponent((remotePath as NSString).lastPathComponent)
         try contents.write(to: file, atomically: true, encoding: .utf8)
         let session = try XCTUnwrap(
             viewModel.trackRemoteEditFile(localURL: file, remotePath: remotePath)
@@ -532,6 +539,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertTrue(
             FileManager.default.fileExists(
                 atPath: tracked.file.deletingLastPathComponent()
+                    .deletingLastPathComponent()
                     .appendingPathComponent(".dockbridge-unsynced").path
             )
         )
@@ -547,6 +555,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertFalse(
             FileManager.default.fileExists(
                 atPath: tracked.file.deletingLastPathComponent()
+                    .deletingLastPathComponent()
                     .appendingPathComponent(".dockbridge-unsynced").path
             )
         )
@@ -601,7 +610,8 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
     func testStoppingDirtyRemoteEditPreservesRecoverableLocalCopy() throws {
         let tracked = try makeTrackedRemoteEditFile()
-        let directory = tracked.file.deletingLastPathComponent()
+        let sessionDirectory = tracked.file.deletingLastPathComponent()
+            .deletingLastPathComponent()
         try "unsynced".write(to: tracked.file, atomically: true, encoding: .utf8)
 
         viewModel.stopRemoteEditSession(tracked.session)
@@ -610,7 +620,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: tracked.file.path))
         XCTAssertTrue(
             FileManager.default.fileExists(
-                atPath: directory.appendingPathComponent(".dockbridge-unsynced").path
+                atPath: sessionDirectory.appendingPathComponent(".dockbridge-unsynced").path
             )
         )
         XCTAssertTrue(viewModel.errorMessage?.contains(tracked.file.path) == true)
@@ -620,7 +630,9 @@ final class MainViewModelTestabilityTests: XCTestCase {
         let clean = try makeTrackedRemoteEditFile(remotePath: "/srv/clean.txt")
         let dirty = try makeTrackedRemoteEditFile(remotePath: "/srv/dirty.txt")
         let cleanDirectory = clean.file.deletingLastPathComponent()
+            .deletingLastPathComponent()
         let dirtyDirectory = dirty.file.deletingLastPathComponent()
+            .deletingLastPathComponent()
         // Simulate an app termination before the one-second poll has had a
         // chance to create the explicit unsynced marker.
         try "changed before polling".write(
@@ -650,6 +662,97 @@ final class MainViewModelTestabilityTests: XCTestCase {
                 Int64(1),
                 remoteEditTempRoot.path
             )
+        )
+    }
+
+    // MARK: - Legacy session compatibility
+
+    func testCleanupPreservesLegacySessionWithoutContentDirectory() throws {
+        // A session created before the `content` subdirectory existed stored
+        // the file directly under the session directory. Cleanup must not
+        // delete it just because the new layout is absent (#567).
+        let legacyDirectory = remoteEditTempRoot
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: legacyDirectory,
+            withIntermediateDirectories: true
+        )
+        let legacyFile = legacyDirectory.appendingPathComponent("config.txt")
+        try "changed".write(to: legacyFile, atomically: true, encoding: .utf8)
+        let snapshot = MainViewModel.RemoteEditFileSnapshot(
+            modifiedAt: Date(),
+            size: 7,
+            fileIdentifier: "1"
+        )
+        let metadata = MainViewModel.RemoteEditRecoveryMetadata(
+            remotePath: "/srv/config.txt",
+            connectionIdentity: "endpoint:user@example.com:22",
+            localFileName: "config.txt",
+            lastUploadedSnapshot: snapshot
+        )
+        let data = try JSONEncoder().encode(metadata)
+        try data.write(to: legacyDirectory.appendingPathComponent(".dockbridge-session.json"))
+
+        let recoveryViewModel = MainViewModel(
+            settings: settings,
+            bookmarkService: bookmarkService,
+            pathBookmarkStore: pathBookmarkStore,
+            bridge: bridge,
+            connectionList: connectionList,
+            transferQueue: transferQueue,
+            remoteEditTempRoot: remoteEditTempRoot,
+            openFileOperation: { _ in true }
+        )
+
+        recoveryViewModel.cleanupRemoteOpenTemp()
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: legacyDirectory.path),
+            "legacy session with an unsynced snapshot must be preserved"
+        )
+    }
+
+    func testCleanupPreservesLegacySessionWhenFileIsMissing() throws {
+        // A legacy session whose local file was deleted (or never downloaded)
+        // must still be preserved: deleting the directory would lose the
+        // recovery metadata the user may still need (#567).
+        let legacyDirectory = remoteEditTempRoot
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: legacyDirectory,
+            withIntermediateDirectories: true
+        )
+        let snapshot = MainViewModel.RemoteEditFileSnapshot(
+            modifiedAt: Date(),
+            size: 7,
+            fileIdentifier: "1"
+        )
+        let metadata = MainViewModel.RemoteEditRecoveryMetadata(
+            remotePath: "/srv/config.txt",
+            connectionIdentity: "endpoint:user@example.com:22",
+            localFileName: "config.txt",
+            lastUploadedSnapshot: snapshot
+        )
+        try JSONEncoder().encode(metadata).write(
+            to: legacyDirectory.appendingPathComponent(".dockbridge-session.json")
+        )
+
+        let recoveryViewModel = MainViewModel(
+            settings: settings,
+            bookmarkService: bookmarkService,
+            pathBookmarkStore: pathBookmarkStore,
+            bridge: bridge,
+            connectionList: connectionList,
+            transferQueue: transferQueue,
+            remoteEditTempRoot: remoteEditTempRoot,
+            openFileOperation: { _ in true }
+        )
+
+        recoveryViewModel.cleanupRemoteOpenTemp()
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: legacyDirectory.path),
+            "legacy session with a missing local file must be preserved"
         )
     }
 
