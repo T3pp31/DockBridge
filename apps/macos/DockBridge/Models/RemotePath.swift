@@ -59,7 +59,11 @@ enum RemotePath {
     static func normalize(_ path: String) throws -> String {
         try rejectParentSegment(in: path)
 
-        var value = path.replacingOccurrences(of: "//", with: "/")
+        // Segment-wise normalization matching Rust: drop empty segments and
+        // "." (issue #576). ".." and NUL are still rejected above.
+        let segments = path.split(separator: "/", omittingEmptySubsequences: true)
+            .filter { $0 != "." }
+        var value = "/" + segments.joined(separator: "/")
         if value.isEmpty {
             value = "/"
         }

@@ -22,8 +22,26 @@ final class RemotePathTests: XCTestCase {
         XCTAssertEqual(try RemotePath.parent(of: "/var/www/index.html"), "/var/www")
     }
 
+    func testNormalizeEmptyPathReturnsRoot() throws {
+        // Empty input and a path of only separators collapse to the root
+        // rather than an empty string (issue #576).
+        XCTAssertEqual(try RemotePath.normalize(""), "/")
+        XCTAssertEqual(try RemotePath.normalize("/"), "/")
+        XCTAssertEqual(try RemotePath.normalize("///"), "/")
+    }
+
     func testNormalizeCollapsesDoubleSlash() throws {
         XCTAssertEqual(try RemotePath.normalize("//foo//bar"), "/foo/bar")
+    }
+
+    func testNormalizeDropsDotSegments() throws {
+        XCTAssertEqual(try RemotePath.normalize("/srv/./"), "/srv")
+        XCTAssertEqual(try RemotePath.normalize("/srv/./file.txt"), "/srv/file.txt")
+    }
+
+    func testNormalizeCollapsesTripleSlash() throws {
+        XCTAssertEqual(try RemotePath.normalize("/srv///"), "/srv")
+        XCTAssertEqual(try RemotePath.normalize("/srv///file.txt"), "/srv/file.txt")
     }
 
     func testDirectoryPathAddsTrailingSlash() throws {
