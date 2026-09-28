@@ -279,7 +279,11 @@ extension AppUpdateServiceTests {
     func testCheckForUpdateTreats304AsNoUpdate() async throws {
         // Given: the server returns 304 (If-None-Match matched)
         UserDefaults.standard.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
-        defer { UserDefaults.standard.removeObject(forKey: AppUpdateConfig.etagDefaultsKey) }
+        UserDefaults.standard.removeObject(forKey: AppUpdateConfig.releaseBodyDefaultsKey)
+        defer {
+            UserDefaults.standard.removeObject(forKey: AppUpdateConfig.etagDefaultsKey)
+            UserDefaults.standard.removeObject(forKey: AppUpdateConfig.releaseBodyDefaultsKey)
+        }
 
         let service = AppUpdateService(session: MockURLSession(statusCode: 304, data: Data()))
         let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)

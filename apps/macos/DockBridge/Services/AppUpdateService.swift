@@ -116,6 +116,10 @@ final class AppUpdateService: @unchecked Sendable {
                let release = try? JSONDecoder().decode(GitHubReleaseResponse.self, from: cached) {
                 return release
             }
+            // Avoid an infinite 304 loop: without a cached body there is
+            // nothing to re-evaluate, and an unconditioned request can still
+            // answer 304 when the upstream cache is authoritative.
+            guard !unconditioned else { return nil }
             return try await fetchLatestRelease(unconditioned: true)
         }
 
