@@ -2273,7 +2273,7 @@ mod tests {
     use crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
     use crate::error::{AuthError, RemoteStatusCode, SftpError};
     use crate::sftp::test_server::{
-        list_partial_paths, KEYBOARD_INTERACTIVE_SECRET, TestSftpServer,
+        list_partial_paths, TestSftpServer, KEYBOARD_INTERACTIVE_SECRET,
     };
     use crate::sftp::tree::walk_remote_directory;
     use crate::transfer::TransferOverwritePolicy;
@@ -5402,7 +5402,10 @@ mod tests {
     async fn auth_without_remaining_methods_reports_method_unavailable() {
         // Given: a server that rejects every method without proposing any
         let server = TestSftpServer::start().await;
-        server.failures.reject_all_auth.store(true, Ordering::SeqCst);
+        server
+            .failures
+            .reject_all_auth
+            .store(true, Ordering::SeqCst);
 
         let config = crate::config::AppConfig {
             known_hosts_path: server.known_hosts_path(),
@@ -5412,8 +5415,12 @@ mod tests {
         let known_hosts = Arc::new(tokio::sync::Mutex::new(
             crate::security::KnownHostsManager::load_or_empty(&config.known_hosts_path),
         ));
-        let profile =
-            crate::ssh::ConnectionProfile::with_password("127.0.0.1", server.addr.port(), "test", "pw");
+        let profile = crate::ssh::ConnectionProfile::with_password(
+            "127.0.0.1",
+            server.addr.port(),
+            "test",
+            "pw",
+        );
 
         // When: connecting
         let result = crate::ssh::SshSession::connect(

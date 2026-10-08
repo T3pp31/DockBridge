@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{Auth, Msg, Server as _, Session};
-use russh::{MethodKind, MethodSet};
 use russh::{Channel, ChannelId};
+use russh::{MethodKind, MethodSet};
 use russh_sftp::de;
 use russh_sftp::extensions::{PosixRenameExtension, POSIX_RENAME};
 use russh_sftp::protocol::{
@@ -911,11 +911,8 @@ impl TestSftpServer {
         self.failures
             .require_keyboard_interactive
             .store(true, Ordering::SeqCst);
-        *self
-            .failures
-            .keyboard_interactive_secret
-            .lock()
-            .unwrap() = KEYBOARD_INTERACTIVE_SECRET.to_string();
+        *self.failures.keyboard_interactive_secret.lock().unwrap() =
+            KEYBOARD_INTERACTIVE_SECRET.to_string();
 
         let config = AppConfig {
             known_hosts_path: self._known_hosts_dir.path().join("known_hosts.json"),

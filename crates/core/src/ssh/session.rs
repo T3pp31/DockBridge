@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use russh::client::{self, AuthResult, Handle, KeyboardInteractiveAuthResponse};
-use russh::MethodKind;
 use russh::keys::PublicKey;
 use russh::keys::{decode_secret_key, PrivateKeyWithHashAlg};
+use russh::MethodKind;
 use russh_sftp::client::{Config as SftpConfig, SftpSession};
 use tokio::sync::Mutex;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -409,11 +409,7 @@ async fn authenticate(
                     {
                         if let Some(handler) = auth_prompt {
                             return keyboard_interactive_auth(
-                                handle,
-                                username,
-                                host,
-                                port,
-                                handler,
+                                handle, username, host, port, handler,
                             )
                             .await;
                         }
