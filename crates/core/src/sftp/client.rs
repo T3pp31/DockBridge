@@ -369,9 +369,10 @@ impl<'a> SftpClient<'a> {
         // never resume.
         let local_size = local_metadata.as_ref().map(|metadata| metadata.len());
         let resume_offset = match local_size {
-            Some(size) => self
-                .find_resumable_upload_offset(size, &parent, &local, &remote)
-                .await?,
+            Some(size) => {
+                self.find_resumable_upload_offset(size, &parent, &local, &remote)
+                    .await?
+            }
             None => None,
         };
         let mut partial = match resume_offset {
@@ -561,7 +562,9 @@ impl<'a> SftpClient<'a> {
                         .map_err(|err| SftpError::DownloadFailed {
                             remote: remote.clone(),
                             local: local.clone(),
-                            message: format!("failed to seek remote file to the resume offset: {err}"),
+                            message: format!(
+                                "failed to seek remote file to the resume offset: {err}"
+                            ),
                         })?;
                     resumed
                 }
@@ -747,15 +750,15 @@ impl<'a> SftpClient<'a> {
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), SftpError> {
         let from = normalize_remote_path(from)?;
         let to = normalize_remote_path(to)?;
-        let replaced = self
-            .sftp()
-            .posix_rename(&from, &to)
-            .await
-            .map_err(|err| SftpError::RenameFailed {
-                from: from.clone(),
-                to: to.clone(),
-                message: err.to_string(),
-            })?;
+        let replaced =
+            self.sftp()
+                .posix_rename(&from, &to)
+                .await
+                .map_err(|err| SftpError::RenameFailed {
+                    from: from.clone(),
+                    to: to.clone(),
+                    message: err.to_string(),
+                })?;
         if replaced {
             return Ok(());
         }
@@ -2538,15 +2541,15 @@ mod tests {
         create_exclusive_local_partial, download_pipelined_to_writer, is_remote_file_exists_error,
         is_remote_no_such_file_error, normalize_remote_path, open_exclusive_local_file,
         partial_file_name, partial_local_path_for_suffix, partial_remote_path_for_suffix,
-        pipeline_depth_for_chunk_budget, prepare_local_finalize_destination,
-        random_partial_suffix, remote_status_code, rename_local_noreplace,
-        resume_partial_suffix, upload_from_reader, DownloadFlowError, PartialLocalTransfer,
-        PartialRemoteTransfer, PipelinableTransferWriter, SftpClient,
+        pipeline_depth_for_chunk_budget, prepare_local_finalize_destination, random_partial_suffix,
+        remote_status_code, rename_local_noreplace, resume_partial_suffix, upload_from_reader,
+        DownloadFlowError, PartialLocalTransfer, PartialRemoteTransfer, PipelinableTransferWriter,
+        SftpClient,
     };
     use crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
     use crate::error::{AuthError, RemoteStatusCode, SftpError};
     use crate::sftp::test_server::{
-        list_partial_paths, KEYBOARD_INTERACTIVE_SECRET, TestSftpServer,
+        list_partial_paths, TestSftpServer, KEYBOARD_INTERACTIVE_SECRET,
     };
     use crate::sftp::tree::walk_remote_directory;
     use crate::transfer::TransferOverwritePolicy;
@@ -5675,7 +5678,10 @@ mod tests {
     async fn auth_without_remaining_methods_reports_method_unavailable() {
         // Given: a server that rejects every method without proposing any
         let server = TestSftpServer::start().await;
-        server.failures.reject_all_auth.store(true, Ordering::SeqCst);
+        server
+            .failures
+            .reject_all_auth
+            .store(true, Ordering::SeqCst);
 
         let config = crate::config::AppConfig {
             known_hosts_path: server.known_hosts_path(),
@@ -5685,8 +5691,12 @@ mod tests {
         let known_hosts = Arc::new(tokio::sync::Mutex::new(
             crate::security::KnownHostsManager::load_or_empty(&config.known_hosts_path),
         ));
-        let profile =
-            crate::ssh::ConnectionProfile::with_password("127.0.0.1", server.addr.port(), "test", "pw");
+        let profile = crate::ssh::ConnectionProfile::with_password(
+            "127.0.0.1",
+            server.addr.port(),
+            "test",
+            "pw",
+        );
 
         // When: connecting
         let result = crate::ssh::SshSession::connect(
@@ -5730,10 +5740,7 @@ mod tests {
             resume_partial_suffix(&local_display, remote)
         );
         server
-            .write_remote_file(
-                &format!("/upload/{partial_local_name}"),
-                &payload[..4],
-            )
+            .write_remote_file(&format!("/upload/{partial_local_name}"), &payload[..4])
             .await;
 
         // When: the upload runs to the same paths
@@ -5763,10 +5770,7 @@ mod tests {
 
         let partial_path = local_dir.path().join(format!(
             ".dockbridge-{}.partial",
-            resume_partial_suffix(
-                &local_path.display().to_string(),
-                "/download/file.bin"
-            )
+            resume_partial_suffix(&local_path.display().to_string(), "/download/file.bin")
         ));
         tokio::fs::write(&partial_path, b"AAAA").await.unwrap();
 
@@ -5787,11 +5791,13 @@ mod tests {
         let server = TestSftpServer::start().await;
         server.failures.hang_write.store(true, Ordering::SeqCst);
         let session = server.connect_session().await;
-        let client = SftpClient::new(&session)
-            .with_upload_request_timeout(Duration::from_millis(120));
+        let client =
+            SftpClient::new(&session).with_upload_request_timeout(Duration::from_millis(120));
         let local_dir = tempfile::tempdir().unwrap();
         let local_path = local_dir.path().join("hang.bin");
-        tokio::fs::write(&local_path, b"some payload").await.unwrap();
+        tokio::fs::write(&local_path, b"some payload")
+            .await
+            .unwrap();
 
         // When: the upload times out on the first WRITE ack
         let err = client
@@ -5868,10 +5874,7 @@ mod tests {
             .posix_rename(partial, "target.txt")
             .await
             .expect("posix-rename request must succeed");
-        assert!(
-            replaced,
-            "OpenSSH must advertise posix-rename@openssh.com"
-        );
+        assert!(replaced, "OpenSSH must advertise posix-rename@openssh.com");
 
         // Then: the destination carries the new contents and the partial is gone
         assert_eq!(session.read("target.txt").await.unwrap(), b"new contents");
