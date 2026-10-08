@@ -8,8 +8,10 @@ use std::time::Duration;
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId};
+use russh_sftp::de;
+use russh_sftp::extensions::{POSIX_RENAME, PosixRenameExtension};
 use russh_sftp::protocol::{
-    Attrs, Data, File, FileAttributes, Handle, Name, OpenFlags, Status, StatusCode, Version,
+    Attrs, Data, File, FileAttributes, Handle, Name, OpenFlags, Packet, Status, StatusCode, Version,
 };
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
@@ -49,6 +51,11 @@ pub struct FailureConfig {
     pub hang_write: AtomicBool,
     /// Notifies a single blocked WRITE handler to stop hanging and reply.
     pub write_unhang: tokio::sync::Notify,
+    /// Whether the server advertises `posix-rename@openssh.com` in its
+    /// SSH_FXP_VERSION and serves the extension. Defaults to `true` so tests
+    /// exercise the OpenSSH-compatible atomic-overwrite path; set to `false`
+    /// to simulate a server that lacks the extension.
+    pub advertise_posix_rename: AtomicBool,
 }
 
 pub struct TestSftpServer {
@@ -284,7 +291,17 @@ impl russh_sftp::server::Handler for SftpHandler {
         _version: u32,
         _extensions: HashMap<String, String>,
     ) -> Result<Version, Self::Error> {
-        Ok(Version::new())
+        let mut version = Version::new();
+        if self
+            .failures
+            .advertise_posix_rename
+            .load(Ordering::SeqCst)
+        {
+            version
+                .extensions
+                .insert(POSIX_RENAME.to_string(), "1".to_string());
+        }
+        Ok(version)
     }
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
@@ -587,6 +604,18 @@ impl russh_sftp::server::Handler for SftpHandler {
         }
         let from = self.resolve(&oldpath);
         let to = self.resolve(&newpath);
+        // Mirror OpenSSH's sftp-server: regular-file renames go through
+        // link()+unlink() and refuse to replace an existing destination, so
+        // a plain SSH_FXP_RENAME onto an existing file fails (issue #565).
+        if let Ok(metadata) = fs::symlink_metadata(&to).await {
+            if !metadata.is_dir() {
+                return Ok(Self::err_status(
+                    id,
+                    StatusCode::Failure,
+                    "rename: destination exists",
+                ));
+            }
+        }
         if let Some(parent) = to.parent() {
             fs::create_dir_all(parent)
                 .await
@@ -596,6 +625,51 @@ impl russh_sftp::server::Handler for SftpHandler {
             .await
             .map_err(|_| StatusCode::Failure)?;
         Ok(Self::ok_status(id))
+    }
+
+    async fn extended(
+        &mut self,
+        id: u32,
+        request: String,
+        data: Vec<u8>,
+    ) -> Result<Packet, Self::Error> {
+        match request.as_str() {
+            POSIX_RENAME => {
+                if !self
+                    .failures
+                    .advertise_posix_rename
+                    .load(Ordering::SeqCst)
+                {
+                    return Err(StatusCode::OpUnsupported);
+                }
+                if self
+                    .failures
+                    .fail_remote_rename
+                    .swap(false, Ordering::SeqCst)
+                {
+                    return Ok(Packet::Status(Self::err_status(
+                        id,
+                        StatusCode::Failure,
+                        "rename failed",
+                    )));
+                }
+                let parsed = de::from_bytes::<PosixRenameExtension>(&mut data.into())
+                    .map_err(|_| StatusCode::BadMessage)?;
+                let from = self.resolve(&parsed.oldpath);
+                let to = self.resolve(&parsed.newpath);
+                if let Some(parent) = to.parent() {
+                    fs::create_dir_all(parent)
+                        .await
+                        .map_err(|_| StatusCode::Failure)?;
+                }
+                // posix-rename replaces an existing destination atomically.
+                fs::rename(&from, &to)
+                    .await
+                    .map_err(|_| StatusCode::Failure)?;
+                Ok(Packet::Status(Self::ok_status(id)))
+            }
+            _ => Err(StatusCode::OpUnsupported),
+        }
     }
 
     async fn setstat(
@@ -672,6 +746,11 @@ impl TestSftpServer {
         fs::create_dir_all(&root).await.unwrap();
 
         let failures = Arc::new(FailureConfig::default());
+        // Advertise posix-rename@openssh.com by default (OpenSSH-compatible);
+        // tests opt out via `advertise_posix_rename.store(false, ..)`.
+        failures
+            .advertise_posix_rename
+            .store(true, Ordering::SeqCst);
         let clients = Arc::new(Mutex::new(HashMap::new()));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

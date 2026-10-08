@@ -312,8 +312,6 @@ dependencies = [
 [[package]]
 name = "bssh-russh-sftp"
 version = "2.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab6c6b80708b71d5ad6d2b348fc964870f01b6d5a64f3ea90e233da747518cd4"
 dependencies = [
  "bitflags",
  "bytes",

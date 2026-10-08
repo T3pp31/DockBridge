@@ -629,12 +629,44 @@ impl<'a> SftpClient<'a> {
         Ok(count)
     }
 
-    /// Renames a remote file or directory.
+    /// Renames a remote file or directory, replacing an existing destination
+    /// atomically when the server supports `posix-rename@openssh.com`.
+    /// Servers without the extension fall back to a plain SSH_FXP_RENAME
+    /// (POSIX-style servers replace the destination; OpenSSH-style ones
+    /// refuse and surface the server error).
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), SftpError> {
         let from = normalize_remote_path(from)?;
         let to = normalize_remote_path(to)?;
+        let replaced = self
+            .sftp()
+            .posix_rename(&from, &to)
+            .await
+            .map_err(|err| SftpError::RenameFailed {
+                from: from.clone(),
+                to: to.clone(),
+                message: err.to_string(),
+            })?;
+        if replaced {
+            return Ok(());
+        }
         self.sftp()
             .rename(&from, &to)
+            .await
+            .map_err(|err| SftpError::RenameFailed {
+                from,
+                to,
+                message: err.to_string(),
+            })
+    }
+
+    /// Renames `from` to `to`, atomically replacing an existing destination
+    /// via the `posix-rename@openssh.com` extension. Returns `Ok(false)` when
+    /// the server does not advertise the extension.
+    pub async fn posix_rename(&self, from: &str, to: &str) -> Result<bool, SftpError> {
+        let from = normalize_remote_path(from)?;
+        let to = normalize_remote_path(to)?;
+        self.sftp()
+            .posix_rename(&from, &to)
             .await
             .map_err(|err| SftpError::RenameFailed {
                 from,
@@ -1478,15 +1510,44 @@ impl<'a> PartialRemoteTransfer<'a> {
             return Err(err);
         }
 
-        // Atomic overwrite: a plain `rename` (SSH_FXP_RENAME) replaces an
-        // existing destination on OpenSSH and most servers. No delete is
-        // issued before the rename, so a failing rename can never destroy the
-        // original file.
-        //
-        // On rename failure the fully-transferred partial is *preserved* so
-        // the user can recover it; the original final file is untouched.
-        match self.client.rename(&self.partial_path, final_path).await {
-            Ok(()) => {
+        // OpenSSH implements regular-file SSH_FXP_RENAME via link()+unlink()
+        // and refuses to replace an existing destination, so Replace relies on
+        // the `posix-rename@openssh.com` extension for an atomic overwrite.
+        // No delete is issued before the rename, so a failing rename can never
+        // destroy the original file. When the server lacks the extension, the
+        // rename only proceeds while the destination is absent — a
+        // delete-then-rename fallback would risk destroying the original and
+        // is therefore never issued. On rename failure the fully-transferred
+        // partial is *preserved* so the user can recover it; the original
+        // final file is untouched.
+        let committed: Result<bool, SftpError> = match self.overwrite_policy {
+            TransferOverwritePolicy::Replace => {
+                match self
+                    .client
+                    .posix_rename(&self.partial_path, final_path)
+                    .await
+                {
+                    Ok(true) => Ok(true),
+                    Ok(false) => match remote_path_exists(self.client, final_path).await {
+                        Ok(false) => self
+                            .client
+                            .rename(&self.partial_path, final_path)
+                            .await
+                            .map(|_| true),
+                        Ok(true) => Ok(false),
+                        Err(err) => Err(err),
+                    },
+                    Err(err) => Err(err),
+                }
+            }
+            TransferOverwritePolicy::FailIfExists => self
+                .client
+                .rename(&self.partial_path, final_path)
+                .await
+                .map(|_| true),
+        };
+        match committed {
+            Ok(true) => {
                 self.committed = true;
                 // Preserve the source file's mtime and permission bits on the
                 // remote copy. Failures are logged but do not fail the transfer
@@ -1509,6 +1570,18 @@ impl<'a> PartialRemoteTransfer<'a> {
                     }
                 }
                 Ok(())
+            }
+            Ok(false) => {
+                let message = format!(
+                    "upload was not committed: the source file '{}' still exists and the new file is preserved at '{}': the server does not support the posix-rename@openssh.com extension, so an existing destination cannot be replaced atomically",
+                    self.remote,
+                    self.partial_path,
+                );
+                Err(SftpError::UploadFailed {
+                    local: self.local.clone(),
+                    remote: self.remote.clone(),
+                    message,
+                })
             }
             Err(err) => {
                 let message = format!(
@@ -2928,6 +3001,76 @@ mod tests {
             message.contains("is a directory"),
             "expected directory destination error, got: {message}"
         );
+    }
+
+    #[tokio::test]
+    async fn upload_replace_without_posix_rename_support_refuses_overwrite() {
+        // Given: a server that does not advertise posix-rename@openssh.com
+        // (e.g. OpenSSH-style: plain SSH_FXP_RENAME cannot replace a file)
+        // and an existing remote file.
+        let server = TestSftpServer::start().await;
+        server
+            .failures
+            .advertise_posix_rename
+            .store(false, Ordering::SeqCst);
+        server
+            .write_remote_file("/upload/overwrite.txt", b"original contents")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("overwrite.txt");
+        tokio::fs::write(&local_path, b"brand new").await.unwrap();
+
+        // When: a Replace-policy upload runs against the existing destination
+        let err = client
+            .upload(&local_path, "/upload/overwrite.txt")
+            .await
+            .unwrap_err();
+
+        // Then: the upload fails without touching the original file and the
+        // fully-uploaded partial is preserved (never delete-then-rename).
+        let message = err.to_string();
+        assert!(
+            message.contains("posix-rename@openssh.com"),
+            "expected unsupported-extension error, got: {message}"
+        );
+        let original = tokio::fs::read(server.root.join("upload/overwrite.txt"))
+            .await
+            .unwrap();
+        assert_eq!(original, b"original contents");
+        assert!(
+            !server.remote_partial_paths().is_empty(),
+            "the fully-uploaded partial must be preserved so the user can recover it"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_replace_without_posix_rename_support_succeeds_when_destination_absent() {
+        // Given: a server without posix-rename support and NO existing file
+        let server = TestSftpServer::start().await;
+        server
+            .failures
+            .advertise_posix_rename
+            .store(false, Ordering::SeqCst);
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("new.txt");
+        tokio::fs::write(&local_path, b"brand new").await.unwrap();
+
+        // When: a Replace-policy upload runs to a fresh path
+        client
+            .upload(&local_path, "/upload/fresh.txt")
+            .await
+            .unwrap();
+
+        // Then: a plain rename creates the destination atomically
+        let contents = tokio::fs::read(server.root.join("upload/fresh.txt"))
+            .await
+            .unwrap();
+        assert_eq!(contents, b"brand new");
+        assert!(server.remote_partial_paths().is_empty());
     }
 
     #[tokio::test]
@@ -5141,5 +5284,118 @@ mod tests {
             matches!(err, SftpError::DirectoryWalkLimitExceeded { .. }),
             "unexpected error: {err:?}"
         );
+    }
+
+    /// Pipe an OpenSSH `sftp-server` child process into an SFTP session so
+    /// extension behaviour can be verified against the reference server.
+    struct SftpServerStdio {
+        stdout: tokio::process::ChildStdout,
+        stdin: tokio::process::ChildStdin,
+    }
+
+    impl tokio::io::AsyncRead for SftpServerStdio {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.stdout).poll_read(cx, buf)
+        }
+    }
+
+    impl tokio::io::AsyncWrite for SftpServerStdio {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Pin::new(&mut self.stdin).poll_write(cx, buf)
+        }
+
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.stdin).poll_flush(cx)
+        }
+
+        fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Pin::new(&mut self.stdin).poll_shutdown(cx)
+        }
+    }
+
+    fn openssh_sftp_server_path() -> Option<std::path::PathBuf> {
+        [
+            "/usr/libexec/sftp-server",
+            "/usr/lib/sftp-server",
+            "/usr/lib/openssh/sftp-server",
+            "/usr/libexec/openssh/sftp-server",
+        ]
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .find(|path| path.exists())
+    }
+
+    #[tokio::test]
+    async fn openssh_sftp_server_replaces_existing_file_via_posix_rename() {
+        // Runs only where a local OpenSSH sftp-server binary exists; skips
+        // silently elsewhere (CI images without the OpenSSH utilities).
+        let Some(sftp_server) = openssh_sftp_server_path() else {
+            eprintln!("skipping: no OpenSSH sftp-server binary found");
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("target.txt"), b"old contents").unwrap();
+
+        let mut child = tokio::process::Command::new(&sftp_server)
+            .current_dir(root.path())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn sftp-server");
+        let stdout = child.stdout.take().unwrap();
+        let stdin = child.stdin.take().unwrap();
+        // Keeping the handle alive keeps the process alive for the session.
+        let _child_guard = child;
+
+        let session = russh_sftp::client::SftpSession::new(SftpServerStdio { stdout, stdin })
+            .await
+            .expect("sftp-server handshake must succeed");
+
+        // Given: an existing destination and a fully-written partial file.
+        // Paths are relative: the un-chrooted sftp-server resolves them
+        // against its working directory (the temp root).
+        let partial = "target.txt.partial";
+        let mut file = session
+            .open_with_flags(
+                partial,
+                russh_sftp::protocol::OpenFlags::CREATE
+                    | russh_sftp::protocol::OpenFlags::WRITE
+                    | russh_sftp::protocol::OpenFlags::TRUNCATE,
+            )
+            .await
+            .unwrap();
+        file.write_all(b"new contents").await.unwrap();
+        file.shutdown().await.unwrap();
+
+        // A plain SSH_FXP_RENAME refuses to replace an existing file on
+        // OpenSSH (this is the pre-fix behaviour of issue #565).
+        let plain = session
+            .rename(partial, "target.txt")
+            .await
+            .expect_err("plain rename must not replace an existing OpenSSH file");
+        let _ = plain;
+
+        // When: Replace finalizes via posix-rename@openssh.com
+        let replaced = session
+            .posix_rename(partial, "target.txt")
+            .await
+            .expect("posix-rename request must succeed");
+        assert!(
+            replaced,
+            "OpenSSH must advertise posix-rename@openssh.com"
+        );
+
+        // Then: the destination carries the new contents and the partial is gone
+        assert_eq!(session.read("target.txt").await.unwrap(), b"new contents");
+        assert!(!root.path().join("target.txt.partial").exists());
     }
 }
