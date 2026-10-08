@@ -403,9 +403,7 @@ async fn authenticate(
                 AuthResult::Failure {
                     remaining_methods, ..
                 } => {
-                    if remaining_methods
-                        .contains(&MethodKind::KeyboardInteractive)
-                    {
+                    if remaining_methods.contains(&MethodKind::KeyboardInteractive) {
                         if let Some(handler) = auth_prompt {
                             return keyboard_interactive_auth(
                                 handle, username, host, port, handler,
