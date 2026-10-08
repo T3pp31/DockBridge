@@ -591,6 +591,13 @@ fileprivate struct FfiConverterString: FfiConverter {
 
 /**
  * Main DockBridge client exposed to Swift.
+ *
+ * Callers must not invoke its methods on the main thread: several methods
+ * park the calling thread on `block_on` (connect, host-key prompts) and a
+ * parked main thread deadlocks the synchronous prompt callbacks
+ * (issue #286). Transfer methods return immediately after enqueuing on the
+ * shared Tokio runtime, so their progress is observed via
+ * `get_transfer_queue` polling.
  */
 public protocol DockBridgeClientProtocol: AnyObject, Sendable {
     
@@ -617,9 +624,9 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
     
     func disconnect(sessionId: UInt64) throws 
     
-    func download(sessionId: UInt64, remotePath: String, localPath: String, overwritePolicy: TransferOverwritePolicyRecord) throws  -> BatchResultRecord
+    func download(sessionId: UInt64, remotePath: String, localPath: String, overwritePolicy: TransferOverwritePolicyRecord) throws 
     
-    func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws  -> BatchResultRecord
+    func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws 
     
     func getInitialDirectory(sessionId: UInt64) throws  -> String
     
@@ -660,13 +667,20 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
      */
     func stat(sessionId: UInt64, path: String, followSymlinks: Bool) throws  -> RemoteFileRecord
     
-    func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord) throws  -> BatchResultRecord
+    func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord) throws 
     
-    func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws  -> BatchResultRecord
+    func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws 
     
 }
 /**
  * Main DockBridge client exposed to Swift.
+ *
+ * Callers must not invoke its methods on the main thread: several methods
+ * park the calling thread on `block_on` (connect, host-key prompts) and a
+ * parked main thread deadlocks the synchronous prompt callbacks
+ * (issue #286). Transfer methods return immediately after enqueuing on the
+ * shared Tokio runtime, so their progress is observed via
+ * `get_transfer_queue` polling.
  */
 open class DockBridgeClient: DockBridgeClientProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -816,8 +830,7 @@ open func disconnect(sessionId: UInt64)throws   {try rustCallWithError(FfiConver
 }
 }
     
-open func download(sessionId: UInt64, remotePath: String, localPath: String, overwritePolicy: TransferOverwritePolicyRecord)throws  -> BatchResultRecord  {
-    return try  FfiConverterTypeBatchResultRecord_lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+open func download(sessionId: UInt64, remotePath: String, localPath: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download(
             self.uniffiCloneHandle(),
@@ -826,11 +839,10 @@ open func download(sessionId: UInt64, remotePath: String, localPath: String, ove
         FfiConverterString.lower(localPath),
         FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
-})
+}
 }
     
-open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String, overwritePolicy: TransferOverwritePolicyRecord)throws  -> BatchResultRecord  {
-    return try  FfiConverterTypeBatchResultRecord_lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_download_entry(
             self.uniffiCloneHandle(),
@@ -839,7 +851,7 @@ open func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: S
         FfiConverterString.lower(localDirectory),
         FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
-})
+}
 }
     
 open func getInitialDirectory(sessionId: UInt64)throws  -> String  {
@@ -986,8 +998,7 @@ open func stat(sessionId: UInt64, path: String, followSymlinks: Bool)throws  -> 
 })
 }
     
-open func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord)throws  -> BatchResultRecord  {
-    return try  FfiConverterTypeBatchResultRecord_lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+open func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload(
             self.uniffiCloneHandle(),
@@ -996,11 +1007,10 @@ open func upload(sessionId: UInt64, localPath: String, remotePath: String, overw
         FfiConverterString.lower(remotePath),
         FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
-})
+}
 }
     
-open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String, overwritePolicy: TransferOverwritePolicyRecord)throws  -> BatchResultRecord  {
-    return try  FfiConverterTypeBatchResultRecord_lift(try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String, overwritePolicy: TransferOverwritePolicyRecord)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_upload_entry(
             self.uniffiCloneHandle(),
@@ -1009,7 +1019,7 @@ open func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: Str
         FfiConverterString.lower(remoteDirectory),
         FfiConverterTypeTransferOverwritePolicyRecord_lower(overwritePolicy),uniffiCallStatus
     )
-})
+}
 }
     
 
@@ -3179,10 +3189,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_disconnect() != 49600) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download() != 2790) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download() != 36615) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download_entry() != 11500) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_download_entry() != 18406) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_get_initial_directory() != 50950) {
@@ -3224,10 +3234,10 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_stat() != 5879) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload() != 56210) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload() != 4786) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload_entry() != 54401) {
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload_entry() != 4078) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_constructor_dockbridgeclient_new() != 55481) {

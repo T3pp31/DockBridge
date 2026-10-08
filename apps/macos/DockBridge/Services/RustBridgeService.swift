@@ -187,9 +187,9 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         localPath: String,
         remoteDirectory: String,
         overwritePolicy: TransferOverwritePolicy
-    ) async throws -> BatchResultRecord {
+    ) async throws {
         let rustOverwritePolicy = overwritePolicy.rustRecord
-        let result = try await runOnBridge { client, sessionId in
+        try await runOnBridge { client, sessionId in
             try client.uploadEntry(
                 sessionId: sessionId,
                 localPath: localPath,
@@ -198,16 +198,15 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
             )
         }
         await refreshTransferQueue()
-        return result
     }
 
     func download(
         remotePath: String,
         localDirectory: String,
         overwritePolicy: TransferOverwritePolicy
-    ) async throws -> BatchResultRecord {
+    ) async throws {
         let rustOverwritePolicy = overwritePolicy.rustRecord
-        let result = try await runOnBridge { client, sessionId in
+        try await runOnBridge { client, sessionId in
             try client.downloadEntry(
                 sessionId: sessionId,
                 remotePath: remotePath,
@@ -216,7 +215,6 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
             )
         }
         await refreshTransferQueue()
-        return result
     }
 
     func deleteRemote(path: String) async throws {

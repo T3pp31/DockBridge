@@ -364,6 +364,13 @@ impl HostKeyPrompt for UniffiHostKeyPrompt {
 }
 
 /// Main DockBridge client exposed to Swift.
+///
+/// Callers must not invoke its methods on the main thread: several methods
+/// park the calling thread on `block_on` (connect, host-key prompts) and a
+/// parked main thread deadlocks the synchronous prompt callbacks
+/// (issue #286). Transfer methods return immediately after enqueuing on the
+/// shared Tokio runtime, so their progress is observed via
+/// `get_transfer_queue` polling.
 #[derive(uniffi::Object)]
 pub struct DockBridgeClient {
     config: AppConfig,
@@ -624,7 +631,7 @@ impl DockBridgeClient {
         local_path: String,
         remote_path: String,
         overwrite_policy: TransferOverwritePolicyRecord,
-    ) -> Result<BatchResultRecord, DockBridgeError> {
+    ) -> Result<(), DockBridgeError> {
         self.upload_entry(session_id, local_path, remote_path, overwrite_policy)
     }
 
@@ -634,7 +641,7 @@ impl DockBridgeClient {
         remote_path: String,
         local_path: String,
         overwrite_policy: TransferOverwritePolicyRecord,
-    ) -> Result<BatchResultRecord, DockBridgeError> {
+    ) -> Result<(), DockBridgeError> {
         self.download_entry(session_id, remote_path, local_path, overwrite_policy)
     }
 
@@ -644,30 +651,44 @@ impl DockBridgeClient {
         local_path: String,
         remote_directory: String,
         overwrite_policy: TransferOverwritePolicyRecord,
-    ) -> Result<BatchResultRecord, DockBridgeError> {
+    ) -> Result<(), DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
+        let session = block_on(async move {
+            let sessions = sessions.lock().await;
+            sessions
+                .get(&session_id)
+                .cloned()
+                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))
+        })??;
         let transfer_manager = Arc::clone(&self.transfer_manager);
         let overwrite_policy: TransferOverwritePolicy = overwrite_policy.into();
-        block_on(async move {
-            let session = {
-                let sessions = sessions.lock().await;
-                sessions
-                    .get(&session_id)
-                    .cloned()
-                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?
-            };
-            transfer_manager
+        // Run the transfer on the shared runtime instead of the caller's
+        // thread: the future only resolves when the whole batch has finished,
+        // and blocking a Swift cooperative thread that long starves the pool
+        // (issue #286). Progress and completion surface through
+        // `get_transfer_queue` polling.
+        let upload_manager = Arc::clone(&transfer_manager);
+        let upload_session = Arc::clone(&session);
+        let upload_local = local_path.clone();
+        let upload_remote = remote_directory.clone();
+        let upload_policy = overwrite_policy.clone();
+        runtime()?.spawn(async move {
+            if let Err(err) = upload_manager
                 .enqueue_upload_entry_for_session_with_policy(
-                    session.as_ref(),
+                    upload_session.as_ref(),
                     session_id,
-                    &local_path,
-                    remote_directory,
-                    overwrite_policy,
+                    &upload_local,
+                    upload_remote,
+                    upload_policy,
                 )
                 .await
-                .map(|(_tasks, batch)| BatchResultRecord::from(batch))
-                .map_err(map_error)
-        })?
+            {
+                eprintln!(
+                    "dockbridge: background upload failed for session {session_id}: {err}"
+                );
+            }
+        });
+        Ok(())
     }
 
     fn download_entry(
@@ -676,30 +697,40 @@ impl DockBridgeClient {
         remote_path: String,
         local_directory: String,
         overwrite_policy: TransferOverwritePolicyRecord,
-    ) -> Result<BatchResultRecord, DockBridgeError> {
+    ) -> Result<(), DockBridgeError> {
         let sessions = Arc::clone(&self.sessions);
+        let session = block_on(async move {
+            let sessions = sessions.lock().await;
+            sessions
+                .get(&session_id)
+                .cloned()
+                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))
+        })??;
         let transfer_manager = Arc::clone(&self.transfer_manager);
         let overwrite_policy: TransferOverwritePolicy = overwrite_policy.into();
-        block_on(async move {
-            let session = {
-                let sessions = sessions.lock().await;
-                sessions
-                    .get(&session_id)
-                    .cloned()
-                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?
-            };
-            transfer_manager
+        // See `upload_entry`: never block the caller for the whole batch.
+        let download_manager = Arc::clone(&transfer_manager);
+        let download_session = Arc::clone(&session);
+        let download_remote = remote_path.clone();
+        let download_local = local_directory.clone();
+        let download_policy = overwrite_policy.clone();
+        runtime()?.spawn(async move {
+            if let Err(err) = download_manager
                 .enqueue_download_entry_for_session_with_policy(
-                    session.as_ref(),
+                    download_session.as_ref(),
                     session_id,
-                    remote_path,
-                    &local_directory,
-                    overwrite_policy,
+                    download_remote,
+                    &download_local,
+                    download_policy,
                 )
                 .await
-                .map(|(_tasks, batch)| BatchResultRecord::from(batch))
-                .map_err(map_error)
-        })?
+            {
+                eprintln!(
+                    "dockbridge: background download failed for session {session_id}: {err}"
+                );
+            }
+        });
+        Ok(())
     }
 
     fn delete(&self, session_id: u64, remote_path: String) -> Result<(), DockBridgeError> {
@@ -826,23 +857,29 @@ impl DockBridgeClient {
             )));
         }
         let sessions = Arc::clone(&self.sessions);
+        let session = block_on(async move {
+            let sessions = sessions.lock().await;
+            sessions.get(&session_id).cloned().ok_or_else(|| {
+                map_error_string(format!("session {session_id} not found"))
+            })
+        })??;
         let transfer_manager = Arc::clone(&self.transfer_manager);
-        self.handle_session_result(
-            session_id,
-            block_on(async move {
-                let session = {
-                    let sessions = sessions.lock().await;
-                    sessions.get(&session_id).cloned().ok_or_else(|| {
-                        map_error_string(format!("session {session_id} not found"))
-                    })?
-                };
-                transfer_manager
-                    .retry_transfer(session.as_ref(), task_id)
-                    .await
-                    .map_err(map_error)?;
-                Ok(())
-            })?,
-        )?;
+        // See `upload_entry`: run the retried transfer on the shared runtime
+        // and return immediately so the caller's cooperative thread is not
+        // occupied for the whole transfer (issue #286). Failures surface as
+        // `TransferStatus::Failed` in the queue.
+        let retry_manager = Arc::clone(&transfer_manager);
+        let retry_session = Arc::clone(&session);
+        runtime()?.spawn(async move {
+            if let Err(err) = retry_manager
+                .retry_transfer(retry_session.as_ref(), task_id)
+                .await
+            {
+                eprintln!(
+                    "dockbridge: background retry failed for session {session_id} task {task_id}: {err}"
+                );
+            }
+        });
         Ok(())
     }
 }
