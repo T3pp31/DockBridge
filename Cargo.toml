@@ -36,3 +36,9 @@ russh = { version = "0.61", features = ["async-trait"] }
 # imports unchanged. It is pinned exactly; see docs/security.md.
 russh-sftp = { package = "bssh-russh-sftp", version = "=2.4.0" }
 uniffi = { version = "0.32", features = ["cli"] }
+
+# Local copy of the bssh-russh-sftp fork that additionally implements the
+# posix-rename@openssh.com extension (atomic Replace uploads on OpenSSH).
+# Keep in sync with the pinned =2.4.0 registry sources; see vendor/README.md.
+[patch.crates-io]
+bssh-russh-sftp = { path = "vendor/bssh-russh-sftp" }

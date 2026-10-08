@@ -1,0 +1,109 @@
+--- a/src/extensions.rs
++++ b/src/extensions.rs
+@@ -5,6 +5,7 @@
+ pub const FSYNC: &str = "fsync@openssh.com";
+ pub const STATVFS: &str = "statvfs@openssh.com";
+ pub const EXPAND_PATH: &str = "expand-path@openssh.com";
++pub const POSIX_RENAME: &str = "posix-rename@openssh.com";
+ 
+ macro_rules! impl_try_into_bytes {
+     ($struct:ty) => {
+@@ -37,6 +38,14 @@
+ impl_try_into_bytes!(HardlinkExtension);
+ 
+ #[derive(Debug, Serialize, Deserialize)]
++pub struct PosixRenameExtension {
++    pub oldpath: String,
++    pub newpath: String,
++}
++
++impl_try_into_bytes!(PosixRenameExtension);
++
++#[derive(Debug, Serialize, Deserialize)]
+ pub struct FsyncExtension {
+     pub handle: String,
+ }
+--- a/src/client/rawsession.rs
++++ b/src/client/rawsession.rs
+@@ -17,8 +17,8 @@
+     client::{run, Config},
+     de,
+     extensions::{
+-        self, ExpandPathExtension, FsyncExtension, HardlinkExtension, LimitsExtension, Statvfs,
+-        StatvfsExtension,
++        self, ExpandPathExtension, FsyncExtension, HardlinkExtension, LimitsExtension,
++        PosixRenameExtension, Statvfs, StatvfsExtension,
+     },
+     protocol::{
+         Attrs, Close, Data, Extended, ExtendedReply, FSetStat, FileAttributes, Fstat, Handle, Init,
+@@ -708,6 +708,25 @@
+         into_status!(result)
+     }
+ 
++    pub async fn posix_rename<O, N>(&self, oldpath: O, newpath: N) -> SftpResult<Status>
++    where
++        O: Into<String>,
++        N: Into<String>,
++    {
++        let result = self
++            .extended(
++                extensions::POSIX_RENAME,
++                PosixRenameExtension {
++                    oldpath: oldpath.into(),
++                    newpath: newpath.into(),
++                }
++                .try_into()?,
++            )
++            .await?;
++
++        into_status!(result)
++    }
++
+     pub async fn fsync<H: Into<String>>(&self, handle: H) -> SftpResult<Status> {
+         let result = self
+             .extended(
+--- a/src/client/session.rs
++++ b/src/client/session.rs
+@@ -19,6 +19,7 @@
+     pub fsync: bool,
+     pub statvfs: bool,
+     pub expand_path: bool,
++    pub posix_rename: bool,
+     pub limits: Option<Limits>,
+     pub max_concurrent_writes: usize,
+     pub max_packet_len: u32,
+@@ -57,6 +58,7 @@
+             fsync: has_extension(extensions::FSYNC, "1"),
+             statvfs: has_extension(extensions::STATVFS, "2"),
+             expand_path: has_extension(extensions::EXPAND_PATH, "1"),
++            posix_rename: has_extension(extensions::POSIX_RENAME, "1"),
+             limits: None,
+             max_concurrent_writes,
+             max_packet_len,
+@@ -264,6 +266,26 @@
+         }
+ 
+         self.session.hardlink(oldpath, newpath).await.map(|_| true)
++    }
++
++    /// Atomically replaces `newpath` with `oldpath` via the
++    /// `posix-rename@openssh.com` extension. Unlike a plain rename, this
++    /// succeeds when `newpath` already exists as a regular file.
++    /// Returns `Ok(false)` if the remote SFTP server does not support
++    /// `posix-rename@openssh.com` extension v1.
++    pub async fn posix_rename<O, N>(&self, oldpath: O, newpath: N) -> SftpResult<bool>
++    where
++        O: Into<String>,
++        N: Into<String>,
++    {
++        if !self.features.posix_rename {
++            return Ok(false);
++        }
++
++        self.session
++            .posix_rename(oldpath, newpath)
++            .await
++            .map(|_| true)
+     }
+ 
+     /// Performs a statvfs on the remote file system path.
