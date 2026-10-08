@@ -671,7 +671,7 @@ impl DockBridgeClient {
         let upload_session = Arc::clone(&session);
         let upload_local = local_path.clone();
         let upload_remote = remote_directory.clone();
-        let upload_policy = overwrite_policy.clone();
+        let upload_policy = overwrite_policy;
         runtime()?.spawn(async move {
             if let Err(err) = upload_manager
                 .enqueue_upload_entry_for_session_with_policy(
@@ -711,7 +711,7 @@ impl DockBridgeClient {
         let download_session = Arc::clone(&session);
         let download_remote = remote_path.clone();
         let download_local = local_directory.clone();
-        let download_policy = overwrite_policy.clone();
+        let download_policy = overwrite_policy;
         runtime()?.spawn(async move {
             if let Err(err) = download_manager
                 .enqueue_download_entry_for_session_with_policy(
