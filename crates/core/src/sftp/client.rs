@@ -1286,12 +1286,12 @@ fn pipeline_depth_for_chunk_budget(pipeline_depth: usize, chunk_size: usize) -> 
 /// preserved across the boundary).
 struct PipelinableTransferWriter<'a, F>
 where
-    F: Fn() -> bool + 'a,
+    F: Fn() -> bool + Send + 'a,
 {
     file: Option<tokio::fs::File>,
     write_pos: u64,
     is_cancelled: &'a F,
-    on_progress: &'a mut dyn FnMut(u64),
+    on_progress: &'a mut (dyn FnMut(u64) + Send),
     transferred: u64,
     pending_write: Option<Pin<Box<dyn Future<Output = PendingWriteOutput> + Send + 'a>>>,
     /// Byte length of the in-flight `pending_write`, so `poll_flush` can
@@ -1305,12 +1305,12 @@ where
 
 impl<'a, F> PipelinableTransferWriter<'a, F>
 where
-    F: Fn() -> bool + 'a,
+    F: Fn() -> bool + Send + 'a,
 {
     fn new(
         file: tokio::fs::File,
         is_cancelled: &'a F,
-        on_progress: &'a mut dyn FnMut(u64),
+        on_progress: &'a mut (dyn FnMut(u64) + Send),
     ) -> Self {
         Self {
             file: Some(file),
@@ -1418,7 +1418,7 @@ where
 
 impl<'a, F> AsyncWrite for PipelinableTransferWriter<'a, F>
 where
-    F: Fn() -> bool + 'a,
+    F: Fn() -> bool + Send + 'a,
 {
     fn poll_write(
         mut self: Pin<&mut Self>,
@@ -1489,7 +1489,7 @@ async fn download_pipelined_to_writer<'a, F>(
     pipeline_depth: usize,
 ) -> Result<(), DownloadFlowError>
 where
-    F: Fn() -> bool + 'a,
+    F: Fn() -> bool + Send + 'a,
 {
     match remote_file
         .read_to_writer_pipelined(writer, pipeline_depth)
