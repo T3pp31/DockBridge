@@ -404,8 +404,7 @@ async fn authenticate(
                     remaining_methods, ..
                 } => {
                     if remaining_methods
-                        .iter()
-                        .any(|kind| *kind == MethodKind::KeyboardInteractive)
+                        .contains(&MethodKind::KeyboardInteractive)
                     {
                         if let Some(handler) = auth_prompt {
                             return keyboard_interactive_auth(
