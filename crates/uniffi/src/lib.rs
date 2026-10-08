@@ -683,9 +683,7 @@ impl DockBridgeClient {
                 )
                 .await
             {
-                eprintln!(
-                    "dockbridge: background upload failed for session {session_id}: {err}"
-                );
+                eprintln!("dockbridge: background upload failed for session {session_id}: {err}");
             }
         });
         Ok(())
@@ -725,9 +723,7 @@ impl DockBridgeClient {
                 )
                 .await
             {
-                eprintln!(
-                    "dockbridge: background download failed for session {session_id}: {err}"
-                );
+                eprintln!("dockbridge: background download failed for session {session_id}: {err}");
             }
         });
         Ok(())
@@ -859,9 +855,10 @@ impl DockBridgeClient {
         let sessions = Arc::clone(&self.sessions);
         let session = block_on(async move {
             let sessions = sessions.lock().await;
-            sessions.get(&session_id).cloned().ok_or_else(|| {
-                map_error_string(format!("session {session_id} not found"))
-            })
+            sessions
+                .get(&session_id)
+                .cloned()
+                .ok_or_else(|| map_error_string(format!("session {session_id} not found")))
         })??;
         let transfer_manager = Arc::clone(&self.transfer_manager);
         // See `upload_entry`: run the retried transfer on the shared runtime
