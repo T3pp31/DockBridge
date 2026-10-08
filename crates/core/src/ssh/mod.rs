@@ -5,4 +5,7 @@ pub mod session;
 
 pub use connection_health::is_connection_lost_message;
 pub use key_inspection::{inspect_private_key_algorithm, PrivateKeyAlgorithm};
-pub use session::{AuthType, ConnectionProfile, HostKeyPrompt, SecretPassword, SshSession};
+pub use session::{
+    AuthPromptHandler, AuthType, ConnectionProfile, HostKeyPrompt, KbdInteractivePrompt,
+    SecretPassword, SshSession,
+};

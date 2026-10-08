@@ -57,7 +57,7 @@ pub enum AuthError {
     #[error("authentication failed for user '{username}'")]
     Failed { username: String },
 
-    #[error("password authentication is not supported by the server")]
+    #[error("authentication is not supported by the server")]
     MethodUnavailable,
 
     #[error("failed to load private key from {path}: {message}")]

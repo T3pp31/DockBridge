@@ -180,6 +180,18 @@ struct MainView: View {
                 )
             }
         }
+        .sheet(isPresented: Binding(
+            get: { bridge.pendingKbdInteractiveChallenge != nil },
+            set: { if !$0 { bridge.respondToKbdInteractiveChallenge(nil) } }
+        )) {
+            if let challenge = bridge.pendingKbdInteractiveChallenge {
+                KeyboardInteractivePromptView(
+                    challenge: challenge,
+                    onSubmit: { answers in bridge.respondToKbdInteractiveChallenge(answers) },
+                    onCancel: { bridge.respondToKbdInteractiveChallenge(nil) }
+                )
+            }
+        }
         .sheet(isPresented: $viewModel.showGoToPath) {
             GoToPathSheet(viewModel: viewModel)
         }

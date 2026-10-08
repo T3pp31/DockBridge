@@ -640,7 +640,7 @@ async fn connect(
     let prompt = Arc::new(CliHostKeyPrompt {
         policy: connection.host_key_policy,
     });
-    SshSession::connect(profile, config, known_hosts, prompt)
+    SshSession::connect(profile, config, known_hosts, prompt, None)
         .await
         .map_err(Into::into)
 }

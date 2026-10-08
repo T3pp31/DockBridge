@@ -2,7 +2,7 @@ import Combine
 import Foundation
 
 @MainActor
-final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostKeyHandler, ConnectionEventHandler {
+final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostKeyHandler, KeyboardInteractivePromptHandler, ConnectionEventHandler {
     /// Published state for the *active* session (kept for API compatibility with
     /// existing views). When multiple sessions exist, these reflect the
     /// currently selected session.
@@ -13,6 +13,9 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     @Published private(set) var connectedUsername: String?
     @Published var pendingHostKeyChallenge: HostKeyChallenge?
     @Published var hostKeyContinuation: CheckedContinuation<Bool, Never>?
+    /// Keyboard-interactive (PAM/2FA) challenge awaiting user input.
+    @Published var pendingKbdInteractiveChallenge: KbdInteractiveChallenge?
+    @Published var kbdInteractiveContinuation: CheckedContinuation<[String?], Never>?
 
     var isConnected: Bool { connectionStatus.isConnected }
 
@@ -50,6 +53,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         client = try DockBridgeClient(
             appConfig: record,
             hostKeyHandler: self,
+            authPromptHandler: self,
             connectionEventHandler: self
         )
     }
@@ -322,6 +326,84 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         pendingHostKeyChallenge = nil
         hostKeyContinuation = nil
         return decision
+    }
+
+    // MARK: - KeyboardInteractivePromptHandler
+
+    nonisolated func prompt(
+        name: String,
+        instructions: String,
+        prompts: [KbdInteractivePromptRecord]
+    ) -> [String?] {
+        do {
+            return try DropOperationSync.run { @MainActor in
+                await self.awaitKbdInteractiveAnswers(
+                    name: name,
+                    instructions: instructions,
+                    prompts: prompts
+                )
+            }
+        } catch {
+            return prompts.map { _ in nil }
+        }
+    }
+
+    func respondToKbdInteractiveChallenge(_ answers: [String?]?) {
+        let fallbackCount = pendingKbdInteractiveChallenge?.prompts.count ?? 0
+        pendingKbdInteractiveChallenge = nil
+        guard let continuation = kbdInteractiveContinuation else { return }
+        kbdInteractiveContinuation = nil
+        continuation.resume(
+            returning: answers ?? Array(repeating: Optional<String>.none, count: fallbackCount)
+        )
+    }
+
+    @MainActor
+    private func awaitKbdInteractiveAnswers(
+        name: String,
+        instructions: String,
+        prompts: [KbdInteractivePromptRecord]
+    ) async -> [String?] {
+        if pendingKbdInteractiveChallenge != nil {
+            respondToKbdInteractiveChallenge(nil)
+        }
+
+        let timeoutSecs = settings.loadConfig().connectionTimeoutSecs
+
+        let answers = await withTaskGroup(of: [String?].self) { group in
+            group.addTask { @MainActor in
+                await withCheckedContinuation { continuation in
+                    self.kbdInteractiveContinuation = continuation
+                    self.pendingKbdInteractiveChallenge = KbdInteractiveChallenge(
+                        name: name,
+                        instructions: instructions,
+                        prompts: prompts.map { item in
+                            KbdInteractivePromptItem(text: item.text, echo: item.echo)
+                        }
+                    )
+                }
+            }
+
+            group.addTask { @MainActor in
+                do {
+                    try await Task.sleep(for: .seconds(timeoutSecs))
+                } catch is CancellationError {
+                    return prompts.map { _ in Optional<String>.none }
+                } catch {
+                    return prompts.map { _ in Optional<String>.none }
+                }
+                self.respondToKbdInteractiveChallenge(nil)
+                return prompts.map { _ in Optional<String>.none }
+            }
+
+            let result = await group.next() ?? prompts.map { _ in Optional<String>.none }
+            group.cancelAll()
+            return result
+        }
+
+        pendingKbdInteractiveChallenge = nil
+        kbdInteractiveContinuation = nil
+        return answers
     }
 
     // MARK: - ConnectionEventHandler

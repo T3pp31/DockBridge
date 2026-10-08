@@ -8,6 +8,7 @@ use std::time::Duration;
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId};
+use russh::{MethodKind, MethodSet};
 use russh_sftp::de;
 use russh_sftp::extensions::{PosixRenameExtension, POSIX_RENAME};
 use russh_sftp::protocol::{
@@ -56,6 +57,26 @@ pub struct FailureConfig {
     /// exercise the OpenSSH-compatible atomic-overwrite path; set to `false`
     /// to simulate a server that lacks the extension.
     pub advertise_posix_rename: AtomicBool,
+    /// When `true`, password authentication is rejected with
+    /// keyboard-interactive listed as a remaining method, and the secret must
+    /// be supplied via a keyboard-interactive round (issue #317).
+    pub require_keyboard_interactive: AtomicBool,
+    /// When `true`, every authentication method is rejected with no remaining
+    /// methods offered at all (issue #317 `MethodUnavailable` case).
+    pub reject_all_auth: AtomicBool,
+    /// The secret expected by the keyboard-interactive challenge when
+    /// [`Self::require_keyboard_interactive`] is set.
+    pub keyboard_interactive_secret: Mutex<String>,
+}
+
+/// Secret required by the test server's keyboard-interactive challenge.
+pub const KEYBOARD_INTERACTIVE_SECRET: &str = "kbd-interactive-secret";
+
+struct AcceptAllPrompt;
+impl HostKeyPrompt for AcceptAllPrompt {
+    fn prompt_unknown_host(&self, _: &str, _: u16, _: &str) -> bool {
+        true
+    }
 }
 
 pub struct TestSftpServer {
@@ -97,7 +118,62 @@ impl russh::server::Handler for ServerImpl {
     type Error = anyhow::Error;
 
     async fn auth_password(&mut self, _user: &str, _password: &str) -> Result<Auth, Self::Error> {
+        if self.failures.reject_all_auth.load(Ordering::SeqCst) {
+            // An explicit empty set: no method is offered afterwards, which
+            // the client must map to AuthError::MethodUnavailable.
+            return Ok(Auth::Reject {
+                proceed_with_methods: Some(MethodSet::empty()),
+                partial_success: false,
+            });
+        }
+        if self
+            .failures
+            .require_keyboard_interactive
+            .load(Ordering::SeqCst)
+        {
+            // Mirror `PasswordAuthentication no`: steer the client to
+            // keyboard-interactive instead of hard-failing.
+            let mut methods = MethodSet::empty();
+            methods.push(MethodKind::KeyboardInteractive);
+            return Ok(Auth::Reject {
+                proceed_with_methods: Some(methods),
+                partial_success: false,
+            });
+        }
         Ok(Auth::Accept)
+    }
+
+    async fn auth_keyboard_interactive<'a>(
+        &'a mut self,
+        _user: &str,
+        _submethods: &str,
+        response: Option<russh::server::Response<'a>>,
+    ) -> Result<Auth, Self::Error> {
+        let Some(response) = response else {
+            return Ok(Auth::Partial {
+                name: "DockBridge test".into(),
+                instructions: "Enter the test secret".into(),
+                prompts: std::borrow::Cow::Owned(vec![(
+                    std::borrow::Cow::Borrowed("Password: "),
+                    false,
+                )]),
+            });
+        };
+        let expected = self
+            .failures
+            .keyboard_interactive_secret
+            .lock()
+            .unwrap()
+            .clone();
+        let answers: Vec<Vec<u8>> = response.map(|item| item.to_vec()).collect();
+        if answers.len() == 1 && answers[0] == expected.as_bytes() {
+            Ok(Auth::Accept)
+        } else {
+            Ok(Auth::Reject {
+                proceed_with_methods: None,
+                partial_success: false,
+            })
+        }
     }
 
     async fn channel_open_session(
@@ -803,13 +879,6 @@ impl TestSftpServer {
         port: u16,
         upload_pipeline_depth: usize,
     ) -> SshSession {
-        struct AcceptAllPrompt;
-        impl HostKeyPrompt for AcceptAllPrompt {
-            fn prompt_unknown_host(&self, _: &str, _: u16, _: &str) -> bool {
-                true
-            }
-        }
-
         let config = AppConfig {
             known_hosts_path: self._known_hosts_dir.path().join("known_hosts.json"),
             merge_openssh_known_hosts_on_connect: false,
@@ -821,13 +890,58 @@ impl TestSftpServer {
         ));
         let profile = ConnectionProfile::with_password("127.0.0.1", port, "test", "test");
 
-        SshSession::connect(profile, &config, known_hosts, Arc::new(AcceptAllPrompt))
-            .await
-            .expect("test SFTP connection should succeed")
+        SshSession::connect(
+            profile,
+            &config,
+            known_hosts,
+            Arc::new(AcceptAllPrompt),
+            None,
+        )
+        .await
+        .expect("test SFTP connection should succeed")
+    }
+
+    /// Enables the keyboard-interactive-only auth mode and connects with the
+    /// given prompt handler (issue #317).
+    pub async fn connect_session_with_auth_prompt(
+        &self,
+        auth_prompt: Arc<dyn crate::ssh::AuthPromptHandler>,
+        password: &str,
+    ) -> Result<SshSession, crate::error::AppError> {
+        self.failures
+            .require_keyboard_interactive
+            .store(true, Ordering::SeqCst);
+        *self.failures.keyboard_interactive_secret.lock().unwrap() =
+            KEYBOARD_INTERACTIVE_SECRET.to_string();
+
+        let config = AppConfig {
+            known_hosts_path: self._known_hosts_dir.path().join("known_hosts.json"),
+            merge_openssh_known_hosts_on_connect: false,
+            ..AppConfig::default()
+        };
+        let known_hosts = Arc::new(AsyncMutex::new(
+            KnownHostsManager::load(&config.known_hosts_path).unwrap(),
+        ));
+        let profile =
+            ConnectionProfile::with_password("127.0.0.1", self.addr.port(), "test", password);
+
+        SshSession::connect(
+            profile,
+            &config,
+            known_hosts,
+            Arc::new(AcceptAllPrompt),
+            Some(auth_prompt),
+        )
+        .await
     }
 
     pub fn remote_partial_paths(&self) -> Vec<PathBuf> {
         list_partial_paths(&self.root)
+    }
+
+    /// Path of the per-server known-hosts store used by `connect_session*`.
+    pub fn known_hosts_path(&self) -> PathBuf {
+        self._known_hosts_dir.path().join("known_hosts.json")
     }
 
     pub async fn write_remote_file(&self, remote_path: &str, contents: &[u8]) {

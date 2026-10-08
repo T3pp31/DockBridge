@@ -27,8 +27,9 @@ pub use sftp::{
     validate_remote_entry_name, validated_remote_entry, RemoteFile, SftpClient,
 };
 pub use ssh::{
-    inspect_private_key_algorithm, is_connection_lost_message, AuthType, ConnectionProfile,
-    HostKeyPrompt, PrivateKeyAlgorithm, SecretPassword, SshSession,
+    inspect_private_key_algorithm, is_connection_lost_message, AuthPromptHandler, AuthType,
+    ConnectionProfile, HostKeyPrompt, KbdInteractivePrompt, PrivateKeyAlgorithm, SecretPassword,
+    SshSession,
 };
 pub use transfer::{
     BatchResult, TransferDirection, TransferManager, TransferOverwritePolicy, TransferStatus,

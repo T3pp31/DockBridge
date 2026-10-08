@@ -707,13 +707,14 @@ open class DockBridgeClient: DockBridgeClientProtocol, @unchecked Sendable {
     public func uniffiCloneHandle() -> UInt64 {
         return try! rustCall { uniffi_dockbridge_uniffi_fn_clone_dockbridgeclient(self.handle, $0) }
     }
-public convenience init(appConfig: AppConfigRecord, hostKeyHandler: HostKeyHandler, connectionEventHandler: ConnectionEventHandler)throws  {
+public convenience init(appConfig: AppConfigRecord, hostKeyHandler: HostKeyHandler, authPromptHandler: KeyboardInteractivePromptHandler, connectionEventHandler: ConnectionEventHandler)throws  {
     let handle =
         try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_constructor_dockbridgeclient_new(
         FfiConverterTypeAppConfigRecord_lower(appConfig),
         FfiConverterCallbackInterfaceHostKeyHandler_lower(hostKeyHandler),
+        FfiConverterCallbackInterfaceKeyboardInteractivePromptHandler_lower(authPromptHandler),
         FfiConverterCallbackInterfaceConnectionEventHandler_lower(connectionEventHandler),uniffiCallStatus
     )
 }
@@ -1378,6 +1379,63 @@ public func FfiConverterTypeHostKeyChallenge_lift(_ buf: RustBuffer) throws -> H
 #endif
 public func FfiConverterTypeHostKeyChallenge_lower(_ value: HostKeyChallenge) -> RustBuffer {
     return FfiConverterTypeHostKeyChallenge.lower(value)
+}
+
+
+/**
+ * One challenge prompt from a keyboard-interactive round.
+ */
+public struct KbdInteractivePromptRecord: Equatable, Hashable {
+    public var text: String
+    public var echo: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(text: String, echo: Bool) {
+        self.text = text
+        self.echo = echo
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension KbdInteractivePromptRecord: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeKbdInteractivePromptRecord: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> KbdInteractivePromptRecord {
+        return
+            try KbdInteractivePromptRecord(
+                text: FfiConverterString.read(from: &buf), 
+                echo: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: KbdInteractivePromptRecord, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.text, into: &buf)
+        FfiConverterBool.write(value.echo, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKbdInteractivePromptRecord_lift(_ buf: RustBuffer) throws -> KbdInteractivePromptRecord {
+    return try FfiConverterTypeKbdInteractivePromptRecord.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeKbdInteractivePromptRecord_lower(_ value: KbdInteractivePromptRecord) -> RustBuffer {
+    return FfiConverterTypeKbdInteractivePromptRecord.lower(value)
 }
 
 
@@ -2617,6 +2675,149 @@ public func FfiConverterCallbackInterfaceHostKeyHandler_lower(_ v: HostKeyHandle
     return FfiConverterCallbackInterfaceHostKeyHandler.lower(v)
 }
 
+
+
+
+/**
+ * Callback invoked when the server requests keyboard-interactive input
+ * (PAM/2FA challenges). Returns one answer per prompt; `None` cancels.
+ */
+public protocol KeyboardInteractivePromptHandler: AnyObject, Sendable {
+    
+    func prompt(name: String, instructions: String, prompts: [KbdInteractivePromptRecord])  -> [String?]
+    
+}
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceKeyboardInteractivePromptHandler {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceKeyboardInteractivePromptHandler = UniffiVTableCallbackInterfaceKeyboardInteractivePromptHandler(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterCallbackInterfaceKeyboardInteractivePromptHandler.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface KeyboardInteractivePromptHandler: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterCallbackInterfaceKeyboardInteractivePromptHandler.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface KeyboardInteractivePromptHandler: handle missing in uniffiClone")
+            }
+        },
+        prompt: { (
+            uniffiHandle: UInt64,
+            name: RustBuffer,
+            instructions: RustBuffer,
+            prompts: RustBuffer,
+            uniffiOutReturn: UnsafeMutablePointer<RustBuffer>,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> [String?] in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceKeyboardInteractivePromptHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.prompt(
+                     name: try FfiConverterString.lift(name),
+                     instructions: try FfiConverterString.lift(instructions),
+                     prompts: try FfiConverterSequenceTypeKbdInteractivePromptRecord.lift(prompts)
+                )
+            }
+
+            
+            let writeReturn = { uniffiOutReturn.pointee = FfiConverterSequenceOptionString.lower($0) }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceKeyboardInteractivePromptHandler> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceKeyboardInteractivePromptHandler>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitKeyboardInteractivePromptHandler() {
+    uniffi_dockbridge_uniffi_fn_init_callback_vtable_keyboardinteractiveprompthandler(UniffiCallbackInterfaceKeyboardInteractivePromptHandler.vtablePtr)
+}
+
+// FfiConverter protocol for callback interfaces
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterCallbackInterfaceKeyboardInteractivePromptHandler {
+    fileprivate static let handleMap = UniffiHandleMap<KeyboardInteractivePromptHandler>()
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+extension FfiConverterCallbackInterfaceKeyboardInteractivePromptHandler : FfiConverter {
+    typealias SwiftType = KeyboardInteractivePromptHandler
+    typealias FfiType = UInt64
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceKeyboardInteractivePromptHandler_lift(_ handle: UInt64) throws -> KeyboardInteractivePromptHandler {
+    return try FfiConverterCallbackInterfaceKeyboardInteractivePromptHandler.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceKeyboardInteractivePromptHandler_lower(_ v: KeyboardInteractivePromptHandler) -> UInt64 {
+    return FfiConverterCallbackInterfaceKeyboardInteractivePromptHandler.lower(v)
+}
+
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
@@ -2740,6 +2941,31 @@ fileprivate struct FfiConverterOptionTypeSecretCredential: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeKbdInteractivePromptRecord: FfiConverterRustBuffer {
+    typealias SwiftType = [KbdInteractivePromptRecord]
+
+    public static func write(_ value: [KbdInteractivePromptRecord], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeKbdInteractivePromptRecord.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [KbdInteractivePromptRecord] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [KbdInteractivePromptRecord]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeKbdInteractivePromptRecord.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeKnownHostAliasRecord: FfiConverterRustBuffer {
     typealias SwiftType = [KnownHostAliasRecord]
 
@@ -2832,6 +3058,31 @@ fileprivate struct FfiConverterSequenceTypeTransferTaskRecord: FfiConverterRustB
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeTransferTaskRecord.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceOptionString: FfiConverterRustBuffer {
+    typealias SwiftType = [String?]
+
+    public static func write(_ value: [String?], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterOptionString.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [String?] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [String?]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterOptionString.read(from: &buf))
         }
         return seq
     }
@@ -2979,7 +3230,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_upload_entry() != 54401) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_dockbridge_uniffi_checksum_constructor_dockbridgeclient_new() != 38617) {
+    if (uniffi_dockbridge_uniffi_checksum_constructor_dockbridgeclient_new() != 55481) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_connectioneventhandler_on_session_disconnected() != 23970) {
@@ -2988,9 +3239,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_dockbridge_uniffi_checksum_method_hostkeyhandler_prompt_unknown_host() != 16113) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_dockbridge_uniffi_checksum_method_keyboardinteractiveprompthandler_prompt() != 14741) {
+        return InitializationResult.apiChecksumMismatch
+    }
 
     uniffiCallbackInitConnectionEventHandler()
     uniffiCallbackInitHostKeyHandler()
+    uniffiCallbackInitKeyboardInteractivePromptHandler()
     return InitializationResult.ok
 }()
 

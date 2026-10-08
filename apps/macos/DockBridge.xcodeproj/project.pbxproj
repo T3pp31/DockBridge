@@ -18,6 +18,7 @@
 		14230096169E4B62B51031A9 /* PathBookmarkStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC0FCF506A791A622DCEFDED /* PathBookmarkStore.swift */; };
 		146B86A2897D61D788614A68 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 74367E09A9260C6DAA67A818 /* Assets.xcassets */; };
 		14BA406FA6C050462700CC86 /* AppUpdateInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A5424AE602D11D22FD52C5 /* AppUpdateInfo.swift */; };
+		1510A34D024EA8173288E26F /* KbdInteractiveChallenge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B802DE460AA10307474D54B6 /* KbdInteractiveChallenge.swift */; };
 		156EBE5D95356C1C50DB6E7B /* ProfileTrustStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7483AA0F5446B8919F0D804E /* ProfileTrustStoreTests.swift */; };
 		15724D1548616821B1C6F29D /* UpdateAvailableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0D177341D5C8309D376C81A /* UpdateAvailableView.swift */; };
 		1689E50E8A71292F68153C4E /* PathNavigationHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D985760A54C252085C13AAA /* PathNavigationHistory.swift */; };
@@ -67,6 +68,7 @@
 		7A6F7E5B24A218D876F4D82E /* RemotePaneSheetsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A948294B5A3D77C637E6A5B5 /* RemotePaneSheetsTests.swift */; };
 		7B0040A71A7DC8F34DF38685 /* KnownHostsErrorMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEBA35FDB98F6C8F6A5EF227 /* KnownHostsErrorMessageTests.swift */; };
 		7B66175188D4251282C81E45 /* UpdateCheckViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05BB12FE8EB2A21EBC8273E1 /* UpdateCheckViewModelTests.swift */; };
+		7CBBD851068754E3D4CF68A0 /* KeyboardInteractivePromptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A7B58908C24E4358344DCC3 /* KeyboardInteractivePromptView.swift */; };
 		7F1888649EBBADF9B1924792 /* SecureLocalFileReaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE736FA932786CF0F918FA94 /* SecureLocalFileReaderTests.swift */; };
 		7F7A25D9C19A871D639ED4AB /* ErrorAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F793C62A632CBE445B4A964 /* ErrorAlert.swift */; };
 		7FC42D48959897A9DFBF9A57 /* MainViewModelTestabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2364B5125ADC32FA213D5D6 /* MainViewModelTestabilityTests.swift */; };
@@ -200,6 +202,7 @@
 		76E0F89688F9A19DB7FCCF4A /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		7845220026471353D5138E73 /* ExpandingFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExpandingFrame.swift; sourceTree = "<group>"; };
 		787D0A52C558DCD791C4FB5C /* RustBridgeServiceSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RustBridgeServiceSessionTests.swift; sourceTree = "<group>"; };
+		7A7B58908C24E4358344DCC3 /* KeyboardInteractivePromptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardInteractivePromptView.swift; sourceTree = "<group>"; };
 		7A85ACD689F14702D0EF4553 /* UpdateCheckViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateCheckViewModel.swift; sourceTree = "<group>"; };
 		7ED57A373FAE91C5DACBBEEB /* FileDropAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileDropAcceptanceTests.swift; sourceTree = "<group>"; };
 		81367EB61E6C8BEF9793A8E1 /* PathBreadcrumbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathBreadcrumbView.swift; sourceTree = "<group>"; };
@@ -224,6 +227,7 @@
 		B21889340030F3E1B19D3A47 /* HostKeyConfirmViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyConfirmViewTests.swift; sourceTree = "<group>"; };
 		B2364B5125ADC32FA213D5D6 /* MainViewModelTestabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewModelTestabilityTests.swift; sourceTree = "<group>"; };
 		B42423E6C41E62152BC34177 /* SSHConfigParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHConfigParser.swift; sourceTree = "<group>"; };
+		B802DE460AA10307474D54B6 /* KbdInteractiveChallenge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KbdInteractiveChallenge.swift; sourceTree = "<group>"; };
 		B9D0151BEDAABC188D276137 /* HostKeyConfirmView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyConfirmView.swift; sourceTree = "<group>"; };
 		BAFE71459129089A0FEF8727 /* ConnectionFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionFormView.swift; sourceTree = "<group>"; };
 		C094152383C89E8A0A64D14D /* AppSettingsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettingsService.swift; sourceTree = "<group>"; };
@@ -408,6 +412,7 @@
 				3CE1F5466970DDEFD99E922A /* FileDragPayload.swift */,
 				36588669F6048754258FD882 /* FileDropError.swift */,
 				CE260329269DAC2FECA3F356 /* FileDropValidation.swift */,
+				B802DE460AA10307474D54B6 /* KbdInteractiveChallenge.swift */,
 				E161934AB4A2807AC6FBAC8F /* LocalFileItem.swift */,
 				5E3CF72A48E2654A4AE767C1 /* PathBookmark.swift */,
 				6D985760A54C252085C13AAA /* PathNavigationHistory.swift */,
@@ -450,6 +455,7 @@
 			isa = PBXGroup;
 			children = (
 				B9D0151BEDAABC188D276137 /* HostKeyConfirmView.swift */,
+				7A7B58908C24E4358344DCC3 /* KeyboardInteractivePromptView.swift */,
 			);
 			path = Security;
 			sourceTree = "<group>";
@@ -745,6 +751,8 @@
 				C9D31B58F85C4B098801C142 /* GoToPathSheet.swift in Sources */,
 				3CE0F2920D7AA1671B0BB927 /* HostKeyConfirmView.swift in Sources */,
 				63CB3D35A2C803F76FAFAE69 /* HostKeyStore.swift in Sources */,
+				1510A34D024EA8173288E26F /* KbdInteractiveChallenge.swift in Sources */,
+				7CBBD851068754E3D4CF68A0 /* KeyboardInteractivePromptView.swift in Sources */,
 				980E1510005AE976AA4982A8 /* KeychainService.swift in Sources */,
 				0A7E7B61F467A806DB3B642A /* LocalFileItem.swift in Sources */,
 				7317425144359B0D22CC457A /* LocalPaneView.swift in Sources */,
