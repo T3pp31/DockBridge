@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{Auth, Msg, Server as _, Session};
-use russh::{MethodKind, MethodSet};
 use russh::{Channel, ChannelId};
+use russh::{MethodKind, MethodSet};
 use russh_sftp::de;
-use russh_sftp::extensions::{POSIX_RENAME, PosixRenameExtension};
+use russh_sftp::extensions::{PosixRenameExtension, POSIX_RENAME};
 use russh_sftp::protocol::{
     Attrs, Data, File, FileAttributes, Handle, Name, OpenFlags, Packet, Status, StatusCode, Version,
 };
@@ -368,11 +368,7 @@ impl russh_sftp::server::Handler for SftpHandler {
         _extensions: HashMap<String, String>,
     ) -> Result<Version, Self::Error> {
         let mut version = Version::new();
-        if self
-            .failures
-            .advertise_posix_rename
-            .load(Ordering::SeqCst)
-        {
+        if self.failures.advertise_posix_rename.load(Ordering::SeqCst) {
             version
                 .extensions
                 .insert(POSIX_RENAME.to_string(), "1".to_string());
@@ -711,11 +707,7 @@ impl russh_sftp::server::Handler for SftpHandler {
     ) -> Result<Packet, Self::Error> {
         match request.as_str() {
             POSIX_RENAME => {
-                if !self
-                    .failures
-                    .advertise_posix_rename
-                    .load(Ordering::SeqCst)
-                {
+                if !self.failures.advertise_posix_rename.load(Ordering::SeqCst) {
                     return Err(StatusCode::OpUnsupported);
                 }
                 if self
@@ -919,11 +911,8 @@ impl TestSftpServer {
         self.failures
             .require_keyboard_interactive
             .store(true, Ordering::SeqCst);
-        *self
-            .failures
-            .keyboard_interactive_secret
-            .lock()
-            .unwrap() = KEYBOARD_INTERACTIVE_SECRET.to_string();
+        *self.failures.keyboard_interactive_secret.lock().unwrap() =
+            KEYBOARD_INTERACTIVE_SECRET.to_string();
 
         let config = AppConfig {
             known_hosts_path: self._known_hosts_dir.path().join("known_hosts.json"),
