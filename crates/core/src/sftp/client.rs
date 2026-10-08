@@ -547,7 +547,7 @@ impl<'a> SftpClient<'a> {
             };
             match resume_offset {
                 Some(offset) => {
-                    let mut resumed = PartialLocalTransfer::begin_resume(
+                    let resumed = PartialLocalTransfer::begin_resume(
                         local_parent,
                         &remote,
                         &local,
