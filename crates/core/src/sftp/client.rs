@@ -637,15 +637,15 @@ impl<'a> SftpClient<'a> {
     pub async fn rename(&self, from: &str, to: &str) -> Result<(), SftpError> {
         let from = normalize_remote_path(from)?;
         let to = normalize_remote_path(to)?;
-        let replaced = self
-            .sftp()
-            .posix_rename(&from, &to)
-            .await
-            .map_err(|err| SftpError::RenameFailed {
-                from: from.clone(),
-                to: to.clone(),
-                message: err.to_string(),
-            })?;
+        let replaced =
+            self.sftp()
+                .posix_rename(&from, &to)
+                .await
+                .map_err(|err| SftpError::RenameFailed {
+                    from: from.clone(),
+                    to: to.clone(),
+                    message: err.to_string(),
+                })?;
         if replaced {
             return Ok(());
         }
@@ -5494,10 +5494,7 @@ mod tests {
             .posix_rename(partial, "target.txt")
             .await
             .expect("posix-rename request must succeed");
-        assert!(
-            replaced,
-            "OpenSSH must advertise posix-rename@openssh.com"
-        );
+        assert!(replaced, "OpenSSH must advertise posix-rename@openssh.com");
 
         // Then: the destination carries the new contents and the partial is gone
         assert_eq!(session.read("target.txt").await.unwrap(), b"new contents");
