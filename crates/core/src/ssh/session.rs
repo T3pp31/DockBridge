@@ -2,7 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use russh::client::{self, Handle};
+use russh::client::{self, AuthResult, Handle, KeyboardInteractiveAuthResponse};
+use russh::MethodKind;
 use russh::keys::PublicKey;
 use russh::keys::{decode_secret_key, PrivateKeyWithHashAlg};
 use russh_sftp::client::{Config as SftpConfig, SftpSession};
@@ -37,6 +38,26 @@ pub trait HostKeyPrompt: Send + Sync {
         );
         false
     }
+}
+
+/// One challenge prompt from a keyboard-interactive authentication round.
+#[derive(Debug, Clone)]
+pub struct KbdInteractivePrompt {
+    pub text: String,
+    pub echo: bool,
+}
+
+/// Callback invoked when the server requests keyboard-interactive input
+/// (PAM/2FA challenges, `KbdInteractiveAuthentication yes` servers).
+pub trait AuthPromptHandler: Send + Sync {
+    /// Shows the challenge to the user and returns one answer per prompt.
+    /// `None` answers mean the user cancelled; authentication is abandoned.
+    fn prompt(
+        &self,
+        name: &str,
+        instructions: &str,
+        prompts: &[KbdInteractivePrompt],
+    ) -> Vec<Option<String>>;
 }
 
 /// SSH authentication method.
@@ -237,6 +258,7 @@ impl SshSession {
         config: &AppConfig,
         known_hosts: Arc<Mutex<KnownHostsManager>>,
         prompt: Arc<dyn HostKeyPrompt>,
+        auth_prompt: Option<Arc<dyn AuthPromptHandler>>,
     ) -> Result<Self, crate::error::AppError> {
         let host = profile.host.clone();
         let port = profile.port;
@@ -274,8 +296,15 @@ impl SshSession {
             message: err.to_string(),
         })?;
 
-        let authenticated =
-            authenticate(&mut handle, &username, &profile.auth, &host, port).await?;
+        let authenticated = authenticate(
+            &mut handle,
+            &username,
+            &profile.auth,
+            &host,
+            port,
+            auth_prompt.as_ref(),
+        )
+        .await?;
 
         if !authenticated {
             return Err(AuthError::Failed { username }.into());
@@ -349,18 +378,55 @@ async fn authenticate(
     auth: &AuthType,
     host: &str,
     port: u16,
+    auth_prompt: Option<&Arc<dyn AuthPromptHandler>>,
 ) -> Result<bool, crate::error::AppError> {
     match auth {
-        AuthType::Password { password } => handle
-            .authenticate_password(username, password.expose())
-            .await
-            .map_err(|err| ConnectionError::ConnectFailed {
-                host: host.to_string(),
-                port,
-                message: err.to_string(),
-            })
-            .map(|result| result.success())
-            .map_err(Into::into),
+        AuthType::Password { password } => {
+            let result = handle
+                .authenticate_password(username, password.expose())
+                .await
+                .map_err(|err| ConnectionError::ConnectFailed {
+                    host: host.to_string(),
+                    port,
+                    message: err.to_string(),
+                })?;
+            if result.success() {
+                return Ok(true);
+            }
+            // The server rejected the password but may still offer
+            // keyboard-interactive (PAM/2FA, or `PasswordAuthentication no`
+            // with `KbdInteractiveAuthentication yes`). Fall through to it
+            // when offered and a prompt handler is wired up; otherwise
+            // surface the plain failure — or, when the server no longer
+            // offers any method at all, the dedicated error.
+            match &result {
+                AuthResult::Failure {
+                    remaining_methods, ..
+                } => {
+                    if remaining_methods
+                        .iter()
+                        .any(|kind| *kind == MethodKind::KeyboardInteractive)
+                    {
+                        if let Some(handler) = auth_prompt {
+                            return keyboard_interactive_auth(
+                                handle,
+                                username,
+                                host,
+                                port,
+                                handler,
+                            )
+                            .await;
+                        }
+                        return Ok(false);
+                    }
+                    if remaining_methods.is_empty() {
+                        return Err(AuthError::MethodUnavailable.into());
+                    }
+                    Ok(false)
+                }
+                _ => Ok(false),
+            }
+        }
         AuthType::PrivateKey {
             key_path,
             passphrase,
@@ -400,5 +466,60 @@ async fn authenticate(
                 .map(|result| result.success())
                 .map_err(Into::into)
         }
+    }
+}
+
+/// Runs a keyboard-interactive authentication round against the server,
+/// relaying each `USERAUTH_INFO_REQUEST` to the user-facing prompt handler.
+async fn keyboard_interactive_auth(
+    handle: &mut Handle<SshClientHandler>,
+    username: &str,
+    host: &str,
+    port: u16,
+    auth_prompt: &Arc<dyn AuthPromptHandler>,
+) -> Result<bool, crate::error::AppError> {
+    let connect_failed = |err: russh::Error| ConnectionError::ConnectFailed {
+        host: host.to_string(),
+        port,
+        message: err.to_string(),
+    };
+    let mut response = handle
+        .authenticate_keyboard_interactive_start(username, None)
+        .await
+        .map_err(connect_failed)?;
+    loop {
+        let prompts = match response {
+            KeyboardInteractiveAuthResponse::Success => return Ok(true),
+            KeyboardInteractiveAuthResponse::Failure { .. } => {
+                // The server rejected the answers; report plain failure.
+                return Ok(false);
+            }
+            KeyboardInteractiveAuthResponse::InfoRequest {
+                name,
+                instructions,
+                prompts,
+            } => (name, instructions, prompts),
+        };
+        let (name, instructions, raw_prompts) = prompts;
+        let challenge: Vec<KbdInteractivePrompt> = raw_prompts
+            .iter()
+            .map(|prompt| KbdInteractivePrompt {
+                text: prompt.prompt.clone(),
+                echo: prompt.echo,
+            })
+            .collect();
+        let answers = auth_prompt.prompt(&name, &instructions, &challenge);
+        if answers.len() != challenge.len() || answers.iter().any(Option::is_none) {
+            // Cancelled: abandon the round instead of sending partial answers.
+            return Ok(false);
+        }
+        let responses: Vec<String> = answers
+            .into_iter()
+            .map(|answer| answer.unwrap_or_default())
+            .collect();
+        response = handle
+            .authenticate_keyboard_interactive_respond(responses)
+            .await
+            .map_err(connect_failed)?;
     }
 }

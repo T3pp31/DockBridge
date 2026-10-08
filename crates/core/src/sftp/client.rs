@@ -2271,11 +2271,20 @@ mod tests {
         PartialLocalTransfer, PartialRemoteTransfer, PipelinableTransferWriter, SftpClient,
     };
     use crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
-    use crate::error::{RemoteStatusCode, SftpError};
-    use crate::sftp::test_server::{list_partial_paths, TestSftpServer};
+    use crate::error::{AuthError, RemoteStatusCode, SftpError};
+    use crate::sftp::test_server::{
+        list_partial_paths, KEYBOARD_INTERACTIVE_SECRET, TestSftpServer,
+    };
     use crate::sftp::tree::walk_remote_directory;
     use crate::transfer::TransferOverwritePolicy;
     use russh_sftp::client::error::Error as SftpClientError;
+
+    struct AcceptAllPromptProxy;
+    impl crate::ssh::HostKeyPrompt for AcceptAllPromptProxy {
+        fn prompt_unknown_host(&self, _: &str, _: u16, _: &str) -> bool {
+            true
+        }
+    }
 
     struct FailOnRead {
         fail_after_successful_reads: usize,
@@ -5331,6 +5340,102 @@ mod tests {
         .into_iter()
         .map(std::path::PathBuf::from)
         .find(|path| path.exists())
+    }
+
+    struct StaticAuthPrompt {
+        answer: Option<String>,
+    }
+
+    impl crate::ssh::AuthPromptHandler for StaticAuthPrompt {
+        fn prompt(
+            &self,
+            _name: &str,
+            _instructions: &str,
+            prompts: &[crate::ssh::KbdInteractivePrompt],
+        ) -> Vec<Option<String>> {
+            prompts.iter().map(|_| self.answer.clone()).collect()
+        }
+    }
+
+    #[tokio::test]
+    async fn keyboard_interactive_auth_succeeds_after_password_rejected() {
+        // Given: a server that rejects passwords and only offers
+        // keyboard-interactive (PasswordAuthentication no)
+        let server = TestSftpServer::start().await;
+        let prompt = Arc::new(StaticAuthPrompt {
+            answer: Some(KEYBOARD_INTERACTIVE_SECRET.to_string()),
+        });
+
+        // When: connecting with a wrong password but a working prompt handler
+        let session = server
+            .connect_session_with_auth_prompt(prompt, "wrong-password")
+            .await
+            .expect("keyboard-interactive fallback must authenticate");
+
+        // Then: the resulting session is usable
+        let client = SftpClient::new(&session);
+        client.canonicalize_path(".").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn keyboard_interactive_auth_cancelled_reports_plain_failure() {
+        // Given: a keyboard-interactive-only server and a prompt the user cancels
+        let server = TestSftpServer::start().await;
+        let prompt = Arc::new(StaticAuthPrompt { answer: None });
+
+        // When: connecting
+        let result = server
+            .connect_session_with_auth_prompt(prompt, "whatever")
+            .await;
+
+        // Then: a plain auth failure is surfaced
+        let Err(err) = result else {
+            panic!("expected the cancelled keyboard-interactive round to fail");
+        };
+        assert!(
+            matches!(err, crate::error::AppError::Auth(AuthError::Failed { .. })),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_without_remaining_methods_reports_method_unavailable() {
+        // Given: a server that rejects every method without proposing any
+        let server = TestSftpServer::start().await;
+        server.failures.reject_all_auth.store(true, Ordering::SeqCst);
+
+        let config = crate::config::AppConfig {
+            known_hosts_path: server.known_hosts_path(),
+            merge_openssh_known_hosts_on_connect: false,
+            ..crate::config::AppConfig::default()
+        };
+        let known_hosts = Arc::new(tokio::sync::Mutex::new(
+            crate::security::KnownHostsManager::load_or_empty(&config.known_hosts_path),
+        ));
+        let profile =
+            crate::ssh::ConnectionProfile::with_password("127.0.0.1", server.addr.port(), "test", "pw");
+
+        // When: connecting
+        let result = crate::ssh::SshSession::connect(
+            profile,
+            &config,
+            known_hosts,
+            Arc::new(AcceptAllPromptProxy),
+            None,
+        )
+        .await;
+
+        // Then: the dedicated error is surfaced instead of a generic failure
+        let Err(err) = result else {
+            panic!("expected connection to fail with no remaining auth methods");
+        };
+        assert!(
+            matches!(
+                err,
+                crate::error::AppError::Auth(AuthError::MethodUnavailable)
+            ),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[tokio::test]
