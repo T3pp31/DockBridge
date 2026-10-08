@@ -369,9 +369,10 @@ impl<'a> SftpClient<'a> {
         // never resume.
         let local_size = local_metadata.as_ref().map(|metadata| metadata.len());
         let resume_offset = match local_size {
-            Some(size) => self
-                .find_resumable_upload_offset(size, &parent, &local, &remote)
-                .await?,
+            Some(size) => {
+                self.find_resumable_upload_offset(size, &parent, &local, &remote)
+                    .await?
+            }
             None => None,
         };
         let mut partial = match resume_offset {
@@ -561,7 +562,9 @@ impl<'a> SftpClient<'a> {
                         .map_err(|err| SftpError::DownloadFailed {
                             remote: remote.clone(),
                             local: local.clone(),
-                            message: format!("failed to seek remote file to the resume offset: {err}"),
+                            message: format!(
+                                "failed to seek remote file to the resume offset: {err}"
+                            ),
                         })?;
                     resumed
                 }
@@ -2538,10 +2541,10 @@ mod tests {
         create_exclusive_local_partial, download_pipelined_to_writer, is_remote_file_exists_error,
         is_remote_no_such_file_error, normalize_remote_path, open_exclusive_local_file,
         partial_file_name, partial_local_path_for_suffix, partial_remote_path_for_suffix,
-        pipeline_depth_for_chunk_budget, prepare_local_finalize_destination,
-        random_partial_suffix, remote_status_code, rename_local_noreplace,
-        resume_partial_suffix, upload_from_reader, DownloadFlowError, PartialLocalTransfer,
-        PartialRemoteTransfer, PipelinableTransferWriter, SftpClient,
+        pipeline_depth_for_chunk_budget, prepare_local_finalize_destination, random_partial_suffix,
+        remote_status_code, rename_local_noreplace, resume_partial_suffix, upload_from_reader,
+        DownloadFlowError, PartialLocalTransfer, PartialRemoteTransfer, PipelinableTransferWriter,
+        SftpClient,
     };
     use crate::config::DEFAULT_TRANSFER_CHUNK_SIZE_BYTES;
     use crate::error::{AuthError, RemoteStatusCode, SftpError};
@@ -5737,10 +5740,7 @@ mod tests {
             resume_partial_suffix(&local_display, remote)
         );
         server
-            .write_remote_file(
-                &format!("/upload/{partial_local_name}"),
-                &payload[..4],
-            )
+            .write_remote_file(&format!("/upload/{partial_local_name}"), &payload[..4])
             .await;
 
         // When: the upload runs to the same paths
@@ -5770,10 +5770,7 @@ mod tests {
 
         let partial_path = local_dir.path().join(format!(
             ".dockbridge-{}.partial",
-            resume_partial_suffix(
-                &local_path.display().to_string(),
-                "/download/file.bin"
-            )
+            resume_partial_suffix(&local_path.display().to_string(), "/download/file.bin")
         ));
         tokio::fs::write(&partial_path, b"AAAA").await.unwrap();
 
@@ -5794,11 +5791,13 @@ mod tests {
         let server = TestSftpServer::start().await;
         server.failures.hang_write.store(true, Ordering::SeqCst);
         let session = server.connect_session().await;
-        let client = SftpClient::new(&session)
-            .with_upload_request_timeout(Duration::from_millis(120));
+        let client =
+            SftpClient::new(&session).with_upload_request_timeout(Duration::from_millis(120));
         let local_dir = tempfile::tempdir().unwrap();
         let local_path = local_dir.path().join("hang.bin");
-        tokio::fs::write(&local_path, b"some payload").await.unwrap();
+        tokio::fs::write(&local_path, b"some payload")
+            .await
+            .unwrap();
 
         // When: the upload times out on the first WRITE ack
         let err = client
