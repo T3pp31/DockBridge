@@ -12,10 +12,10 @@ use std::time::Duration;
 use dockbridge_core::{
     ensure_known_hosts_parent, expand_tilde,
     inspect_private_key_algorithm as core_inspect_private_key_algorithm,
-    is_connection_lost_message, u64_to_usize_or_invalid, AppConfig, AuthType, ConnectionProfile,
-    HostKeyPrompt, KnownHostEntry, KnownHostsManager, KnownHostsStatus, PrivateKeyAlgorithm,
-    RemoteFile, SecretPassword, SftpClient, SshSession, TransferDirection, TransferManager,
-    TransferOverwritePolicy, TransferStatus, TransferTask,
+    is_connection_lost_message, u64_to_usize_or_invalid, AppConfig, AuthPromptHandler,
+    AuthType, ConnectionProfile, HostKeyPrompt, KnownHostEntry, KnownHostsManager,
+    KnownHostsStatus, PrivateKeyAlgorithm, RemoteFile, SecretPassword, SftpClient, SshSession,
+    TransferDirection, TransferManager, TransferOverwritePolicy, TransferStatus, TransferTask,
 };
 #[cfg(test)]
 use dockbridge_core::{
@@ -289,6 +289,50 @@ pub trait ConnectionEventHandler: Send + Sync {
     fn on_session_disconnected(&self, session_id: u64, reason: String);
 }
 
+/// One challenge prompt from a keyboard-interactive round.
+#[derive(uniffi::Record)]
+pub struct KbdInteractivePromptRecord {
+    pub text: String,
+    pub echo: bool,
+}
+
+/// Callback invoked when the server requests keyboard-interactive input
+/// (PAM/2FA challenges). Returns one answer per prompt; `None` cancels.
+#[uniffi::export(callback_interface)]
+pub trait KeyboardInteractivePromptHandler: Send + Sync {
+    fn prompt(
+        &self,
+        name: String,
+        instructions: String,
+        prompts: Vec<KbdInteractivePromptRecord>,
+    ) -> Vec<Option<String>>;
+}
+
+struct UniffiAuthPrompt {
+    handler: Arc<dyn KeyboardInteractivePromptHandler>,
+}
+
+impl AuthPromptHandler for UniffiAuthPrompt {
+    fn prompt(
+        &self,
+        name: &str,
+        instructions: &str,
+        prompts: &[dockbridge_core::KbdInteractivePrompt],
+    ) -> Vec<Option<String>> {
+        self.handler.prompt(
+            name.to_string(),
+            instructions.to_string(),
+            prompts
+                .iter()
+                .map(|prompt| KbdInteractivePromptRecord {
+                    text: prompt.text.clone(),
+                    echo: prompt.echo,
+                })
+                .collect(),
+        )
+    }
+}
+
 struct UniffiHostKeyPrompt {
     handler: Arc<dyn HostKeyHandler>,
 }
@@ -325,6 +369,7 @@ pub struct DockBridgeClient {
     config: AppConfig,
     known_hosts: Arc<AsyncMutex<KnownHostsManager>>,
     host_key_handler: Arc<dyn HostKeyHandler>,
+    auth_prompt_handler: Arc<dyn KeyboardInteractivePromptHandler>,
     connection_event_handler: Arc<dyn ConnectionEventHandler>,
     sessions: Arc<AsyncMutex<HashMap<u64, Arc<SshSession>>>>,
     monitors: Arc<AsyncMutex<HashMap<u64, JoinHandle<()>>>>,
@@ -338,6 +383,7 @@ impl DockBridgeClient {
     fn new(
         app_config: AppConfigRecord,
         host_key_handler: Box<dyn HostKeyHandler>,
+        auth_prompt_handler: Box<dyn KeyboardInteractivePromptHandler>,
         connection_event_handler: Box<dyn ConnectionEventHandler>,
     ) -> Result<Arc<Self>, DockBridgeError> {
         let known_hosts_path = expand_tilde(PathBuf::from(app_config.known_hosts_path).as_path());
@@ -386,6 +432,7 @@ impl DockBridgeClient {
             config,
             known_hosts: Arc::new(AsyncMutex::new(known_hosts_manager)),
             host_key_handler: Arc::from(host_key_handler),
+            auth_prompt_handler: Arc::from(auth_prompt_handler),
             connection_event_handler: Arc::from(connection_event_handler),
             sessions: Arc::new(AsyncMutex::new(HashMap::new())),
             monitors: Arc::new(AsyncMutex::new(HashMap::new())),
@@ -400,12 +447,16 @@ impl DockBridgeClient {
         let prompt: Arc<dyn HostKeyPrompt> = Arc::new(UniffiHostKeyPrompt {
             handler: Arc::clone(&self.host_key_handler),
         });
+        let auth_prompt: Arc<dyn AuthPromptHandler> = Arc::new(UniffiAuthPrompt {
+            handler: Arc::clone(&self.auth_prompt_handler),
+        });
 
         let session = block_on(SshSession::connect(
             core_profile,
             &config,
             known_hosts,
             prompt,
+            Some(auth_prompt),
         ))?
         .map_err(map_app_error)?;
 
