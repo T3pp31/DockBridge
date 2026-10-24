@@ -836,7 +836,14 @@ impl TestSftpServer {
             loop {
                 let (socket, _) = match listener.accept().await {
                     Ok(connection) => connection,
-                    Err(_) => break,
+                    Err(err) => {
+                        if !is_transient_accept_error(&err) {
+                            tracing::error!(error = %err, "test SFTP server accept failed");
+                            panic!("test SFTP server accept failed: {err}");
+                        }
+                        tracing::warn!(error = %err, "test SFTP server accept retrying");
+                        continue;
+                    }
                 };
                 let mut factory = ServerFactory {
                     clients: Arc::clone(&clients),
@@ -1003,4 +1010,29 @@ pub fn list_partial_paths(dir: &Path) -> Vec<PathBuf> {
 
 pub fn is_partial_file_name(name: &str) -> bool {
     name.starts_with(".dockbridge-") && name.ends_with(".partial")
+}
+
+fn is_transient_accept_error(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ResourceBusy
+            | std::io::ErrorKind::TimedOut
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transient_accept_errors_are_classified() {
+        // Given: a connection aborted before accept
+        let aborted = std::io::Error::from(std::io::ErrorKind::ConnectionAborted);
+
+        // Then: it is retried rather than silently stopping the server task
+        assert!(is_transient_accept_error(&aborted));
+    }
 }
