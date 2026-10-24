@@ -290,11 +290,7 @@ impl SshSession {
         .map_err(|_| ConnectionError::Timeout {
             timeout_secs: config.connection_timeout_secs,
         })?
-        .map_err(|err| ConnectionError::ConnectFailed {
-            host: host.clone(),
-            port,
-            message: err.to_string(),
-        })?;
+        .map_err(|err| preserve_connection_error(err, &host, port))?;
 
         let authenticated = authenticate(
             &mut handle,
@@ -462,6 +458,26 @@ async fn authenticate(
     }
 }
 
+/// Keeps structured connection errors intact and only flattens low-level
+/// transport errors into `ConnectFailed`. This preserves host-key rejection and
+/// mismatch details across `client::connect`.
+fn preserve_connection_error(error: ConnectionError, host: &str, port: u16) -> ConnectionError {
+    match error {
+        err if matches!(
+            err,
+            ConnectionError::HostKeyRejected { .. } | ConnectionError::Timeout { .. }
+        ) =>
+        {
+            err
+        }
+        error => ConnectionError::ConnectFailed {
+            host: host.to_string(),
+            port,
+            message: error.to_string(),
+        },
+    }
+}
+
 /// Runs a keyboard-interactive authentication round against the server,
 /// relaying each `USERAUTH_INFO_REQUEST` to the user-facing prompt handler.
 async fn keyboard_interactive_auth(
@@ -514,5 +530,29 @@ async fn keyboard_interactive_auth(
             .authenticate_keyboard_interactive_respond(responses)
             .await
             .map_err(connect_failed)?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserve_connection_error_keeps_host_key_rejection() {
+        // Given: a structured host-key rejection from the SSH handler
+        let original = ConnectionError::HostKeyRejected {
+            host: "example.com".to_string(),
+            port: 2222,
+        };
+
+        // When: the connect future is flattened for reporting
+        let mapped = preserve_connection_error(original, "example.com", 2222);
+
+        // Then: the typed rejection is preserved instead of becoming ConnectFailed
+        assert!(matches!(
+            mapped,
+            ConnectionError::HostKeyRejected { host, port }
+                if host == "example.com" && port == 2222
+        ));
     }
 }
