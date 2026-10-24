@@ -501,18 +501,23 @@ async fn keyboard_interactive_auth(
                 echo: prompt.echo,
             })
             .collect();
-        let answers = auth_prompt.prompt(&name, &instructions, &challenge);
+        let mut answers = auth_prompt.prompt(&name, &instructions, &challenge);
         if answers.len() != challenge.len() || answers.iter().any(Option::is_none) {
             // Cancelled: abandon the round instead of sending partial answers.
+            answers.zeroize();
             return Ok(false);
         }
-        let responses: Vec<String> = answers
-            .into_iter()
-            .map(|answer| answer.unwrap_or_default())
-            .collect();
-        response = handle
-            .authenticate_keyboard_interactive_respond(responses)
+        let mut responses = Zeroizing::new(
+            answers
+                .into_iter()
+                .map(|answer| answer.unwrap_or_default())
+                .collect::<Vec<String>>(),
+        );
+        let result = handle
+            .authenticate_keyboard_interactive_respond(responses.to_vec())
             .await
             .map_err(connect_failed)?;
+        responses.zeroize();
+        response = result;
     }
 }
