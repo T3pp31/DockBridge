@@ -5,12 +5,12 @@ set -euo pipefail
 # English (development language) and Japanese translation, and that the file
 # is valid JSON. Used by CI to catch untranslated / missing keys early.
 #
-# Usage: scripts/verify-localization.sh
+# Usage: scripts/verify-localization.sh [path-to-xcstrings]
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-XCS="$ROOT/apps/macos/DockBridge/Resources/Localizable.xcstrings"
+XCS="${1:-$ROOT/apps/macos/DockBridge/Resources/Localizable.xcstrings}"
 
 if [[ ! -f "$XCS" ]]; then
   echo "FAIL: $XCS not found" >&2
@@ -52,6 +52,46 @@ def format_signature(value):
     return sorted(signature)
 
 
+def collect_string_units(node, prefix=()):
+    """Return translation values keyed by their String Catalog variation path."""
+    units = {}
+    if not isinstance(node, dict):
+        return units
+
+    string_unit = node.get("stringUnit")
+    if string_unit is not None:
+        if isinstance(string_unit, dict):
+            units[prefix] = string_unit.get("value")
+        else:
+            units[prefix] = None
+
+    variations = node.get("variations")
+    if variations is not None:
+        if not isinstance(variations, dict):
+            units[prefix + ("variations",)] = None
+        else:
+            for variation_name, variation in variations.items():
+                variation_path = prefix + ("variations", variation_name)
+                if variation_name == "plural":
+                    if not isinstance(variation, dict):
+                        units[variation_path] = None
+                        continue
+                    for category, category_node in variation.items():
+                        category_path = variation_path + (category,)
+                        category_units = collect_string_units(
+                            category_node, category_path
+                        )
+                        if not category_units:
+                            units[category_path] = None
+                        else:
+                            units.update(category_units)
+                else:
+                    units.update(
+                        collect_string_units(variation, variation_path)
+                    )
+    return units
+
+
 for key in sorted(strings):
     entry = strings[key]
     localizations = entry.get("localizations", {})
@@ -63,9 +103,9 @@ for key in sorted(strings):
     if source_language not in localizations:
         errors.append(f"{key!r}: missing {source_language} localization")
         continue
-    en = localizations[source_language].get("stringUnit", {}).get("value")
-    if not en:
-        errors.append(f"{key!r}: empty {source_language} value")
+    source_units = collect_string_units(localizations[source_language])
+    if not source_units:
+        errors.append(f"{key!r}: missing {source_language} value")
 
     # The first target language the project ships must be translated too.
     for target in ("ja",):
@@ -73,14 +113,40 @@ for key in sorted(strings):
         if loc is None:
             errors.append(f"{key!r}: missing {target} localization")
             continue
-        value = loc.get("stringUnit", {}).get("value")
-        if value is None or value == "":
-            errors.append(f"{key!r}: empty {target} value")
-        elif en and format_signature(value) != format_signature(en):
+        target_units = collect_string_units(loc)
+        if not target_units:
+            errors.append(f"{key!r}: missing {target} value")
+            continue
+
+        missing_paths = sorted(set(source_units) - set(target_units))
+        extra_paths = sorted(set(target_units) - set(source_units))
+        for unit_path in missing_paths:
             errors.append(
-                f"{key!r}: {target} format arguments {format_signature(value)} "
-                f"do not match {source_language} {format_signature(en)}"
+                f"{key!r}: missing {target} value at {'.'.join(unit_path)}"
             )
+        for unit_path in extra_paths:
+            errors.append(
+                f"{key!r}: unexpected {target} value at {'.'.join(unit_path)}"
+            )
+
+        for unit_path in sorted(set(source_units) & set(target_units)):
+            source_value = source_units[unit_path]
+            target_value = target_units[unit_path]
+            unit_name = ".".join(unit_path)
+            if not source_value:
+                errors.append(
+                    f"{key!r}: empty {source_language} value at {unit_name}"
+                )
+            if not target_value:
+                errors.append(f"{key!r}: empty {target} value at {unit_name}")
+            elif source_value and format_signature(target_value) != format_signature(
+                source_value
+            ):
+                errors.append(
+                    f"{key!r}: {target} format arguments "
+                    f"{format_signature(target_value)} at {unit_name} do not match "
+                    f"{source_language} {format_signature(source_value)}"
+                )
 
 # Every explicit String(localized:) literal must have a catalog entry. Dynamic
 # interpolation inside the localization key is rejected so placeholder keys
