@@ -2954,6 +2954,7 @@ mod tests {
     async fn pipelined_upload_reports_total_progress() {
         // Given: a small local file on the test SFTP server
         let server = TestSftpServer::start().await;
+        server.create_remote_dir("/metadata").await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();
@@ -3008,6 +3009,7 @@ mod tests {
     #[tokio::test]
     async fn upload_local_read_failure_cleans_up_remote_partial() {
         let server = TestSftpServer::start().await;
+        server.create_remote_dir("/metadata").await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();
@@ -3377,11 +3379,11 @@ mod tests {
         let client = SftpClient::new(&session);
 
         let err = client
-            .create_directory_all("/upload/nested/dir")
+            .create_directory_all("/fixture/nested/dir")
             .await
             .unwrap_err();
         assert!(
-            matches!(err, SftpError::MkdirFailed { ref path, .. } if path == "/upload"),
+            matches!(err, SftpError::MkdirFailed { ref path, .. } if path == "/fixture"),
             "unexpected error: {err:?}"
         );
     }
@@ -3660,6 +3662,7 @@ mod tests {
     async fn upload_cancel_before_rename_leaves_no_remote_final_file() {
         // Given: a local file and a test SFTP server
         let server = TestSftpServer::start().await;
+        server.create_remote_dir("/metadata").await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();
@@ -3826,6 +3829,7 @@ mod tests {
     #[tokio::test]
     async fn delete_missing_file_returns_error() {
         let server = TestSftpServer::start().await;
+        server.create_remote_dir("/metadata").await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
 
@@ -4364,6 +4368,27 @@ mod tests {
             "partial remote files must not remain: {:?}",
             server.remote_partial_paths()
         );
+    }
+
+    #[tokio::test]
+    async fn upload_to_missing_parent_fails_without_creating_it() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("missing-parent.txt");
+        tokio::fs::write(&local_path, b"payload").await.unwrap();
+
+        let err = client
+            .upload(&local_path, "/does/not/exist/file.txt")
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, SftpError::UploadFailed { .. }),
+            "unexpected error: {err:?}"
+        );
+        assert!(!server.root.join("does").exists());
     }
 
     #[tokio::test]
@@ -5202,6 +5227,7 @@ mod tests {
         use std::os::unix::fs::{symlink, PermissionsExt};
 
         let server = TestSftpServer::start().await;
+        server.create_remote_dir("/metadata").await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();
@@ -5279,6 +5305,7 @@ mod tests {
     #[tokio::test]
     async fn upload_succeeds_when_metadata_preservation_fails() {
         let server = TestSftpServer::start().await;
+        server.create_remote_dir("/metadata").await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();

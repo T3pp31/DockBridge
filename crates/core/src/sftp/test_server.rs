@@ -413,12 +413,6 @@ impl russh_sftp::server::Handler for SftpHandler {
         _attrs: FileAttributes,
     ) -> Result<Handle, Self::Error> {
         let local = self.resolve(&filename);
-        if let Some(parent) = local.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|_| StatusCode::Failure)?;
-        }
-
         let mut options = OpenOptions::new();
         if pflags.contains(OpenFlags::READ) {
             options.read(true);
@@ -689,9 +683,13 @@ impl russh_sftp::server::Handler for SftpHandler {
             }
         }
         if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|_| StatusCode::Failure)?;
+            if !parent.is_dir() {
+                return Ok(Self::err_status(
+                    id,
+                    StatusCode::NoSuchFile,
+                    "rename parent does not exist",
+                ));
+            }
         }
         fs::rename(&from, &to)
             .await
@@ -726,9 +724,13 @@ impl russh_sftp::server::Handler for SftpHandler {
                 let from = self.resolve(&parsed.oldpath);
                 let to = self.resolve(&parsed.newpath);
                 if let Some(parent) = to.parent() {
-                    fs::create_dir_all(parent)
-                        .await
-                        .map_err(|_| StatusCode::Failure)?;
+                    if !parent.is_dir() {
+                        return Ok(Packet::Status(Self::err_status(
+                            id,
+                            StatusCode::NoSuchFile,
+                            "rename parent does not exist",
+                        )));
+                    }
                 }
                 // posix-rename replaces an existing destination atomically.
                 fs::rename(&from, &to)
@@ -812,6 +814,7 @@ impl TestSftpServer {
         let root_dir = tempfile::tempdir().unwrap();
         let root = root_dir.path().to_path_buf();
         fs::create_dir_all(&root).await.unwrap();
+        fs::create_dir_all(root.join("upload")).await.unwrap();
 
         let failures = Arc::new(FailureConfig::default());
         // Advertise posix-rename@openssh.com by default (OpenSSH-compatible);
@@ -950,6 +953,10 @@ impl TestSftpServer {
             fs::create_dir_all(parent).await.unwrap();
         }
         fs::write(local, contents).await.unwrap();
+    }
+
+    pub async fn create_remote_dir(&self, remote_path: &str) {
+        fs::create_dir_all(self.resolve(remote_path)).await.unwrap();
     }
 
     pub fn remote_file_exists(&self, remote_path: &str) -> bool {
