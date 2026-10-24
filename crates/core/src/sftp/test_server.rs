@@ -752,20 +752,30 @@ impl russh_sftp::server::Handler for SftpHandler {
         }
 
         if attrs.atime.is_some() || attrs.mtime.is_some() {
-            let mut times = std::fs::FileTimes::new();
-            if let Some(atime) = attrs.atime {
-                times = times.set_accessed(
-                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(atime as u64),
-                );
+            #[cfg(unix)]
+            {
+                set_file_times_by_path(&local, attrs.atime, attrs.mtime)
+                    .map_err(|_| StatusCode::Failure)?;
             }
-            if let Some(mtime) = attrs.mtime {
-                times = times.set_modified(
-                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64),
-                );
+            #[cfg(not(unix))]
+            {
+                let mut times = std::fs::FileTimes::new();
+                if let Some(atime) = attrs.atime {
+                    times = times.set_accessed(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(atime as u64),
+                    );
+                }
+                if let Some(mtime) = attrs.mtime {
+                    times = times.set_modified(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64),
+                    );
+                }
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&local)
+                    .and_then(|file| file.set_times(times))
+                    .map_err(|_| StatusCode::Failure)?;
             }
-            std::fs::File::open(&local)
-                .and_then(|file| file.set_times(times))
-                .map_err(|_| StatusCode::Failure)?;
         }
 
         if let Some(mode) = attrs.permissions {
@@ -1003,4 +1013,37 @@ pub fn list_partial_paths(dir: &Path) -> Vec<PathBuf> {
 
 pub fn is_partial_file_name(name: &str) -> bool {
     name.starts_with(".dockbridge-") && name.ends_with(".partial")
+}
+
+#[cfg(unix)]
+fn set_file_times_by_path(
+    path: &Path,
+    atime: Option<u32>,
+    mtime: Option<u32>,
+) -> Result<(), std::io::Error> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+    let to_timespec = |secs: u32| libc::timespec {
+        tv_sec: secs as libc::time_t,
+        tv_nsec: 0,
+    };
+    let times = [
+        to_timespec(atime.unwrap_or_default()),
+        to_timespec(mtime.unwrap_or_default()),
+    ];
+
+    let result = unsafe {
+        libc::utimensat(
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            times.as_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
