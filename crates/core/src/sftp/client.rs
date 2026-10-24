@@ -390,7 +390,7 @@ impl<'a> SftpClient<'a> {
                         remote: remote.clone(),
                         message: format!("failed to seek source file for resume: {err}"),
                     })?;
-                PartialRemoteTransfer::begin_resume(
+                match PartialRemoteTransfer::begin_resume(
                     self,
                     partial_path,
                     offset,
@@ -399,6 +399,27 @@ impl<'a> SftpClient<'a> {
                     overwrite_policy,
                 )
                 .await?
+                {
+                    Some(partial) => partial,
+                    None => {
+                        local_file
+                            .seek(std::io::SeekFrom::Start(0))
+                            .await
+                            .map_err(|err| SftpError::UploadFailed {
+                                local: local.clone(),
+                                remote: remote.clone(),
+                                message: format!("failed to seek source file to start: {err}"),
+                            })?;
+                        PartialRemoteTransfer::begin(
+                            self,
+                            &parent,
+                            &local,
+                            &remote,
+                            overwrite_policy,
+                        )
+                        .await?
+                    }
+                }
             }
             None => {
                 PartialRemoteTransfer::begin(self, &parent, &local, &remote, overwrite_policy)
@@ -1608,18 +1629,33 @@ impl<'a> PartialRemoteTransfer<'a> {
         local: &str,
         remote: &str,
         overwrite_policy: TransferOverwritePolicy,
-    ) -> Result<Self, SftpError> {
-        let mut remote_file = client
+    ) -> Result<Option<Self>, SftpError> {
+        let mut remote_file = match client
             .sftp()
-            .open_with_flags(&partial_path, OpenFlags::WRITE | OpenFlags::CREATE)
+            .open_with_flags(&partial_path, OpenFlags::WRITE)
             .await
-            .map_err(|err| SftpError::UploadFailed {
-                local: local.to_string(),
-                remote: remote.to_string(),
-                message: format!(
-                    "failed to reopen partial for resume: {err}; restarting from scratch is required"
-                ),
-            })?;
+        {
+            Ok(remote_file) => remote_file,
+            Err(_) => {
+                // The partial disappeared (or cannot be reopened). Restart
+                // from scratch instead of allowing CREATE to synthesize a new
+                // partial and seek to an offset that does not exist.
+                return Ok(None);
+            }
+        };
+        let actual_size = client
+            .sftp()
+            .metadata(&partial_path)
+            .await
+            .ok()
+            .and_then(|metadata| metadata.size)
+            .unwrap_or(0);
+        if actual_size != start_offset {
+            // A truncated or otherwise invalid partial would create a sparse
+            // hole and corrupt the final file. Remove it and restart cleanly.
+            let _ = client.sftp().remove_file(&partial_path).await;
+            return Ok(None);
+        }
         use tokio::io::AsyncSeekExt;
         remote_file
             .seek(std::io::SeekFrom::Start(start_offset))
@@ -1629,7 +1665,7 @@ impl<'a> PartialRemoteTransfer<'a> {
                 remote: remote.to_string(),
                 message: format!("failed to seek partial to the resume offset: {err}"),
             })?;
-        Ok(Self {
+        Ok(Some(Self {
             client,
             partial_path,
             remote_file: Some(remote_file),
@@ -1638,7 +1674,7 @@ impl<'a> PartialRemoteTransfer<'a> {
             remote: remote.to_string(),
             overwrite_policy,
             keep_on_error: true,
-        })
+        }))
     }
 
     fn remote_file_mut(&mut self) -> Result<&mut RemoteFileHandle, SftpError> {
@@ -5753,6 +5789,41 @@ mod tests {
             .unwrap();
         assert_eq!(contents, payload);
         assert!(server.remote_partial_paths().is_empty());
+    }
+
+    #[tokio::test]
+    async fn upload_resume_discards_size_mismatched_partial() {
+        // Given: a partial whose size no longer matches the resume offset
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        tokio::fs::write(&local_path, b"AAAA").await.unwrap();
+
+        let remote = "/upload/file.bin";
+        let partial_path = format!(
+            "/upload/.dockbridge-{}.partial",
+            resume_partial_suffix(&local_path.display().to_string(), remote)
+        );
+        server.write_remote_file(&partial_path, b"AAAABBBB").await;
+
+        // When: the client prepares a resume at an offset that does not match
+        // the partial's actual size
+        let resumed = PartialRemoteTransfer::begin_resume(
+            &client,
+            partial_path.clone(),
+            4,
+            &local_path.display().to_string(),
+            remote,
+            TransferOverwritePolicy::default(),
+        )
+        .await
+        .unwrap();
+
+        // Then: the invalid partial is discarded and the caller restarts
+        assert!(resumed.is_none());
+        assert!(!server.remote_file_exists(&partial_path));
     }
 
     #[tokio::test]
