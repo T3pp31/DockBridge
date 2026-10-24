@@ -2426,6 +2426,11 @@ async fn prepare_local_finalize_destination(
                 final_path.display()
             ),
         }),
+        Ok(metadata) if metadata.is_dir() => Err(SftpError::DownloadFailed {
+            remote: remote.to_string(),
+            local: local.to_string(),
+            message: format!("destination '{}' is a directory", final_path.display()),
+        }),
         Ok(_) => match overwrite_policy {
             TransferOverwritePolicy::FailIfExists => Err(SftpError::DownloadFailed {
                 remote: remote.to_string(),
@@ -3619,6 +3624,29 @@ mod tests {
         match err {
             crate::error::SftpError::DownloadFailed { message, .. } => {
                 assert!(message.contains("symlink"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn finalize_local_destination_rejects_directory_before_download() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let destination = temp_dir.path().join("final-dir");
+        std::fs::create_dir(&destination).unwrap();
+
+        let err = prepare_local_finalize_destination(
+            &destination,
+            TransferOverwritePolicy::Replace,
+            "/remote/file.txt",
+            destination.display().to_string().as_str(),
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            crate::error::SftpError::DownloadFailed { message, .. } => {
+                assert!(message.contains("is a directory"));
             }
             other => panic!("unexpected error: {other:?}"),
         }
