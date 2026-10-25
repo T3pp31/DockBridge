@@ -89,6 +89,10 @@ extension DockBridgeError {
     static func friendlyMessage(for message: String) -> String {
         let lowercased = message.lowercased()
 
+        if lowercased.contains("password authentication is not supported") {
+            return String(localized: "This server does not accept password authentication. Use public key authentication or another supported method.")
+        }
+
         if lowercased.contains("known hosts") || lowercased.contains("known_hosts") {
             return String(localized: "Unable to load the host key store. Quit the app, back up or remove known_hosts.json, then reconnect.")
         }

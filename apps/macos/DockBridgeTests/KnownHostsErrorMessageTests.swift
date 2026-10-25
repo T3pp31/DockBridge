@@ -106,6 +106,20 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         )
     }
 
+    func testUnsupportedPasswordAuthenticationMessageIsNotCredentialPrompt() {
+        let message = DockBridgeError.friendlyMessage(
+            for: "password authentication is not supported by the server"
+        )
+
+        XCTAssertEqual(
+            message,
+            String(
+                localized: "This server does not accept password authentication. Use public key authentication or another supported method."
+            )
+        )
+        XCTAssertFalse(DockBridgeError.isAuthenticationMessage(message))
+    }
+
     func testAuthenticationMessageDetectionUsesRawBridgeTokens() {
         XCTAssertTrue(
             DockBridgeError.isAuthenticationMessage(
