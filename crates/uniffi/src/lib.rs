@@ -393,10 +393,12 @@ impl DockBridgeClient {
         auth_prompt_handler: Box<dyn KeyboardInteractivePromptHandler>,
         connection_event_handler: Box<dyn ConnectionEventHandler>,
     ) -> Result<Arc<Self>, DockBridgeError> {
-        let known_hosts_path = expand_tilde(PathBuf::from(app_config.known_hosts_path).as_path());
+        let known_hosts_path = expand_tilde(PathBuf::from(app_config.known_hosts_path).as_path())
+            .map_err(map_error)?;
         ensure_known_hosts_parent(&known_hosts_path).map_err(map_error)?;
         let openssh_known_hosts_path =
-            expand_tilde(PathBuf::from(app_config.openssh_known_hosts_path).as_path());
+            expand_tilde(PathBuf::from(app_config.openssh_known_hosts_path).as_path())
+                .map_err(map_error)?;
         let config = AppConfig {
             connection_timeout_secs: app_config.connection_timeout_secs,
             session_health_check_interval_secs: app_config.session_health_check_interval_secs,
