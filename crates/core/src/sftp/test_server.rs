@@ -473,12 +473,9 @@ impl russh_sftp::server::Handler for SftpHandler {
             return Err(StatusCode::Failure);
         }
 
-        #[cfg(test)]
-        {
-            let delay = self.failures.read_delay_ms.load(Ordering::Relaxed);
-            if delay > 0 {
-                tokio::time::sleep(Duration::from_millis(delay)).await;
-            }
+        let delay = self.failures.read_delay_ms.load(Ordering::Relaxed);
+        if delay > 0 {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
         }
 
         let open = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;
