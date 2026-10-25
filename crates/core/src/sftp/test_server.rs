@@ -307,6 +307,9 @@ impl SftpHandler {
 
     async fn read_directory_entries(&self, path: &str) -> Result<Vec<File>, StatusCode> {
         let local = self.resolve(path);
+        if !local.exists() {
+            return Err(StatusCode::NoSuchFile);
+        }
         if !local.is_dir() {
             return Err(StatusCode::Failure);
         }
