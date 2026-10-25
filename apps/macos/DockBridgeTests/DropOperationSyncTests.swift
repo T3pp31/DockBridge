@@ -46,4 +46,16 @@ final class DropOperationSyncTests: XCTestCase {
         })
         XCTAssertLessThan(ContinuousClock.now - start, .seconds(5))
     }
+
+    @MainActor
+    func testTimesOutWhenOperationDoesNotComplete() {
+        XCTAssertThrowsError(
+            try DropOperationSync.run(timeout: 0.01) {
+                try await Task.sleep(for: .seconds(1))
+                return 1
+            }
+        ) { error in
+            XCTAssertEqual(error as? DropOperationSyncError, .timedOut)
+        }
+    }
 }
