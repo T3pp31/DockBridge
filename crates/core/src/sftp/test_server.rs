@@ -751,6 +751,17 @@ impl russh_sftp::server::Handler for SftpHandler {
             return Err(StatusCode::Failure);
         }
 
+        if let Some(size) = attrs.size {
+            // Match real servers: SETSTAT with size truncates/extends the file
+            // (issue #793).
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .open(&local)
+                .await
+                .map_err(|_| StatusCode::Failure)?;
+            file.set_len(size).await.map_err(|_| StatusCode::Failure)?;
+        }
+
         if attrs.atime.is_some() || attrs.mtime.is_some() {
             let mut times = std::fs::FileTimes::new();
             if let Some(atime) = attrs.atime {
