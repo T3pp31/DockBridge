@@ -35,8 +35,10 @@ extension TransferTaskRecord: Identifiable {}
 extension DockBridgeError {
     var userFriendlyMessage: String {
         switch self {
-        case .HostKeyMismatch, .HostKeyRejected:
+        case .HostKeyMismatch:
             return String(localized: "The server's identity has changed. Disconnect and verify with your server administrator.")
+        case .HostKeyRejected:
+            return String(localized: "Connection aborted because the host key was not approved.")
         case .AuthFailed, .PrivateKeyLoadFailed:
             return String(localized: "Check the username and password.")
         case .ConnectionLost(let message), .Other(let message), .Config(let message):
