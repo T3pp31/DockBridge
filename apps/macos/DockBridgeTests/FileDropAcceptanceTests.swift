@@ -447,9 +447,19 @@ final class FileDropAcceptanceTests: XCTestCase {
             try? await bridge?.getInitialDirectory(),
             "/upload",
         ]
+        // A readable-only directory would fail uploads later; verify writability
+        // by creating and removing a probe directory (issue #787).
         for candidate in candidates.compactMap({ $0 }).filter({ $0 != "/" }) {
-            if (try? await bridge?.listDirectory(path: candidate)) != nil {
+            guard (try? await bridge?.listDirectory(path: candidate)) != nil else {
+                continue
+            }
+            let probe = "\(candidate)/.dockbridge-write-probe-\(UUID().uuidString)"
+            do {
+                try await bridge?.mkdirRemote(path: probe)
+                try await bridge?.deleteRemote(path: probe)
                 return candidate
+            } catch {
+                continue
             }
         }
         throw XCTSkip("No writable remote directory found for Docker E2E")
