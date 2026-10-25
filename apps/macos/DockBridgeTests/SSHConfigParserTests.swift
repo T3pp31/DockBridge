@@ -12,11 +12,11 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.count, 1)
-        XCTAssertEqual(hosts[0].alias, "myserver")
-        XCTAssertEqual(hosts[0].hostName, "192.168.1.10")
-        XCTAssertEqual(hosts[0].user, "alice")
-        XCTAssertEqual(hosts[0].port, 2222)
-        XCTAssertEqual(hosts[0].identityFile, NSHomeDirectory() + "/.ssh/id_ed25519")
+        XCTAssertEqual(hosts.first?.alias, "myserver")
+        XCTAssertEqual(hosts.first?.hostName, "192.168.1.10")
+        XCTAssertEqual(hosts.first?.user, "alice")
+        XCTAssertEqual(hosts.first?.port, 2222)
+        XCTAssertEqual(hosts.first?.identityFile, NSHomeDirectory() + "/.ssh/id_ed25519")
     }
 
     func testSkipsCommentsAndParsesQuotedValues() {
@@ -29,9 +29,9 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.count, 1)
-        XCTAssertEqual(hosts[0].alias, "quoted")
-        XCTAssertEqual(hosts[0].hostName, "server.example.com")
-        XCTAssertEqual(hosts[0].identityFile, NSHomeDirectory() + "/.ssh/My Key")
+        XCTAssertEqual(hosts.first?.alias, "quoted")
+        XCTAssertEqual(hosts.first?.hostName, "server.example.com")
+        XCTAssertEqual(hosts.first?.identityFile, NSHomeDirectory() + "/.ssh/My Key")
     }
 
     func testSkipsWildcardAndNegatedPatternsButKeepsFollowingExactHost() {
@@ -93,8 +93,8 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.count, 1)
-        XCTAssertEqual(hosts[0].hostName, "case.example.com")
-        XCTAssertEqual(hosts[0].user, "alice")
+        XCTAssertEqual(hosts.first?.hostName, "case.example.com")
+        XCTAssertEqual(hosts.first?.user, "alice")
     }
 
     func testTabSeparatedDirectives() {
@@ -126,7 +126,7 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.map(\.alias), ["valid"])
-        XCTAssertEqual(hosts[0].port, 65535)
+        XCTAssertEqual(hosts.first?.port, 65535)
     }
 
     func testMatchSectionCannotMutatePrecedingHost() {
@@ -144,8 +144,8 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.map(\.alias), ["first", "second"])
-        XCTAssertEqual(hosts[0].hostName, "first.example.com")
-        XCTAssertEqual(hosts[0].user, "alice")
+        XCTAssertEqual(hosts.first?.hostName, "first.example.com")
+        XCTAssertEqual(hosts.first?.user, "alice")
     }
 
     func testRepeatedAliasMergesMissingValuesAndKeepsFirstValues() {
@@ -164,10 +164,10 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.count, 1)
-        XCTAssertEqual(hosts[0].alias, "duplicate")
-        XCTAssertEqual(hosts[0].hostName, "first.example.com")
-        XCTAssertEqual(hosts[0].user, "alice")
-        XCTAssertEqual(hosts[0].port, 2200)
+        XCTAssertEqual(hosts.first?.alias, "duplicate")
+        XCTAssertEqual(hosts.first?.hostName, "first.example.com")
+        XCTAssertEqual(hosts.first?.user, "alice")
+        XCTAssertEqual(hosts.first?.port, 2200)
     }
 
     func testExpandsCurrentUserAndNamedUserIdentityPaths() throws {
@@ -183,8 +183,8 @@ final class SSHConfigParserTests: XCTestCase {
             IdentityFile ~\(currentUser)/.ssh/named
         """)
 
-        XCTAssertEqual(hosts[0].identityFile, NSHomeDirectory() + "/.ssh/current")
-        XCTAssertEqual(hosts[1].identityFile, namedHome.path + "/.ssh/named")
+        XCTAssertEqual(hosts.first?.identityFile, NSHomeDirectory() + "/.ssh/current")
+        XCTAssertEqual(hosts[1]?.identityFile, namedHome.path + "/.ssh/named")
     }
 
     func testUnknownTildeUserDoesNotProduceUnresolvedKeyPath() {
@@ -195,7 +195,7 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.count, 1)
-        XCTAssertNil(hosts[0].identityFile)
+        XCTAssertNil(hosts.first?.identityFile)
     }
 
     func testEmptyConfigReturnsNoHosts() {
@@ -214,10 +214,10 @@ final class SSHConfigParserTests: XCTestCase {
         """))
 
         XCTAssertEqual(profiles.count, 2)
-        XCTAssertEqual(profiles[0].port, 22)
-        XCTAssertEqual(profiles[0].authType, .password)
-        XCTAssertEqual(profiles[1].authType, .privateKey)
-        XCTAssertNotNil(profiles[1].privateKeyPath)
-        XCTAssertNil(profiles[1].privateKeyBookmark)
+        XCTAssertEqual(profiles.first?.port, 22)
+        XCTAssertEqual(profiles.first?.authType, .password)
+        XCTAssertEqual(profiles[1]?.authType, .privateKey)
+        XCTAssertNotNil(profiles[1]?.privateKeyPath)
+        XCTAssertNil(profiles[1]?.privateKeyBookmark)
     }
 }
