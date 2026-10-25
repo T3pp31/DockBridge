@@ -1146,7 +1146,10 @@ impl TransferManager {
                         // Exponential backoff with jitter between retries;
                         // still abortable while waiting.
                         retry_index = retry_index.saturating_add(1);
-                        if self.sleep_backoff(task_id, retry_index).await {
+                        if self
+                            .sleep_backoff(Arc::clone(&cancel_flag), retry_index)
+                            .await
+                        {
                             return Err(TransferError::Cancelled);
                         }
                         tracing::warn!(
@@ -1171,7 +1174,7 @@ impl TransferManager {
     /// Sleeps with exponential backoff + jitter (1s, 2s, 4s, ... capped at 30s)
     /// between retry attempts. Returns `true` when the transfer was cancelled
     /// during the wait (so the caller aborts immediately).
-    async fn sleep_backoff(&self, task_id: u64, retry_index: u32) -> bool {
+    async fn sleep_backoff(&self, cancel_flag: Arc<AtomicBool>, retry_index: u32) -> bool {
         #[cfg(test)]
         let delay = Duration::from_millis(
             self.backoff_override_ms
@@ -1181,14 +1184,13 @@ impl TransferManager {
         let delay = Duration::from_millis(backoff_delay_ms(retry_index));
 
         tracing::info!(
-            task_id,
             retry_backoff_ms = delay.as_millis(),
             "waiting before retrying transfer"
         );
 
         tokio::time::timeout(delay, async {
             loop {
-                if self.is_cancelled(task_id) {
+                if cancel_flag.load(Ordering::Relaxed) {
                     return true;
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1260,7 +1262,10 @@ impl TransferManager {
                         // Exponential backoff with jitter between retries;
                         // still abortable while waiting.
                         retry_index = retry_index.saturating_add(1);
-                        if self.sleep_backoff(task_id, retry_index).await {
+                        if self
+                            .sleep_backoff(Arc::clone(&cancel_flag), retry_index)
+                            .await
+                        {
                             return Err(TransferError::Cancelled);
                         }
                         tracing::warn!(
@@ -1647,6 +1652,19 @@ mod tests {
             captured.load(Ordering::Relaxed),
             "the captured flag must stay cancelled after map removal"
         );
+    }
+
+    #[tokio::test]
+    async fn sleep_backoff_uses_captured_cancellation_flag() {
+        let mut manager = TransferManager::new(&AppConfig::default());
+        manager.backoff_override_ms = Some(0);
+        manager.register_cancellation_flag(22);
+        manager.request_cancellation(22);
+
+        let captured = manager.cancellation_flag(22);
+        manager.remove_cancellation_flag(22);
+
+        assert!(manager.sleep_backoff(captured, 1).await);
     }
 
     #[test]
