@@ -161,14 +161,11 @@ impl TransferManager {
         session: &SshSession,
         task_id: u64,
     ) -> Result<TransferTask, TransferError> {
+        // Atomically verify the task is retryable and remove it so concurrent
+        // retries of the same id cannot both enqueue a replacement (issue #757).
         let (task, overwrite_policy) = self
-            .find_task_with_policy(task_id)
+            .remove_retryable_task(task_id)
             .ok_or(TransferError::TaskNotFound { task_id })?;
-
-        match task.status {
-            TransferStatus::Failed { .. } | TransferStatus::Cancelled => {}
-            _ => return Err(TransferError::TaskNotFound { task_id }),
-        }
 
         // Reject the retry while the original transfer future is still
         // unwinding. `cancel_transfer` flips the task status synchronously but
@@ -176,14 +173,10 @@ impl TransferManager {
         // re-enqueueing here would start a second transfer against the same
         // destination while the first one is still active (issue #307).
         if self.is_in_flight(task_id) {
+            // Restore the task so a later retry (after the future unwinds)
+            // can still find it.
+            self.restore_removed_task(task, overwrite_policy);
             return Err(TransferError::TaskStillRunning { task_id });
-        }
-
-        if let Ok(mut tasks) = self.tasks.lock() {
-            tasks.retain(|existing| existing.id != task_id);
-            if let Ok(mut policies) = self.overwrite_policies.lock() {
-                policies.remove(&task_id);
-            }
         }
         // The cancellation flag is *not* removed here: it is removed by
         // `finalize_task_result` when the original future completes. Removing
@@ -282,6 +275,40 @@ impl TransferManager {
         }
     }
 
+    /// Atomically verifies that `task_id` refers to a failed or cancelled task
+    /// and removes it from the queue. Returns `None` when the task is missing,
+    /// not retryable, or already removed by a concurrent retry (issue #757).
+    fn remove_retryable_task(&self, task_id: u64) -> Option<(TransferTask, TransferOverwritePolicy)> {
+        let mut tasks = self.tasks.lock().ok()?;
+        let index = tasks.iter().position(|task| task.id == task_id)?;
+        let task = tasks[index].clone();
+        match task.status {
+            TransferStatus::Failed { .. } | TransferStatus::Cancelled => {}
+            _ => return None,
+        }
+        tasks.remove(index);
+        let policy = self
+            .overwrite_policies
+            .lock()
+            .ok()
+            .and_then(|mut policies| policies.remove(&task_id))
+            .unwrap_or_default();
+        Some((task, policy))
+    }
+
+    /// Puts a previously removed task back into the queue when a retry was
+    /// rejected after the atomic removal (e.g. still in flight).
+    fn restore_removed_task(&self, task: TransferTask, policy: TransferOverwritePolicy) {
+        let task_id = task.id;
+        if let Ok(mut tasks) = self.tasks.lock() {
+            tasks.push(task);
+        }
+        if let Ok(mut policies) = self.overwrite_policies.lock() {
+            policies.insert(task_id, policy);
+        }
+    }
+
+    #[cfg(test)]
     fn find_task_with_policy(
         &self,
         task_id: u64,
