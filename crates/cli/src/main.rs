@@ -497,7 +497,14 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
 }
 
 fn print_json_listing(entries: Vec<dockbridge_core::RemoteFile>) -> anyhow::Result<()> {
-    println!("{}", json_listing(&entries)?);
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    // BrokenPipe (e.g. `list | head -1`) must exit quietly instead of
+    // panicking (issue #791).
+    if writeln!(out, "{}", json_listing(&entries)?).is_err() {
+        return Ok(());
+    }
+    let _ = out.flush();
     Ok(())
 }
 
