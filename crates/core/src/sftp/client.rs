@@ -370,7 +370,7 @@ impl<'a> SftpClient<'a> {
         let local_size = local_metadata.as_ref().map(|metadata| metadata.len());
         let resume_offset = match local_size {
             Some(size) => {
-                self.find_resumable_upload_offset(size, &parent, &local, &remote)
+                self.find_resumable_upload_offset(size, &parent, &local, &remote, &mut local_file)
                     .await?
             }
             None => None,
@@ -430,9 +430,15 @@ impl<'a> SftpClient<'a> {
         partial.finalize_rename(&remote_path, local_metadata).await
     }
 
+    /// Maximum number of leading bytes compared between the partial and the
+    /// local file before trusting a resume. This bounds the extra round-trip
+    /// cost while still catching content changes at the start of the file.
+    const RESUME_VERIFICATION_BYTES: u64 = 64 * 1024;
+
     /// Returns the byte offset to continue a previous attempt from, when a
-    /// leftover partial for this `(local, remote)` pair exists and is a strict
-    /// prefix of the source file (issue #313). `Ok(None)` starts from scratch.
+    /// leftover partial for this `(local, remote)` pair exists, is a strict
+    /// prefix of the source file, AND its leading bytes match the current local
+    /// content (issue #313, #750). `Ok(None)` starts from scratch.
     ///
     /// A partial that is empty, at least as large as the source, or missing is
     /// not a resumable state: the transfer either never started or the source
@@ -443,6 +449,7 @@ impl<'a> SftpClient<'a> {
         parent: &str,
         local: &str,
         remote: &str,
+        local_file: &mut tokio::fs::File,
     ) -> Result<Option<u64>, SftpError> {
         let partial_path = join_remote_path(
             parent,
@@ -457,6 +464,37 @@ impl<'a> SftpClient<'a> {
         if size == 0 || size >= local_size {
             return Ok(None);
         }
+        // Compare the leading bytes of the partial against the current local
+        // content. If the local file was edited since the partial was written,
+        // the mismatch forces a fresh upload instead of silently concatenating
+        // old and new data (issue #750).
+        let verify_len = size.min(Self::RESUME_VERIFICATION_BYTES) as usize;
+        let Ok(mut partial_file) = self.sftp().open(&partial_path).await else {
+            return Ok(None);
+        };
+        let mut partial_prefix = vec![0u8; verify_len];
+        use tokio::io::AsyncReadExt;
+        if partial_file.read_exact(&mut partial_prefix).await.is_err() {
+            return Ok(None);
+        }
+        let mut local_prefix = vec![0u8; verify_len];
+        if local_file.read_exact(&mut local_prefix).await.is_err() {
+            return Ok(None);
+        }
+        if partial_prefix != local_prefix {
+            return Ok(None);
+        }
+        // Rewind the local file so the caller seeks to the resume offset from
+        // the beginning rather than from the post-verification position.
+        use tokio::io::AsyncSeekExt;
+        local_file
+            .seek(std::io::SeekFrom::Start(0))
+            .await
+            .map_err(|err| SftpError::UploadFailed {
+                local: local.to_string(),
+                remote: remote.to_string(),
+                message: format!("failed to rewind local file after resume verification: {err}"),
+            })?;
         Ok(Some(size))
     }
 
