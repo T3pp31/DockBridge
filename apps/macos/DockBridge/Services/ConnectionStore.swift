@@ -42,6 +42,9 @@ final class ConnectionStore: @unchecked Sendable {
     private let profilesBaseDirectory: URL
     private let trustStore: ProfileTrustStore
     private let encryptionService: ProfileEncryptionService
+    /// Serializes read-modify-write cycles so concurrent upserts/deletes do
+    /// not overwrite each other (issue #691).
+    private let mutationLock = NSLock()
     private let fileName = "profiles.json"
 
     init(
@@ -96,6 +99,8 @@ final class ConnectionStore: @unchecked Sendable {
     }
 
     func upsert(_ profile: ConnectionProfile) throws -> [ConnectionProfile] {
+        mutationLock.lock()
+        defer { mutationLock.unlock() }
         var profiles = try readProfilesFromDisk()
         if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[index] = profile
@@ -107,6 +112,8 @@ final class ConnectionStore: @unchecked Sendable {
     }
 
     func delete(id: UUID) throws -> [ConnectionProfile] {
+        mutationLock.lock()
+        defer { mutationLock.unlock() }
         var profiles = try readProfilesFromDisk()
         profiles.removeAll { $0.id == id }
         try saveProfiles(profiles)
@@ -129,6 +136,8 @@ final class ConnectionStore: @unchecked Sendable {
     }
 
     func restoreTrustedEndpoint(for change: ProfileEndpointChange) throws -> [ConnectionProfile] {
+        mutationLock.lock()
+        defer { mutationLock.unlock() }
         var profiles = try readProfilesFromDisk()
         guard let index = profiles.firstIndex(where: { $0.id == change.profileID }) else {
             return profiles
