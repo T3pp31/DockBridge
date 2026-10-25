@@ -834,14 +834,10 @@ impl<'a> SftpClient<'a> {
             }
             let next = join_remote_path(&current, Path::new(segment))?;
 
-            if next != normalized {
-                // The final segment is handled by the caller (a file path or
-                // its own create call); parents only need existing-state.
-                if let Some(created) = created_cache.as_ref() {
-                    if created.contains(&next) {
-                        current = next;
-                        continue;
-                    }
+            if let Some(created) = created_cache.as_ref() {
+                if created.contains(&next) {
+                    current = next;
+                    continue;
                 }
             }
 
