@@ -6,15 +6,25 @@ struct TrustedProfileEndpoint: Codable, Equatable, Sendable {
     var username: String
 
     init(host: String, port: UInt16, username: String) {
-        self.host = host
+        self.host = Self.canonicalized(host)
         self.port = port
         self.username = username
     }
 
     init(profile: ConnectionProfile) {
-        self.host = profile.host
+        self.host = Self.canonicalized(profile.host)
         self.port = profile.port
         self.username = profile.username
+    }
+
+    /// Compares host names case-insensitively and strips a trailing FQDN dot
+    /// (issue #770).
+    private static func canonicalized(_ host: String) -> String {
+        let trimmed = host.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasSuffix(".") && trimmed.count > 1 {
+            return String(trimmed.dropLast()).lowercased()
+        }
+        return trimmed.lowercased()
     }
 
     var endpointLabel: String {
@@ -22,7 +32,9 @@ struct TrustedProfileEndpoint: Codable, Equatable, Sendable {
     }
 
     func matches(_ profile: ConnectionProfile) -> Bool {
-        host == profile.host && port == profile.port && username == profile.username
+        host == Self.canonicalized(profile.host)
+            && port == profile.port
+            && username == profile.username
     }
 }
 
