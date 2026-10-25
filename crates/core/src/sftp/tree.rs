@@ -649,7 +649,9 @@ pub async fn remote_directories<'a>(
             continue;
         };
         for entry in entries {
-            if !entry.is_directory {
+            if !entry.is_directory || entry.is_symlink {
+                // Symlinks are not followed, matching
+                // walk_remote_directory_with_limits (issue #796).
                 continue;
             }
             let Ok(child_remote) =
