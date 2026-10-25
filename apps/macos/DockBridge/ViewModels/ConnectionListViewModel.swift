@@ -727,7 +727,9 @@ final class ConnectionListViewModel: ObservableObject {
         var profile = ConnectionProfile(name: "", host: host, port: port, username: username)
         profile.initialRemotePath = remotePath
         do {
-            profile = try store.upsert(profile).first ?? profile
+            // Select the profile just created, not the first entry in the
+            // store (issue #779).
+            profile = try store.upsert(profile).first { $0.id == profile.id } ?? profile
             profiles = try store.loadProfiles()
             selectedProfileID = profile.id
         } catch {
