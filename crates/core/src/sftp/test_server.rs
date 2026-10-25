@@ -8,6 +8,7 @@ use std::time::Duration;
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId};
+use crate::sftp::tree::normalize_remote_path;
 use russh::{MethodKind, MethodSet};
 use russh_sftp::de;
 use russh_sftp::extensions::{PosixRenameExtension, POSIX_RENAME};
@@ -377,9 +378,15 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
+        // Match real servers: the resolved path must exist and the returned
+        // remote path must be a normalized absolute form (issue #795).
+        let local = self.resolve(&path);
+        if !local.exists() {
+            return Err(StatusCode::NoSuchFile);
+        }
         Ok(Name {
             id,
-            files: vec![File::dummy(self.canonical(&path))],
+            files: vec![File::dummy(normalize_remote_path(&path).unwrap_or_else(|_| format!("/{path}")))],
         })
     }
 
