@@ -586,16 +586,21 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     }
 
     private func removeSession(_ session: RemoteSession) {
+        let wasActive = activeSessionID == session.id
         sessions.removeValue(forKey: session.id)
         sessionOrder.removeAll { $0 == session.id }
         sessionCancellables.removeValue(forKey: session.id)
-        if activeSessionID == session.id {
+        if wasActive {
             activeSessionID = nil
-        }
-        if let next = allSessions.last {
-            setActiveSession(next)
+            if let next = allSessions.last {
+                setActiveSession(next)
+            } else {
+                resetPublishedSessionFields()
+            }
         } else {
-            resetPublishedSessionFields()
+            // A non-active session was closed; do not steal the active slot
+            // (issue #774).
+            refreshActiveSessionState()
         }
     }
 
