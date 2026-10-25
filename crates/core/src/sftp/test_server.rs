@@ -611,8 +611,15 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn remove(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
         let local = self.resolve(&path);
-        if fs::remove_file(&local).await.is_err() {
-            return Ok(Self::err_status(id, StatusCode::NoSuchFile, "no such file"));
+        if let Err(err) = fs::remove_file(&local).await {
+            // Match real servers: only a missing target is NoSuchFile; other
+            // failures (EISDIR/EPERM/I/O) map to their own statuses (issue #794).
+            let code = match err.kind() {
+                std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+                std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+                _ => StatusCode::Failure,
+            };
+            return Ok(Self::err_status(id, code, "remove failed"));
         }
         Ok(Self::ok_status(id))
     }
