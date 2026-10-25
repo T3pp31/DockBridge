@@ -5,8 +5,10 @@ final class SensitiveStringTests: XCTestCase {
     func testClearRemovesStoredText() {
         var secret = SensitiveString()
         secret.text = "secret-password"
+        var copy = secret
         secret.clear()
         XCTAssertEqual(secret.text, "")
+        XCTAssertEqual(copy.text, "")
     }
 
     func testClearOptionalString() {

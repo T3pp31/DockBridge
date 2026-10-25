@@ -3,11 +3,11 @@ import Foundation
 /// Holds sensitive text entered in the UI and supports explicit clearing.
 ///
 /// Swift `String` does not expose mutable storage and cannot be safely
-/// zeroized. This type therefore keeps its authoritative storage in `Data`,
-/// whose mutable bytes can be explicitly cleared. Accessing `text` still
-/// creates a temporary String required by SwiftUI; callers should avoid
-/// retaining that value.
-struct SensitiveString: Equatable {
+/// zeroized. This type therefore uses a final class to keep the mutable buffer
+/// shared by all aliases; `clear()` zeroizes that same buffer instead of
+/// creating a copy-on-write duplicate. Accessing `text` still creates a
+/// temporary String required by SwiftUI; callers should avoid retaining it.
+final class SensitiveString: Equatable {
     private var storage = Data()
 
     var text: String {
@@ -18,11 +18,11 @@ struct SensitiveString: Equatable {
         }
     }
 
-    mutating func clear() {
+    func clear() {
         zeroizeStorage()
     }
 
-    private mutating func zeroizeStorage() {
+    private func zeroizeStorage() {
         if !storage.isEmpty {
             // Data exposes supported mutable storage; resetBytes overwrites
             // that storage without casting away constness from a String.
