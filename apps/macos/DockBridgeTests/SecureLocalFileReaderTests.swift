@@ -57,6 +57,20 @@ final class SecureLocalFileReaderTests: XCTestCase {
             XCTAssertEqual(error as? SecureLocalFileReaderError, .insecurePermissions)
         }
     }
+
+    func testReadDataRejectsOversizedFile() throws {
+        let fileURL = baseDirectory.appendingPathComponent("large.json", isDirectory: false)
+        let oversizedData = Data(repeating: 0, count: 5 * 1024 * 1024 + 1)
+        try oversizedData.write(to: fileURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o600))],
+            ofItemAtPath: fileURL.path
+        )
+
+        XCTAssertThrowsError(try SecureLocalFileReader.readData(from: fileURL)) { error in
+            XCTAssertEqual(error as? SecureLocalFileReaderError, .fileTooLarge)
+        }
+    }
 }
 
 extension SecureLocalFileReaderError: Equatable {
@@ -64,7 +78,8 @@ extension SecureLocalFileReaderError: Equatable {
         switch (lhs, rhs) {
         case (.symlinkNotAllowed, .symlinkNotAllowed),
              (.ownerMismatch, .ownerMismatch),
-             (.insecurePermissions, .insecurePermissions):
+             (.insecurePermissions, .insecurePermissions),
+             (.fileTooLarge, .fileTooLarge):
             return true
         case (.readFailed(let left), .readFailed(let right)):
             return left == right
