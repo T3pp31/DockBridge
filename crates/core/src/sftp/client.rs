@@ -3847,6 +3847,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_missing_directory_returns_delete_failed() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let err = client
+            .delete_entry("/delete/missing-dir", false)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, SftpError::DeleteFailed { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
     async fn upload_with_failed_rename_signals_upload_failure() {
         // Exercises the `fail_remote_rename` hook (previously unused): a
         // rename failure at finalize must surface as an upload error, not
