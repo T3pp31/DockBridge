@@ -199,7 +199,7 @@ final class ConnectionListViewModel: ObservableObject {
         name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    func save(_ profile: ConnectionProfile, password: String?, passphrase: String?) {
+    func save(_ profile: ConnectionProfile, password: String?, passphrase: String?, saveSecrets: Bool = true) {
         if profile.requiresPrivateKeyBookmark, !profile.hasPrivateKeyBookmark {
             errorMessage = String(localized: "Select the private key with Browse…. A security-scoped bookmark is required.")
             return
@@ -208,6 +208,11 @@ final class ConnectionListViewModel: ObservableObject {
         do {
             profiles = try store.upsert(profile)
             selectedProfileID = profile.id
+
+            // When Keychain storage is disabled, skip all secret operations so
+            // typed credentials are used only for the current session
+            // (issue #782).
+            guard saveSecrets else { return }
 
             let account = keychain.keychainAccount(for: profile.id, kind: "profile")
             switch profile.authType {
