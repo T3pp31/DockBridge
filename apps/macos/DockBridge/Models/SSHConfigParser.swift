@@ -106,10 +106,8 @@ enum SSHConfigParser {
         case "hostname":
             guard directive.arguments.count == 1,
                   let value = directive.arguments.first,
-                  !containsUnsupportedExpansion(value) else {
-                currentBlockIsValid = false
-                return
-            }
+                  !value.trimmingCharacters(in: .whitespaces).isEmpty,
+                  !containsUnsupportedExpansion(value) else { return }
             for index in hosts.indices where hosts[index].hostName == nil {
                 hosts[index].hostName = value
             }
@@ -117,6 +115,7 @@ enum SSHConfigParser {
         case "user":
             guard directive.arguments.count == 1,
                   let value = directive.arguments.first,
+                  !value.trimmingCharacters(in: .whitespaces).isEmpty,
                   !containsUnsupportedExpansion(value) else { return }
             for index in hosts.indices where hosts[index].user == nil {
                 hosts[index].user = value
@@ -138,6 +137,7 @@ enum SSHConfigParser {
         case "identityfile":
             guard directive.arguments.count == 1,
                   let rawPath = directive.arguments.first,
+                  !rawPath.trimmingCharacters(in: .whitespaces).isEmpty,
                   rawPath.lowercased() != "none",
                   !containsUnsupportedExpansion(rawPath),
                   let expandedPath = expandTilde(rawPath) else { return }

@@ -170,6 +170,23 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertEqual(hosts[0].port, 2200)
     }
 
+    func testQuotedEmptyValuesDoNotBlockLaterValidValues() {
+        let hosts = SSHConfigParser.parse("""
+        Host empty
+            HostName ""
+            User ""
+            IdentityFile ""
+            HostName valid.example.com
+            User alice
+            IdentityFile ~/.ssh/id_ed25519
+        """)
+
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertEqual(hosts[0].hostName, "valid.example.com")
+        XCTAssertEqual(hosts[0].user, "alice")
+        XCTAssertEqual(hosts[0].identityFile, NSHomeDirectory() + "/.ssh/id_ed25519")
+    }
+
     func testExpandsCurrentUserAndNamedUserIdentityPaths() throws {
         let currentUser = NSUserName()
         let namedHome = try XCTUnwrap(FileManager.default.homeDirectory(forUser: currentUser))
