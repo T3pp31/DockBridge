@@ -321,9 +321,10 @@ impl KnownHostsManager {
     /// Lookup order:
     /// 1. `@revoked` entries (plain or hashed) matching host and fingerprint
     /// 2. Exact canonical host/port or stored alias (excluding cert-authority markers)
-    /// 3. Same port and matching fingerprint (hostname/IP alias normalization; skipped in strict mode)
-    /// 4. Hashed entries matching host and fingerprint
-    /// 5. Unknown
+    /// 3. Hashed entries matching host and fingerprint
+    /// 4. Hashed entry host mismatch (issue #566)
+    /// 5. Same port and matching fingerprint (hostname/IP alias normalization; skipped in strict mode)
+    /// 6. Unknown
     pub fn check_host_key(
         &self,
         host: &str,
@@ -341,14 +342,6 @@ impl KnownHostsManager {
             return fingerprint_check(entry, &actual);
         }
 
-        if !strict_mode
-            && self
-                .find_trusted_entry_by_fingerprint(host, port, &actual)
-                .is_some()
-        {
-            return HostKeyCheckResult::Trust;
-        }
-
         if self
             .find_matching_hashed_entry(host, port, &actual)
             .is_some()
@@ -361,6 +354,14 @@ impl KnownHostsManager {
         // a changed key as an unknown host (issue #566).
         if let Some(entry) = self.find_hashed_entry_for_host(host, port) {
             return fingerprint_check_hashed(entry, &actual);
+        }
+
+        if !strict_mode
+            && self
+                .find_trusted_entry_by_fingerprint(host, port, &actual)
+                .is_some()
+        {
+            return HostKeyCheckResult::Trust;
         }
 
         HostKeyCheckResult::Unknown
@@ -2326,6 +2327,54 @@ mod tests {
             HostKeyCheckResult::Mismatch { .. } => {}
             other => panic!("expected Mismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn non_strict_fingerprint_alias_does_not_bypass_hashed_mismatch() {
+        // Given: a hashed entry for one host with key K1 and a plain entry for
+        //        another host on the same port with key K2
+        // When: K2 is presented for the hashed host in non-strict mode
+        // Then: the hashed host's key change is still reported as Mismatch,
+        //       rather than trusting K2 via the unrelated plain entry
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let hashed_key = test_public_key();
+        let other_key = test_other_public_key();
+        let host = "changed-hashed.example.com";
+        let salt = b"change-salt-00002";
+        let hash = openssh_hostname_hash(salt, host, 22);
+        let openssh_path = dir.path().join("known_hosts");
+        let salt_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, salt);
+        let hash_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, hash);
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!(
+                "|1|{salt_b64}|{hash_b64} {}\nother.example.com {}\n",
+                hashed_key.to_openssh().unwrap(),
+                other_key.to_openssh().unwrap()
+            ),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        assert_eq!(
+            manager.check_host_key(host, 22, &hashed_key, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key(host, 22, &other_key, false) {
+            HostKeyCheckResult::Mismatch {
+                expected_fingerprint,
+                ..
+            } => {
+                assert_eq!(expected_fingerprint, fingerprint_sha256(&hashed_key));
+            }
+            other => panic!("expected Mismatch, got {other:?}"),
+        }
+        assert_eq!(
+            manager.check_host_key("other.example.com", 22, &other_key, false),
+            HostKeyCheckResult::Trust
+        );
     }
 
     #[test]
