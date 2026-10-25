@@ -37,8 +37,10 @@ extension DockBridgeError {
         switch self {
         case .HostKeyMismatch, .HostKeyRejected:
             return String(localized: "The server's identity has changed. Disconnect and verify with your server administrator.")
-        case .AuthFailed, .PrivateKeyLoadFailed:
+        case .AuthFailed:
             return String(localized: "Check the username and password.")
+        case .PrivateKeyLoadFailed:
+            return String(localized: "Unable to load the private key. Check the key file path, permissions, and passphrase.")
         case .ConnectionLost(let message), .Other(let message), .Config(let message):
             return Self.friendlyMessage(for: message)
         case .Cancelled:
@@ -103,6 +105,13 @@ extension DockBridgeError {
 
         if lowercased.contains("authentication") || lowercased.contains("auth failed") {
             return String(localized: "Check the username and password.")
+        }
+
+        if lowercased.contains("failed to load private key")
+            || lowercased.contains("incorrect passphrase") {
+            return String(
+                localized: "Unable to load the private key. Check the key file path, permissions, and passphrase."
+            )
         }
 
         if lowercased.contains("timed out") || lowercased.contains("timeout") {

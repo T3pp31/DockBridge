@@ -133,6 +133,33 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         )
     }
 
+    func testPrivateKeyLoadFailedMessageMentionsKeyPathAndPassphrase() {
+        let error = DockBridgeError.PrivateKeyLoadFailed(
+            path: "/tmp/id_ed25519",
+            message: "incorrect passphrase"
+        )
+
+        XCTAssertEqual(
+            error.dockBridgeUserMessage,
+            String(
+                localized: "Unable to load the private key. Check the key file path, permissions, and passphrase."
+            )
+        )
+    }
+
+    func testRawPrivateKeyLoadFailureMapsToKeySpecificMessage() {
+        let message = DockBridgeError.friendlyMessage(
+            for: "failed to load private key from /tmp/id_ed25519: incorrect passphrase"
+        )
+
+        XCTAssertEqual(
+            message,
+            String(
+                localized: "Unable to load the private key. Check the key file path, permissions, and passphrase."
+            )
+        )
+    }
+
     func testAuthenticationFailureInspectsGenericMessageBeforeFriendlyMapping() {
         let error = DockBridgeError.Other(
             message: "authentication failed for user 'demo'"
