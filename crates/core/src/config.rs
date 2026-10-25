@@ -414,19 +414,19 @@ pub fn ensure_known_hosts_parent(path: &Path) -> Result<(), SecurityError> {
 
 #[cfg(unix)]
 fn create_known_hosts_parent_dir(parent: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    use std::os::unix::fs::DirBuilderExt;
 
+    // Only apply 0o700 when we actually create the directory. Chmod-ing an
+    // existing directory would silently change permissions of a shared or
+    // pre-existing path chosen by the user (issue #744).
     match std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(parent)
     {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(err) => return Err(err),
+        Ok(()) => Ok(()),
+        Err(err) => Err(err),
     }
-    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
-    Ok(())
 }
 
 #[cfg(not(unix))]
@@ -705,12 +705,12 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn ensure_known_hosts_parent_tightens_existing_parent_permissions() {
+    fn ensure_known_hosts_parent_preserves_existing_parent_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
         // Given: an existing parent directory with permissive mode 0755
         let dir = std::env::temp_dir().join(format!(
-            "dockbridge-known-hosts-tighten-{}",
+            "dockbridge-known-hosts-preserve-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -721,9 +721,9 @@ mod tests {
         // When: ensure_known_hosts_parent is called
         ensure_known_hosts_parent(&path).unwrap();
 
-        // Then: the parent directory mode is tightened to 0700
+        // Then: the parent directory mode is NOT changed (issue #744)
         let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700);
+        assert_eq!(mode, 0o755);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
