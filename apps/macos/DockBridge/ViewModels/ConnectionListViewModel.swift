@@ -457,9 +457,11 @@ final class ConnectionListViewModel: ObservableObject {
 
     @Published var pendingCredentialPrompt: (profile: ConnectionProfile, kind: CredentialPromptKind)?
 
-    /// One-time credential supplied by the prompt for the next connect attempt.
-    private var promptPasswordOverride: String?
-    private var promptPassphraseOverride: String?
+    /// One-time credential supplied by the prompt, scoped to the profile that
+    /// requested it so a failed connect cannot leak it to a different profile
+    /// (issue #778).
+    private var promptPasswordOverride: (profileID: UUID, value: String)?
+    private var promptPassphraseOverride: (profileID: UUID, value: String)?
 
     func beginPasswordPrompt(for profile: ConnectionProfile) {
         pendingCredentialPrompt = (profile, .password)
@@ -497,9 +499,9 @@ final class ConnectionListViewModel: ObservableObject {
 
         switch kind {
         case .password:
-            promptPasswordOverride = text
+            promptPasswordOverride = (profile.id, text)
         case .passphrase:
-            promptPassphraseOverride = text
+            promptPassphraseOverride = (profile.id, text)
         }
 
         pendingCredentialPrompt = nil
@@ -556,14 +558,19 @@ final class ConnectionListViewModel: ObservableObject {
             ? try keychain.loadPassphrase(account: account)
             : nil
 
-        // A one-time override from the credential prompt always takes
-        // precedence over a saved (possibly stale) Keychain value (issue #571).
+        // A one-time override from the credential prompt takes precedence over a
+        // saved (possibly stale) Keychain value, but only for the profile that
+        // requested it (issues #571, #778).
         if let override = promptPasswordOverride {
-            password = override
+            if override.profileID == profile.id {
+                password = override.value
+            }
             promptPasswordOverride = nil
         }
         if let override = promptPassphraseOverride {
-            passphrase = override
+            if override.profileID == profile.id {
+                passphrase = override.value
+            }
             promptPassphraseOverride = nil
         }
 
