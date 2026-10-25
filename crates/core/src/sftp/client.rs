@@ -5470,7 +5470,7 @@ mod tests {
 
         let removed = client.delete_entry("/delete/empty", false).await.unwrap();
         assert_eq!(removed, 1);
-        assert!(!server.remote_file_exists("/delete/empty/.keep"));
+        assert!(!server.root.join("delete/empty").exists());
     }
 
     #[tokio::test]
