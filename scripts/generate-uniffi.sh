@@ -42,4 +42,35 @@ if [[ -f "$OUT_DIR/dockbridge_uniffiFFI.modulemap" ]]; then
   cp "$OUT_DIR/dockbridge_uniffiFFI.modulemap" "$HEADER_DIR/module.modulemap"
 fi
 
+# Patch the generated RustBuffer lift so decoding errors do not leak the
+# underlying allocation (issue #769).
+python3 - "$OUT_DIR/DockBridgeUniffi.swift" <<'PATCH'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+old = """    public static func lift(_ buf: RustBuffer) throws -> SwiftType {
+        var reader = createReader(data: Data(rustBuffer: buf))
+        let value = try read(from: &reader)
+        if hasRemaining(reader) {
+            throw UniffiInternalError.incompleteData
+        }
+        buf.deallocate()
+        return value
+    }"""
+new = """    public static func lift(_ buf: RustBuffer) throws -> SwiftType {
+        defer { buf.deallocate() }
+        var reader = createReader(data: Data(rustBuffer: buf))
+        let value = try read(from: &reader)
+        if hasRemaining(reader) {
+            throw UniffiInternalError.incompleteData
+        }
+        return value
+    }"""
+if old in src:
+    open(path, "w").write(src.replace(old, new))
+    print("patched RustBuffer.lift")
+else:
+    print("RustBuffer.lift already patched or pattern changed")
+PATCH
+
 echo "Swift bindings written to $OUT_DIR"
