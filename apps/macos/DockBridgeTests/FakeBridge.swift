@@ -147,7 +147,12 @@ final class FakeBridge: RemoteBridging {
         transferTasks = []
     }
 
-    func retryTransfer(taskId: UInt64) async throws {}
+    /// Task ids recorded during  (issue #786).
+    private(set) var retriedTaskIDs: [UInt64] = []
+
+    func retryTransfer(taskId: UInt64) async throws {
+        retriedTaskIDs.append(taskId)
+    }
 
     func respondToHostKeyChallenge(accepted: Bool) {
         pendingHostKeyChallenge = nil
