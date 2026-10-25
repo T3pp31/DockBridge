@@ -81,12 +81,12 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           NOTES_FILE="${RUNNER_TEMP}/release-notes.md"
           if awk -v ver="${VERSION}" '
-            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            index($0, "## [" ver "]") == 1 { found=1; next }
             found && /^## \[/ { exit }
             found { print }
           ' CHANGELOG.md | grep -q .; then
             awk -v ver="${VERSION}" '
-              $0 ~ "^## \\[" ver "\\]" { found=1; next }
+              index($0, "## [" ver "]") == 1 { found=1; next }
               found && /^## \[/ { exit }
               found { print }
             ' CHANGELOG.md > "$NOTES_FILE"
