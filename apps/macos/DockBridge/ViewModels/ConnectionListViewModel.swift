@@ -28,6 +28,7 @@ final class ConnectionListViewModel: ObservableObject {
         KeychainService,
         SecurityScopedBookmarkService
     ) -> Bool?
+    private let onRsaInspectionResult: ((Bool?) -> Void)?
     private var pendingEndpointChanges: [ProfileEndpointChange] = []
     private var pendingInitialTrustProfiles: [ConnectionProfile] = []
     private var pendingNewProfileTrustProfiles: [ConnectionProfile] = []
@@ -59,13 +60,15 @@ final class ConnectionListViewModel: ObservableObject {
             ConnectionProfile,
             KeychainService,
             SecurityScopedBookmarkService
-        ) -> Bool? = ConnectionListViewModel.inspectRsa
+        ) -> Bool? = ConnectionListViewModel.inspectRsa,
+        onRsaInspectionResult: ((Bool?) -> Void)? = nil
     ) {
         self.store = store
         self.keychain = keychain
         self.bookmarkService = bookmarkService
         self.bridge = bridge
         self.rsaKeyInspector = rsaKeyInspector
+        self.onRsaInspectionResult = onRsaInspectionResult
 
         bridge.objectWillChange
             .sink { [weak self] _ in
@@ -322,6 +325,7 @@ final class ConnectionListViewModel: ObservableObject {
             }.value
             guard generation == connectRequestGeneration,
                   pendingConnectProfile?.id == profile.id else { return }
+            onRsaInspectionResult?(usesRsa)
             switch usesRsa {
             case .some(true):
                 showRsaKeyWarning = true
