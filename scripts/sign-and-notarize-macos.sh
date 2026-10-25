@@ -102,12 +102,6 @@ if [[ "$SKIP_NOTARIZATION" == "true" ]]; then
   exit 0
 fi
 
-if ! xcrun notarytool history --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" >/dev/null 2>&1; then
-  echo "Notary keychain profile not found: ${NOTARY_KEYCHAIN_PROFILE}" >&2
-  echo "Run: xcrun notarytool store-credentials ${NOTARY_KEYCHAIN_PROFILE} ..." >&2
-  exit 1
-fi
-
 SUBMIT_DIR="$(mktemp -d)"
 trap 'rm -rf "$SUBMIT_DIR"' EXIT
 ZIP_PATH="${SUBMIT_DIR}/$(basename "$APP_PATH").zip"
