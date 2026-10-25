@@ -2720,6 +2720,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_permission_denied_returns_permission_denied() {
+        let server = TestSftpServer::start().await;
+        let path = server.root.join("download/secure.txt");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"secret").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let err = client
+            .download("/download/secure.txt", &std::env::temp_dir().join("x"))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, SftpError::DownloadFailed { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
     async fn download_rename_failure_cleans_up_local_partial() {
         let server = TestSftpServer::start().await;
         server
