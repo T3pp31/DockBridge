@@ -37,7 +37,7 @@ final class FakeBridge: RemoteBridging {
     private(set) var renamed: [(from: String, to: String)] = []
     /// mkdir paths recorded during `mkdirRemote`.
     private(set) var createdDirectories: [String] = []
-    /// Set to fake a remote failure; `true` makes transfer calls throw.
+    /// Set to fake a remote mutation failure for rename and mkdir calls.
     var failTransfers = false
     /// Set to fake a connection failure; `true` makes `connect` throw.
     var failConnect = false
@@ -89,7 +89,7 @@ final class FakeBridge: RemoteBridging {
         overwritePolicy: TransferOverwritePolicy
     ) async throws {
         uploaded.append((localPath, remoteDirectory, overwritePolicy))
-        if uploadFails {
+        if failTransfers || uploadFails {
             throw DockBridgeError.Other(message: "simulated upload failure")
         }
     }
@@ -100,14 +100,14 @@ final class FakeBridge: RemoteBridging {
         overwritePolicy: TransferOverwritePolicy
     ) async throws {
         downloaded.append((remotePath, localDirectory, overwritePolicy))
-        if downloadFails {
+        if failTransfers || downloadFails {
             throw DockBridgeError.Other(message: "simulated download failure")
         }
     }
 
     func deleteRemote(path: String) async throws {
         deleted.append(path)
-        if deleteFails {
+        if failTransfers || deleteFails {
             throw DockBridgeError.Other(message: "simulated delete failure")
         }
     }
