@@ -541,7 +541,7 @@ impl<'a> SftpClient<'a> {
             let remote_size = remote_metadata.as_ref().and_then(|metadata| metadata.size);
             let resume_offset = match remote_size {
                 Some(size) => {
-                    find_resumable_download_offset(local_parent, size, &local, &remote).await
+                    find_resumable_download_offset(local_parent, size, &local, &remote, &mut remote_file).await
                 }
                 None => None,
             };
@@ -2241,11 +2241,21 @@ async fn create_exclusive_remote_partial(
 /// Returns the byte offset to continue a previous download attempt from, when
 /// a leftover local partial for this `(local, remote)` pair exists and is a
 /// strict prefix of the remote file (issue #313). `None` starts from scratch.
+// Maximum number of leading bytes compared between the partial and the
+// remote file before trusting a resume. This bounds the extra round-trip
+// cost while still catching content changes at the start of the file.
+const RESUME_VERIFICATION_BYTES: u64 = 64 * 1024;
+
+/// Returns the byte offset to continue a previous download attempt from, when
+/// a leftover local partial for this `(local, remote)` pair exists, is a
+/// strict prefix of the remote file, AND its leading bytes match the current
+/// remote content (issue #313, #655). `None` starts from scratch.
 async fn find_resumable_download_offset(
     local_parent: &Path,
     remote_size: u64,
     local: &str,
     remote: &str,
+    remote_file: &mut RemoteFileHandle,
 ) -> Option<u64> {
     let partial_path =
         partial_local_path_for_suffix(local_parent, &resume_partial_suffix(local, remote));
@@ -2254,6 +2264,26 @@ async fn find_resumable_download_offset(
     };
     let size = metadata.len();
     if size == 0 || size >= remote_size {
+        return None;
+    }
+    // Compare the leading bytes of the partial against the current remote
+    // content. If the remote file was replaced since the partial was written,
+    // the mismatch forces a fresh download instead of silently concatenating
+    // old and new data (issue #655).
+    let verify_len = size.min(RESUME_VERIFICATION_BYTES) as usize;
+    let mut remote_prefix = vec![0u8; verify_len];
+    use tokio::io::AsyncReadExt;
+    if remote_file.read_exact(&mut remote_prefix).await.is_err() {
+        return None;
+    }
+    let Ok(mut partial_file) = tokio::fs::File::open(&partial_path).await else {
+        return None;
+    };
+    let mut partial_prefix = vec![0u8; verify_len];
+    if partial_file.read_exact(&mut partial_prefix).await.is_err() {
+        return None;
+    }
+    if remote_prefix != partial_prefix {
         return None;
     }
     Some(size)
