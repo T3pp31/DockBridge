@@ -32,18 +32,25 @@ final class DropOperationSyncTests: XCTestCase {
         }
     }
 
-    @MainActor
     func testSignalsSemaphoreEvenWhenOperationThrows() throws {
         // Regression test for issue #181: a throwing operation must not leave
-        // the caller hanging. We verify the call returns promptly (instead of
-        // deadlocking) by asserting it completes within a generous deadline.
+        // the caller hanging. Run off the main thread and wait with an XCTest
+        // expectation so a hang fails at the deadline instead of blocking CI
+        // (issue #697).
         struct TestError: Error {}
 
-        let start = ContinuousClock.now
-        XCTAssertThrowsError(try DropOperationSync.run { @MainActor in
-            await Task.yield()
-            throw TestError()
-        })
-        XCTAssertLessThan(ContinuousClock.now - start, .seconds(5))
+        let completion = expectation(description: "DropOperationSync.run returned")
+        DispatchQueue.global().async {
+            do {
+                try DropOperationSync.run { @MainActor in
+                    await Task.yield()
+                    throw TestError()
+                }
+                XCTFail("Expected run to throw")
+            } catch {
+                completion.fulfill()
+            }
+        }
+        wait(for: [completion], timeout: 5)
     }
 }
