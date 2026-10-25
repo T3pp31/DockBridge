@@ -79,7 +79,7 @@ struct LocalPaneView: View {
                             }
                         }
                     } primaryAction: { ids in
-                        if let item = singleSelectedLocalItem(from: ids) ?? viewModel.selectedLocalTableItem {
+                        if let item = primaryActionLocalItem(from: ids) {
                             viewModel.openLocalTableItem(item)
                         }
                     }
@@ -169,9 +169,11 @@ struct LocalPaneView: View {
         }
     }
 
-    private func singleSelectedLocalItem(from ids: Set<String>) -> LocalFileItem? {
-        guard ids.count == 1, let id = ids.first else { return nil }
-        return viewModel.localTableItems.first { $0.id == id }
+    /// Opens the only item when a row is selected; when several rows are
+    /// selected, opens the first row in display order as an explicit fallback.
+    private func primaryActionLocalItem(from ids: Set<String>) -> LocalFileItem? {
+        guard !ids.isEmpty else { return nil }
+        return viewModel.localTableItems.first { ids.contains($0.id) }
     }
 
     private func transferableLocalItems(from ids: Set<String>) -> [LocalFileItem] {
