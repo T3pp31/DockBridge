@@ -185,8 +185,6 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
         }
 
         NSWorkspace.shared.open(mountPoint)
-        shouldUnmount = false
-        shouldCleanUpDownload = false
     }
 
     private func downloadDMG(from url: URL) async throws -> URL {
