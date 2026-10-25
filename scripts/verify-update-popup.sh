@@ -108,7 +108,11 @@ click_sheet_button 2
 sleep 2
 expected_url=$(curl -s -H "Accept: application/vnd.github+json" https://api.github.com/repos/T3pp31/DockBridge/releases/latest \
   | python3 -c "import sys,json; r=json.load(sys.stdin); print(next(a['browser_download_url'] for a in r['assets'] if a['name'].endswith('.dmg')))")
-if [[ "$expected_url" == *"DockBridge-0.1.2-macOS.dmg" ]]; then
+expected_asset_name=$(awk -F'"' '/^asset_name_template / { print $2; exit }' config/release.toml)
+release_version=$(awk -F'"' '/^version / { print $2; exit }' config/release.toml)
+expected_dmg_name="${expected_asset_name//\{app_name\}/DockBridge}"
+expected_dmg_name="${expected_dmg_name//\{version\}/${release_version}}"
+if [[ "$expected_url" == *"$expected_dmg_name" ]]; then
   echo "PASS: Download button clicked; target URL is $expected_url"
 else
   echo "FAIL: Unexpected DMG URL: $expected_url"
