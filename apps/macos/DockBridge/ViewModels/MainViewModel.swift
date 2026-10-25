@@ -1493,15 +1493,27 @@ final class MainViewModel: ObservableObject {
             return await perform(.replace)
 
         case .failIfExists:
-            if await destinationExists(at: destinationPath, side: destinationSide) {
+            let destinationState = await destinationExists(
+                at: destinationPath,
+                side: destinationSide
+            )
+            if destinationState == true {
                 errorMessage = String(localized: "A file already exists at the destination.")
                 return false
+            }
+            if destinationState == nil {
+                overwriteAskDestination = destinationPath
+                showOverwriteAsk = true
+                let replace = await withCheckedContinuation { continuation in
+                    overwriteAskContinuation = continuation
+                }
+                return replace ? await perform(.replace) : false
             }
             errorMessage = nil
             return await perform(.failIfExists)
 
         case .ask:
-            if await destinationExists(at: destinationPath, side: destinationSide) {
+            if await destinationExists(at: destinationPath, side: destinationSide) != false {
                 overwriteAskDestination = destinationPath
                 showOverwriteAsk = true
                 let replace = await withCheckedContinuation { continuation in
@@ -1516,7 +1528,10 @@ final class MainViewModel: ObservableObject {
         }
     }
 
-    private func destinationExists(at path: String, side: TransferDestinationSide) async -> Bool {
+    private func destinationExists(
+        at path: String,
+        side: TransferDestinationSide
+    ) async -> Bool? {
         switch side {
         case .remote:
             return await remoteDestinationExists(path: path)
@@ -1525,10 +1540,11 @@ final class MainViewModel: ObservableObject {
         }
     }
 
-    private func remoteDestinationExists(path: String) async -> Bool {
-        guard let parent = try? RemotePath.parent(of: path) else { return false }
+    /// `true` and `false` are conclusive; `nil` means the check could not run.
+    private func remoteDestinationExists(path: String) async -> Bool? {
+        guard let parent = try? RemotePath.parent(of: path) else { return nil }
         let name = (path as NSString).lastPathComponent
-        guard let items = try? await bridge.listDirectory(path: parent) else { return false }
+        guard let items = try? await bridge.listDirectory(path: parent) else { return nil }
         return items.contains { $0.name == name && !$0.isParentDirectory }
     }
 
