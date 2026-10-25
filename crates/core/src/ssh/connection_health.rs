@@ -8,6 +8,15 @@
 /// covered as well.
 pub fn is_connection_lost_message(message: &str) -> bool {
     let lower = message.to_lowercase();
+    // Non-connection errors that embed user-controlled paths must not be
+    // treated as disconnects (issue #798), even if the path contains a
+    // phrase like "session closed".
+    let has_non_connection_marker = lower.contains("permission denied")
+        || lower.contains("no such file")
+        || lower.contains("not found");
+    if has_non_connection_marker {
+        return false;
+    }
     if lower.contains("session closed")
         || lower.contains("connection reset")
         || lower.contains("broken pipe")
@@ -45,6 +54,19 @@ mod tests {
     #[test]
     fn detects_connection_reset_case_insensitively() {
         assert!(is_connection_lost_message("Connection Reset by peer"));
+    }
+
+    #[test]
+    fn ignores_non_connection_error_with_path_containing_closed() {
+        // Given: a permission error whose path contains a disconnect phrase
+        // When: checked for connection loss
+        // Then: it is NOT treated as disconnected (issue #798)
+        assert!(!is_connection_lost_message(
+            "failed to delete '/home/user/session closed.txt': Permission denied"
+        ));
+        assert!(!is_connection_lost_message(
+            "failed to delete '/srv/channel closed/x.txt': No such file"
+        ));
     }
 
     #[test]
