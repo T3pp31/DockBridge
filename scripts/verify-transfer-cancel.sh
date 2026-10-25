@@ -13,6 +13,7 @@ export PATH="${HOME}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
 
 CONTAINER_NAME="${SFTP_CONTAINER:-dockbridge-e2e}"
 PORT="${SFTP_PORT:-2222}"
+IMAGE="${SFTP_IMAGE:-atmoz/sftp:latest@sha256:0960390462a4441dbb63698d7c185b76a41ffcee7b78ff4adf275f3e66f9c475}"
 USER="${SFTP_USER:-demo}"
 PASSWORD="${SFTP_PASSWORD:-password}"
 
@@ -29,7 +30,7 @@ ensure_container() {
   log "Starting Docker SFTP container $CONTAINER_NAME on port $PORT ..."
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   docker run -d --name "$CONTAINER_NAME" -p "${PORT}:22" -e SFTP_USER="$USER" \
-    atmoz/sftp "${USER}:${PASSWORD}:::upload" >/dev/null
+    "$IMAGE" "${USER}:${PASSWORD}:::upload" >/dev/null
   sleep 3
 }
 
