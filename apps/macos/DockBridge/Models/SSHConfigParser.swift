@@ -51,7 +51,15 @@ enum SSHConfigParser {
         }
 
         for rawLine in contents.components(separatedBy: .newlines) {
-            guard let directive = parseDirective(rawLine) else { continue }
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isBlockDirective = trimmed.lowercased().hasPrefix("host")
+                || trimmed.lowercased().hasPrefix("match")
+            guard let directive = parseDirective(rawLine) else {
+                if isBlockDirective {
+                    finishCurrentBlock()
+                }
+                continue
+            }
 
             switch directive.key {
             case "host":
