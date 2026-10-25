@@ -19,7 +19,7 @@ final class HostKeyConfirmViewTests: XCTestCase {
         )
 
         // Then: the view builds without crashing for mismatch mode
-        XCTAssertNotNil(view.body)
+        _ = view.body
     }
 
     func testUnknownChallengeHasNoExpectedFingerprint() {
@@ -39,6 +39,6 @@ final class HostKeyConfirmViewTests: XCTestCase {
         )
 
         // Then: the view builds without crashing for unknown mode
-        XCTAssertNotNil(view.body)
+        _ = view.body
     }
 }
