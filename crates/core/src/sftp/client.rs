@@ -604,7 +604,12 @@ impl<'a> SftpClient<'a> {
             // Best-effort remote close + local partial delete. `abort(false)`
             // never fails hard on remote shutdown (already closed handles are
             // logged and ignored) so cleanup of the local partial can proceed.
-            let cleanup_err = partial.abort(false, &mut remote_file).await?;
+            // A cleanup failure must not mask the original transfer error
+            // (issue #792); record it and keep the original `err` as primary.
+            let cleanup_err = match partial.abort(false, &mut remote_file).await {
+                Ok(note) => note,
+                Err(e) => Some(e),
+            };
             return Err(match err {
                 DownloadFlowError::Cancelled => SftpError::Cancelled,
                 DownloadFlowError::Write(message) => SftpError::DownloadFailed {
