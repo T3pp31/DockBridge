@@ -413,10 +413,12 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
                     batch.skipped
                 );
                 if batch.failed > 0 {
-                    anyhow::bail!(
-                        "upload batch completed with {} failed entries",
-                        batch.failed
-                    );
+                    return Err(anyhow::anyhow!(AppError::Transfer(
+                        TransferError::RetriesExhausted {
+                            attempts: batch.failed as u32,
+                            message: format!("{} failed upload entries", batch.failed),
+                        }
+                    )));
                 }
             } else {
                 let task = manager.enqueue_upload(&session, &local, remote).await?;
@@ -453,10 +455,12 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
                     batch.skipped
                 );
                 if batch.failed > 0 {
-                    anyhow::bail!(
-                        "download batch completed with {} failed entries",
-                        batch.failed
-                    );
+                    return Err(anyhow::anyhow!(AppError::Transfer(
+                        TransferError::RetriesExhausted {
+                            attempts: batch.failed as u32,
+                            message: format!("{} failed download entries", batch.failed),
+                        }
+                    )));
                 }
             } else {
                 let task = manager.enqueue_download(&session, remote, &local).await?;
