@@ -325,6 +325,7 @@ impl TransferManager {
         }
     }
 
+    #[cfg(test)]
     fn mark_task_progress_complete(&self, task_id: u64) {
         if let Ok(mut tasks) = self.tasks.lock() {
             if let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) {
@@ -350,6 +351,7 @@ impl TransferManager {
         }
     }
 
+    #[cfg(test)]
     fn remove_cancellation_flag(&self, task_id: u64) {
         if let Ok(mut flags) = self.cancellation_flags.lock() {
             flags.remove(&task_id);
@@ -388,12 +390,6 @@ impl TransferManager {
         }
     }
 
-    fn clear_in_flight(&self, task_id: u64) {
-        if let Ok(mut in_flight) = self.in_flight.lock() {
-            in_flight.remove(&task_id);
-        }
-    }
-
     fn is_in_flight(&self, task_id: u64) -> bool {
         self.in_flight
             .lock()
@@ -406,65 +402,59 @@ impl TransferManager {
         task_id: u64,
         result: Result<(), TransferError>,
     ) -> Result<(), TransferError> {
-        let was_cancelled = self.is_cancelled(task_id);
-        self.remove_cancellation_flag(task_id);
-        self.clear_in_flight(task_id);
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|_| TransferError::TaskNotFound { task_id })?;
+        let mut flags = self
+            .cancellation_flags
+            .lock()
+            .map_err(|_| TransferError::TaskNotFound { task_id })?;
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .map_err(|_| TransferError::TaskNotFound { task_id })?;
 
-        if was_cancelled {
-            return match result {
-                Ok(()) => {
-                    self.update_task_status(task_id, TransferStatus::Completed);
-                    Ok(())
-                }
-                Err(TransferError::Cancelled) => {
-                    self.update_task_status(task_id, TransferStatus::Cancelled);
-                    Err(TransferError::Cancelled)
-                }
-                // A cancel raced with an actual partial-file cleanup failure.
-                Err(TransferError::CleanupFailed { message }) => {
-                    let failure = TransferError::CleanupFailed { message };
-                    self.update_task_status(
-                        task_id,
-                        TransferStatus::Failed {
-                            message: failure.to_string(),
-                        },
-                    );
-                    Err(failure)
-                }
-                // Any other error that surfaces after a cancel is reported as
-                // itself, never relabeled as a cleanup failure (issue #319).
-                Err(err) => {
-                    self.update_task_status(
-                        task_id,
-                        TransferStatus::Failed {
-                            message: err.to_string(),
-                        },
-                    );
-                    Err(err)
-                }
-            };
-        }
+        let was_cancelled = flags
+            .get(&task_id)
+            .map(|flag| flag.load(Ordering::Relaxed))
+            .unwrap_or(false);
+        flags.remove(&task_id);
+        in_flight.remove(&task_id);
 
-        match result {
-            Ok(()) => {
-                self.mark_task_progress_complete(task_id);
-                self.update_task_status(task_id, TransferStatus::Completed);
-                Ok(())
+        let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) else {
+            return Ok(());
+        };
+
+        let final_status = match (&result, was_cancelled) {
+            (Ok(()), true) => TransferStatus::Completed,
+            (Err(TransferError::Cancelled), true) => TransferStatus::Cancelled,
+            // A cancel raced with an actual partial-file cleanup failure.
+            (Err(TransferError::CleanupFailed { message }), true) => TransferStatus::Failed {
+                message: TransferError::CleanupFailed {
+                    message: message.clone(),
+                }
+                .to_string(),
+            },
+            // Any other error that surfaces after a cancel is reported as
+            // itself, never relabeled as a cleanup failure (issue #319).
+            (Err(err), true) => TransferStatus::Failed {
+                message: err.to_string(),
+            },
+            (Ok(()), false) => {
+                if task.total_bytes > 0 {
+                    task.bytes_transferred = task.total_bytes;
+                }
+                TransferStatus::Completed
             }
-            Err(TransferError::Cancelled) => {
-                self.update_task_status(task_id, TransferStatus::Cancelled);
-                Err(TransferError::Cancelled)
-            }
-            Err(err) => {
-                self.update_task_status(
-                    task_id,
-                    TransferStatus::Failed {
-                        message: err.to_string(),
-                    },
-                );
-                Err(err)
-            }
-        }
+            (Err(TransferError::Cancelled), false) => TransferStatus::Cancelled,
+            (Err(err), false) => TransferStatus::Failed {
+                message: err.to_string(),
+            },
+        };
+        task.status = final_status;
+
+        result
     }
 
     /// Enqueues and immediately executes a single upload task.
@@ -1672,6 +1662,28 @@ mod tests {
         assert!(!manager.is_in_flight(23), "finalize must clear in-flight");
         let queue = manager.get_transfer_queue();
         assert!(matches!(queue[0].status, TransferStatus::Completed));
+    }
+
+    #[test]
+    fn finalize_task_result_clears_cancel_flag() {
+        let manager = TransferManager::new(&AppConfig::default());
+        manager.insert_task(TransferTask {
+            id: 24,
+            session_id: 1,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 0,
+        });
+        manager.register_cancellation_flag(24);
+        manager.mark_in_flight(24);
+
+        manager.finalize_task_result(24, Ok(())).unwrap();
+
+        assert!(!manager.is_cancelled(24));
+        assert!(!manager.is_in_flight(24));
     }
 
     #[test]
