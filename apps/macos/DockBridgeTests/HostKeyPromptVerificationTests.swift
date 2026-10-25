@@ -167,7 +167,10 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         } catch {
             throw XCTSkip("Security-scoped bookmarks require App Sandbox context: \(error)")
         }
-        config.opensshKnownHostsPath = knownHostsFile.path
+        // Point the stored path elsewhere so the assertion can distinguish
+        // bookmark resolution from a pass-through of opensshKnownHostsPath
+        // (issue #789).
+        config.opensshKnownHostsPath = directory.appendingPathComponent("stale-known_hosts").path
         config.mergeOpensshKnownHostsOnConnect = false
         settings.saveConfig(config)
 
