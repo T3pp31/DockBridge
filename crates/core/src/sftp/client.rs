@@ -22,6 +22,7 @@ use crate::config::{
 };
 use crate::error::{RemoteStatusCode, SftpError};
 use crate::ssh::session::SshSession;
+use crate::ssh::connection_health::is_connection_lost_message;
 use crate::transfer::TransferOverwritePolicy;
 
 use super::path::parent_remote_path;
@@ -2471,10 +2472,16 @@ fn classify_sftp_client_error(err: SftpClientError, path: &str) -> SftpError {
         // typed as SSH_FX_BAD_MESSAGE rather than a generic error so
         // is_non_retryable_error can classify them as non-retryable without
         // string matching.
-        SftpClientError::UnexpectedBehavior(message) => SftpError::RemoteStatus {
-            code: RemoteStatusCode::BadMessage,
-            path: format!("{path}: {message}"),
-        },
+        SftpClientError::UnexpectedBehavior(message) => {
+            if is_connection_lost_message(&message) {
+                SftpError::Other(anyhow::anyhow!("SFTP error for '{path}': {message}"))
+            } else {
+                SftpError::RemoteStatus {
+                    code: RemoteStatusCode::BadMessage,
+                    path: format!("{path}: {message}"),
+                }
+            }
+        }
         SftpClientError::UnexpectedPacket => SftpError::RemoteStatus {
             code: RemoteStatusCode::BadMessage,
             path: path.to_string(),
@@ -3467,6 +3474,12 @@ mod tests {
                 code: RemoteStatusCode::BadMessage,
                 path,
             } => assert!(path.contains("/upload/f.txt")),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let lost = SftpClientError::UnexpectedBehavior("connection closed: eof".to_string());
+        match classify_sftp_client_error(lost, "/upload/f.txt") {
+            SftpError::Other(_) => {}
             other => panic!("unexpected: {other:?}"),
         }
 
