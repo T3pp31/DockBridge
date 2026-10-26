@@ -214,7 +214,7 @@ Uploads and downloads write to temporary partial files before renaming to the fi
 
 | Policy | Behavior |
 |--------|----------|
-| `Replace` (default) | Replace an existing destination after the transfer completes successfully. Remote uploads delete the existing file before rename when the server does not overwrite via rename alone. |
+| `Replace` (default) | Replace an existing destination after the transfer completes successfully. Remote uploads rely on `posix-rename@openssh.com`; when a server lacks it, no delete-then-rename fallback is issued, so an existing destination is preserved and the transferred partial is kept for recovery. |
 | `FailIfExists` | Fail without modifying the destination when it already exists. |
 
 Local finalize rejects symlink destinations without following them. Partial files are never opened through symlinks on Unix.
