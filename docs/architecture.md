@@ -33,7 +33,7 @@ Remote Server
 ## Host key verification
 
 - Fingerprint format: OpenSSH SHA256 (`SHA256:...`)
-- Storage: `~/Library/Application Support/DockBridge/known_hosts.json` (mode 0600)
+- Storage: macOS app (sandboxed) uses its container data directory; CLI uses `~/.dockbridge/known_hosts.json` (mode 0600)
 - Swift shows accept/reject UI; Rust performs verification
 
 ## Known limitations
