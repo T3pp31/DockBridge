@@ -1,2 +1,3 @@
 [toolchain]
-channel = "stable"
+# Pin a verified compiler for reproducible builds (issue #668).
+channel = "1.96.0"
