@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, BufRead};
 
 use zeroize::Zeroizing;
 
@@ -60,13 +60,21 @@ fn trim_trailing_line_endings(value: &mut String) {
 /// Shared by `--password-stdin` and `--passphrase-stdin` so both credentials
 /// are handled with the same zeroize discipline.
 fn read_secret_line<R: io::BufRead>(
-    mut reader: R,
+    reader: R,
     label: &str,
 ) -> anyhow::Result<Zeroizing<String>> {
-    let mut buffer = Zeroizing::new(String::new());
+    // Pre-allocate the accepted capacity so the secret stays in one buffer
+    // that can be zeroized; growing String would leave unzeroed copies on the
+    // heap (issue #649).
+    const MAX_SECRET_LEN: usize = 8 * 1024;
+    let mut buffer = Zeroizing::new(String::with_capacity(MAX_SECRET_LEN));
     reader
+        .take((MAX_SECRET_LEN as u64) + 1)
         .read_line(&mut buffer)
         .map_err(|err| anyhow::anyhow!("failed to read {label} from stdin: {err}"))?;
+    if buffer.len() > MAX_SECRET_LEN {
+        anyhow::bail!("{label} from stdin exceeded {MAX_SECRET_LEN} bytes");
+    }
     trim_trailing_line_endings(&mut buffer);
     if buffer.is_empty() {
         anyhow::bail!("{label} read from stdin was empty");
