@@ -306,10 +306,16 @@ struct LocalFileTable: View {
         // Apply the column sort first, then stable-sort folders to the front
         // (KeyPathComparator cannot order `Bool`, so folder-first is applied
         // as a stable secondary pass).
-        let columnSorted = viewModel.localItems.sorted(using: sortOrder)
-        return columnSorted.sorted { lhs, rhs in
-            lhs.isDirectory && !rhs.isDirectory
-        }
+        return viewModel.localItems
+            .sorted(using: sortOrder)
+            .enumerated()
+            .sorted { lhs, rhs in
+                if lhs.element.isDirectory != rhs.element.isDirectory {
+                    return lhs.element.isDirectory
+                }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
     }
 
     var body: some View {
@@ -407,10 +413,16 @@ struct RemoteFileTable: View {
     @State private var sortOrder = [KeyPathComparator(\RemoteFileRecord.name, order: .forward)]
 
     private var sortedItems: [RemoteFileRecord] {
-        let columnSorted = viewModel.remoteItems.sorted(using: sortOrder)
-        return columnSorted.sorted { lhs, rhs in
-            lhs.isDirectory && !rhs.isDirectory
-        }
+        return viewModel.remoteItems
+            .sorted(using: sortOrder)
+            .enumerated()
+            .sorted { lhs, rhs in
+                if lhs.element.isDirectory != rhs.element.isDirectory {
+                    return lhs.element.isDirectory
+                }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
     }
 
     var body: some View {
