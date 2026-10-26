@@ -134,7 +134,29 @@ else
   echo "FAIL: Offline/network failure handling test failed"
   exit 1
 fi
-HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 open "$APP"
+# `open` does not inherit command-line env vars, and URLSession ignores
+# HTTP_PROXY; block api.github.com with pf instead (issue #682).
+if ! sudo -n true 2>/dev/null; then
+  echo "SKIP: offline-launch check requires passwordless sudo for pf rules"
+fi
+if sudo -n true 2>/dev/null; then
+  BLOCK_ANCHOR="dockbridge_offline_check"
+  pfctl -a "$BLOCK_ANCHOR" -F all 2>/dev/null || true
+  printf 'block drop out proto tcp to 140.82.112.0/20 port {80, 443}\n' | sudo pfctl -a "$BLOCK_ANCHOR" -f - >/dev/null
+  sudo pfctl -E >/dev/null 2>&1 || true
+  ANCHOR_ENABLED=1
+else
+  ANCHOR_ENABLED=0
+fi
+restore_pf() {
+  if [[ "$ANCHOR_ENABLED" == "1" ]]; then
+    sudo pfctl -a "$BLOCK_ANCHOR" -F all >/dev/null 2>&1 || true
+    sudo pfctl -d >/dev/null 2>&1 || true
+  fi
+}
+trap restore_pf EXIT
+
+open "$APP"
 sleep 6
 if pgrep -x DockBridge >/dev/null; then
   echo "PASS: App launched while GitHub API unreachable"
@@ -148,6 +170,8 @@ else
   echo "FAIL: Unexpected sheet while offline"
   exit 1
 fi
+restore_pf
+trap - EXIT
 
 echo "== Test 5: HostKey deferral =="
 kill_dockbridge
