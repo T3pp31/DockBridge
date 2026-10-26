@@ -74,10 +74,9 @@ ensure_key() {
 }
 
 ensure_container() {
-  if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
-    return 0
-  fi
   ensure_key
+  # Always recreate the container so a reused container cannot keep a port
+  # binding or credentials that no longer match this run's configuration.
   log "Starting Docker SFTP container $CONTAINER_NAME ..."
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   docker run -d --name "$CONTAINER_NAME" -p "${PORT}:22" -e SFTP_USER="$USER" \
