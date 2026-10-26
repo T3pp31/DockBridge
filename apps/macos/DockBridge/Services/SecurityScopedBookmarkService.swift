@@ -109,8 +109,6 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
         return started
     }
 
-    }
-
     func stopAllAccess() {
         lock.lock()
         let urls = Array(activeAccessCounts.keys)
