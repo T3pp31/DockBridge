@@ -724,6 +724,22 @@ impl KnownHostsManager {
             ));
         }
 
+        let mut hashed_entries = self.hashed_entries.iter().collect::<Vec<_>>();
+        hashed_entries.sort_by(|left, right| {
+            left.fingerprint_sha256
+                .cmp(&right.fingerprint_sha256)
+                .then_with(|| left.hash.cmp(&right.hash))
+        });
+        for entry in hashed_entries {
+            let Some(public_key_openssh) = entry.public_key_openssh.as_deref() else {
+                continue;
+            };
+            let encode = base64::engine::general_purpose::STANDARD;
+            let salt = base64::Engine::encode(&encode, entry.salt);
+            let hash = base64::Engine::encode(&encode, entry.hash);
+            lines.push(format!("|1|{salt}|{hash} {public_key_openssh}"));
+        }
+
         let payload = if lines.is_empty() {
             String::new()
         } else {
