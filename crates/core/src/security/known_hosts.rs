@@ -223,7 +223,7 @@ impl KnownHostsManager {
             } else {
                 None
             }
-        };
+        });
 
         // Remove hashed entries too so a remove operation cannot leave a
         // separate trust record behind for the same host.
