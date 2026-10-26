@@ -908,6 +908,26 @@ mod tests {
         assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ensure_local_path_within_root_rejects_dangling_symlink_escape() {
+        // Given: a symlink under root whose target does not yet exist
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("download");
+        fs::create_dir(&root).unwrap();
+        let outside = tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path().join("later.txt"), root.join("dangling.txt"))
+            .unwrap();
+
+        // When: the path is checked for the local root
+        // Then: it is rejected instead of being treated as a new root-local path
+        let escaped = root.join("dangling.txt");
+        let err = ensure_local_path_within_root(&root, &escaped)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
+    }
+
     #[test]
     fn validated_remote_entry_accepts_matching_paths() {
         // Given: a valid entry name and matching server path
