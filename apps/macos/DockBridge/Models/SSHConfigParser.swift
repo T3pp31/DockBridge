@@ -107,7 +107,9 @@ enum SSHConfigParser {
             guard directive.arguments.count == 1,
                   let value = directive.arguments.first,
                   !containsUnsupportedExpansion(value) else {
-                currentBlockIsValid = false
+                if hosts.contains(where: { $0.hostName == nil }) {
+                    currentBlockIsValid = false
+                }
                 return
             }
             for index in hosts.indices where hosts[index].hostName == nil {
@@ -127,8 +129,9 @@ enum SSHConfigParser {
                   let rawPort = directive.arguments.first,
                   let port = UInt16(rawPort),
                   port > 0 else {
-                // An explicit invalid port must not silently become port 22.
-                currentBlockIsValid = false
+                if hosts.contains(where: { $0.port == nil }) {
+                    currentBlockIsValid = false
+                }
                 return
             }
             for index in hosts.indices where hosts[index].port == nil {
