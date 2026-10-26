@@ -11,6 +11,9 @@ final class UpdateCheckViewModel: ObservableObject {
     private let updateService: AppUpdateService
     private let downloadService: AppUpdateDownloading
     private let settingsService: AppSettingsService
+    /// Tracks whether the startup host-key prompt has been resolved, so a
+    /// slow update check can still present after dismissal (issue #636).
+    private var isHostKeyResolved = false
 
     init(
         updateService: AppUpdateService = AppUpdateService(),
@@ -29,14 +32,15 @@ final class UpdateCheckViewModel: ObservableObject {
             )
             guard let update else { return }
             pendingUpdate = update
-            presentIfAllowed(isHostKeyBlocking: isHostKeyBlocking)
+            presentPendingUpdateIfAllowed()
         } catch {
             AppLogging.update.error("update check failed on launch: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     func onHostKeyDismissed() {
-        presentIfAllowed(isHostKeyBlocking: false)
+        isHostKeyResolved = true
+        presentPendingUpdateIfAllowed()
     }
 
     var inAppUpdateInstallationEnabled: Bool {
@@ -88,8 +92,8 @@ final class UpdateCheckViewModel: ObservableObject {
         downloadErrorMessage = nil
     }
 
-    private func presentIfAllowed(isHostKeyBlocking: Bool) {
-        guard pendingUpdate != nil, !isHostKeyBlocking else { return }
+    private func presentPendingUpdateIfAllowed() {
+        guard pendingUpdate != nil, isHostKeyResolved else { return }
         showUpdateSheet = true
     }
 }
