@@ -26,6 +26,9 @@ if [[ ! -d "$SOURCE_PATH" ]]; then
 fi
 
 echo "DockBridge を Applications にインストールしています..."
+# Remove the existing bundle first so stale resources/frameworks from older
+# builds cannot survive the copy (issue #671).
+rm -rf "$INSTALL_PATH"
 ditto "$SOURCE_PATH" "$INSTALL_PATH"
 
 echo "macOS のセキュリティ制限を解除しています..."
