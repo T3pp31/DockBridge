@@ -111,6 +111,7 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
             kSecAttrAccount as String: account,
+            kSecUseDataProtectionKeychain as String: true,
         ]
     }
 }
