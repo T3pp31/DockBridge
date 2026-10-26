@@ -667,7 +667,7 @@ impl<'a> SftpClient<'a> {
         }
 
         let mut count = 0usize;
-        let mut deleted_files = 0usize;
+        let mut deleted_files = 0u64;
         let mut deleted_bytes = 0u64;
         let mut stack = vec![Task::VisitDir(remote_path, 0)];
 
