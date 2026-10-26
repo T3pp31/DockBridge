@@ -24,7 +24,7 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
     static let shared = SecurityScopedBookmarkService()
 
     private let lock = NSLock()
-    private var activeURLs: Set<URL> = []
+    private var activeAccessCounts: [URL: Int] = [:]
 
     private init() {}
 
@@ -79,10 +79,15 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
 
     func stopAccessing(_ url: URL) {
         lock.lock()
-        let wasActive = activeURLs.remove(url) != nil
+        let count = activeAccessCounts[url] ?? 0
+        if count > 1 {
+            activeAccessCounts[url] = count - 1
+        } else if count == 1 {
+            activeAccessCounts.removeValue(forKey: url)
+        }
         lock.unlock()
 
-        if wasActive {
+        if count > 0 {
             url.stopAccessingSecurityScopedResource()
         }
     }
@@ -90,27 +95,26 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
     @discardableResult
     func beginAccessing(_ url: URL) -> Bool {
         lock.lock()
-        let alreadyActive = activeURLs.contains(url)
-        lock.unlock()
-
-        if alreadyActive {
+        defer { lock.unlock() }
+        let currentCount = activeAccessCounts[url] ?? 0
+        guard currentCount == 0 else {
+            activeAccessCounts[url] = currentCount + 1
             return true
         }
 
-        guard url.startAccessingSecurityScopedResource() else {
-            return false
+        let started = url.startAccessingSecurityScopedResource()
+        if started {
+            activeAccessCounts[url] = 1
         }
+        return started
+    }
 
-        lock.lock()
-        activeURLs.insert(url)
-        lock.unlock()
-        return true
     }
 
     func stopAllAccess() {
         lock.lock()
-        let urls = activeURLs
-        activeURLs.removeAll()
+        let urls = Array(activeAccessCounts.keys)
+        activeAccessCounts.removeAll()
         lock.unlock()
 
         for url in urls {
@@ -121,7 +125,7 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
     func isAccessActive(for url: URL) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return activeURLs.contains(url)
+        return (activeAccessCounts[url] ?? 0) > 0
     }
 
     func withAccess<T>(to url: URL, perform work: () throws -> T) throws -> T {
