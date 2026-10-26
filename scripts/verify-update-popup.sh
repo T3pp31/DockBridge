@@ -60,12 +60,7 @@ tell application "System Events"
   if not (exists process "DockBridge") then return true
   tell process "DockBridge"
     if not (exists window 1) then return true
-    if not (exists sheet 1 of window 1) then return true
-    try
-      if exists static text "Update Available" of sheet 1 of window 1 then
-        return false
-      end if
-    end try
+    return not (exists sheet 1 of window 1)
   end tell
 end tell
 return true
