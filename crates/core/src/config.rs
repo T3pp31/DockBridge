@@ -468,14 +468,27 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn normalize_home_accepts_absolute_home() {
         let home = PathBuf::from("/home/user");
+        assert_eq!(normalize_home(Some(home.clone())), Some(home));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalize_home_accepts_absolute_home() {
+        let home = PathBuf::from(r"C:\Users\user");
         assert_eq!(normalize_home(Some(home.clone())), Some(home));
     }
 
     #[test]
     fn normalize_home_rejects_relative_home() {
         assert_eq!(normalize_home(Some(PathBuf::from("relative/home"))), None);
+    }
+
+    #[test]
+    fn normalize_home_rejects_empty_home() {
+        assert_eq!(normalize_home(Some(PathBuf::new())), None);
     }
 
     #[test]
