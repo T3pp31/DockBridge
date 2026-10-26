@@ -65,12 +65,24 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
         }
 
         var staticCode: SecStaticCode?
-        let createStatus = SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode)
+        let createStatus = SecStaticCodeCreateWithPath(
+            url as CFURL,
+            SecCSFlags(rawValue: kSecCSDefaultFlags),
+            &staticCode
+        )
         guard createStatus == errSecSuccess, let staticCode else {
             throw ReleaseCodeSignatureVerifierError.unsignedBundle
         }
 
-        let validityStatus = SecStaticCodeCheckValidity(staticCode, [], nil)
+        let validityStatus = SecStaticCodeCheckValidity(
+            staticCode,
+            SecCSFlags(
+                rawValue: kSecCSCheckAllArchitectures
+                    | kSecCSStrictValidate
+                    | kSecCSCheckNestedCode
+            ),
+            nil
+        )
         guard validityStatus == errSecSuccess else {
             throw ReleaseCodeSignatureVerifierError.unsignedBundle
         }
