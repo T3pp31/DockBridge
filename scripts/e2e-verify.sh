@@ -29,6 +29,9 @@ pass=0
 fail=0
 
 cleanup() {
+  # Discard the per-run container so stale authorized_keys cannot survive into
+  # the next run (issue #672).
+  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
