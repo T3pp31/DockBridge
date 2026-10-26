@@ -305,6 +305,7 @@ final class MainViewModel: ObservableObject {
     private var lastAppliedDefaultLocalBookmark: Data?
     private var pathBookmarkAccessURL: URL?
     private var localLoadGeneration = 0
+    private var connectionGeneration = 0
     @Published private(set) var isLoadingRemote = false
     private var remoteLoadGeneration = 0
     private var localHistory: PathNavigationHistory
@@ -475,6 +476,8 @@ final class MainViewModel: ObservableObject {
     }
 
     func onConnectionChanged(isConnected: Bool) async {
+        connectionGeneration &+= 1
+        let generation = connectionGeneration
         if isConnected {
             // Remember which profile established this connection. The bridge
             // clears `connectedProfileID` before the disconnect callback fires.
@@ -502,7 +505,8 @@ final class MainViewModel: ObservableObject {
         }
 
         do {
-            try await prepareRemoteWorkingDirectory()
+            try await prepareRemoteWorkingDirectory(connectionGeneration: generation)
+            guard generation == connectionGeneration, bridge.isConnected else { return }
             if let profileID = lastConnectedProfileID ?? bridge.connectedProfileID,
                let profile = connectionList.profiles.first(where: { $0.id == profileID }) {
                 // A configured initial path takes priority; the last visited
@@ -510,12 +514,14 @@ final class MainViewModel: ObservableObject {
                 let targetRemote = profile.initialRemotePath ?? profile.lastRemotePath
                 if let savedRemotePath = targetRemote, !savedRemotePath.isEmpty {
                     if await remoteDirectoryExists(savedRemotePath) {
+                        guard generation == connectionGeneration, bridge.isConnected else { return }
                         applyRemotePath(savedRemotePath, recordHistory: false)
                         remoteHistory.reset(to: savedRemotePath)
                     }
                 }
             }
             await reloadRemote()
+            guard generation == connectionGeneration, bridge.isConnected else { return }
             if let profileID = lastConnectedProfileID ?? bridge.connectedProfileID,
                let profile = connectionList.profiles.first(where: { $0.id == profileID }) {
                 let targetLocal = profile.initialLocalPath ?? profile.lastLocalPath
@@ -525,12 +531,14 @@ final class MainViewModel: ObservableObject {
                     // path (deleted folder, renamed volume) must not break
                     // the freshly established connection.
                     if FileManager.default.fileExists(atPath: localURL.path) {
+                        guard generation == connectionGeneration, bridge.isConnected else { return }
                         applyLocalPath(localURL, recordHistory: false)
                         reloadLocal()
                     }
                 }
             }
             refreshPathBookmarks()
+            guard generation == connectionGeneration, bridge.isConnected else { return }
             startRemoteEditMonitoring()
         } catch {
             errorMessage = error.dockBridgeUserMessage
@@ -629,8 +637,8 @@ final class MainViewModel: ObservableObject {
         }
     }
 
-    func prepareRemoteWorkingDirectory() async throws {
-        guard bridge.isConnected else { return }
+    func prepareRemoteWorkingDirectory(connectionGeneration generation: Int) async throws {
+        guard bridge.isConnected, generation == connectionGeneration else { return }
         guard remotePath == "/" else { return }
 
         if let initialDirectory = bridge.initialRemoteDirectory {
@@ -639,8 +647,10 @@ final class MainViewModel: ObservableObject {
             return
         }
 
+        guard bridge.isConnected, generation == connectionGeneration else { return }
         do {
             let directory = try await bridge.getInitialDirectory()
+            guard bridge.isConnected, generation == connectionGeneration else { return }
             applyRemotePath(directory, recordHistory: false)
             remoteHistory.reset(to: directory)
         } catch {
@@ -652,7 +662,9 @@ final class MainViewModel: ObservableObject {
             }
         }
 
+        guard bridge.isConnected, generation == connectionGeneration else { return }
         if remotePath == "/", let fallback = await verifiedFallbackHomePath() {
+            guard bridge.isConnected, generation == connectionGeneration else { return }
             applyRemotePath(fallback, recordHistory: false)
             remoteHistory.reset(to: fallback)
         }
