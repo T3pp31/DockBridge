@@ -276,12 +276,41 @@ final class AppUpdateServiceTests: XCTestCase {
 }
 
 extension AppUpdateServiceTests {
+    private static let testDefaultsSuiteName = "AppUpdateServiceTests"
+    private static var testDefaults: UserDefaults {
+        UserDefaults(suiteName: testDefaultsSuiteName)!
+    }
+    private static var testCacheDirectory: URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppUpdateServiceTests-\(testDefaultsSuiteName)", isDirectory: true)
+    }
+
+    private static func installTestState() {
+        UserDefaults().removePersistentDomain(forName: testDefaultsSuiteName)
+        try? FileManager.default.createDirectory(
+            at: testCacheDirectory,
+            withIntermediateDirectories: true
+        )
+        try? FileManager.default.removeItem(
+            at: testCacheDirectory.appendingPathComponent(AppUpdateConfig.releaseBodyCacheFileName)
+        )
+        AppUpdateConfig.etagDefaults = testDefaults
+        AppUpdateConfig.releaseBodyCacheDirectory = testCacheDirectory
+    }
+
+    private static func resetTestState() {
+        UserDefaults().removePersistentDomain(forName: testDefaultsSuiteName)
+        AppUpdateConfig.clearReleaseBody()
+        AppUpdateConfig.etagDefaults = .standard
+        AppUpdateConfig.releaseBodyCacheDirectory = nil
+    }
+
     func testCheckForUpdateTreats304AsNoUpdate() async throws {
         // Given: the server returns 304 (If-None-Match matched)
-        UserDefaults.standard.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
+        AppUpdateConfig.etagDefaults.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
         AppUpdateConfig.clearReleaseBody()
         defer {
-            UserDefaults.standard.removeObject(forKey: AppUpdateConfig.etagDefaultsKey)
+            AppUpdateConfig.etagDefaults.removeObject(forKey: AppUpdateConfig.etagDefaultsKey)
             AppUpdateConfig.clearReleaseBody()
         }
 
@@ -292,10 +321,10 @@ extension AppUpdateServiceTests {
 
     func testCheckForUpdateClearsCorruptCacheOn304() async throws {
         // Given: a cached release body is corrupted and the server answers 304
-        UserDefaults.standard.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
+        AppUpdateConfig.etagDefaults.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
         AppUpdateConfig.persistReleaseBody(Data("not json".utf8))
         defer {
-            UserDefaults.standard.removeObject(forKey: AppUpdateConfig.etagDefaultsKey)
+            AppUpdateConfig.etagDefaults.removeObject(forKey: AppUpdateConfig.etagDefaultsKey)
             AppUpdateConfig.clearReleaseBody()
         }
 
@@ -310,7 +339,7 @@ extension AppUpdateServiceTests {
         // Given: a cache entry that is older than the maximum age
         AppUpdateConfig.clearReleaseBody()
         defer { AppUpdateConfig.clearReleaseBody() }
-        let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let cacheURL = testCacheDirectory
             .appendingPathComponent(AppUpdateConfig.releaseBodyCacheFileName)
         let stale = ReleaseBodyCacheEntry(
             storedAt: Date().addingTimeInterval(-25 * 60 * 60),
