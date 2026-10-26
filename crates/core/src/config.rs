@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
 use dirs::home_dir as system_home_dir;
+use serde::Deserialize;
 
 use crate::error::{ConfigError, SecurityError};
 

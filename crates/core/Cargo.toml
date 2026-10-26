@@ -9,6 +9,7 @@ description = "DockBridge SSH/SFTP core library"
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+dirs.workspace = true
 libc = "0.2"
 # rand 0.10 is the current stable series on crates.io (as of 2026-09); the
 # range keeps us on non-breaking 0.10 minor updates.
@@ -25,7 +26,6 @@ tokio = { workspace = true, features = ["fs", "io-util", "sync", "time"] }
 toml.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
-dirs = "5.0.1"
 
 [dev-dependencies]
 base64.workspace = true
