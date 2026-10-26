@@ -168,7 +168,7 @@ struct ConnectionArgs {
     user: String,
     /// Password for local development and testing only (insecure: visible in argv, history, and ps).
     #[cfg(not(feature = "disable-cli-password"))]
-    #[arg(long, conflicts_with = "password_stdin")]
+    #[arg(long, conflicts_with_all = ["identity", "password_stdin"])]
     password: Option<String>,
     /// Read password from standard input (recommended for scripts, CI, and production).
     #[arg(long, conflicts_with_all = ["identity", "passphrase_stdin"])]
