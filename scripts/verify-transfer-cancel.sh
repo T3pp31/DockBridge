@@ -28,7 +28,9 @@ ensure_container() {
 
   log "Starting Docker SFTP container $CONTAINER_NAME on port $PORT ..."
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  docker run -d --name "$CONTAINER_NAME" -p "${PORT}:22" -e SFTP_USER="$USER" \
+  # Bind to loopback only so the weak demo credentials stay local
+  # (issue #679).
+  docker run -d --name "$CONTAINER_NAME" -p "127.0.0.1:${PORT}:22" -e SFTP_USER="$USER" \
     atmoz/sftp "${USER}:${PASSWORD}:::upload" >/dev/null
   sleep 3
 }
