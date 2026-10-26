@@ -1732,7 +1732,8 @@ final class MainViewModel: ObservableObject {
         // Guard against overwriting an existing item before the move. A
         // destination collision would otherwise surface only as a generic
         // move error.
-        if FileManager.default.fileExists(atPath: newURL.path) {
+        if name.caseInsensitiveCompare(target.name) != .orderedSame,
+           FileManager.default.fileExists(atPath: newURL.path) {
             errorMessage = String(
                 format: String(localized: "A file or folder named '%@' already exists."),
                 name
