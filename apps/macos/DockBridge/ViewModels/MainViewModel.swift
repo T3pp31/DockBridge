@@ -1532,7 +1532,7 @@ final class MainViewModel: ObservableObject {
         return items.contains { $0.name == name && !$0.isParentDirectory }
     }
 
-    func moveLocalItem(from source: URL, toDirectory directory: URL) throws {
+    func moveLocalItem(from source: URL, toDirectory directory: URL) async throws {
         guard FileDropValidation.canMoveLocalItem(from: source, to: directory) else {
             throw FileDropError.invalidMove
         }
@@ -1543,7 +1543,9 @@ final class MainViewModel: ObservableObject {
         guard FileDropValidation.canMoveLocalItem(from: source, to: directory) else {
             throw FileDropError.invalidMove
         }
-        try FileManager.default.moveItem(at: source, to: destination)
+        try await Task.detached(priority: .userInitiated) {
+            try FileManager.default.moveItem(at: source, to: destination)
+        }.value
         reloadLocal()
     }
 

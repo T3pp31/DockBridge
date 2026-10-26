@@ -191,11 +191,14 @@ struct LocalPaneDropModifier: ViewModifier {
                 continue
             }
             do {
-                try viewModel.moveLocalItem(from: item.url, toDirectory: viewModel.localPath)
+                Task {
+                    do {
+                        try await viewModel.moveLocalItem(from: item.url, toDirectory: viewModel.localPath)
+                    } catch {
+                        viewModel.errorMessage = error.dockBridgeUserMessage
+                    }
+                }
                 accepted = true
-            } catch {
-                hasMoveError = true
-                viewModel.errorMessage = error.dockBridgeUserMessage
             }
         }
         if !accepted, !hasMoveError {
@@ -381,9 +384,9 @@ struct LocalFileTable: View {
                 continue
             }
             do {
-                try viewModel.moveLocalItem(from: payload.url, toDirectory: target)
-            } catch {
-                viewModel.errorMessage = error.dockBridgeUserMessage
+                Task {
+                    try await viewModel.moveLocalItem(from: payload.url, toDirectory: target)
+                }
             }
         }
     }
