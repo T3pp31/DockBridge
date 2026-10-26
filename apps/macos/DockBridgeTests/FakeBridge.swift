@@ -147,9 +147,14 @@ final class FakeBridge: RemoteBridging {
         transferTasks = []
     }
 
+    /// Records the last host key response so tests can assert it reached the
+    /// bridge (issue #643).
+    private(set) var lastHostKeyAnswer: Bool?
+
     func retryTransfer(taskId: UInt64) async throws {}
 
     func respondToHostKeyChallenge(accepted: Bool) {
+        lastHostKeyAnswer = accepted
         pendingHostKeyChallenge = nil
     }
 
