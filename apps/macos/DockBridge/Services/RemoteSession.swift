@@ -55,6 +55,9 @@ final class RemoteSession: ObservableObject, Identifiable {
     }
 
     func markConnecting() {
+        sessionId = nil
+        connectedUsername = nil
+        initialRemoteDirectory = nil
         connectionStatus = .connecting(endpoint: endpointLabel)
         lastDisconnectReason = nil
     }
