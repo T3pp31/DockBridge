@@ -735,8 +735,8 @@ impl KnownHostsManager {
                 continue;
             };
             let encode = base64::engine::general_purpose::STANDARD;
-            let salt = base64::Engine::encode(&encode, entry.salt);
-            let hash = base64::Engine::encode(&encode, entry.hash);
+            let salt = base64::Engine::encode(&encode, &entry.salt);
+            let hash = base64::Engine::encode(&encode, &entry.hash);
             lines.push(format!("|1|{salt}|{hash} {public_key_openssh}"));
         }
 
