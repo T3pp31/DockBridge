@@ -420,11 +420,12 @@ impl KnownHostsManager {
                 return Ok(());
             }
 
-            let host_is_canonical = existing.host == host && existing.port == port;
+            let host_is_canonical = existing.host.eq_ignore_ascii_case(host)
+                && existing.port == port;
             let has_remaining_alias = existing
                 .aliases
                 .iter()
-                .any(|alias| !(alias.host == host && alias.port == port));
+                .any(|alias| !(alias.host.eq_ignore_ascii_case(host) && alias.port == port));
             let has_remaining_exclusion = existing
                 .excluded_aliases
                 .iter()
@@ -457,7 +458,7 @@ impl KnownHostsManager {
             let mut remaining_aliases: Vec<HostAlias> = old_entry
                 .aliases
                 .drain(..)
-                .filter(|alias| !(alias.host == host && alias.port == port))
+                .filter(|alias| !(alias.host.eq_ignore_ascii_case(host) && alias.port == port))
                 .collect();
 
             // The detached (host, port) is now explicitly trusted with the new
@@ -467,7 +468,7 @@ impl KnownHostsManager {
             let remaining_excluded: Vec<HostAlias> = old_entry
                 .excluded_aliases
                 .drain(..)
-                .filter(|alias| !(alias.host == host && alias.port == port))
+                .filter(|alias| !(alias.host.eq_ignore_ascii_case(host) && alias.port == port))
                 .collect();
 
             if host_is_canonical {
@@ -494,8 +495,9 @@ impl KnownHostsManager {
                 self.entries.insert(canonical_key, old_entry);
             }
 
+            let normalized_host = host.to_ascii_lowercase();
             let entry = KnownHostEntry {
-                host: host.to_string(),
+                host: normalized_host.clone(),
                 port,
                 fingerprint_sha256: fingerprint,
                 algorithm: format!("{:?}", key.algorithm()),
@@ -509,7 +511,7 @@ impl KnownHostsManager {
                 public_key_openssh,
                 marker: None,
             };
-            self.entries.insert(entry_key(host, port), entry);
+            self.entries.insert(entry_key(&normalized_host, port), entry);
 
             return self.persist();
         }
