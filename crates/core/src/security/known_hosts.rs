@@ -849,8 +849,17 @@ impl KnownHostsManager {
                 return Ok(MergeOutcome::default());
             }
 
+            // Do not overwrite an existing trusted entry when recording a
+            // revocation; use a unique marker key instead (issue #653).
+            let canonical = entry_key(&host, port);
+            let insert_key = if self.entries.contains_key(&canonical) {
+                format!("{canonical}#revoked:{}", fingerprint_sha256)
+            } else {
+                canonical
+            };
+
             self.entries.insert(
-                entry_key(&host, port),
+                insert_key,
                 KnownHostEntry {
                     host,
                     port,
@@ -877,8 +886,16 @@ impl KnownHostsManager {
                 return Ok(MergeOutcome::default());
             }
 
+            // Same as revoked: preserve an existing trusted entry (issue #653).
+            let canonical = entry_key(&host, port);
+            let insert_key = if self.entries.contains_key(&canonical) {
+                format!("{canonical}#ca:{}", fingerprint_sha256)
+            } else {
+                canonical
+            };
+
             self.entries.insert(
-                entry_key(&host, port),
+                insert_key,
                 KnownHostEntry {
                     host,
                     port,
