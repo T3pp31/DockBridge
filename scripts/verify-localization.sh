@@ -36,7 +36,11 @@ source_language = data.get("sourceLanguage", "en")
 print(f"Verifying {len(strings)} keys (sourceLanguage={source_language})")
 
 errors = []
-format_pattern = re.compile(r"%(?:(\d+)\$)?(lld|@)")
+# Match general printf-style specifiers. Only the conversion character is
+# compared, so length modifiers like ll/l are treated as equivalent (issue #678).
+format_pattern = re.compile(
+    r"%(?:(\d+)\$)?[+#0\-]*[\d*]*(?:\.[\d*])?(?:hh|h|ll|l|q|z|t|j)?([diouxXeEfgGaAcspF@])"
+)
 
 
 def format_signature(value):
