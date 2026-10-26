@@ -30,9 +30,7 @@ struct WindowMinSizeModifier: NSViewRepresentable {
 
         func applyMinSize() {
             guard let window else { return }
-            let size = NSSize(width: minWidth, height: minHeight)
-            window.minSize = size
-            window.contentMinSize = size
+            window.minSize = NSSize(width: minWidth, height: minHeight)
         }
     }
 }
