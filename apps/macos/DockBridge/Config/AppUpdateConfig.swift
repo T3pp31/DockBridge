@@ -29,6 +29,10 @@ enum AppUpdateConfig {
         UserDefaults.standard.string(forKey: etagDefaultsKey)
     }
 
+    static func clearETag() {
+        UserDefaults.standard.removeObject(forKey: etagDefaultsKey)
+    }
+
     /// Cached, decoded release body from the last successful 200 response.
     /// Used to re-evaluate `304 Not Modified` responses: the ETag only tells
     /// us the *server* payload is unchanged, not that the update was applied.
@@ -68,6 +72,7 @@ enum AppUpdateConfig {
 
     static func clearReleaseBody() {
         try? FileManager.default.removeItem(at: releaseBodyCacheURL())
+        clearETag()
     }
 
     static let allowedDownloadHosts: Set<String> = ["github.com", "objects.githubusercontent.com"]
