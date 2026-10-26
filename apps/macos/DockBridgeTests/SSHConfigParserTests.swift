@@ -73,7 +73,7 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertTrue(hosts.isEmpty)
     }
 
-    func testIncludesOnlyHostsWithHostName() {
+    func testIncludesHostsWithoutHostNameWhenDirectivesPresent() {
         let hosts = SSHConfigParser.parse("""
         Host no-hostname
             User bob
@@ -82,7 +82,10 @@ final class SSHConfigParserTests: XCTestCase {
             HostName real.example.com
         """)
 
-        XCTAssertEqual(hosts.map(\.alias), ["with-hostname"])
+        XCTAssertEqual(hosts.map(\.alias), ["no-hostname", "with-hostname"])
+
+        let profiles = SSHConfigParser.toProfiles(hosts)
+        XCTAssertEqual(profiles[0].host, "no-hostname")
     }
 
     func testDirectiveKeysAreCaseInsensitiveAndSupportEqualsSyntax() {

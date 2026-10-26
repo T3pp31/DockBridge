@@ -76,7 +76,9 @@ enum SSHConfigParser {
             }
         }
         finishCurrentBlock()
-        return hosts.filter { $0.hostName != nil }
+        return hosts.filter { host in
+            host.hostName != nil || host.user != nil || host.port != nil || host.identityFile != nil
+        }
     }
 
     static func toProfiles(_ hosts: [SSHConfigHost]) -> [ConnectionProfile] {
