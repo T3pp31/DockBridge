@@ -74,7 +74,9 @@ final class QuickLookPresenter: NSResponder, QLPreviewPanelDataSource, QLPreview
         panel.dataSource = nil
         panel.delegate = nil
         detachFromResponderChain()
-        previewURLs = []
+        // Keep the URLs until the panel is shown again. Clearing them here
+        // emptied the panel when it regained key status without a new
+        // beginPreviewPanelControl callback.
     }
 
     func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
