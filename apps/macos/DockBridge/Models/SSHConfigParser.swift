@@ -22,6 +22,9 @@ enum SSHConfigParser {
         var hosts: [SSHConfigHost] = []
         var currentHosts: [SSHConfigHost] = []
         var currentBlockIsValid = true
+        // Values set before any Host line and inside wildcard-only blocks
+        // behave as defaults in OpenSSH (issue #688).
+        var globalDefaults = SSHConfigHost(alias: "*")
 
         func finishCurrentBlock() {
             defer {
@@ -59,9 +62,13 @@ enum SSHConfigParser {
             switch directive.key {
             case "host":
                 finishCurrentBlock()
-                currentHosts = directive.arguments
-                    .filter(isImportableAlias)
-                    .map { SSHConfigHost(alias: $0) }
+                let aliases = directive.arguments.filter(isImportableAlias)
+                if aliases.isEmpty {
+                    // Wildcard-only blocks act as defaults (issue #688).
+                    currentHosts = [globalDefaults]
+                } else {
+                    currentHosts = aliases.map { SSHConfigHost(alias: $0) }
+                }
 
             case "match":
                 // A Match section has different conditional semantics. Finish
@@ -70,15 +77,34 @@ enum SSHConfigParser {
                 finishCurrentBlock()
 
             default:
-                guard !currentHosts.isEmpty, currentBlockIsValid else { continue }
-                apply(
-                    directive: directive,
-                    to: &currentHosts,
-                    currentBlockIsValid: &currentBlockIsValid
-                )
+                guard currentBlockIsValid else { continue }
+                if currentHosts.isEmpty {
+                    var targets = [globalDefaults]
+                    apply(
+                        directive: directive,
+                        to: &targets,
+                        currentBlockIsValid: &currentBlockIsValid
+                    )
+                    if let updated = targets.first {
+                        globalDefaults = updated
+                    }
+                } else {
+                    apply(
+                        directive: directive,
+                        to: &currentHosts,
+                        currentBlockIsValid: &currentBlockIsValid
+                    )
+                }
             }
         }
         finishCurrentBlock()
+        for index in hosts.indices {
+            if hosts[index].user == nil { hosts[index].user = globalDefaults.user }
+            if hosts[index].port == nil { hosts[index].port = globalDefaults.port }
+            if hosts[index].identityFiles.isEmpty {
+                hosts[index].identityFiles = globalDefaults.identityFiles
+            }
+        }
         return hosts.filter { $0.hostName != nil }
     }
 
