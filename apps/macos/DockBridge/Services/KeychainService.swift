@@ -104,6 +104,12 @@ final class KeychainService: @unchecked Sendable {
             if updateStatus == errSecSuccess {
                 return
             }
+            // The item can be deleted by a concurrent save/delete operation
+            // between the existence check and update. Re-add it in that case.
+            if updateStatus == errSecItemNotFound {
+                try addItem(account: account, kind: kind, attributes: attributes)
+                return
+            }
             throw KeychainServiceError.unexpectedStatus(updateStatus)
 
         case errSecItemNotFound:
@@ -180,6 +186,16 @@ final class KeychainService: @unchecked Sendable {
             )
             if updateStatus == errSecSuccess {
                 return
+            }
+            // A concurrent delete can remove the item after the duplicate
+            // result was returned. Add it again instead of reporting a stale
+            // not-found status.
+            if updateStatus == errSecItemNotFound {
+                let reAddStatus = SecItemAdd(addQuery as CFDictionary, nil)
+                if reAddStatus == errSecSuccess {
+                    return
+                }
+                throw KeychainServiceError.unexpectedStatus(reAddStatus)
             }
             throw KeychainServiceError.unexpectedStatus(updateStatus)
         }
