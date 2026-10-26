@@ -2456,6 +2456,14 @@ async fn prepare_local_finalize_destination(
                 final_path.display()
             ),
         }),
+        Ok(metadata) if metadata.is_dir() => Err(SftpError::DownloadFailed {
+            remote: remote.to_string(),
+            local: local.to_string(),
+            message: format!(
+                "destination '{}' is a directory and cannot be replaced by a file",
+                final_path.display()
+            ),
+        }),
         Ok(_) => match overwrite_policy {
             TransferOverwritePolicy::FailIfExists => Err(SftpError::DownloadFailed {
                 remote: remote.to_string(),
