@@ -696,7 +696,7 @@ impl<'a> SftpClient<'a> {
                         if deleted_files >= self.directory_walk_limits.max_files {
                             return Err(SftpError::DirectoryWalkLimitExceeded {
                                 limit: "max_files".to_string(),
-                                value: deleted_files as u64,
+                                value: deleted_files,
                                 path: path.to_string(),
                             });
                         }
