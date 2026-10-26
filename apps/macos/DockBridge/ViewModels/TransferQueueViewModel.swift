@@ -120,6 +120,7 @@ final class TransferQueueViewModel: ObservableObject {
             }
             let sessionTasks = filteredTasks(from: fetched)
             updateProgressSamples(for: sessionTasks)
+            markActiveTasksNotifiable(for: sessionTasks)
             let finished = finishedTransitions(from: previousTasks, to: sessionTasks)
             // Remember terminal tasks so a later reappearance is not treated
             // as a brand-new fast transfer.
@@ -222,6 +223,21 @@ final class TransferQueueViewModel: ObservableObject {
     /// if the task disappears and reappears in a later snapshot.
     func markFinishedTasksNotified(_ finished: [TransferTaskRecord]) {
         notifiedTaskIDs.formUnion(finished.map { $0.id })
+    }
+
+    /// Allows a reactivated task to notify its next terminal transition.
+    func markActiveTasksNotifiable(for tasks: [TransferTaskRecord]) {
+        let activeIDs = Set(
+            tasks
+                .filter { task in
+                    switch task.status {
+                    case .pending, .inProgress: return true
+                    case .completed, .failed, .cancelled: return false
+                    }
+                }
+                .map(\.id)
+        )
+        notifiedTaskIDs.subtract(activeIDs)
     }
 
     private func notifyFinishedTransitions(_ finished: [TransferTaskRecord]) {
