@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use dirs::home_dir;
+use dirs::home_dir as system_home_dir;
 
 use crate::error::{ConfigError, SecurityError};
 
@@ -374,7 +374,7 @@ fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBuf {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    home_dir().filter(|path| path.is_absolute())
+    system_home_dir().filter(|path| path.is_absolute())
 }
 
 fn default_known_hosts_path() -> PathBuf {
