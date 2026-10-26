@@ -266,12 +266,21 @@ pub fn ensure_remote_path_within_root(root: &str, path: &str) -> Result<(), Sftp
 pub fn normalize_remote_path(path: &str) -> Result<String, SftpError> {
     reject_parent_dir_segment(path)?;
 
-    let mut value = path.replace("//", "/");
+    // Fold duplicate slashes repeatedly so "///" also becomes "/".
+    let mut value = path.to_string();
+    while value.contains("//") {
+        value = value.replace("//", "/");
+    }
     if value.is_empty() {
         value = "/".to_string();
     }
     if !value.starts_with('/') {
         value = format!("/{value}");
+    }
+    // A trailing slash changes prefix comparisons such as "/srv/" + "/" and
+    // must be removed (issue #661). The root itself is the exception.
+    while value.len() > 1 && value.ends_with('/') {
+        value.pop();
     }
     Ok(value)
 }
