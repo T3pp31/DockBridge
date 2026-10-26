@@ -1780,10 +1780,56 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
 
 #[cfg(not(unix))]
 fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
-    fs::write(path, data).map_err(|err| SecurityError::KnownHostsWriteFailed {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    ensure_known_hosts_parent(path)?;
+    let mut temp_path = None;
+    for attempt in 0..MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS {
+        let candidate = parent.join(format!(
+            "{}.{}.{}.tmp",
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "known_hosts".to_string()),
+            std::process::id(),
+            attempt
+        ));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(file) => {
+                temp_path = Some((candidate, file));
+                break;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(SecurityError::KnownHostsWriteFailed {
+                    path: path.display().to_string(),
+                    message: err.to_string(),
+                })
+            }
+        }
+    }
+    let (temp_path, mut file) = temp_path.ok_or_else(|| SecurityError::KnownHostsWriteFailed {
         path: path.display().to_string(),
-        message: err.to_string(),
-    })
+        message: format!(
+            "failed to create exclusive partial file after {MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS} attempts"
+        ),
+    })?;
+
+    if let Err(err) = file.write_all(data).and_then(|_| file.sync_all()) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(SecurityError::KnownHostsWriteFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        });
+    }
+
+    if let Err(err) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(SecurityError::KnownHostsWriteFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        });
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
