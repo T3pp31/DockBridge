@@ -4,6 +4,24 @@ import XCTest
 final class HostKeyPromptVerificationTests: XCTestCase {
     private var tempDirectory: URL?
 
+    private func withTimeout<T: Sendable>(
+        seconds: UInt64,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                throw URLError(.timedOut)
+            }
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
+    }
+
     override func tearDown() {
         if let tempDirectory {
             try? FileManager.default.removeItem(at: tempDirectory)
@@ -98,12 +116,10 @@ final class HostKeyPromptVerificationTests: XCTestCase {
             expectedFingerprintSha256: nil
         )
 
-        // When: promptUnknownHost is invoked from a background thread (mimicking Rust callback)
-        var promptResult: Bool?
-        let backgroundThread = Thread {
-            promptResult = bridge.promptUnknownHost(challenge: challenge)
+        // When: promptUnknownHost is invoked from a detached task (mimicking a Rust callback)
+        let backgroundTask = Task.detached {
+            bridge.promptUnknownHost(challenge: challenge)
         }
-        backgroundThread.start()
 
         // Then: pendingHostKeyChallenge should appear on the main actor within 2 seconds
         let deadline = ContinuousClock.now + .seconds(2)
@@ -123,11 +139,9 @@ final class HostKeyPromptVerificationTests: XCTestCase {
             bridge.respondToHostKeyChallenge(accepted: true)
         }
 
-        let joinDeadline = ContinuousClock.now + .seconds(5)
-        while backgroundThread.isExecuting, ContinuousClock.now < joinDeadline {
-            try await Task.sleep(for: .milliseconds(50))
+        let promptResult = try await withTimeout(seconds: 5) {
+            await backgroundTask.value
         }
-        XCTAssertFalse(backgroundThread.isExecuting, "promptUnknownHost should complete without hanging")
         XCTAssertEqual(promptResult, true)
     }
 
