@@ -164,6 +164,15 @@ async fn async_canonicalize_local_path(path: &Path) -> Result<PathBuf, SftpError
 }
 
 async fn resolve_local_path_for_root_check(path: &Path) -> Result<PathBuf, SftpError> {
+    if let Ok(metadata) = tokio::fs::symlink_metadata(path).await {
+        if metadata.file_type().is_symlink() {
+            // A dangling symlink is not a new file to create. It would write
+            // through the link on the next I/O operation, so it must be
+            // resolved (or rejected if broken) before the root check.
+            return async_canonicalize_local_path(path).await;
+        }
+    }
+
     if tokio::fs::try_exists(path).await.unwrap_or(false) {
         return async_canonicalize_local_path(path).await;
     }
