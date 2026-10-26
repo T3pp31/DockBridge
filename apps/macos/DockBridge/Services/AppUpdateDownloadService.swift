@@ -35,13 +35,24 @@ struct HdiutilDMGImageMounter: DMGImageMounting {
         }
 
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let plist = try PropertyListSerialization.propertyList(from: outputData, format: nil)
-        guard let dictionary = plist as? [String: Any],
-              let systemEntities = dictionary["system-entities"] as? [[String: Any]] else {
-            throw AppUpdateDownloadError.mountFailed
+        let plist = try? PropertyListSerialization.propertyList(from: outputData, format: nil)
+        let systemEntities = (plist as? [String: Any])?["system-entities"] as? [[String: Any]]
+
+        defer {
+            // hdiutil can exit successfully but fail later plist/entity parsing.
+            // Use the device entry to detach that already-mounted image.
+            if let deviceEntry = systemEntities?.compactMap({ $0["dev-entry"] as? String }).first {
+                let cleanup = Process()
+                cleanup.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+                cleanup.arguments = ["detach", deviceEntry, "-quiet"]
+                cleanup.standardOutput = Pipe()
+                cleanup.standardError = Pipe()
+                try? cleanup.run()
+                cleanup.waitUntilExit()
+            }
         }
 
-        for entity in systemEntities {
+        for entity in systemEntities ?? [] {
             guard let mountPoint = entity["mount-point"] as? String,
                   entity["content"] as? String == "Apple_HFS" || entity["content"] as? String == "Apple_APFS" else {
                 continue
