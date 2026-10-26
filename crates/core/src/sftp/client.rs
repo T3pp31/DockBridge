@@ -1131,15 +1131,22 @@ async fn upload_from_reader(
         tokio::pin!(write_outcome);
 
         let result = tokio::select! {
-            timed_write = &mut write_outcome => match timed_write {
-                Ok(write_result) => write_result.map_err(WriteFailure::Io),
-                Err(_) => Err(WriteFailure::Timeout),
-            },
+            biased;
             () = cancel_watch(is_cancelled) => {
                 let _ = partial.abort(false).await;
                 return Err(SftpError::Cancelled);
             }
+            timed_write = &mut write_outcome => match timed_write {
+                Ok(write_result) => write_result.map_err(WriteFailure::Io),
+                Err(_) => Err(WriteFailure::Timeout),
+            },
         };
+        // A cancellation racing the request timeout must still be classified
+        // as Cancelled (issue #654).
+        if is_cancelled() {
+            let _ = partial.abort(false).await;
+            return Err(SftpError::Cancelled);
+        }
         if let Err(failure) = result {
             match failure {
                 WriteFailure::Timeout => {
