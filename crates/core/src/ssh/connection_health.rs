@@ -7,6 +7,7 @@
 /// underlying libraries actually produce when a channel/session dies are
 /// covered as well.
 pub fn is_connection_lost_message(message: &str) -> bool {
+    let message = remove_quoted_paths(message);
     let lower = message.to_lowercase();
     if lower.contains("session closed")
         || lower.contains("connection reset")
@@ -26,6 +27,22 @@ pub fn is_connection_lost_message(message: &str) -> bool {
         && !lower.contains("permission denied")
         && !lower.contains("no such file")
         && !lower.contains("not found")
+}
+
+/// Removes single-quoted path segments before applying text heuristics.
+/// Error text commonly embeds user-controlled paths; a path containing
+/// "not found" must not suppress a genuine `unexpected eof` indicator.
+fn remove_quoted_paths(message: &str) -> String {
+    let mut output = String::with_capacity(message.len());
+    let mut inside_path = false;
+    for ch in message.chars() {
+        match ch {
+            '\'' => inside_path = !inside_path,
+            _ if inside_path => {}
+            _ => output.push(ch),
+        }
+    }
+    output
 }
 
 #[cfg(test)]
@@ -63,6 +80,16 @@ mod tests {
         ));
         assert!(!is_connection_lost_message(
             "failed to upload 'geoff.txt': no such file"
+        ));
+    }
+
+    #[test]
+    fn detects_eof_with_path_containing_not_found() {
+        // Given: a real EOF and a user-controlled path containing a suppressive phrase
+        // When: checked for connection loss
+        // Then: quoted paths are removed before applying the suppression
+        assert!(is_connection_lost_message(
+            "failed to upload '/home/u/not found.txt': unexpected eof"
         ));
     }
 
