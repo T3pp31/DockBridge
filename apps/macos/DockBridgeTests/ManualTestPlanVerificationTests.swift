@@ -3,6 +3,8 @@ import XCTest
 
 @MainActor
 final class ManualTestPlanVerificationTests: XCTestCase {
+    /// Whether the test actually reached the Docker E2E bridge (issue #644).
+    var usedDockerE2E = false
     private var tempDirectory: URL?
     private var bridge: RustBridgeService?
     override func tearDown() async throws {
@@ -12,7 +14,13 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         if let tempDirectory {
             try? FileManager.default.removeItem(at: tempDirectory)
         }
-        _ = Self.restartDockerSFTP()
+        // Only restart the E2E container for tests that actually used it;
+        // otherwise every non-Docker test pays the restart latency on the
+        // main actor (issue #644).
+        if usedDockerE2E {
+            await Self.restartDockerSFTP()
+            usedDockerE2E = false
+        }
         bridge = nil
         tempDirectory = nil
         try await super.tearDown()
@@ -568,13 +576,13 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         return process.terminationStatus == 0 || process.terminationStatus == 1
     }
 
-    private static func restartDockerSFTP() -> Bool {
+    private static func restartDockerSFTP() async -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: dockerExecutable)
         process.arguments = ["restart", "dockbridge-e2e"]
         guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
-        Thread.sleep(forTimeInterval: 3)
+        await process.waitUntilExit()
+        try? await Task.sleep(for: .seconds(3))
         return process.terminationStatus == 0
     }
 }
