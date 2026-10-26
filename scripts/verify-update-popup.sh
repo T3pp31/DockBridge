@@ -31,21 +31,25 @@ wait_for_update_sheet() {
   local timeout="${1:-20}"
   local elapsed=0
   while (( elapsed < timeout )); do
-    if osascript <<'APPLESCRIPT' >/dev/null 2>&1
+    # osascript exits 0 regardless of the AppleScript result; inspect stdout
+    # (issue #681).
+    local result
+    result=$(osascript <<'APPLESCRIPT'
 tell application "System Events"
   if exists process "DockBridge" then
     tell process "DockBridge"
       if exists (sheet 1 of window 1) then
         if exists static text "Update Available" of sheet 1 of window 1 then
-          return true
+          return "true"
         end if
       end if
     end tell
   end if
 end tell
-return false
+return "false"
 APPLESCRIPT
-    then
+) || return 1
+    if [[ "$result" == "true" ]]; then
       return 0
     fi
     sleep 1
