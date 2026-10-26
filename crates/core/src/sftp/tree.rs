@@ -1132,6 +1132,12 @@ mod tests {
     async fn walk_local_directory_skips_unreadable_subdirectory_but_keeps_rest() {
         use std::os::unix::fs::PermissionsExt;
 
+        // Effective UID 0 bypasses DAC permissions, so this test cannot create
+        // an unreadable directory on root-run environments.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+
         // Given: a tree with an unreadable subdirectory and readable siblings
         let dir = tempdir().unwrap();
         let root = dir.path();
