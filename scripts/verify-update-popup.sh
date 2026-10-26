@@ -104,14 +104,18 @@ else
 fi
 
 echo "== Test 2: Download opens DMG URL =="
+LOG_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 click_sheet_button 2
 sleep 2
 expected_url=$(curl -s -H "Accept: application/vnd.github+json" https://api.github.com/repos/T3pp31/DockBridge/releases/latest \
   | python3 -c "import sys,json; r=json.load(sys.stdin); print(next(a['browser_download_url'] for a in r['assets'] if a['name'].endswith('.dmg')))")
-if [[ "$expected_url" == *"DockBridge-0.1.2-macOS.dmg" ]]; then
+observed_url=$(log show --start "$LOG_START" --style compact \
+  --predicate 'process == "DockBridge" AND eventMessage CONTAINS "opening update release page:"' 2>/dev/null \
+  | sed -n 's/.*opening update release page: \(https:\/\/[^ ]*\).*/\1/p' | tail -1)
+if [[ -n "$observed_url" && "$observed_url" == "$expected_url" ]]; then
   echo "PASS: Download button clicked; target URL is $expected_url"
 else
-  echo "FAIL: Unexpected DMG URL: $expected_url"
+  echo "FAIL: Expected $expected_url, observed ${observed_url:-<none>}"
   exit 1
 fi
 

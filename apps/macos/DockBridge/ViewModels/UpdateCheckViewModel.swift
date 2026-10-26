@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import os
 
 @MainActor
 final class UpdateCheckViewModel: ObservableObject {
@@ -48,6 +49,9 @@ final class UpdateCheckViewModel: ObservableObject {
 
         if !inAppUpdateInstallationEnabled
             || pendingUpdate.downloadURL == pendingUpdate.releasePageURL {
+            AppLogging.update.info(
+                "opening update release page: \(pendingUpdate.releasePageURL.absoluteString, privacy: .public)"
+            )
             NSWorkspace.shared.open(pendingUpdate.releasePageURL)
             if !inAppUpdateInstallationEnabled {
                 downloadErrorMessage = """
