@@ -46,16 +46,35 @@ main() {
 
   log "Running automated transfer-cancel E2E test ..."
   cd "$ROOT/apps/macos"
+  result_bundle="$ROOT/.derivedData-transfer-cancel/results.xcresult"
+  rm -rf "$result_bundle"
   xcodebuild \
     -scheme DockBridge \
     -destination 'platform=macOS' \
     -configuration Debug \
     -only-testing:DockBridgeTests/ManualTestPlanVerificationTests/testCancelInProgressLargeFileUpload \
+    -resultBundlePath "$result_bundle" \
     build test \
     CODE_SIGN_IDENTITY="-" \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGNING_ALLOWED=NO \
     DEVELOPMENT_TEAM=""
+
+  # -only-testing silently succeeds with 0 tests; require at least one ran
+  # and no failures (issue #680).
+  if [[ ! -d "$result_bundle" ]]; then
+    fail "xcodebuild did not produce a result bundle"
+  fi
+  summary=$(xcrun xcresulttool get test-results summary --path "$result_bundle" 2>/dev/null) \
+    || fail "failed to read xcodebuild result bundle"
+  total=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("totalTestCount", 0))')
+  failed=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("failedTests", 0))')
+  if [[ "$total" -lt 1 ]]; then
+    fail "no tests matched the -only-testing identifier"
+  fi
+  if [[ "$failed" -ne 0 ]]; then
+    fail "$failed transfer-cancel test(s) failed"
+  fi
 
   log "PASS: in-progress large file upload can be cancelled via Transfer Queue API"
 }
