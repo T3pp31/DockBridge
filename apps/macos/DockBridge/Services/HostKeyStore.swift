@@ -26,7 +26,13 @@ final class HostKeyStore: @unchecked Sendable {
         let parent = path.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
 
-        if FileManager.default.fileExists(atPath: path.path) {
+        if !FileManager.default.fileExists(atPath: path.path) {
+            FileManager.default.createFile(
+                atPath: path.path,
+                contents: nil,
+                attributes: [.posixPermissions: NSNumber(value: Int16(0o600))]
+            )
+        } else {
             try setSecurePermissions(for: path)
         }
     }
