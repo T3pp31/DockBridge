@@ -26,6 +26,10 @@ if [[ ! -d "$SOURCE_PATH" ]]; then
 fi
 
 echo "DockBridge を Applications にインストールしています..."
+# Stop the old instance first so the new build is actually launched, and so
+# we do not swap the bundle under a running process (issue #670).
+pkill -x DockBridge 2>/dev/null || true
+sleep 1
 ditto "$SOURCE_PATH" "$INSTALL_PATH"
 
 echo "macOS のセキュリティ制限を解除しています..."
