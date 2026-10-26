@@ -1358,6 +1358,13 @@ fn merge_trusted_alias(entry: &mut KnownHostEntry, host: &str, port: u16) -> boo
 fn merge_excluded_aliases(entry: &mut KnownHostEntry, excluded: &[HostAlias]) -> bool {
     let mut changed = false;
     for alias in excluded {
+        if entry_matches_host(entry, &alias.host, alias.port)
+            || entry_is_excluded_for_host(entry, &alias.host, alias.port)
+        {
+            // A host that is already trusted (or excluded) must not be added
+            // to exclusions as well: precedence would silently untrust it.
+            continue;
+        }
         if !entry
             .excluded_aliases
             .iter()
