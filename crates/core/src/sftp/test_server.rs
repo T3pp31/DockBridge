@@ -836,7 +836,28 @@ impl TestSftpServer {
             loop {
                 let (socket, _) = match listener.accept().await {
                     Ok(connection) => connection,
-                    Err(_) => break,
+                    Err(err) => {
+                        // Transient accept failures must not permanently stop
+                        // the test server (issue #660).
+                        let transient = matches!(
+                            err.kind(),
+                            std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::WouldBlock
+                                | std::io::ErrorKind::Interrupted
+                        ) || matches!(
+                            err.raw_os_error(),
+                            Some(libc::EMFILE)
+                                | Some(libc::ENFILE)
+                                | Some(libc::ENOBUFS)
+                                | Some(libc::ENOMEM)
+                        );
+                        if transient {
+                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                            continue;
+                        }
+                        eprintln!("test server accept loop failed: {err}");
+                        break;
+                    }
                 };
                 let mut factory = ServerFactory {
                     clients: Arc::clone(&clients),
