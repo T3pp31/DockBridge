@@ -296,6 +296,12 @@ impl SshSession {
             message: err.to_string(),
         })?;
 
+        // Apply the connection deadline to post-handshake steps too, so an
+        // unresponsive server cannot hang the whole connect flow forever
+        // (issue #663).
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_secs(config.connection_timeout_secs);
+
         let authenticated = authenticate(
             &mut handle,
             &username,
@@ -310,31 +316,40 @@ impl SshSession {
             return Err(AuthError::Failed { username }.into());
         }
 
-        let channel =
-            handle
-                .channel_open_session()
-                .await
-                .map_err(|err| ConnectionError::ConnectFailed {
-                    host: host.clone(),
-                    port,
-                    message: err.to_string(),
-                })?;
-
-        channel
-            .request_subsystem(true, "sftp")
+        let channel = tokio::time::timeout_at(deadline, handle.channel_open_session())
             .await
+            .map_err(|_| ConnectionError::Timeout {
+                timeout_secs: config.connection_timeout_secs,
+            })?
+            .map_err(|err| ConnectionError::ConnectFailed {
+                host: host.clone(),
+                port,
+                message: err.to_string(),
+            })?;
+
+        tokio::time::timeout_at(deadline, channel.request_subsystem(true, "sftp"))
+            .await
+            .map_err(|_| SftpError::SubsystemFailed {
+                message: format!("SFTP subsystem did not initialize within {}s", config.connection_timeout_secs),
+            })?
             .map_err(|err| SftpError::SubsystemFailed {
                 message: err.to_string(),
             })?;
 
-        let sftp = SftpSession::new_with_config(
-            channel.into_stream(),
-            SftpConfig {
-                max_concurrent_writes: config.transfer_upload_pipeline_depth,
-                ..SftpConfig::default()
-            },
+        let sftp = tokio::time::timeout_at(
+            deadline,
+            SftpSession::new_with_config(
+                channel.into_stream(),
+                SftpConfig {
+                    max_concurrent_writes: config.transfer_upload_pipeline_depth,
+                    ..SftpConfig::default()
+                },
+            ),
         )
         .await
+        .map_err(|_| SftpError::SubsystemFailed {
+            message: format!("SFTP session did not initialize within {}s", config.connection_timeout_secs),
+        })?
         .map_err(|err| SftpError::SubsystemFailed {
             message: err.to_string(),
         })?;
