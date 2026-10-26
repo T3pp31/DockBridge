@@ -119,6 +119,8 @@ final class AppSettingsService: @unchecked Sendable {
         let maxTimeoutSecs = 86_400
         let minUploadPipelineDepth = 1
         let maxUploadPipelineDepth = 256
+        let minDownloadPipelineDepth = 1
+        let maxDownloadPipelineDepth = 256
 
         let rawChunkSize = defaults.integer(forKey: AppSettingsKeys.transferChunkSizeBytes)
         let chunkSize = rawChunkSize == 0
@@ -145,8 +147,14 @@ final class AppSettingsService: @unchecked Sendable {
                 clamping: min(maxChunk, max(minChunk, chunkSize))
             ),
             transferDownloadPipelineDepth: UInt64(
-                defaults.object(forKey: AppSettingsKeys.transferDownloadPipelineDepth) as? Int
-                    ?? Int(AppConfig.default.transferDownloadPipelineDepth)
+                clamping: min(
+                    maxDownloadPipelineDepth,
+                    max(
+                        minDownloadPipelineDepth,
+                        defaults.object(forKey: AppSettingsKeys.transferDownloadPipelineDepth) as? Int
+                            ?? Int(AppConfig.default.transferDownloadPipelineDepth)
+                    )
+                )
             ),
             transferUploadPipelineDepth: UInt64(
                 clamping: min(
@@ -220,7 +228,7 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(Int(config.transferRetryCount), forKey: AppSettingsKeys.transferRetryCount)
         defaults.set(Int(config.transferChunkSizeBytes), forKey: AppSettingsKeys.transferChunkSizeBytes)
         defaults.set(
-            Int(config.transferDownloadPipelineDepth),
+            Int(clamping: config.transferDownloadPipelineDepth),
             forKey: AppSettingsKeys.transferDownloadPipelineDepth
         )
         defaults.set(

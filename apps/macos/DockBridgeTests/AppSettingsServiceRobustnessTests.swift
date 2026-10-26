@@ -84,6 +84,24 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
         XCTAssertEqual(highConfig.transferUploadPipelineDepth, 256)
     }
 
+    func testLoadConfigClampsDownloadPipelineDepthToSupportedRange() {
+        // Given: corrupted download pipeline depths outside the supported range
+        defaults().set(-1, forKey: AppSettingsKeys.transferDownloadPipelineDepth)
+
+        // When: the low value is loaded
+        let lowConfig = service.loadConfig()
+
+        // Then: it is clamped to the minimum
+        XCTAssertEqual(lowConfig.transferDownloadPipelineDepth, 1)
+
+        // When: an oversized value is loaded
+        defaults().set(Int.max, forKey: AppSettingsKeys.transferDownloadPipelineDepth)
+        let highConfig = service.loadConfig()
+
+        // Then: it is clamped to the maximum
+        XCTAssertEqual(highConfig.transferDownloadPipelineDepth, 256)
+    }
+
     func testSaveConfigPreservesUploadPipelineDepth() {
         // Given: a non-default upload pipeline depth
         var config = service.loadConfig()
