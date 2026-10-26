@@ -51,10 +51,6 @@ struct AppConfig: Codable, Equatable, Sendable {
         case playTransferNotificationSound
     }
 
-    init() {
-        self = .default
-    }
-
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         connectionTimeoutSecs = try container.decode(UInt64.self, forKey: .connectionTimeoutSecs)
@@ -106,31 +102,33 @@ struct AppConfig: Codable, Equatable, Sendable {
         ) ?? true
     }
 
-    static let `default` = AppConfig(
-        connectionTimeoutSecs: 30,
-        sessionHealthCheckIntervalSecs: 10,
-        transferRetryCount: 3,
-        transferChunkSizeBytes: 262_144,
-        transferDownloadPipelineDepth: 64,
-        transferUploadPipelineDepth: 64,
-        sshInactivityTimeoutSecs: 600,
-        sshKeepaliveIntervalSecs: 30,
-        defaultLocalPath: DefaultLocalPathResolver.containerHomeURL().path,
-        defaultLocalBookmark: nil,
-        confirmBeforeDelete: true,
-        showHiddenFiles: false,
-        mergeOpensshKnownHostsOnConnect: true,
-        opensshKnownHostsPath: "~/.ssh/known_hosts",
-        opensshKnownHostsBookmark: nil,
-        knownHostsStrictMode: true,
-        failConnectOnOpensshMergeError: true,
-        directoryWalkMaxFiles: 100_000,
-        directoryWalkMaxDepth: 64,
-        directoryWalkMaxTotalBytes: 107_374_182_400,
-        transferOverwritePolicy: .replace,
-        notifyWhenTransfersFinish: true,
-        playTransferNotificationSound: true
-    )
+    init() {
+        connectionTimeoutSecs = 30
+        sessionHealthCheckIntervalSecs = 10
+        transferRetryCount = 3
+        transferChunkSizeBytes = 262_144
+        transferDownloadPipelineDepth = 64
+        transferUploadPipelineDepth = 64
+        sshInactivityTimeoutSecs = 600
+        sshKeepaliveIntervalSecs = 30
+        defaultLocalPath = DefaultLocalPathResolver.containerHomeURL().path
+        defaultLocalBookmark = nil
+        confirmBeforeDelete = true
+        showHiddenFiles = false
+        mergeOpensshKnownHostsOnConnect = true
+        opensshKnownHostsPath = "~/.ssh/known_hosts"
+        opensshKnownHostsBookmark = nil
+        knownHostsStrictMode = true
+        failConnectOnOpensshMergeError = true
+        directoryWalkMaxFiles = 100_000
+        directoryWalkMaxDepth = 64
+        directoryWalkMaxTotalBytes = 107_374_182_400
+        transferOverwritePolicy = .replace
+        notifyWhenTransfersFinish = true
+        playTransferNotificationSound = true
+    }
+
+    static let `default` = AppConfig()
 
     /// Builds the UniFFI config record. The overwrite policy is passed per
     /// transfer after the Swift UI resolves the `ask` behavior.
