@@ -118,7 +118,7 @@ fi
 echo "== Test 3: Later suppresses same version on relaunch =="
 if xcodebuild -project apps/macos/DockBridge.xcodeproj -scheme DockBridge -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO \
   -only-testing:DockBridgeTests/UpdateCheckViewModelTests/testSkipUpdatePersistsSkippedVersionAndSuppressesRelaunch test 2>&1 | tail -8 | grep -q "TEST SUCCEEDED"; then
-  echo "PASS: Later saves skipped version and suppresses relaunch"
+  echo "PASS: Later saves skipped version and suppresses relaunch in unit tests"
 else
   echo "FAIL: Skip persistence test failed"
   exit 1
