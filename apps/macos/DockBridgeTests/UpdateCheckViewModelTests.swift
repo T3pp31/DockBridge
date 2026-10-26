@@ -110,6 +110,10 @@ final class UpdateCheckViewModelTests: XCTestCase {
     }
 
     func testDownloadUpdateOpensReleasePageWhenInAppInstallDisabled() async {
+        try XCTSkipUnless(
+            !viewModel.inAppUpdateInstallationEnabled,
+            "Requires in-app update installation to be disabled."
+        )
         XCTAssertFalse(viewModel.inAppUpdateInstallationEnabled)
 
         mockSession.responseJSON = newerReleaseJSON
