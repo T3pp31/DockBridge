@@ -36,6 +36,12 @@ final class KnownHostsErrorMessageTests: XCTestCase {
                 "failed to upload 'geoff.txt': no such file"
             )
         )
+        // A standalone path segment must also not count (issue #689).
+        XCTAssertFalse(
+            DockBridgeError.isConnectionLostMessage(
+                "failed to upload '/srv/eof.txt': no such file"
+            )
+        )
     }
 
     func testConnectionStatusTitles() {
