@@ -56,8 +56,11 @@ struct PathSummaryRow<Actions: View>: View {
     }
 
     private func revealInFinder() {
-        let url = URL(fileURLWithPath: path, isDirectory: true)
-        NSWorkspace.shared.open(url)
+        // Select the path itself in Finder rather than opening it; the
+        // isDirectory flag previously corrupted file paths (issue #640).
+        NSWorkspace.shared.activateFileViewerSelecting([
+            URL(fileURLWithPath: path)
+        ])
     }
 }
 
