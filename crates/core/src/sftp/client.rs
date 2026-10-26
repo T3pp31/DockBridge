@@ -2188,12 +2188,44 @@ fn apply_downloaded_metadata(final_path: &Path, metadata: &FileAttributes) {
     }
 }
 
+/// Returns the parent directory of a remote path, or `None` for the root.
+fn remote_parent_path(remote: &str) -> Option<String> {
+    let normalized = normalize_remote_path(remote).ok()?;
+    if normalized == "/" {
+        return None;
+    }
+    let parent = normalized
+        .rsplit_once('/')
+        .map(|(dir, _)| if dir.is_empty() { "/" } else { dir })
+        .unwrap_or("/");
+    Some(parent.to_string())
+}
+
 async fn create_exclusive_remote_partial(
     client: &SftpClient<'_>,
     parent: &str,
     local: &str,
     remote: &str,
 ) -> Result<(String, RemoteFileHandle), SftpError> {
+    // Verify the final remote parent exists before attempting create; a
+    // missing parent is a real error rather than something to auto-create
+    // (issue #658).
+    if let Some(parent_path) = remote_parent_path(remote) {
+        match client.sftp().metadata(&parent_path).await {
+            Ok(_) => {}
+            Err(err) if is_remote_no_such_file_error(&err) => {
+                return Err(SftpError::UploadFailed {
+                    local: local.to_string(),
+                    remote: remote.to_string(),
+                    message: format!("upload parent directory does not exist: {parent_path}"),
+                });
+            }
+            Err(err) => {
+                return Err(classify_sftp_client_error(err, &parent_path));
+            }
+        }
+    }
+
     for _ in 0..MAX_PARTIAL_CREATE_ATTEMPTS {
         let suffix = random_partial_suffix()?;
         let partial_path = join_remote_path(parent, Path::new(&partial_file_name(&suffix)))?;
@@ -3402,16 +3434,17 @@ mod tests {
     #[tokio::test]
     async fn create_directory_all_fails_on_generic_failure_without_existing_directory() {
         let server = TestSftpServer::start().await;
+        // The default sandbox creates /upload; use a path outside it.
         server.failures.fail_mkdir.store(true, Ordering::SeqCst);
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
 
         let err = client
-            .create_directory_all("/upload/nested/dir")
+            .create_directory_all("/nested/upload/dir")
             .await
             .unwrap_err();
         assert!(
-            matches!(err, SftpError::MkdirFailed { ref path, .. } if path == "/upload"),
+            matches!(err, SftpError::MkdirFailed { ref path, .. } if path == "/nested"),
             "unexpected error: {err:?}"
         );
     }
@@ -5233,6 +5266,8 @@ mod tests {
 
         let server = TestSftpServer::start().await;
         let session = server.connect_session().await;
+        // Real servers require the remote parent to exist (issue #658).
+        server.write_remote_file("/metadata/.keep", b"").await;
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();
         let target_path = local_dir.path().join("target.sh");
@@ -5310,6 +5345,8 @@ mod tests {
     async fn upload_succeeds_when_metadata_preservation_fails() {
         let server = TestSftpServer::start().await;
         let session = server.connect_session().await;
+        // Real servers require the remote parent to exist (issue #658).
+        server.write_remote_file("/metadata/.keep", b"").await;
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();
         let local_path = local_dir.path().join("best-effort.txt");
