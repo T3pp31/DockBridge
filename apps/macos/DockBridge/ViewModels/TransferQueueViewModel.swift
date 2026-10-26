@@ -3,6 +3,11 @@ import Foundation
 
 @MainActor
 final class TransferQueueViewModel: ObservableObject {
+    /// Per-view active transfer counts. Dock badge is a single global state, so
+    /// each window/tab reports through this coordinator instead of overwriting
+    /// the badge directly.
+    private static var activeTransferCounts: [UUID: Int] = [:]
+
     @Published private(set) var tasks: [TransferTaskRecord] = []
     @Published var errorMessage: String?
 
@@ -268,7 +273,9 @@ final class TransferQueueViewModel: ObservableObject {
         let active = tasks.filter {
             $0.status == .inProgress || $0.status == .pending
         }.count
-        NSApp.dockTile.badgeLabel = active > 0 ? "\(active)" : nil
+        Self.activeTransferCounts[UUID()] = active
+        let total = Self.activeTransferCounts.values.reduce(0, +)
+        NSApp.dockTile.badgeLabel = total > 0 ? "\(total)" : nil
     }
 
     private func updateProgressSamples(for fetched: [TransferTaskRecord]) {
