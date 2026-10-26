@@ -228,13 +228,27 @@ struct SftpHandler {
 }
 
 impl SftpHandler {
+    /// Resolves a remote path inside the sandbox, rejecting paths that escape
+    /// via lexical components (issue #657).
     fn resolve(&self, path: &str) -> PathBuf {
-        let trimmed = path.trim_start_matches('/');
-        if trimmed.is_empty() {
-            self.root.clone()
-        } else {
-            self.root.join(trimmed)
+        let mut components: Vec<String> = vec![];
+        for raw in path.split('/') {
+            match raw {
+                "" | "." => continue,
+                ".." => {
+                    components.pop();
+                }
+                other => components.push(other.to_string()),
+            }
         }
+        components.iter().fold(self.root.clone(), |acc, component| {
+            acc.join(component)
+        })
+    }
+
+    /// Returns whether the resolved path is still inside the sandbox root.
+    fn is_within_root(&self, path: &Path) -> bool {
+        path.starts_with(&self.root)
     }
 
     fn canonical(&self, path: &str) -> String {
@@ -413,6 +427,9 @@ impl russh_sftp::server::Handler for SftpHandler {
         _attrs: FileAttributes,
     ) -> Result<Handle, Self::Error> {
         let local = self.resolve(&filename);
+        if !self.is_within_root(&local) {
+            return Err(StatusCode::PermissionDenied);
+        }
         if let Some(parent) = local.parent() {
             fs::create_dir_all(parent)
                 .await
