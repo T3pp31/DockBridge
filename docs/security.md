@@ -26,7 +26,7 @@
 
 Tilde paths and default security-file locations resolve the home directory with
 the platform-standard `dirs` API. On Unix and macOS, an explicit non-empty
-`HOME` takes precedence; if it is unset or empty, the effective user's home is
+`HOME` takes precedence; if it is unset or empty, the real user's home is
 resolved from the system database. On Windows, the user profile known folder
 is used. DockBridge only accepts an absolute home path and does not honor a
 relative or empty value.

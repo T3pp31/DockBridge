@@ -479,6 +479,11 @@ mod tests {
     }
 
     #[test]
+    fn normalize_home_returns_none_when_home_is_unresolved() {
+        assert_eq!(normalize_home(None), None);
+    }
+
+    #[test]
     fn expand_tilde_ignores_relative_home() {
         // A relative HOME should not be used to expand ~.
         let relative = PathBuf::from("relative/path");
