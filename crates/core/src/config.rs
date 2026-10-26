@@ -373,8 +373,12 @@ fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBuf {
     path.to_path_buf()
 }
 
+fn normalize_home(home: Option<PathBuf>) -> Option<PathBuf> {
+    home.filter(|path| path.is_absolute())
+}
+
 fn home_dir() -> Option<PathBuf> {
-    system_home_dir().filter(|path| path.is_absolute())
+    normalize_home(system_home_dir())
 }
 
 fn default_known_hosts_path() -> PathBuf {
@@ -461,6 +465,17 @@ mod tests {
             expanded,
             PathBuf::from("/tmp/home/.dockbridge/known_hosts.json")
         );
+    }
+
+    #[test]
+    fn normalize_home_accepts_absolute_home() {
+        let home = PathBuf::from("/home/user");
+        assert_eq!(normalize_home(Some(home.clone())), Some(home));
+    }
+
+    #[test]
+    fn normalize_home_rejects_relative_home() {
+        assert_eq!(normalize_home(Some(PathBuf::from("relative/home"))), None);
     }
 
     #[test]
