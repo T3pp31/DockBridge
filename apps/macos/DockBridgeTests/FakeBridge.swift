@@ -131,7 +131,17 @@ final class FakeBridge: RemoteBridging {
     }
 
     func cancelTransfer(taskId: UInt64) async throws {
-        transferTasks.removeAll { $0.id == taskId }
+        guard let index = transferTasks.firstIndex(where: { $0.id == taskId }) else { return }
+        transferTasks[index] = TransferTaskRecord(
+            id: transferTasks[index].id,
+            sessionId: transferTasks[index].sessionId,
+            direction: transferTasks[index].direction,
+            localPath: transferTasks[index].localPath,
+            remotePath: transferTasks[index].remotePath,
+            status: .cancelled,
+            bytesTransferred: transferTasks[index].bytesTransferred,
+            totalBytes: transferTasks[index].totalBytes
+        )
     }
 
     func clearCompletedTransfers() async throws {
