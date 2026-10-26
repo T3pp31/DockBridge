@@ -273,7 +273,7 @@ final class TransferQueueViewModel: ObservableObject {
         let active = tasks.filter {
             $0.status == .inProgress || $0.status == .pending
         }.count
-        Self.activeTransferCounts[UUID()] = active
+        Self.activeTransferCounts[ObjectIdentifier(self)] = active
         let total = Self.activeTransferCounts.values.reduce(0, +)
         NSApp.dockTile.badgeLabel = total > 0 ? "\(total)" : nil
     }
