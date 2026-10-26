@@ -225,8 +225,11 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         defaults.set(90, forKey: AppSettingsKeys.connectionTimeoutSecs)
         try bridge.prepareClient()
 
-        let record = settings.buildAppConfigRecord(knownHostsPath: knownHostsPath)
-        XCTAssertEqual(record.connectionTimeoutSecs, 90)
+        XCTAssertEqual(bridge.lastAppConfigRecord?.connectionTimeoutSecs, 90)
+        XCTAssertEqual(
+            bridge.lastAppConfigRecord?.knownHostsPath,
+            knownHostsPath
+        )
     }
 
     @MainActor

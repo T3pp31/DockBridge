@@ -25,6 +25,8 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     private(set) var activeSessionID: UUID?
 
     private var client: DockBridgeClient?
+    /// Most recent Rust client configuration, exposed for test verification.
+    private(set) var lastAppConfigRecord: AppConfigRecord?
     private let settings: AppSettingsService
     private let hostKeyStore: HostKeyStore
     private let bookmarkService: SecurityScopedBookmarkService
@@ -50,6 +52,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         guard client == nil else { return }
         try hostKeyStore.ensureStoreDirectoryExists()
         let record = settings.buildAppConfigRecord(knownHostsPath: hostKeyStore.knownHostsPath.path)
+        lastAppConfigRecord = record
         client = try DockBridgeClient(
             appConfig: record,
             hostKeyHandler: self,
