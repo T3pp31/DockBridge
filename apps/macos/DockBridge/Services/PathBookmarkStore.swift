@@ -5,6 +5,7 @@ final class PathBookmarkStore: @unchecked Sendable {
 
     private let defaults: UserDefaults
     private let storageKey = "pathBookmarks"
+    private let backupStorageKey = "pathBookmarksCorruptBackup"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -16,6 +17,7 @@ final class PathBookmarkStore: @unchecked Sendable {
             return try JSONDecoder().decode([PathBookmark].self, from: data)
         } catch {
             AppLogging.ui.error("failed to decode path bookmarks: \(error.localizedDescription, privacy: .public)")
+            defaults.set(data, forKey: backupStorageKey)
             return []
         }
     }
