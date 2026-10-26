@@ -42,6 +42,7 @@ final class ProfileTrustStore: @unchecked Sendable {
     private let baseDirectory: URL
     private let fileName = "trusted_endpoints.json"
     private let signingKeyStore: ProfileTrustSigningKeyStore
+    private let trustLock = NSLock()
 
     init(
         baseDirectory: URL,
@@ -164,9 +165,9 @@ final class ProfileTrustStore: @unchecked Sendable {
     }
 
     func updateTrust(for profile: ConnectionProfile) throws {
-        var trusted = try loadTrustedEndpoints()
-        trusted[profile.id] = TrustedProfileEndpoint(profile: profile)
-        try saveTrustedEndpoints(trusted)
+        try mutateTrustedEndpoints { trusted in
+            trusted[profile.id] = TrustedProfileEndpoint(profile: profile)
+        }
     }
 
     func replaceTrustedEndpoints(for profiles: [ConnectionProfile]) throws {
@@ -177,14 +178,24 @@ final class ProfileTrustStore: @unchecked Sendable {
     }
 
     func acceptChange(_ change: ProfileEndpointChange) throws {
-        var trusted = try loadTrustedEndpoints()
-        trusted[change.profileID] = change.current
-        try saveTrustedEndpoints(trusted)
+        try mutateTrustedEndpoints { trusted in
+            trusted[change.profileID] = change.current
+        }
     }
 
     func removeTrust(for profileID: UUID) throws {
+        try mutateTrustedEndpoints { trusted in
+            trusted.removeValue(forKey: profileID)
+        }
+    }
+
+    private func mutateTrustedEndpoints(
+        _ mutate: (inout [UUID: TrustedProfileEndpoint]) throws -> Void
+    ) throws {
+        trustLock.lock()
+        defer { trustLock.unlock() }
         var trusted = try loadTrustedEndpoints()
-        guard trusted.removeValue(forKey: profileID) != nil else { return }
+        try mutate(&trusted)
         try saveTrustedEndpoints(trusted)
     }
 
