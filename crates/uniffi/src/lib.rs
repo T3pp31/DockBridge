@@ -520,10 +520,12 @@ impl DockBridgeClient {
         self.handle_session_result(
             session_id,
             block_on(async move {
-                let sessions = sessions.lock().await;
-                let session = sessions
-                    .get(&session_id)
-                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                let session = {
+                    let sessions = sessions.lock().await;
+                    sessions.get(&session_id).cloned().ok_or_else(|| {
+                        map_error_string(format!("session {session_id} not found"))
+                    })?
+                };
                 SftpClient::new(session.as_ref())
                     .initial_directory()
                     .await
@@ -541,10 +543,12 @@ impl DockBridgeClient {
         let files = self.handle_session_result(
             session_id,
             block_on(async move {
-                let sessions = sessions.lock().await;
-                let session = sessions
-                    .get(&session_id)
-                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                let session = {
+                    let sessions = sessions.lock().await;
+                    sessions.get(&session_id).cloned().ok_or_else(|| {
+                        map_error_string(format!("session {session_id} not found"))
+                    })?
+                };
                 SftpClient::new(session.as_ref())
                     .list_directory(&path)
                     .await
@@ -569,10 +573,12 @@ impl DockBridgeClient {
         let file = self.handle_session_result(
             session_id,
             block_on(async move {
-                let sessions = sessions.lock().await;
-                let session = sessions
-                    .get(&session_id)
-                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                let session = {
+                    let sessions = sessions.lock().await;
+                    sessions.get(&session_id).cloned().ok_or_else(|| {
+                        map_error_string(format!("session {session_id} not found"))
+                    })?
+                };
                 SftpClient::new(session.as_ref())
                     .stat(&path, follow_symlinks)
                     .await
@@ -588,10 +594,12 @@ impl DockBridgeClient {
         let target = self.handle_session_result(
             session_id,
             block_on(async move {
-                let sessions = sessions.lock().await;
-                let session = sessions
-                    .get(&session_id)
-                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                let session = {
+                    let sessions = sessions.lock().await;
+                    sessions.get(&session_id).cloned().ok_or_else(|| {
+                        map_error_string(format!("session {session_id} not found"))
+                    })?
+                };
                 SftpClient::new(session.as_ref())
                     .read_link(&path)
                     .await
@@ -612,10 +620,12 @@ impl DockBridgeClient {
         self.handle_session_result(
             session_id,
             block_on(async move {
-                let sessions = sessions.lock().await;
-                let session = sessions
-                    .get(&session_id)
-                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                let session = {
+                    let sessions = sessions.lock().await;
+                    sessions.get(&session_id).cloned().ok_or_else(|| {
+                        map_error_string(format!("session {session_id} not found"))
+                    })?
+                };
                 SftpClient::new(session.as_ref())
                     .set_permissions(&path, mode)
                     .await
@@ -734,10 +744,12 @@ impl DockBridgeClient {
         self.handle_session_result(
             session_id,
             block_on(async move {
-                let sessions = sessions.lock().await;
-                let session = sessions
-                    .get(&session_id)
-                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                let session = {
+                    let sessions = sessions.lock().await;
+                    sessions.get(&session_id).cloned().ok_or_else(|| {
+                        map_error_string(format!("session {session_id} not found"))
+                    })?
+                };
                 SftpClient::new(session.as_ref())
                     .delete(&remote_path)
                     .await
@@ -762,10 +774,12 @@ impl DockBridgeClient {
         let count = self.handle_session_result(
             session_id,
             block_on(async move {
-                let sessions = sessions.lock().await;
-                let session = sessions
-                    .get(&session_id)
-                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                let session = {
+                    let sessions = sessions.lock().await;
+                    sessions.get(&session_id).cloned().ok_or_else(|| {
+                        map_error_string(format!("session {session_id} not found"))
+                    })?
+                };
                 SftpClient::new(session.as_ref())
                     .delete_entry(&remote_path, recursive)
                     .await
@@ -780,10 +794,12 @@ impl DockBridgeClient {
         self.handle_session_result(
             session_id,
             block_on(async move {
-                let sessions = sessions.lock().await;
-                let session = sessions
-                    .get(&session_id)
-                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                let session = {
+                    let sessions = sessions.lock().await;
+                    sessions.get(&session_id).cloned().ok_or_else(|| {
+                        map_error_string(format!("session {session_id} not found"))
+                    })?
+                };
                 SftpClient::new(session.as_ref())
                     .rename(&from, &to)
                     .await
@@ -802,10 +818,12 @@ impl DockBridgeClient {
         self.handle_session_result(
             session_id,
             block_on(async move {
-                let sessions = sessions.lock().await;
-                let session = sessions
-                    .get(&session_id)
-                    .ok_or_else(|| map_error_string(format!("session {session_id} not found")))?;
+                let session = {
+                    let sessions = sessions.lock().await;
+                    sessions.get(&session_id).cloned().ok_or_else(|| {
+                        map_error_string(format!("session {session_id} not found"))
+                    })?
+                };
                 SftpClient::new(session.as_ref())
                     .create_directory(&remote_path)
                     .await
