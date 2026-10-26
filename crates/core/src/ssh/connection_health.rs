@@ -6,8 +6,32 @@
 /// "EOF" is only matched as a standalone token. Additional messages that the
 /// underlying libraries actually produce when a channel/session dies are
 /// covered as well.
+/// Strips quoted path-like segments before disconnect heuristics so a path
+/// containing a phrase cannot falsely indicate connection loss (issue #662).
+fn strip_quoted_paths(message: &str) -> String {
+    let mut result = String::with_capacity(message.len());
+    let mut rest = message;
+    while let Some(start) = rest.find(['\'', '"']) {
+        let quote = rest[start..].chars().next().unwrap();
+        let after_open = &rest[start + quote.len_utf8()..];
+        if let Some(end) = after_open.find(quote) {
+            result.push_str(&rest[..start]);
+            result.push_str(" \"path\" ");
+            rest = &after_open[end + quote.len_utf8()..];
+        } else {
+            break;
+        }
+    }
+    result.push_str(rest);
+    result
+}
+
 pub fn is_connection_lost_message(message: &str) -> bool {
-    let lower = message.to_lowercase();
+    // User-controlled paths may contain disconnect phrases (e.g. a file named
+    // "eof.txt" or "session closed"). Remove quoted paths before matching
+    // (issue #662).
+    let stripped = strip_quoted_paths(message);
+    let lower = stripped.to_lowercase();
     if lower.contains("session closed")
         || lower.contains("connection reset")
         || lower.contains("broken pipe")
@@ -18,11 +42,11 @@ pub fn is_connection_lost_message(message: &str) -> bool {
     {
         return true;
     }
-    // "eof" only as its own word, not inside a user-controlled path segment
-    // (e.g. "unexpected eof", "eof, ..."), so `geoffrey` / `thereof` are safe.
-    lower
-        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
-        .any(|token| token == "eof" || token == "eof,")
+    // Match eof as a phrase only; a bare token can be a path segment.
+    (lower.contains("unexpected eof")
+        || lower.contains("eof while reading")
+        || lower.contains("connection closed: eof")
+        || lower.contains("eof from server"))
         && !lower.contains("permission denied")
         && !lower.contains("no such file")
         && !lower.contains("not found")
