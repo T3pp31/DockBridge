@@ -262,12 +262,12 @@ fn is_supported_key_algorithm(algorithm: &PrivateKeyAlgorithm) -> bool {
 
 impl HostKeyPrompt for CliHostKeyPrompt {
     fn prompt_unknown_host(&self, host: &str, port: u16, fingerprint_sha256: &str) -> bool {
-        eprintln!("The authenticity of host '{host}:{port}' can't be established.");
-        eprintln!("Host key fingerprint is {fingerprint_sha256}.");
+        print_to_tty_or_stderr(&format!("The authenticity of host '{host}:{port}' can't be established."));
+        print_to_tty_or_stderr(&format!("Host key fingerprint is {fingerprint_sha256}."));
         match self.policy {
             HostKeyPolicy::AcceptNew => true,
             HostKeyPolicy::Strict => {
-                eprintln!("Host key verification failed (--host-key-policy strict).");
+                print_to_tty_or_stderr("Host key verification failed (--host-key-policy strict).");
                 false
             }
             HostKeyPolicy::Ask => {
@@ -283,29 +283,44 @@ impl HostKeyPrompt for CliHostKeyPrompt {
         expected_fingerprint_sha256: &str,
         actual_fingerprint_sha256: &str,
     ) -> bool {
-        eprintln!("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
-        eprintln!("@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @");
-        eprintln!("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
-        eprintln!("Host key for '{host}:{port}' has changed.");
-        eprintln!("Expected fingerprint: {expected_fingerprint_sha256}");
-        eprintln!("Received fingerprint: {actual_fingerprint_sha256}");
+        print_to_tty_or_stderr("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+        print_to_tty_or_stderr("@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @");
+        print_to_tty_or_stderr("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+        print_to_tty_or_stderr(&format!("Host key for '{host}:{port}' has changed."));
+        print_to_tty_or_stderr(&format!("Expected fingerprint: {expected_fingerprint_sha256}"));
+        print_to_tty_or_stderr(&format!("Received fingerprint: {actual_fingerprint_sha256}"));
         match self.policy {
             HostKeyPolicy::Ask => {
                 prompt_yes_no_tty("Are you sure you want to continue connecting (yes/no)? ")
             }
             HostKeyPolicy::AcceptNew | HostKeyPolicy::Strict => {
-                eprintln!(
+                print_to_tty_or_stderr(&format!(
                     "Host key verification failed (--host-key-policy {}).",
                     match self.policy {
                         HostKeyPolicy::AcceptNew => "accept-new",
                         HostKeyPolicy::Strict => "strict",
                         HostKeyPolicy::Ask => unreachable!(),
                     }
-                );
+                ));
                 false
             }
         }
     }
+}
+
+/// Writes prompt text to the controlling terminal when available, falling
+/// back to stderr so redirected diagnostics never hide an interactive prompt
+/// (issue #648).
+fn print_to_tty_or_stderr(text: &str) {
+    if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+        use std::io::Write;
+        if tty.write_all(text.as_bytes()).is_ok() {
+            let _ = tty.flush();
+            return;
+        }
+    }
+    eprint!("{text}");
+    let _ = std::io::stderr().flush();
 }
 
 /// Prompts on the controlling terminal so that `--password-stdin` /
@@ -328,8 +343,10 @@ fn prompt_yes_no_tty(prompt: &str) -> bool {
             return false;
         }
     };
-    eprint!("{prompt}");
-    let _ = std::io::stderr().flush();
+    use std::io::Write;
+    if tty.write_all(prompt.as_bytes()).is_ok() {
+        let _ = tty.flush();
+    }
 
     let mut input = String::new();
     let mut reader = std::io::BufReader::new(&mut tty);
