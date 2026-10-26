@@ -649,7 +649,9 @@ final class ConnectionListViewModel: ObservableObject {
             if connectionStatus.isConnected || connectionStatus.isConnecting {
                 await disconnect()
             }
-            await connect(profile: profile)
+            // Reconnect must pass through the same endpoint-change, root-user,
+            // and RSA-key confirmation gates as a normal Connect.
+            requestConnect(profile: profile)
         }
     }
 
