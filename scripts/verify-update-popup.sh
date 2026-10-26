@@ -135,17 +135,22 @@ else
   exit 1
 fi
 HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 open "$APP"
-sleep 6
-if pgrep -x DockBridge >/dev/null; then
-  echo "PASS: App launched while GitHub API unreachable"
+offline_check_deadline=$((SECONDS + 30))
+while (( SECONDS < offline_check_deadline )); do
+  if ! pgrep -x DockBridge >/dev/null; then
+    echo "FAIL: App did not stay running offline"
+    exit 1
+  fi
+  if [[ "$(sheet_absent)" != "true" ]]; then
+    echo "FAIL: Unexpected sheet while offline"
+    exit 1
+  fi
+  sleep 1
+done
+if pgrep -x DockBridge >/dev/null && [[ "$(sheet_absent)" == "true" ]]; then
+  echo "PASS: App stayed running without a sheet while GitHub API was unreachable"
 else
-  echo "FAIL: App did not stay running offline"
-  exit 1
-fi
-if [[ "$(sheet_absent)" == "true" ]]; then
-  echo "PASS: No update sheet when offline"
-else
-  echo "FAIL: Unexpected sheet while offline"
+  echo "FAIL: App or sheet state changed during offline launch"
   exit 1
 fi
 
