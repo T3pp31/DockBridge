@@ -153,7 +153,7 @@ echo "== Test 5: HostKey deferral =="
 kill_dockbridge
 if xcodebuild -project apps/macos/DockBridge.xcodeproj -scheme DockBridge -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO \
   -only-testing:DockBridgeTests/UpdateCheckViewModelTests/testCheckOnLaunchDefersSheetWhileHostKeyBlocking test 2>&1 | tail -8 | grep -q "TEST SUCCEEDED"; then
-  echo "PASS: HostKey blocking defers update sheet until dismissal"
+  echo "PASS: HostKey blocking defers update sheet until dismissal in unit tests"
 else
   echo "FAIL: HostKey deferral test failed"
   exit 1
