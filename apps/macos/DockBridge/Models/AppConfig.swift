@@ -25,6 +25,87 @@ struct AppConfig: Codable, Equatable, Sendable {
     var notifyWhenTransfersFinish: Bool = true
     var playTransferNotificationSound: Bool = true
 
+    private enum CodingKeys: String, CodingKey {
+        case connectionTimeoutSecs
+        case sessionHealthCheckIntervalSecs
+        case transferRetryCount
+        case transferChunkSizeBytes
+        case transferDownloadPipelineDepth
+        case transferUploadPipelineDepth
+        case sshInactivityTimeoutSecs
+        case sshKeepaliveIntervalSecs
+        case defaultLocalPath
+        case defaultLocalBookmark
+        case confirmBeforeDelete
+        case showHiddenFiles
+        case mergeOpensshKnownHostsOnConnect
+        case opensshKnownHostsPath
+        case opensshKnownHostsBookmark
+        case knownHostsStrictMode
+        case failConnectOnOpensshMergeError
+        case directoryWalkMaxFiles
+        case directoryWalkMaxDepth
+        case directoryWalkMaxTotalBytes
+        case transferOverwritePolicy
+        case notifyWhenTransfersFinish
+        case playTransferNotificationSound
+    }
+
+    init() {
+        self = .default
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        connectionTimeoutSecs = try container.decode(UInt64.self, forKey: .connectionTimeoutSecs)
+        sessionHealthCheckIntervalSecs = try container.decode(UInt64.self, forKey: .sessionHealthCheckIntervalSecs)
+        transferRetryCount = try container.decode(UInt32.self, forKey: .transferRetryCount)
+        transferChunkSizeBytes = try container.decode(UInt64.self, forKey: .transferChunkSizeBytes)
+        transferDownloadPipelineDepth = try container.decode(UInt64.self, forKey: .transferDownloadPipelineDepth)
+        transferUploadPipelineDepth = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .transferUploadPipelineDepth
+        ) ?? 64
+        sshInactivityTimeoutSecs = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .sshInactivityTimeoutSecs
+        )
+        sshKeepaliveIntervalSecs = try container.decode(UInt64.self, forKey: .sshKeepaliveIntervalSecs)
+        defaultLocalPath = try container.decode(String.self, forKey: .defaultLocalPath)
+        defaultLocalBookmark = try container.decodeIfPresent(Data.self, forKey: .defaultLocalBookmark)
+        confirmBeforeDelete = try container.decode(Bool.self, forKey: .confirmBeforeDelete)
+        showHiddenFiles = try container.decode(Bool.self, forKey: .showHiddenFiles)
+        mergeOpensshKnownHostsOnConnect = try container.decode(
+            Bool.self,
+            forKey: .mergeOpensshKnownHostsOnConnect
+        )
+        opensshKnownHostsPath = try container.decode(String.self, forKey: .opensshKnownHostsPath)
+        opensshKnownHostsBookmark = try container.decodeIfPresent(
+            Data.self,
+            forKey: .opensshKnownHostsBookmark
+        )
+        knownHostsStrictMode = try container.decode(Bool.self, forKey: .knownHostsStrictMode)
+        failConnectOnOpensshMergeError = try container.decode(
+            Bool.self,
+            forKey: .failConnectOnOpensshMergeError
+        )
+        directoryWalkMaxFiles = try container.decode(UInt64.self, forKey: .directoryWalkMaxFiles)
+        directoryWalkMaxDepth = try container.decode(UInt32.self, forKey: .directoryWalkMaxDepth)
+        directoryWalkMaxTotalBytes = try container.decode(UInt64.self, forKey: .directoryWalkMaxTotalBytes)
+        transferOverwritePolicy = try container.decodeIfPresent(
+            TransferOverwritePolicy.self,
+            forKey: .transferOverwritePolicy
+        ) ?? .replace
+        notifyWhenTransfersFinish = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .notifyWhenTransfersFinish
+        ) ?? true
+        playTransferNotificationSound = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .playTransferNotificationSound
+        ) ?? true
+    }
+
     static let `default` = AppConfig(
         connectionTimeoutSecs: 30,
         sessionHealthCheckIntervalSecs: 10,
