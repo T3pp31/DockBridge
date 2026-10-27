@@ -420,8 +420,8 @@ impl KnownHostsManager {
                 return Ok(());
             }
 
-            let host_is_canonical = existing.host.eq_ignore_ascii_case(host)
-                && existing.port == port;
+            let host_is_canonical =
+                existing.host.eq_ignore_ascii_case(host) && existing.port == port;
             let has_remaining_alias = existing
                 .aliases
                 .iter()
@@ -511,7 +511,8 @@ impl KnownHostsManager {
                 public_key_openssh,
                 marker: None,
             };
-            self.entries.insert(entry_key(&normalized_host, port), entry);
+            self.entries
+                .insert(entry_key(&normalized_host, port), entry);
 
             return self.persist();
         }
