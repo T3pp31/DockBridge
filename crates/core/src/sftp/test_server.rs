@@ -5,10 +5,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::sftp::tree::normalize_remote_path;
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId};
-use crate::sftp::tree::normalize_remote_path;
 use russh::{MethodKind, MethodSet};
 use russh_sftp::de;
 use russh_sftp::extensions::{PosixRenameExtension, POSIX_RENAME};
@@ -386,7 +386,9 @@ impl russh_sftp::server::Handler for SftpHandler {
         }
         Ok(Name {
             id,
-            files: vec![File::dummy(normalize_remote_path(&path).unwrap_or_else(|_| format!("/{path}")))],
+            files: vec![File::dummy(
+                normalize_remote_path(&path).unwrap_or_else(|_| format!("/{path}")),
+            )],
         })
     }
 
