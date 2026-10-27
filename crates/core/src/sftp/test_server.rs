@@ -241,9 +241,9 @@ impl SftpHandler {
                 other => components.push(other.to_string()),
             }
         }
-        components.iter().fold(self.root.clone(), |acc, component| {
-            acc.join(component)
-        })
+        components
+            .iter()
+            .fold(self.root.clone(), |acc, component| acc.join(component))
     }
 
     /// Returns whether the resolved path is still inside the sandbox root.
