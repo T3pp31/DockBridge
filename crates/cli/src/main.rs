@@ -262,7 +262,9 @@ fn is_supported_key_algorithm(algorithm: &PrivateKeyAlgorithm) -> bool {
 
 impl HostKeyPrompt for CliHostKeyPrompt {
     fn prompt_unknown_host(&self, host: &str, port: u16, fingerprint_sha256: &str) -> bool {
-        print_to_tty_or_stderr(&format!("The authenticity of host '{host}:{port}' can't be established."));
+        print_to_tty_or_stderr(&format!(
+            "The authenticity of host '{host}:{port}' can't be established."
+        ));
         print_to_tty_or_stderr(&format!("Host key fingerprint is {fingerprint_sha256}."));
         match self.policy {
             HostKeyPolicy::AcceptNew => true,
@@ -287,8 +289,12 @@ impl HostKeyPrompt for CliHostKeyPrompt {
         print_to_tty_or_stderr("@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @");
         print_to_tty_or_stderr("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
         print_to_tty_or_stderr(&format!("Host key for '{host}:{port}' has changed."));
-        print_to_tty_or_stderr(&format!("Expected fingerprint: {expected_fingerprint_sha256}"));
-        print_to_tty_or_stderr(&format!("Received fingerprint: {actual_fingerprint_sha256}"));
+        print_to_tty_or_stderr(&format!(
+            "Expected fingerprint: {expected_fingerprint_sha256}"
+        ));
+        print_to_tty_or_stderr(&format!(
+            "Received fingerprint: {actual_fingerprint_sha256}"
+        ));
         match self.policy {
             HostKeyPolicy::Ask => {
                 prompt_yes_no_tty("Are you sure you want to continue connecting (yes/no)? ")
