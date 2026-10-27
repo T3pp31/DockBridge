@@ -59,10 +59,7 @@ fn trim_trailing_line_endings(value: &mut String) {
 ///
 /// Shared by `--password-stdin` and `--passphrase-stdin` so both credentials
 /// are handled with the same zeroize discipline.
-fn read_secret_line<R: io::BufRead>(
-    reader: R,
-    label: &str,
-) -> anyhow::Result<Zeroizing<String>> {
+fn read_secret_line<R: io::BufRead>(reader: R, label: &str) -> anyhow::Result<Zeroizing<String>> {
     // Pre-allocate the accepted capacity so the secret stays in one buffer
     // that can be zeroized; growing String would leave unzeroed copies on the
     // heap (issue #649).
