@@ -278,7 +278,10 @@ impl TransferManager {
     /// Atomically verifies that `task_id` refers to a failed or cancelled task
     /// and removes it from the queue. Returns `None` when the task is missing,
     /// not retryable, or already removed by a concurrent retry (issue #757).
-    fn remove_retryable_task(&self, task_id: u64) -> Option<(TransferTask, TransferOverwritePolicy)> {
+    fn remove_retryable_task(
+        &self,
+        task_id: u64,
+    ) -> Option<(TransferTask, TransferOverwritePolicy)> {
         let mut tasks = self.tasks.lock().ok()?;
         let index = tasks.iter().position(|task| task.id == task_id)?;
         let task = tasks[index].clone();
