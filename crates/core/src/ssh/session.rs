@@ -299,8 +299,8 @@ impl SshSession {
         // Apply the connection deadline to post-handshake steps too, so an
         // unresponsive server cannot hang the whole connect flow forever
         // (issue #663).
-        let deadline = tokio::time::Instant::now()
-            + Duration::from_secs(config.connection_timeout_secs);
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(config.connection_timeout_secs);
 
         let authenticated = authenticate(
             &mut handle,
@@ -330,7 +330,10 @@ impl SshSession {
         tokio::time::timeout_at(deadline, channel.request_subsystem(true, "sftp"))
             .await
             .map_err(|_| SftpError::SubsystemFailed {
-                message: format!("SFTP subsystem did not initialize within {}s", config.connection_timeout_secs),
+                message: format!(
+                    "SFTP subsystem did not initialize within {}s",
+                    config.connection_timeout_secs
+                ),
             })?
             .map_err(|err| SftpError::SubsystemFailed {
                 message: err.to_string(),
@@ -348,7 +351,10 @@ impl SshSession {
         )
         .await
         .map_err(|_| SftpError::SubsystemFailed {
-            message: format!("SFTP session did not initialize within {}s", config.connection_timeout_secs),
+            message: format!(
+                "SFTP session did not initialize within {}s",
+                config.connection_timeout_secs
+            ),
         })?
         .map_err(|err| SftpError::SubsystemFailed {
             message: err.to_string(),
