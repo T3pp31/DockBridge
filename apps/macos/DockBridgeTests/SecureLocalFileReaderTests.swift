@@ -58,6 +58,18 @@ final class SecureLocalFileReaderTests: XCTestCase {
         }
     }
 
+    func testReadDataAcceptsFileAtSizeLimit() throws {
+        let fileURL = baseDirectory.appendingPathComponent("limit.json", isDirectory: false)
+        let expected = Data(repeating: 0, count: 5 * 1024 * 1024)
+        try expected.write(to: fileURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o600))],
+            ofItemAtPath: fileURL.path
+        )
+
+        XCTAssertEqual(try SecureLocalFileReader.readData(from: fileURL), expected)
+    }
+
     func testReadDataRejectsOversizedFile() throws {
         let fileURL = baseDirectory.appendingPathComponent("large.json", isDirectory: false)
         let oversizedData = Data(repeating: 0, count: 5 * 1024 * 1024 + 1)
