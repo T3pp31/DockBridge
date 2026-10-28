@@ -6,7 +6,8 @@ final class TransferQueueViewModel: ObservableObject {
     /// Per-view active transfer counts. Dock badge is a single global state, so
     /// each window/tab reports through this coordinator instead of overwriting
     /// the badge directly.
-    private static var activeTransferCounts: [UUID: Int] = [:]
+    private static var activeTransferIDs: [UUID: Set<UInt64>] = [:]
+    private let badgeOwnerID = UUID()
 
     @Published private(set) var tasks: [TransferTaskRecord] = []
     @Published var errorMessage: String?
@@ -269,12 +270,25 @@ final class TransferQueueViewModel: ObservableObject {
     }
 
     /// Shows the number of active transfers on the Dock tile; clears it at zero.
+    deinit {
+        let ownerID = badgeOwnerID
+        Task { @MainActor in
+            Self.activeTransferIDs.removeValue(forKey: ownerID)
+            Self.refreshDockBadge()
+        }
+    }
+
     private func updateDockBadge(tasks: [TransferTaskRecord]) {
-        let active = tasks.filter {
+        Self.activeTransferIDs[badgeOwnerID] = Set(tasks.filter {
             $0.status == .inProgress || $0.status == .pending
+        }.map(\.id))
+        Self.refreshDockBadge()
+    }
+
+    private static func refreshDockBadge() {
+        let total = activeTransferIDs.values.reduce(into: Set<UInt64>()) {
+            $0.formUnion($1)
         }.count
-        Self.activeTransferCounts[ObjectIdentifier(self)] = active
-        let total = Self.activeTransferCounts.values.reduce(0, +)
         NSApp.dockTile.badgeLabel = total > 0 ? "\(total)" : nil
     }
 
