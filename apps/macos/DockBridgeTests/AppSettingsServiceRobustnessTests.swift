@@ -18,6 +18,39 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
         super.tearDown()
     }
 
+    func testEmptyEncodedConfigUsesAllDefaults() throws {
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        XCTAssertEqual(config, .default)
+    }
+
+    func testEachMissingConfigKeyUsesItsDefault() throws {
+        let encoded = try JSONEncoder().encode(AppConfig.default)
+        let full = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        for key in full.keys {
+            var partial = full
+            partial.removeValue(forKey: key)
+            let data = try JSONSerialization.data(withJSONObject: partial)
+            XCTAssertEqual(try JSONDecoder().decode(AppConfig.self, from: data), .default, key)
+        }
+    }
+
+    func testExplicitNullInactivityTimeoutRemainsDisabled() throws {
+        let config = try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data("{\"sshInactivityTimeoutSecs\":null}".utf8)
+        )
+        XCTAssertNil(config.sshInactivityTimeoutSecs)
+        XCTAssertEqual(config.connectionTimeoutSecs, AppConfig.default.connectionTimeoutSecs)
+        XCTAssertEqual(try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config)), config)
+    }
+
+    func testInvalidConfigFieldTypeStillFailsDecoding() {
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data("{\"connectionTimeoutSecs\":\"invalid\"}".utf8)
+        ))
+    }
+
     private func defaults() -> UserDefaults {
         UserDefaults(suiteName: suiteName)!
     }

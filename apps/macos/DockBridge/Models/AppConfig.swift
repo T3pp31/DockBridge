@@ -51,55 +51,83 @@ struct AppConfig: Codable, Equatable, Sendable {
         case playTransferNotificationSound
     }
 
+    static let `default` = AppConfig()
+
+    /// Builds the UniFFI config record. The overwrite policy is passed per
+    /// transfer after the Swift UI resolves the `ask` behavior.
+    func toRecord(knownHostsPath: String, opensshKnownHostsPath: String) -> AppConfigRecord {
+        AppConfigRecord(
+            connectionTimeoutSecs: connectionTimeoutSecs,
+            sessionHealthCheckIntervalSecs: sessionHealthCheckIntervalSecs,
+            transferRetryCount: transferRetryCount,
+            transferChunkSizeBytes: transferChunkSizeBytes,
+            transferDownloadPipelineDepth: transferDownloadPipelineDepth,
+            transferUploadPipelineDepth: transferUploadPipelineDepth,
+            sshInactivityTimeoutSecs: sshInactivityTimeoutSecs,
+            sshKeepaliveIntervalSecs: sshKeepaliveIntervalSecs,
+            knownHostsPath: knownHostsPath,
+            opensshKnownHostsPath: opensshKnownHostsPath,
+            mergeOpensshKnownHostsOnConnect: mergeOpensshKnownHostsOnConnect,
+            knownHostsStrictMode: knownHostsStrictMode,
+            failConnectOnOpensshMergeError: failConnectOnOpensshMergeError,
+            directoryWalkMaxFiles: directoryWalkMaxFiles,
+            directoryWalkMaxDepth: directoryWalkMaxDepth,
+            directoryWalkMaxTotalBytes: directoryWalkMaxTotalBytes
+        )
+    }
+}
+
+// Keep custom decoding outside the struct so its memberwise initializer
+// remains available to existing settings callers.
+extension AppConfig {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        connectionTimeoutSecs = try container.decode(UInt64.self, forKey: .connectionTimeoutSecs)
-        sessionHealthCheckIntervalSecs = try container.decode(UInt64.self, forKey: .sessionHealthCheckIntervalSecs)
-        transferRetryCount = try container.decode(UInt32.self, forKey: .transferRetryCount)
-        transferChunkSizeBytes = try container.decode(UInt64.self, forKey: .transferChunkSizeBytes)
-        transferDownloadPipelineDepth = try container.decode(UInt64.self, forKey: .transferDownloadPipelineDepth)
+        let defaults = Self.default
+        connectionTimeoutSecs = try container.decodeIfPresent(UInt64.self, forKey: .connectionTimeoutSecs) ?? defaults.connectionTimeoutSecs
+        sessionHealthCheckIntervalSecs = try container.decodeIfPresent(UInt64.self, forKey: .sessionHealthCheckIntervalSecs) ?? defaults.sessionHealthCheckIntervalSecs
+        transferRetryCount = try container.decodeIfPresent(UInt32.self, forKey: .transferRetryCount) ?? defaults.transferRetryCount
+        transferChunkSizeBytes = try container.decodeIfPresent(UInt64.self, forKey: .transferChunkSizeBytes) ?? defaults.transferChunkSizeBytes
+        transferDownloadPipelineDepth = try container.decodeIfPresent(UInt64.self, forKey: .transferDownloadPipelineDepth) ?? defaults.transferDownloadPipelineDepth
         transferUploadPipelineDepth = try container.decodeIfPresent(
             UInt64.self,
             forKey: .transferUploadPipelineDepth
-        ) ?? 64
-        sshInactivityTimeoutSecs = try container.decodeIfPresent(
-            UInt64.self,
-            forKey: .sshInactivityTimeoutSecs
-        )
-        sshKeepaliveIntervalSecs = try container.decode(UInt64.self, forKey: .sshKeepaliveIntervalSecs)
-        defaultLocalPath = try container.decode(String.self, forKey: .defaultLocalPath)
+        ) ?? defaults.transferUploadPipelineDepth
+        if container.contains(.sshInactivityTimeoutSecs) {
+            sshInactivityTimeoutSecs = try container.decodeIfPresent(
+                UInt64.self,
+                forKey: .sshInactivityTimeoutSecs
+            )
+        } else {
+            sshInactivityTimeoutSecs = defaults.sshInactivityTimeoutSecs
+        }
+        sshKeepaliveIntervalSecs = try container.decodeIfPresent(UInt64.self, forKey: .sshKeepaliveIntervalSecs) ?? defaults.sshKeepaliveIntervalSecs
+        defaultLocalPath = try container.decodeIfPresent(String.self, forKey: .defaultLocalPath) ?? defaults.defaultLocalPath
         defaultLocalBookmark = try container.decodeIfPresent(Data.self, forKey: .defaultLocalBookmark)
-        confirmBeforeDelete = try container.decode(Bool.self, forKey: .confirmBeforeDelete)
-        showHiddenFiles = try container.decode(Bool.self, forKey: .showHiddenFiles)
-        mergeOpensshKnownHostsOnConnect = try container.decode(
-            Bool.self,
-            forKey: .mergeOpensshKnownHostsOnConnect
-        )
-        opensshKnownHostsPath = try container.decode(String.self, forKey: .opensshKnownHostsPath)
+        confirmBeforeDelete = try container.decodeIfPresent(Bool.self, forKey: .confirmBeforeDelete) ?? defaults.confirmBeforeDelete
+        showHiddenFiles = try container.decodeIfPresent(Bool.self, forKey: .showHiddenFiles) ?? defaults.showHiddenFiles
+        mergeOpensshKnownHostsOnConnect = try container.decodeIfPresent(Bool.self, forKey: .mergeOpensshKnownHostsOnConnect) ?? defaults.mergeOpensshKnownHostsOnConnect
+        opensshKnownHostsPath = try container.decodeIfPresent(String.self, forKey: .opensshKnownHostsPath) ?? defaults.opensshKnownHostsPath
         opensshKnownHostsBookmark = try container.decodeIfPresent(
             Data.self,
             forKey: .opensshKnownHostsBookmark
         )
-        knownHostsStrictMode = try container.decode(Bool.self, forKey: .knownHostsStrictMode)
-        failConnectOnOpensshMergeError = try container.decode(
-            Bool.self,
-            forKey: .failConnectOnOpensshMergeError
-        )
-        directoryWalkMaxFiles = try container.decode(UInt64.self, forKey: .directoryWalkMaxFiles)
-        directoryWalkMaxDepth = try container.decode(UInt32.self, forKey: .directoryWalkMaxDepth)
-        directoryWalkMaxTotalBytes = try container.decode(UInt64.self, forKey: .directoryWalkMaxTotalBytes)
+        knownHostsStrictMode = try container.decodeIfPresent(Bool.self, forKey: .knownHostsStrictMode) ?? defaults.knownHostsStrictMode
+        failConnectOnOpensshMergeError = try container.decodeIfPresent(Bool.self, forKey: .failConnectOnOpensshMergeError) ?? defaults.failConnectOnOpensshMergeError
+        directoryWalkMaxFiles = try container.decodeIfPresent(UInt64.self, forKey: .directoryWalkMaxFiles) ?? defaults.directoryWalkMaxFiles
+        directoryWalkMaxDepth = try container.decodeIfPresent(UInt32.self, forKey: .directoryWalkMaxDepth) ?? defaults.directoryWalkMaxDepth
+        directoryWalkMaxTotalBytes = try container.decodeIfPresent(UInt64.self, forKey: .directoryWalkMaxTotalBytes) ?? defaults.directoryWalkMaxTotalBytes
         transferOverwritePolicy = try container.decodeIfPresent(
             TransferOverwritePolicy.self,
             forKey: .transferOverwritePolicy
-        ) ?? .replace
+        ) ?? defaults.transferOverwritePolicy
         notifyWhenTransfersFinish = try container.decodeIfPresent(
             Bool.self,
             forKey: .notifyWhenTransfersFinish
-        ) ?? true
+        ) ?? defaults.notifyWhenTransfersFinish
         playTransferNotificationSound = try container.decodeIfPresent(
             Bool.self,
             forKey: .playTransferNotificationSound
-        ) ?? true
+        ) ?? defaults.playTransferNotificationSound
     }
 
     init() {
@@ -128,28 +156,31 @@ struct AppConfig: Codable, Equatable, Sendable {
         playTransferNotificationSound = true
     }
 
-    static let `default` = AppConfig()
-
-    /// Builds the UniFFI config record. The overwrite policy is passed per
-    /// transfer after the Swift UI resolves the `ask` behavior.
-    func toRecord(knownHostsPath: String, opensshKnownHostsPath: String) -> AppConfigRecord {
-        AppConfigRecord(
-            connectionTimeoutSecs: connectionTimeoutSecs,
-            sessionHealthCheckIntervalSecs: sessionHealthCheckIntervalSecs,
-            transferRetryCount: transferRetryCount,
-            transferChunkSizeBytes: transferChunkSizeBytes,
-            transferDownloadPipelineDepth: transferDownloadPipelineDepth,
-            transferUploadPipelineDepth: transferUploadPipelineDepth,
-            sshInactivityTimeoutSecs: sshInactivityTimeoutSecs,
-            sshKeepaliveIntervalSecs: sshKeepaliveIntervalSecs,
-            knownHostsPath: knownHostsPath,
-            opensshKnownHostsPath: opensshKnownHostsPath,
-            mergeOpensshKnownHostsOnConnect: mergeOpensshKnownHostsOnConnect,
-            knownHostsStrictMode: knownHostsStrictMode,
-            failConnectOnOpensshMergeError: failConnectOnOpensshMergeError,
-            directoryWalkMaxFiles: directoryWalkMaxFiles,
-            directoryWalkMaxDepth: directoryWalkMaxDepth,
-            directoryWalkMaxTotalBytes: directoryWalkMaxTotalBytes
-        )
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(connectionTimeoutSecs, forKey: .connectionTimeoutSecs)
+        try container.encode(sessionHealthCheckIntervalSecs, forKey: .sessionHealthCheckIntervalSecs)
+        try container.encode(transferRetryCount, forKey: .transferRetryCount)
+        try container.encode(transferChunkSizeBytes, forKey: .transferChunkSizeBytes)
+        try container.encode(transferDownloadPipelineDepth, forKey: .transferDownloadPipelineDepth)
+        try container.encode(transferUploadPipelineDepth, forKey: .transferUploadPipelineDepth)
+        // Encode nil explicitly so a disabled timeout survives a round trip.
+        try container.encode(sshInactivityTimeoutSecs, forKey: .sshInactivityTimeoutSecs)
+        try container.encode(sshKeepaliveIntervalSecs, forKey: .sshKeepaliveIntervalSecs)
+        try container.encode(defaultLocalPath, forKey: .defaultLocalPath)
+        try container.encodeIfPresent(defaultLocalBookmark, forKey: .defaultLocalBookmark)
+        try container.encode(confirmBeforeDelete, forKey: .confirmBeforeDelete)
+        try container.encode(showHiddenFiles, forKey: .showHiddenFiles)
+        try container.encode(mergeOpensshKnownHostsOnConnect, forKey: .mergeOpensshKnownHostsOnConnect)
+        try container.encode(opensshKnownHostsPath, forKey: .opensshKnownHostsPath)
+        try container.encodeIfPresent(opensshKnownHostsBookmark, forKey: .opensshKnownHostsBookmark)
+        try container.encode(knownHostsStrictMode, forKey: .knownHostsStrictMode)
+        try container.encode(failConnectOnOpensshMergeError, forKey: .failConnectOnOpensshMergeError)
+        try container.encode(directoryWalkMaxFiles, forKey: .directoryWalkMaxFiles)
+        try container.encode(directoryWalkMaxDepth, forKey: .directoryWalkMaxDepth)
+        try container.encode(directoryWalkMaxTotalBytes, forKey: .directoryWalkMaxTotalBytes)
+        try container.encode(transferOverwritePolicy, forKey: .transferOverwritePolicy)
+        try container.encode(notifyWhenTransfersFinish, forKey: .notifyWhenTransfersFinish)
+        try container.encode(playTransferNotificationSound, forKey: .playTransferNotificationSound)
     }
 }
