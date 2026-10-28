@@ -2243,17 +2243,12 @@ async fn create_exclusive_remote_partial(
     })
 }
 
-/// Returns the byte offset to continue a previous download attempt from, when
-/// a leftover local partial for this `(local, remote)` pair exists and is a
-/// strict prefix of the remote file (issue #313). `None` starts from scratch.
-// Maximum number of leading bytes compared between the partial and the
-// remote file before trusting a resume. This bounds the extra round-trip
-// cost while still catching content changes at the start of the file.
+/// Maximum buffer size used while comparing the complete saved prefix.
 const RESUME_VERIFICATION_BYTES: u64 = 64 * 1024;
 
 /// Returns the byte offset to continue a previous download attempt from, when
 /// a leftover local partial for this `(local, remote)` pair exists, is a
-/// strict prefix of the remote file, AND its leading bytes match the current
+/// strict prefix of the remote file, and all saved bytes match the current
 /// remote content (issue #313, #655). `None` starts from scratch.
 async fn find_resumable_download_offset(
     client: &SftpClient<'_>,
@@ -2264,44 +2259,36 @@ async fn find_resumable_download_offset(
 ) -> Option<u64> {
     let partial_path =
         partial_local_path_for_suffix(local_parent, &resume_partial_suffix(local, remote));
-    let Ok(metadata) = tokio::fs::metadata(&partial_path).await else {
-        return None;
-    };
+    let metadata = tokio::fs::metadata(&partial_path).await.ok()?;
     let size = metadata.len();
     if size == 0 || size >= remote_size {
         return None;
     }
-    // Compare the leading bytes of the partial against the current remote
-    // content. If the remote file was replaced since the partial was written,
-    // the mismatch forces a fresh download instead of silently concatenating
-    // old and new data (issue #655).
-    let verify_len = size.min(RESUME_VERIFICATION_BYTES) as usize;
-    // Use a separate handle so verification never changes the cursor of the
-    // handle used for the actual transfer. In particular, a mismatch must not
-    // cause the fresh-download path to skip the first verified bytes.
+
+    // Verify the entire saved prefix in bounded chunks. A separate remote
+    // handle keeps both resume and restart paths independent of this cursor.
+    let mut partial_file = tokio::fs::File::open(&partial_path).await.ok()?;
     let mut verification_file = client.sftp().open(remote).await.ok()?;
-    let mut remote_prefix = vec![0u8; verify_len];
+    let mut remote_prefix = vec![0u8; RESUME_VERIFICATION_BYTES as usize];
+    let mut partial_prefix = vec![0u8; RESUME_VERIFICATION_BYTES as usize];
+    let mut remaining = size;
     use tokio::io::AsyncReadExt;
-    if verification_file
-        .read_exact(&mut remote_prefix)
-        .await
-        .is_err()
-    {
-        return None;
-    }
-    let Ok(mut partial_file) = tokio::fs::File::open(&partial_path).await else {
-        return None;
-    };
-    let mut partial_prefix = vec![0u8; verify_len];
-    if partial_file.read_exact(&mut partial_prefix).await.is_err() {
-        return None;
-    }
-    if remote_prefix != partial_prefix {
-        // The deterministic partial cannot be resumed. Remove it so future
-        // attempts do not repeatedly verify and discard the same stale prefix.
-        drop(partial_file);
-        let _ = tokio::fs::remove_file(&partial_path).await;
-        return None;
+    while remaining > 0 {
+        let verify_len = remaining.min(RESUME_VERIFICATION_BYTES) as usize;
+        verification_file
+            .read_exact(&mut remote_prefix[..verify_len])
+            .await
+            .ok()?;
+        partial_file
+            .read_exact(&mut partial_prefix[..verify_len])
+            .await
+            .ok()?;
+        if remote_prefix[..verify_len] != partial_prefix[..verify_len] {
+            drop(partial_file);
+            let _ = tokio::fs::remove_file(&partial_path).await;
+            return None;
+        }
+        remaining -= verify_len as u64;
     }
     Some(size)
 }
@@ -5860,6 +5847,35 @@ mod tests {
         // Then: the fresh download includes the first byte instead of
         // continuing from the verification handle's advanced cursor.
         assert_eq!(tokio::fs::read(&local_path).await.unwrap(), b"NEW-BYTES");
+        assert!(list_partial_paths(local_dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn download_restarts_when_partial_differs_after_first_verification_chunk() {
+        let server = TestSftpServer::start().await;
+        let chunk_size = super::RESUME_VERIFICATION_BYTES as usize;
+        let remote_content = vec![b'N'; chunk_size * 2 + 1];
+        server
+            .write_remote_file("/download/file.bin", &remote_content)
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        let partial_path = local_dir.path().join(format!(
+            ".dockbridge-{}.partial",
+            resume_partial_suffix(&local_path.display().to_string(), "/download/file.bin")
+        ));
+        let mut partial = remote_content[..chunk_size + 3].to_vec();
+        partial[chunk_size + 1] = b'O';
+        tokio::fs::write(&partial_path, partial).await.unwrap();
+
+        client
+            .download("/download/file.bin", &local_path)
+            .await
+            .unwrap();
+
+        assert_eq!(tokio::fs::read(&local_path).await.unwrap(), remote_content);
         assert!(list_partial_paths(local_dir.path()).is_empty());
     }
 
