@@ -22,6 +22,16 @@ private struct MockURLSession: URLSessionDataProviding {
 }
 
 final class AppUpdateServiceTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        Self.installTestState()
+    }
+
+    override func tearDown() {
+        Self.resetTestState()
+        super.tearDown()
+    }
+
     private let validDownloadURL =
         "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg"
     private let releasePageURL = "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0"
@@ -276,7 +286,7 @@ final class AppUpdateServiceTests: XCTestCase {
 }
 
 extension AppUpdateServiceTests {
-    private static let testDefaultsSuiteName = "AppUpdateServiceTests"
+    private static let testDefaultsSuiteName = "AppUpdateServiceTests-\(UUID().uuidString)"
     private static var testDefaults: UserDefaults {
         UserDefaults(suiteName: testDefaultsSuiteName)!
     }
@@ -301,6 +311,7 @@ extension AppUpdateServiceTests {
     private static func resetTestState() {
         UserDefaults().removePersistentDomain(forName: testDefaultsSuiteName)
         AppUpdateConfig.clearReleaseBody()
+        try? FileManager.default.removeItem(at: testCacheDirectory)
         AppUpdateConfig.etagDefaults = .standard
         AppUpdateConfig.releaseBodyCacheDirectory = nil
     }
@@ -339,7 +350,7 @@ extension AppUpdateServiceTests {
         // Given: a cache entry that is older than the maximum age
         AppUpdateConfig.clearReleaseBody()
         defer { AppUpdateConfig.clearReleaseBody() }
-        let cacheURL = testCacheDirectory
+        let cacheURL = Self.testCacheDirectory
             .appendingPathComponent(AppUpdateConfig.releaseBodyCacheFileName)
         let stale = ReleaseBodyCacheEntry(
             storedAt: Date().addingTimeInterval(-25 * 60 * 60),
