@@ -15,7 +15,7 @@ final class RemoteSession: ObservableObject, Identifiable {
     /// Profile endpoint label used for display.
     let endpointLabel: String
     /// Set once connected.
-    @Published private(set) var connectionStatus: ConnectionStatus = .connecting(endpoint: endpointLabel)
+    @Published private(set) var connectionStatus: ConnectionStatus
     @Published private(set) var lastDisconnectReason: String?
     @Published private(set) var initialRemoteDirectory: String?
     @Published private(set) var connectedUsername: String?
@@ -31,6 +31,7 @@ final class RemoteSession: ObservableObject, Identifiable {
         self.id = id
         self.profileID = profileID
         self.endpointLabel = endpointLabel
+        self.connectionStatus = .connecting(endpoint: endpointLabel)
     }
 
     var isConnected: Bool { connectionStatus.isConnected }
