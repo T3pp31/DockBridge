@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// Holds sensitive text entered in the UI and supports explicit clearing.
 ///
@@ -7,8 +8,13 @@ import Foundation
 /// shared by all aliases; `clear()` zeroizes that same buffer instead of
 /// creating a copy-on-write duplicate. Accessing `text` still creates a
 /// temporary String required by SwiftUI; callers should avoid retaining it.
+@Observable
 final class SensitiveString: Equatable {
     private var storage = Data()
+
+    static func == (lhs: SensitiveString, rhs: SensitiveString) -> Bool {
+        lhs.storage == rhs.storage
+    }
 
     var text: String {
         get { String(decoding: storage, as: UTF8.self) }
