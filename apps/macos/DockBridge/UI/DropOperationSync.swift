@@ -10,8 +10,9 @@ enum DropOperationSync {
     /// semaphore.
     ///
     /// The semaphore is signaled when the operation completes or throws. If
-    /// the operation hangs, the bridge times out, cancels the unstructured
-    /// Task, and lets the caller regain control.
+    /// the operation remains suspended, the bridge times out and requests
+    /// cancellation of its Task. Cancellation is cooperative: synchronous
+    /// blocking work cannot be interrupted by pumping the run loop.
     /// Errors thrown by `operation` are re-thrown to the caller.
     ///
     /// - Throws: `DropOperationSyncError.timedOut` when the operation does not
@@ -31,14 +32,14 @@ enum DropOperationSync {
             }
         }
 
-        let deadline = Date.now.addingTimeInterval(timeout)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
 
         let pumpMainRunLoop = {
             RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.001))
         }
 
         while semaphore.wait(timeout: .now()) == .timedOut {
-            if Date.now.timeIntervalSince1970 >= deadline {
+            if ContinuousClock.now >= deadline {
                 task.cancel()
                 throw DropOperationSyncError.timedOut
             }
