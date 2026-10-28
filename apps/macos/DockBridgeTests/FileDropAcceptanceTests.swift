@@ -130,7 +130,7 @@ final class FileDropAcceptanceTests: XCTestCase {
         XCTAssertTrue(movedItems.contains { $0.name == localFile.lastPathComponent })
     }
 
-    func testLocalMoveAcceptsOnSuccess() throws {
+    func testLocalMoveAcceptsOnSuccess() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("local-drop-\(UUID().uuidString)", isDirectory: true)
         let sourceDirectory = root.appendingPathComponent("source", isDirectory: true)
@@ -191,9 +191,13 @@ final class FileDropAcceptanceTests: XCTestCase {
 
         let viewModel = try makeKickoffViewModel()
 
-        XCTAssertThrowsError(
+        do {
             try await viewModel.moveLocalItem(from: sourceFile, toDirectory: destinationDirectory)
-        )
+            XCTFail("Expected the move to reject an existing destination")
+        } catch let error as NSError {
+            XCTAssertEqual(error.domain, NSCocoaErrorDomain)
+            XCTAssertEqual(error.code, NSFileWriteFileExistsError)
+        }
         XCTAssertEqual(try String(contentsOf: sourceFile, encoding: .utf8), "source")
         XCTAssertEqual(try String(contentsOf: destinationFile, encoding: .utf8), "destination")
     }
