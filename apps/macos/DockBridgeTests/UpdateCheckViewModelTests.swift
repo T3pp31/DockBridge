@@ -109,7 +109,7 @@ final class UpdateCheckViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isDownloadingUpdate)
     }
 
-    func testDownloadUpdateOpensReleasePageWhenInAppInstallDisabled() async {
+    func testDownloadUpdateOpensReleasePageWhenInAppInstallDisabled() async throws {
         try XCTSkipUnless(
             !viewModel.inAppUpdateInstallationEnabled,
             "Requires in-app update installation to be disabled."
