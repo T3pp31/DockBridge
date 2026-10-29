@@ -117,10 +117,15 @@ enum SSHConfigParser {
     ) {
         switch directive.key {
         case "hostname":
+            if directive.arguments == [""] { return }
             guard directive.arguments.count == 1,
                   let value = directive.arguments.first,
-                  !value.trimmingCharacters(in: .whitespaces).isEmpty,
-                  !containsUnsupportedExpansion(value) else { return }
+                  !containsUnsupportedExpansion(value) else {
+                if hosts.contains(where: { $0.hostName == nil }) {
+                    currentBlockIsValid = false
+                }
+                return
+            }
             for index in hosts.indices where hosts[index].hostName == nil {
                 hosts[index].hostName = value
             }
@@ -139,8 +144,9 @@ enum SSHConfigParser {
                   let rawPort = directive.arguments.first,
                   let port = UInt16(rawPort),
                   port > 0 else {
-                // An explicit invalid port must not silently become port 22.
-                currentBlockIsValid = false
+                if hosts.contains(where: { $0.port == nil }) {
+                    currentBlockIsValid = false
+                }
                 return
             }
             for index in hosts.indices where hosts[index].port == nil {
