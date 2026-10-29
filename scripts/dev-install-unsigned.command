@@ -25,11 +25,42 @@ if [[ ! -d "$SOURCE_PATH" ]]; then
   exit 1
 fi
 
+# Read the required companion settings from beside this script.
+SETTINGS_PATH="${SCRIPT_DIR}/dev-install-settings.conf"
+if [[ ! -f "$SETTINGS_PATH" ]]; then
+  alert "dev-install-settings.conf が見つかりません。スクリプトと同じ場所に置いてください。"
+  exit 1
+fi
+# shellcheck source=scripts/dev-install-settings.conf
+source "$SETTINGS_PATH"
+if [[ ! "${INSTALL_EXIT_TIMEOUT_SECONDS:-}" =~ ^[1-9][0-9]*$ ||
+      ! "${INSTALL_EXIT_POLL_INTERVAL_SECONDS:-}" =~ ^[1-9][0-9]*$ ]] ||
+   (( INSTALL_EXIT_POLL_INTERVAL_SECONDS > INSTALL_EXIT_TIMEOUT_SECONDS )); then
+  alert "終了待機設定は正の整数で指定し、確認間隔を待機時間以下にしてください。"
+  exit 1
+fi
+
 echo "DockBridge を Applications にインストールしています..."
-# Stop the old instance first so the new build is actually launched, and so
-# we do not swap the bundle under a running process (issue #670).
+# Confirm the old instance has exited before replacing its bundle (#670).
+# Do not force-kill it: a timeout must leave the installed app untouched.
 pkill -x DockBridge 2>/dev/null || true
-sleep 1
+exit_deadline=$((SECONDS + INSTALL_EXIT_TIMEOUT_SECONDS))
+while true; do
+  if pgrep -x DockBridge >/dev/null 2>&1; then
+    if (( SECONDS >= exit_deadline )); then
+      alert "DockBridge が終了しなかったため、インストールを中止しました。終了後に再実行してください。"
+      exit 1
+    fi
+    sleep "$INSTALL_EXIT_POLL_INTERVAL_SECONDS"
+  else
+    query_status=$?
+    if [[ "$query_status" != 1 ]]; then
+      alert "DockBridge の終了状態を確認できなかったため、インストールを中止しました。"
+      exit 1
+    fi
+    break
+  fi
+done
 ditto "$SOURCE_PATH" "$INSTALL_PATH"
 
 echo "macOS のセキュリティ制限を解除しています..."
