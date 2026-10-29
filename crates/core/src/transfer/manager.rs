@@ -83,6 +83,9 @@ pub struct TransferManager {
     /// cannot be re-enqueued while its original future is still unwinding
     /// (which used to revive the cancelled transfer: issue #307).
     in_flight: Mutex<HashSet<u64>>,
+    /// Task ids explicitly removed from the queue. Prevents a stale batch loop
+    /// from re-registering a task after clear-all or clear-completed.
+    removed_task_ids: Mutex<HashSet<u64>>,
     /// Fixed backoff delay in milliseconds between retries, used by tests to
     /// avoid real sleeping. `None` uses the exponential jittered backoff.
     #[cfg(test)]
@@ -102,6 +105,7 @@ impl TransferManager {
             overwrite_policies: Mutex::new(HashMap::new()),
             cancellation_flags: Mutex::new(HashMap::new()),
             in_flight: Mutex::new(HashSet::new()),
+            removed_task_ids: Mutex::new(HashSet::new()),
             #[cfg(test)]
             backoff_override_ms: None,
         }
@@ -119,6 +123,7 @@ impl TransferManager {
     pub fn clear_completed_transfers(&self) {
         if let Ok(mut tasks) = self.tasks.lock() {
             let mut retained_ids = HashSet::new();
+            let mut removed_ids = HashSet::new();
             tasks.retain(|task| {
                 let retain = matches!(
                     task.status,
@@ -126,9 +131,14 @@ impl TransferManager {
                 );
                 if retain {
                     retained_ids.insert(task.id);
+                } else {
+                    removed_ids.insert(task.id);
                 }
                 retain
             });
+            if let Ok(mut removed) = self.removed_task_ids.lock() {
+                removed.extend(removed_ids);
+            }
             if let Ok(mut policies) = self.overwrite_policies.lock() {
                 policies.retain(|task_id, _| retained_ids.contains(task_id));
             }
@@ -158,6 +168,9 @@ impl TransferManager {
                 .or_insert_with(|| Arc::new(AtomicBool::new(false)))
                 .store(true, Ordering::Relaxed);
             task.status = TransferStatus::Cancelled;
+        }
+        if let Ok(mut removed) = self.removed_task_ids.lock() {
+            removed.extend(tasks.iter().map(|task| task.id));
         }
         tasks.clear();
         if let Ok(mut policies) = self.overwrite_policies.lock() {
@@ -280,6 +293,11 @@ impl TransferManager {
 
     fn register_task(&self, task: TransferTask, overwrite_policy: TransferOverwritePolicy) {
         if let Ok(mut tasks) = self.tasks.lock() {
+            if let Ok(removed) = self.removed_task_ids.lock() {
+                if removed.contains(&task.id) {
+                    return;
+                }
+            }
             if let Ok(mut policies) = self.overwrite_policies.lock() {
                 policies.insert(task.id, overwrite_policy);
                 tasks.push(task);
@@ -2229,7 +2247,14 @@ mod tests {
             total_bytes: 10,
         });
 
+        let stale_completed = manager.get_transfer_queue()[0].clone();
         manager.clear_completed_transfers();
+        // A stale batch must not resurrect a task removed by the user.
+        manager.insert_task(stale_completed);
+        // Retained work must remain eligible for registration.
+        let active = manager.get_transfer_queue()[0].clone();
+        manager.tasks.lock().unwrap().clear();
+        manager.insert_task(active);
 
         let queue = manager.get_transfer_queue();
         assert_eq!(queue.len(), 1);
