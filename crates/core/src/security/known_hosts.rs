@@ -429,7 +429,7 @@ impl KnownHostsManager {
             let has_remaining_exclusion = existing
                 .excluded_aliases
                 .iter()
-                .any(|alias| !(alias.host == host && alias.port == port));
+                .any(|alias| !(alias.host.eq_ignore_ascii_case(host) && alias.port == port));
 
             // With no positive alias to promote, retaining exclusions for the
             // old key would require two canonical rows for the same host, which
@@ -3949,6 +3949,40 @@ mod tests {
             manager.check_host_key("example.com", 22, &key, true),
             HostKeyCheckResult::Trust
         );
+    }
+
+    #[test]
+    fn changed_key_with_mixed_case_keeps_alias_on_original_key() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("Example.COM", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("Alias.Example.COM", 22, &old_key)
+            .unwrap();
+
+        manager
+            .accept_host_key("EXAMPLE.com", 22, &new_key)
+            .unwrap();
+
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(reloaded.entries().len(), 2);
+        assert_eq!(
+            reloaded.check_host_key("example.COM", 22, &new_key, true),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            reloaded.check_host_key("ALIAS.example.com", 22, &old_key, true),
+            HostKeyCheckResult::Trust
+        );
+        assert!(matches!(
+            reloaded.check_host_key("alias.example.com", 22, &new_key, true),
+            HostKeyCheckResult::Mismatch { .. }
+        ));
     }
 
     #[test]
