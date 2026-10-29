@@ -20,6 +20,16 @@ final class HostKeyStoreTests: XCTestCase {
 
         try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         try Data("{}".utf8).write(to: store.knownHostsPath)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o644))],
+            ofItemAtPath: store.knownHostsPath.path
+        )
+
+        let initialAttributes = try FileManager.default.attributesOfItem(
+            atPath: store.knownHostsPath.path
+        )
+        let initialPermissions = (initialAttributes[.posixPermissions] as? NSNumber)?.intValue
+        XCTAssertNotEqual(initialPermissions, Int(0o600))
 
         try store.ensureStoreDirectoryExists()
 
