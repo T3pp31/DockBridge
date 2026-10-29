@@ -31,7 +31,10 @@ final class UpdateCheckViewModel: ObservableObject {
             let update = try await updateService.checkForUpdate(
                 skippedVersion: settingsService.loadSkippedUpdateVersion()
             )
-            guard let update else { return }
+            guard let update else {
+                pendingUpdate = nil
+                return
+            }
             pendingUpdate = update
             presentPendingUpdateIfAllowed()
         } catch {
@@ -89,6 +92,7 @@ final class UpdateCheckViewModel: ObservableObject {
     }
 
     func dismissSheet() {
+        pendingUpdate = nil
         showUpdateSheet = false
         downloadErrorMessage = nil
     }
