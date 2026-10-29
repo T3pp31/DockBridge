@@ -208,8 +208,8 @@ impl KnownHostsManager {
         entries
     }
 
-    /// Removes every host identifier of an entry that matches (host, port) and
-    /// persists the change. Returns `false` when no entry matched.
+    /// Removes (host, port) from every matching plain entry, including marker
+    /// records, and persists the change. Returns `false` when no entry matched.
     ///
     /// When the removed host is the canonical host, the first remaining alias
     /// is promoted to canonical (mirroring the accept-changed-key detach logic).
@@ -217,47 +217,49 @@ impl KnownHostsManager {
         let _store_lock = acquire_store_lock(&self.path)?;
         self.reload_for_update()?;
 
-        let Some(canonical_key) = self.entries.iter().find_map(|(key, entry)| {
-            if entry_matches_host(entry, host, port) {
-                Some(key.clone())
-            } else {
-                None
-            }
-        }) else {
-            return Ok(false);
-        };
-
-        let Some(mut entry) = self.entries.remove(&canonical_key) else {
-            return Ok(false);
-        };
-        let host_is_canonical = entry.host.eq_ignore_ascii_case(host) && entry.port == port;
-        let mut remaining: Vec<HostAlias> = entry
-            .aliases
-            .drain(..)
-            .filter(|alias| !(alias.host.eq_ignore_ascii_case(host) && alias.port == port))
+        let matching_keys: Vec<String> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry_matches_host(entry, host, port))
+            .map(|(key, _)| key.clone())
             .collect();
+        if matching_keys.is_empty() {
+            return Ok(false);
+        }
 
-        if host_is_canonical {
-            // Promote the first remaining alias to canonical so the other hosts
-            // keep their trust. When no aliases remain the old entry is dropped.
-            if let Some(index) = remaining
-                .iter()
-                .position(|alias| !entry_is_excluded_for_host(&entry, &alias.host, alias.port))
-            {
-                let promoted = remaining.remove(index);
-                entry.host = promoted.host.to_ascii_lowercase();
-                entry.port = promoted.port;
+        for canonical_key in matching_keys {
+            let Some(mut entry) = self.entries.remove(&canonical_key) else {
+                continue;
+            };
+            let host_is_canonical = entry.host.eq_ignore_ascii_case(host) && entry.port == port;
+            let mut remaining: Vec<HostAlias> = entry
+                .aliases
+                .drain(..)
+                .filter(|alias| !(alias.host.eq_ignore_ascii_case(host) && alias.port == port))
+                .collect();
+
+            if host_is_canonical {
+                // Promote the first remaining alias to canonical so the other hosts
+                // keep their trust. When no aliases remain the old entry is dropped.
+                if let Some(index) = remaining
+                    .iter()
+                    .position(|alias| !entry_is_excluded_for_host(&entry, &alias.host, alias.port))
+                {
+                    let promoted = remaining.remove(index);
+                    entry.host = promoted.host.to_ascii_lowercase();
+                    entry.port = promoted.port;
+                    entry.aliases = remaining;
+                    entry.excluded_aliases.retain(|excluded| {
+                        !(excluded.host.eq_ignore_ascii_case(&entry.host)
+                            && excluded.port == entry.port)
+                    });
+                    self.entries.insert(storage_key(&entry), entry);
+                }
+            } else {
                 entry.aliases = remaining;
-                entry.excluded_aliases.retain(|excluded| {
-                    !(excluded.host.eq_ignore_ascii_case(&entry.host)
-                        && excluded.port == entry.port)
-                });
+                let entry = normalize_entry_case(entry);
                 self.entries.insert(storage_key(&entry), entry);
             }
-        } else {
-            entry.aliases = remaining;
-            let entry = normalize_entry_case(entry);
-            self.entries.insert(storage_key(&entry), entry);
         }
 
         self.persist()?;
@@ -732,9 +734,22 @@ impl KnownHostsManager {
     }
 
     fn find_entry(&self, host: &str, port: u16) -> Option<&KnownHostEntry> {
+        // Ordinary trust is the acceptance/update target when policy records
+        // coexist. Revocation checks still run first in check_host_key.
         self.entries
             .values()
-            .find(|entry| entry_matches_host(entry, host, port))
+            .filter(|entry| entry_matches_host(entry, host, port))
+            .min_by(|left, right| {
+                let priority = |entry: &KnownHostEntry| {
+                    (
+                        entry_has_non_trusting_marker(entry.marker),
+                        entry.marker == Some(KnownHostMarker::CertAuthority),
+                    )
+                };
+                priority(left)
+                    .cmp(&priority(right))
+                    .then_with(|| left.fingerprint_sha256.cmp(&right.fingerprint_sha256))
+            })
     }
 
     fn find_trusted_entry(&self, host: &str, port: u16) -> Option<&KnownHostEntry> {
@@ -2222,6 +2237,121 @@ mod tests {
                 .iter()
                 .any(|a| a.host == "bad.example.com"),
             "exclusion must be preserved"
+        );
+    }
+
+    #[test]
+    fn remove_forgets_all_plain_markers_and_preserves_other_aliases() {
+        for target in ["example.com", "peer.example.com"] {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("known_hosts.json");
+            let source = dir.path().join("known_hosts");
+            let trusted = test_public_key();
+            let revoked = test_public_key();
+            let ca = test_public_key();
+            write_test_file_mode_0600(
+                &source,
+                format!(
+                    "example.com,peer.example.com {}\n@revoked example.com,peer.example.com {}\n@cert-authority example.com,peer.example.com {}\n",
+                    trusted.to_openssh().unwrap(),
+                    revoked.to_openssh().unwrap(),
+                    ca.to_openssh().unwrap()
+                ),
+            );
+            let mut manager = KnownHostsManager::load(&path).unwrap();
+            manager.import_openssh(&source).unwrap();
+            assert!(manager.remove(target, 22).unwrap());
+            let mut reloaded = KnownHostsManager::load(&path).unwrap();
+            assert_eq!(reloaded.entries().len(), 3);
+            for key in [&trusted, &revoked, &ca] {
+                assert_eq!(
+                    reloaded.check_host_key(target, 22, key, true),
+                    HostKeyCheckResult::Unknown
+                );
+            }
+            let remaining = if target == "example.com" {
+                "peer.example.com"
+            } else {
+                "example.com"
+            };
+            assert_eq!(
+                reloaded.check_host_key(remaining, 22, &trusted, true),
+                HostKeyCheckResult::Trust
+            );
+            assert_eq!(
+                reloaded.check_host_key(remaining, 22, &revoked, true),
+                HostKeyCheckResult::Reject
+            );
+            assert!(reloaded.remove(remaining, 22).unwrap());
+            assert!(KnownHostsManager::load(&path).unwrap().entries().is_empty());
+            assert!(!reloaded.remove(remaining, 22).unwrap());
+        }
+    }
+
+    #[test]
+    fn accept_changed_trusted_key_preserves_coexisting_markers() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let source = dir.path().join("known_hosts");
+        let trusted = test_public_key();
+        let replacement = test_public_key();
+        let revoked = test_public_key();
+        let ca = test_public_key();
+        write_test_file_mode_0600(
+            &source,
+            format!(
+                "@revoked example.com {}\n@cert-authority example.com {}\nexample.com {}\n",
+                revoked.to_openssh().unwrap(),
+                ca.to_openssh().unwrap(),
+                trusted.to_openssh().unwrap()
+            ),
+        );
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&source).unwrap();
+        for _ in 0..10 {
+            manager = KnownHostsManager::load(&path).unwrap();
+            assert_eq!(manager.find_entry("example.com", 22).unwrap().marker, None);
+            manager
+                .accept_host_key("example.com", 22, &replacement)
+                .unwrap();
+            assert_eq!(manager.entries().len(), 3);
+            assert_eq!(
+                manager.check_host_key("example.com", 22, &replacement, true),
+                HostKeyCheckResult::Trust
+            );
+            assert_eq!(
+                manager.check_host_key("example.com", 22, &revoked, true),
+                HostKeyCheckResult::Reject
+            );
+            assert_eq!(
+                manager
+                    .entries()
+                    .iter()
+                    .filter(|entry| entry.marker.is_some())
+                    .count(),
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn importing_revoked_key_as_trusted_preserves_rejection() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let source = dir.path().join("known_hosts");
+        let key = test_public_key();
+        let openssh_key = key.to_openssh().unwrap();
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        write_test_file_mode_0600(&source, format!("@revoked example.com {openssh_key}\n"));
+        manager.import_openssh(&source).unwrap();
+        write_test_file_mode_0600(&source, format!("example.com {openssh_key}\n"));
+        manager.import_openssh(&source).unwrap();
+        let reloaded = KnownHostsManager::load(&path).unwrap();
+        assert_eq!(reloaded.entries().len(), 1);
+        assert_eq!(reloaded.entries()[0].marker, Some(KnownHostMarker::Revoked));
+        assert_eq!(
+            reloaded.check_host_key("example.com", 22, &key, true),
+            HostKeyCheckResult::Reject
         );
     }
 
