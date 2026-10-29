@@ -243,7 +243,10 @@ struct ConnectionListView: View {
                 Button(String(localized: "Connect")) {
                     viewModel.requestConnect(profile: profile)
                 }
-                .disabled(viewModel.connectionStatus.isConnecting)
+                .disabled(
+                    viewModel.connectionStatus.isConnected
+                        || viewModel.connectionStatus.isConnecting
+                )
             }
 
             Button(String(localized: "Edit")) {
