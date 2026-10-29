@@ -6275,6 +6275,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_resumes_matching_partials_across_verification_chunks() {
+        let server = TestSftpServer::start().await;
+        let chunk_size = super::RESUME_VERIFICATION_BYTES as usize;
+        let payload: Vec<u8> = (0..chunk_size * 3 + 2)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        server
+            .write_remote_file("/download/file.bin", &payload)
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        for saved_size in [chunk_size, chunk_size + 1, chunk_size * 2 + 1] {
+            let local_dir = tempfile::tempdir().unwrap();
+            let local_path = local_dir.path().join("file.bin");
+            let local = local_path.display().to_string();
+            let partial_path = local_dir.path().join(format!(
+                ".dockbridge-{}.partial",
+                resume_partial_suffix(&local, "/download/file.bin")
+            ));
+            tokio::fs::write(&partial_path, &payload[..saved_size])
+                .await
+                .unwrap();
+
+            assert_eq!(
+                super::find_resumable_download_offset(
+                    &mut client.sftp().open("/download/file.bin").await.unwrap(),
+                    local_dir.path(),
+                    payload.len() as u64,
+                    &local,
+                    "/download/file.bin",
+                )
+                .await,
+                Some(saved_size as u64),
+                "matching partial must resume at {saved_size}"
+            );
+            client
+                .download("/download/file.bin", &local_path)
+                .await
+                .unwrap();
+            assert_eq!(tokio::fs::read(&local_path).await.unwrap(), payload);
+            assert!(list_partial_paths(local_dir.path()).is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn download_preserves_partial_after_verification_read_error_and_resumes_on_retry() {
+        let server = TestSftpServer::start().await;
+        let remote = "/download/file.bin";
+        let payload = b"AAAABBBBCCCC";
+        server.write_remote_file(remote, payload).await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        let local = local_path.display().to_string();
+        let partial_path = local_dir.path().join(format!(
+            ".dockbridge-{}.partial",
+            resume_partial_suffix(&local, remote)
+        ));
+        tokio::fs::write(&partial_path, &payload[..4])
+            .await
+            .unwrap();
+
+        // The one-shot read error rejects verification, then a fresh download
+        // succeeds without truncating the saved deterministic partial.
+        server
+            .failures
+            .fail_remote_read
+            .store(true, Ordering::SeqCst);
+        client.download(remote, &local_path).await.unwrap();
+        assert_eq!(tokio::fs::read(&partial_path).await.unwrap(), &payload[..4]);
+        assert_eq!(tokio::fs::read(&local_path).await.unwrap(), payload);
+        assert_eq!(
+            list_partial_paths(local_dir.path()),
+            vec![partial_path.clone()]
+        );
+
+        server
+            .failures
+            .fail_remote_read
+            .store(false, Ordering::SeqCst);
+        assert_eq!(
+            find_resumable_download_offset(
+                &mut client.sftp().open(remote).await.unwrap(),
+                local_dir.path(),
+                payload.len() as u64,
+                &local,
+                remote
+            )
+            .await,
+            Some(4)
+        );
+        client.download(remote, &local_path).await.unwrap();
+        assert_eq!(tokio::fs::read(&local_path).await.unwrap(), payload);
+        assert!(list_partial_paths(local_dir.path()).is_empty());
+    }
+
+    #[tokio::test]
     async fn download_cancels_while_resume_verification_is_waiting_for_read() {
         let server = TestSftpServer::start().await;
         server
