@@ -118,6 +118,12 @@ for key in sorted(strings):
             errors.append(f"{key!r}: missing {target} value")
             continue
 
+        # A locale without grammatical plurals may use one scalar translation
+        # for a source plural group. Treat it as that group's `other` form.
+        plural_other = ("variations", "plural", "other")
+        if set(target_units) == {()} and plural_other in source_units:
+            target_units = {plural_other: target_units[()]}
+
         # Plural categories depend on the language. Japanese may contain only
         # `other`, while English also has `one`. Compare extra target categories
         # against the corresponding source `other` form.
