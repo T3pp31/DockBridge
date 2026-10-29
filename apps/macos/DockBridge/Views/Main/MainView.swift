@@ -190,6 +190,7 @@ struct MainView: View {
                     onSubmit: { answers in bridge.respondToKbdInteractiveChallenge(answers) },
                     onCancel: { bridge.respondToKbdInteractiveChallenge(nil) }
                 )
+                .id(challenge.id)
             }
         }
         .sheet(isPresented: $viewModel.showGoToPath) {
