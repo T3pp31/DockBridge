@@ -67,7 +67,7 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
         var staticCode: SecStaticCode?
         let createStatus = SecStaticCodeCreateWithPath(
             url as CFURL,
-            SecCSFlags(rawValue: kSecCSDefaultFlags),
+            [],
             &staticCode
         )
         guard createStatus == errSecSuccess, let staticCode else {
