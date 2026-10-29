@@ -4303,6 +4303,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_missing_directory_returns_list_failed() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let err = client
+            .list_directory("/download/missing-dir")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, SftpError::ListFailed { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
     async fn upload_writes_remote_file_matching_local_bytes() {
         // Given: a local file with a known payload
         let server = TestSftpServer::start().await;
