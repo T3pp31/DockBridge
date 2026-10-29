@@ -452,6 +452,9 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         guard keyScan.terminationStatus == 0 else {
             throw XCTSkip("ssh-keyscan failed for Docker E2E host")
         }
+        // Close the parent copy of the pipe so ssh-keygen sees EOF instead of
+        // blocking forever (issue #790).
+        try? scanPipe.fileHandleForWriting.close()
 
         let keyGen = Process()
         keyGen.executableURL = URL(fileURLWithPath: "/usr/bin/ssh-keygen")
