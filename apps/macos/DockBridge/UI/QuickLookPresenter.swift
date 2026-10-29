@@ -47,6 +47,7 @@ final class QuickLookPresenter: NSResponder, QLPreviewPanelDataSource, QLPreview
             detachFromResponderChain()
             previousNextResponder = contentView.nextResponder
             contentView.nextResponder = self
+            self.nextResponder = previousNextResponder
             hostContentView = contentView
         }
 
@@ -62,6 +63,7 @@ final class QuickLookPresenter: NSResponder, QLPreviewPanelDataSource, QLPreview
         if let host = hostContentView, host.nextResponder === self {
             host.nextResponder = previousNextResponder
         }
+        nextResponder = nil
         hostContentView = nil
         previousNextResponder = nil
     }
