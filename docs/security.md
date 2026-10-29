@@ -22,6 +22,15 @@
 - Warning when connecting as root
 - **FileVault (or equivalent full-disk encryption) recommended** on the boot volume — see [Connection profiles](#connection-profiles-profilesjson)
 
+## Home directory resolution
+
+Tilde paths and default security-file locations resolve the home directory with
+the platform-standard `dirs` API. On Unix and macOS, an explicit non-empty
+`HOME` takes precedence; if it is unset or empty, the real user's home is
+resolved from the system database. On Windows, the user profile known folder
+is used. DockBridge only accepts an absolute home path and does not honor a
+relative or empty value.
+
 ## CLI password authentication
 
 Password-based CLI connections support two mechanisms:
@@ -337,6 +346,8 @@ gh attestation verify DockBridge-<version>.cdx.json --repo T3pp31/DockBridge
 |----------|-------|----------|------------|
 | RUSTSEC-2026-0153 | russh-cryptovec | High (7.5) | Fixed in `russh 0.61.2` / `russh-cryptovec 0.61.0` (patched `>=0.60.3`) |
 | RUSTSEC-2026-0154 | russh | High (7.5) | Same as above |
+| RUSTSEC-2026-0385 | ctutils | Timing side channel | Fixed in `ctutils 0.4.6` via the `crypto-bigint 0.7.6` update |
+| RUSTSEC-2026-0387 | crypto-bigint | Timing side channel | Fixed in `crypto-bigint 0.7.6` |
 
 ### RSA Marvin Attack (RUSTSEC-2023-0071)
 

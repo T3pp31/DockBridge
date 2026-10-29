@@ -75,12 +75,13 @@ This is also included in the full E2E suite:
 
 ### Manual UI check
 
-1. Start Docker SFTP: `docker run -d --name dockbridge-e2e -p 2222:22 -e SFTP_USER=demo atmoz/sftp demo:password:::upload`
+1. Start Docker SFTP: `docker run -d --name dockbridge-e2e -p 127.0.0.1:2222:22 -e SFTP_USER=demo atmoz/sftp demo:password:::upload`
 2. Build Rust (`./scripts/build-rust.sh`) and run the app in Xcode (Cmd+R).
 3. Connect to `127.0.0.1:2222` as `demo` / `password`; accept the host key.
 4. Upload a large local file (32 MB or more) to the remote pane.
 5. Open **Transfer Queue**, confirm the task shows **In Progress** with a **Cancel** button.
 6. Click **Cancel**; the task status should change to **Cancelled**.
+7. Clean up the test container: `docker rm -f dockbridge-e2e`.
 
 Cancel is checked between read/write chunks, so large transfers can be interrupted at chunk boundaries (default chunk size: 256 KiB).
 

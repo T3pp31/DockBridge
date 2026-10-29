@@ -47,7 +47,7 @@ if [[ -x "$BINDGEN_BIN" ]]; then
   "$BINDGEN_BIN" generate --library "$LIB_PATH" --language swift --out-dir "$OUT_DIR"
 else
   echo "bindgen not found; building via cargo run --$PROFILE"
-  cargo run -p dockbridge-uniffi --bin uniffi-bindgen "${CARGO_FLAG[@]}" -- \
+  cargo run -p dockbridge-uniffi --features cli --bin uniffi-bindgen "${CARGO_FLAG[@]}" -- \
     generate --library "$LIB_PATH" --language swift --out-dir "$OUT_DIR"
 fi
 

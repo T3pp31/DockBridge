@@ -13,11 +13,15 @@ name = "dockbridge_uniffi"
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["uniffi/cli"]
 
 [dependencies]
 dockbridge-core = { path = "../core" }
 tokio.workspace = true
-uniffi = { workspace = true, features = ["cli"] }
+uniffi.workspace = true
 zeroize.workspace = true
 
 [build-dependencies]
