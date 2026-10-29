@@ -118,35 +118,44 @@ for key in sorted(strings):
             errors.append(f"{key!r}: missing {target} value")
             continue
 
-        missing_paths = sorted(set(source_units) - set(target_units))
-        extra_paths = sorted(set(target_units) - set(source_units))
-        for unit_path in missing_paths:
-            errors.append(
-                f"{key!r}: missing {target} value at {'.'.join(unit_path)}"
-            )
-        for unit_path in extra_paths:
-            errors.append(
-                f"{key!r}: unexpected {target} value at {'.'.join(unit_path)}"
-            )
+        # Plural categories depend on the language. Japanese may contain only
+        # `other`, while English also has `one`. Compare extra target categories
+        # against the corresponding source `other` form.
+        def fallback_path(unit_path):
+            parts = list(unit_path)
+            for index in range(len(parts) - 1):
+                if parts[index] == "plural":
+                    parts[index + 1] = "other"
+            return tuple(parts)
 
-        for unit_path in sorted(set(source_units) & set(target_units)):
-            source_value = source_units[unit_path]
-            target_value = target_units[unit_path]
-            unit_name = ".".join(unit_path)
-            if not source_value:
-                errors.append(
-                    f"{key!r}: empty {source_language} value at {unit_name}"
-                )
-            if not target_value:
-                errors.append(f"{key!r}: empty {target} value at {unit_name}")
-            elif source_value and format_signature(target_value) != format_signature(
-                source_value
-            ):
-                errors.append(
-                    f"{key!r}: {target} format arguments "
-                    f"{format_signature(target_value)} at {unit_name} do not match "
-                    f"{source_language} {format_signature(source_value)}"
-                )
+        for language, units in ((source_language, source_units), (target, target_units)):
+            for unit_path, value in units.items():
+                if not isinstance(value, str) or not value:
+                    errors.append(f"{key!r}: empty {language} value at {'.'.join(unit_path)}")
+                other_path = fallback_path(unit_path)
+                if other_path not in units:
+                    errors.append(f"{key!r}: missing {language} value at {'.'.join(other_path)}")
+
+        # Every non-plural variation and every plural group must be present,
+        # but category sets are allowed to differ between locales.
+        for unit_path in source_units:
+            required_path = fallback_path(unit_path)
+            if required_path not in target_units:
+                errors.append(f"{key!r}: missing {target} value at {'.'.join(required_path)}")
+
+        for unit_path, target_value in target_units.items():
+            source_path = unit_path if unit_path in source_units else fallback_path(unit_path)
+            if source_path not in source_units:
+                errors.append(f"{key!r}: unexpected {target} value at {'.'.join(unit_path)}")
+                continue
+            source_value = source_units[source_path]
+            if isinstance(source_value, str) and isinstance(target_value, str) and source_value and target_value:
+                if format_signature(target_value) != format_signature(source_value):
+                    errors.append(
+                        f"{key!r}: {target} format arguments "
+                        f"{format_signature(target_value)} at {'.'.join(unit_path)} do not match "
+                        f"{source_language} {format_signature(source_value)}"
+                    )
 
 # Every explicit String(localized:) literal must have a catalog entry. Dynamic
 # interpolation inside the localization key is rejected so placeholder keys
