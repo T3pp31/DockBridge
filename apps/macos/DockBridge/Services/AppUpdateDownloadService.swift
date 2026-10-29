@@ -150,11 +150,8 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
     func downloadVerifyAndReveal(update: AppUpdateInfo) async throws {
         let downloadedURL = try await downloadDMG(from: update.downloadURL)
 
-        var shouldCleanUpDownload = true
         defer {
-            if shouldCleanUpDownload {
-                try? fileManager.removeItem(at: downloadedURL)
-            }
+            try? fileManager.removeItem(at: downloadedURL)
         }
 
         if let checksumURL = update.checksumURL {
@@ -184,9 +181,12 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
             throw AppUpdateDownloadError.signatureVerificationFailed(.unsignedBundle)
         }
 
-        NSWorkspace.shared.open(mountPoint)
-        shouldUnmount = false
-        shouldCleanUpDownload = false
+        if NSWorkspace.shared.open(mountPoint) {
+            // Finder needs the mounted volume for the user's manual copy.
+            // Removing the backing pathname is safe while the image remains
+            // mounted, and avoids leaving the downloaded DMG in temporary files.
+            shouldUnmount = false
+        }
     }
 
     private func downloadDMG(from url: URL) async throws -> URL {
