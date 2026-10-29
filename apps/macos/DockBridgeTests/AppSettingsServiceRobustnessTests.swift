@@ -107,8 +107,8 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
         // When: loadConfig is called
         let config = service.loadConfig()
 
-        // Then: it does not crash and clamps to the default
-        XCTAssertLessThanOrEqual(config.transferRetryCount, UInt32.max)
+        // Then: it does not crash and clamps to 0
+        XCTAssertEqual(config.transferRetryCount, 0)
     }
 
     func testLoadConfigClampsOversizedChunkToMaximum() {

@@ -3,6 +3,8 @@ import XCTest
 
 @MainActor
 final class ManualTestPlanVerificationTests: XCTestCase {
+    /// Whether the test actually reached the Docker E2E bridge (issue #644).
+    private var usedDockerE2E = false
     private var tempDirectory: URL?
     private var bridge: RustBridgeService?
     override func tearDown() async throws {
@@ -12,7 +14,13 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         if let tempDirectory {
             try? FileManager.default.removeItem(at: tempDirectory)
         }
-        _ = Self.restartDockerSFTP()
+        // Only restart the E2E container for tests that actually used it;
+        // otherwise every non-Docker test pays the restart latency on the
+        // main actor (issue #644).
+        if usedDockerE2E {
+            await Self.restartDockerSFTP()
+            usedDockerE2E = false
+        }
         bridge = nil
         tempDirectory = nil
         try await super.tearDown()
@@ -41,8 +49,11 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         try await bridge?.upload(localPath: localFile.path, remoteDirectory: remoteDirectory)
 
         let remoteFileName = localFile.lastPathComponent
-        let items = try await bridge?.listDirectory(path: remoteDirectory) ?? []
-        XCTAssertTrue(items.contains { $0.name == remoteFileName })
+        let uploaded = await waitUntil(timeout: .seconds(10)) {
+            let items = (try? await self.bridge?.listDirectory(path: remoteDirectory)) ?? []
+            return items.contains { $0.name == remoteFileName }
+        }
+        XCTAssertTrue(uploaded)
     }
 
     func testProductionKeychainSaveAndLoad() throws {
@@ -378,6 +389,7 @@ final class ManualTestPlanVerificationTests: XCTestCase {
 
     private func prepareBridgeWithoutAutoAccept(connectionTimeoutSecs: UInt64? = nil) throws {
         try XCTSkipUnless(Self.isDockerE2EAvailable(), "Docker SFTP (dockbridge-e2e on :2222) is required")
+        usedDockerE2E = true
 
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("manual-test-\(UUID().uuidString)", isDirectory: true)
@@ -399,6 +411,7 @@ final class ManualTestPlanVerificationTests: XCTestCase {
 
     private func prepareBridge() async throws {
         try XCTSkipUnless(Self.isDockerE2EAvailable(), "Docker SFTP (dockbridge-e2e on :2222) is required")
+        usedDockerE2E = true
 
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("manual-test-\(UUID().uuidString)", isDirectory: true)
@@ -513,13 +526,13 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         throw XCTSkip("No writable remote directory found for Docker E2E")
     }
 
-    private func waitUntil(timeout: Duration, condition: @escaping () -> Bool) async -> Bool {
+    private func waitUntil(timeout: Duration, condition: @escaping () async -> Bool) async -> Bool {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
-            if condition() { return true }
+            if await condition() { return true }
             try? await Task.sleep(for: .milliseconds(250))
         }
-        return condition()
+        return await condition()
     }
 
     private static var e2eProfile: ConnectionProfile {
@@ -571,13 +584,19 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         return process.terminationStatus == 0 || process.terminationStatus == 1
     }
 
-    private static func restartDockerSFTP() -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: dockerExecutable)
-        process.arguments = ["restart", "dockbridge-e2e"]
-        guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
-        Thread.sleep(forTimeInterval: 3)
-        return process.terminationStatus == 0
+    private static func restartDockerSFTP() async -> Bool {
+        let executable = dockerExecutable
+        let restarted = await Task.detached {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = ["restart", "dockbridge-e2e"]
+            guard (try? process.run()) != nil else { return false }
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        }.value
+        if restarted {
+            try? await Task.sleep(for: .seconds(3))
+        }
+        return restarted
     }
 }

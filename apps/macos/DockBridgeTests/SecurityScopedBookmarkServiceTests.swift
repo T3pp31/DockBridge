@@ -4,6 +4,8 @@ import XCTest
 final class SecurityScopedBookmarkServiceTests: XCTestCase {
     private var service: SecurityScopedBookmarkService!
     private var tempDir: URL!
+    /// Track the ephemeral defaults suite for cleanup (issue #645).
+    private var testUserDefaultsSuite: String?
 
     override func setUp() {
         super.setUp()
@@ -16,6 +18,10 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
 
     override func tearDown() {
         service.stopAllAccess()
+        if let suiteName = testUserDefaultsSuite {
+            UserDefaults.standard.removePersistentDomain(forName: suiteName)
+        }
+        testUserDefaultsSuite = nil
         try? FileManager.default.removeItem(at: tempDir)
         super.tearDown()
     }
@@ -160,7 +166,9 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
             throw XCTSkip("Security-scoped bookmarks require App Sandbox context: \(error)")
         }
 
-        let defaults = UserDefaults(suiteName: "SecurityScopedBookmarkServiceTests.\(UUID().uuidString)")!
+        let suiteName = "SecurityScopedBookmarkServiceTests.\(UUID().uuidString)"
+        testUserDefaultsSuite = suiteName
+        let defaults = UserDefaults(suiteName: suiteName)!
         let settings = AppSettingsService(defaults: defaults, bookmarkService: service)
 
         var config = AppConfig.default
