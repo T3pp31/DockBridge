@@ -115,6 +115,7 @@ impl TransferManager {
     pub fn clear_completed_transfers(&self) {
         if let Ok(mut tasks) = self.tasks.lock() {
             let mut retained_ids = HashSet::new();
+            let mut removed_ids = HashSet::new();
             tasks.retain(|task| {
                 let retain = matches!(
                     task.status,
@@ -122,15 +123,11 @@ impl TransferManager {
                 );
                 if retain {
                     retained_ids.insert(task.id);
+                } else {
+                    removed_ids.insert(task.id);
                 }
                 retain
             });
-            let removed_ids: HashSet<u64> = tasks
-                .iter()
-                .map(|task| task.id)
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect();
             if let Ok(mut removed) = self.removed_task_ids.lock() {
                 removed.extend(removed_ids);
             }
@@ -2109,7 +2106,14 @@ mod tests {
             total_bytes: 10,
         });
 
+        let stale_completed = manager.get_transfer_queue()[0].clone();
         manager.clear_completed_transfers();
+        // A stale batch must not resurrect a task removed by the user.
+        manager.insert_task(stale_completed);
+        // Retained work must remain eligible for registration.
+        let active = manager.get_transfer_queue()[0].clone();
+        manager.tasks.lock().unwrap().clear();
+        manager.insert_task(active);
 
         let queue = manager.get_transfer_queue();
         assert_eq!(queue.len(), 1);
