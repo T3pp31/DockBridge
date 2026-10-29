@@ -136,6 +136,15 @@ else
 fi
 HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 open "$APP"
 offline_check_deadline=$((SECONDS + 30))
+# LaunchServices may return before the process appears. Wait for startup
+# within the same deadline before treating process absence as a crash.
+while ! pgrep -x DockBridge >/dev/null; do
+  if (( SECONDS >= offline_check_deadline )); then
+    echo "FAIL: App did not launch offline"
+    exit 1
+  fi
+  sleep 1
+done
 while (( SECONDS < offline_check_deadline )); do
   if ! pgrep -x DockBridge >/dev/null; then
     echo "FAIL: App did not stay running offline"
