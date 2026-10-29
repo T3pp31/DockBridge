@@ -24,7 +24,7 @@ final class HostKeyPromptVerificationTests: XCTestCase {
 
         async let decision = bridge.awaitHostKeyDecision(for: challenge)
 
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitForPendingHostKeyChallenge(on: bridge)
         guard let pending = bridge.pendingHostKeyChallenge else {
             return XCTFail("Expected host key challenge to appear")
         }
@@ -52,7 +52,7 @@ final class HostKeyPromptVerificationTests: XCTestCase {
 
         async let decision = bridge.awaitHostKeyDecision(for: challenge)
 
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitForPendingHostKeyChallenge(on: bridge)
         guard let pending = bridge.pendingHostKeyChallenge else {
             return XCTFail("Expected host key mismatch challenge to appear")
         }
