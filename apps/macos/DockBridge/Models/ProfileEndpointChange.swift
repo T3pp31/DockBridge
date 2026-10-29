@@ -27,12 +27,20 @@ struct TrustedProfileEndpoint: Codable, Equatable, Sendable {
         return trimmed.lowercased()
     }
 
+    // Compare legacy decoded records canonically without changing their encoded
+    // host: rewriting it during decoding would invalidate existing HMAC signatures.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        canonicalized(lhs.host) == canonicalized(rhs.host)
+            && lhs.port == rhs.port
+            && lhs.username == rhs.username
+    }
+
     var endpointLabel: String {
         "\(username)@\(host):\(port.portLabel)"
     }
 
     func matches(_ profile: ConnectionProfile) -> Bool {
-        host == Self.canonicalized(profile.host)
+        Self.canonicalized(host) == Self.canonicalized(profile.host)
             && port == profile.port
             && username == profile.username
     }

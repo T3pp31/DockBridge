@@ -25,6 +25,35 @@ final class ProfileTrustStoreTests: XCTestCase {
         super.tearDown()
     }
 
+    func testDecodedLegacyEndpointComparesCanonicalHostsWithoutRewritingData() throws {
+        let input = Data(#"{"host":" EXAMPLE.COM. ","port":22,"username":"user"}"#.utf8)
+        let endpoint = try JSONDecoder().decode(TrustedProfileEndpoint.self, from: input)
+        let profile = ConnectionProfile(name: "Test", host: "example.com", username: "user")
+        XCTAssertEqual(endpoint, TrustedProfileEndpoint(profile: profile))
+        XCTAssertTrue(endpoint.matches(profile))
+        XCTAssertEqual(endpoint.host, " EXAMPLE.COM. ")
+        var differentUser = profile
+        differentUser.username = "User"
+        XCTAssertFalse(endpoint.matches(differentUser))
+        var differentPort = profile
+        differentPort.port = 2222
+        XCTAssertFalse(endpoint.matches(differentPort))
+    }
+
+    func testSignedLegacyEndpointRetainsSignatureAndDoesNotReportHostChange() throws {
+        let profile = ConnectionProfile(name: "Test", host: "example.com", username: "user")
+        var legacyEndpoint = TrustedProfileEndpoint(profile: profile)
+        legacyEndpoint.host = "EXAMPLE.COM."
+        try trustStore.saveTrustedEndpoints([profile.id: legacyEndpoint])
+        let reloaded = try trustStore.loadTrustedEndpoints()
+        XCTAssertEqual(reloaded[profile.id]?.host, "EXAMPLE.COM.")
+        XCTAssertEqual(reloaded[profile.id], TrustedProfileEndpoint(profile: profile))
+        let detection = try trustStore.detectEndpointChanges(in: [profile])
+        XCTAssertTrue(detection.endpointChanges.isEmpty)
+        XCTAssertTrue(detection.pendingInitialTrust.isEmpty)
+        XCTAssertTrue(detection.pendingNewProfileTrust.isEmpty)
+    }
+
     func testConcurrentKeyCreationReturnsSameKey() async throws {
         let keyStore = signingKeyStore!
 
