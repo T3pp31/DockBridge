@@ -264,8 +264,13 @@ final class ConnectionStore: @unchecked Sendable {
                             try trustStore.updateTrust(for: profile)
                         }
                     }
-                } catch ProfileTrustStoreError.verificationFailed {
-                    // Skip auto trust refresh until the user re-confirms trust on next load.
+                } catch {
+                    // The encrypted profile file is already saved. Trust-store
+                    // refresh is a secondary operation: report success for the
+                    // write and let the next load re-detect changes.
+                    AppLogging.connection.error(
+                        "profile trust refresh failed after saving profiles: \(error.localizedDescription, privacy: .public)"
+                    )
                 }
             }
         } catch let error as ProfileEncryptionError {
