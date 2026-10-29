@@ -24,7 +24,7 @@ final class HostKeyPromptVerificationTests: XCTestCase {
 
         async let decision = bridge.awaitHostKeyDecision(for: challenge)
 
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitForPendingHostKeyChallenge(on: bridge)
         guard let pending = bridge.pendingHostKeyChallenge else {
             return XCTFail("Expected host key challenge to appear")
         }
@@ -52,7 +52,7 @@ final class HostKeyPromptVerificationTests: XCTestCase {
 
         async let decision = bridge.awaitHostKeyDecision(for: challenge)
 
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitForPendingHostKeyChallenge(on: bridge)
         guard let pending = bridge.pendingHostKeyChallenge else {
             return XCTFail("Expected host key mismatch challenge to appear")
         }
@@ -171,7 +171,7 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         config.mergeOpensshKnownHostsOnConnect = false
         settings.saveConfig(config)
 
-        let record = settings.buildAppConfigRecord(knownHostsPath: directory.appendingPathComponent("store.json").path)
+        let record = settings.buildAppConfigRecord(knownHostsPath: HostKeyStore(baseDirectory: directory).knownHostsPath.path)
         XCTAssertEqual(
             URL(fileURLWithPath: record.opensshKnownHostsPath).standardizedFileURL.path,
             knownHostsFile.standardizedFileURL.path
@@ -215,7 +215,7 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         tempDirectory = directory
 
-        let knownHostsPath = directory.appendingPathComponent("store.json").path
+        let knownHostsPath = HostKeyStore(baseDirectory: directory).knownHostsPath.path
         let bridge = RustBridgeService(
             settings: settings,
             hostKeyStore: HostKeyStore(baseDirectory: directory)
