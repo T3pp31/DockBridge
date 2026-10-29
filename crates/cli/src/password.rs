@@ -1,6 +1,24 @@
-use std::io;
+use std::io::{self, BufRead};
 
 use zeroize::Zeroizing;
+
+fn max_secret_len() -> anyhow::Result<usize> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct CliSettings {
+        max_secret_len: usize,
+    }
+    let settings: CliSettings = serde_json::from_str(include_str!("../../../config/cli.json"))?;
+    anyhow::ensure!(
+        settings.max_secret_len > 0,
+        "max_secret_len must be positive"
+    );
+    anyhow::ensure!(
+        settings.max_secret_len.checked_add(3).is_some(),
+        "max_secret_len is too large"
+    );
+    Ok(settings.max_secret_len)
+}
 
 #[cfg(not(feature = "disable-cli-password"))]
 mod insecure_password {
@@ -59,15 +77,22 @@ fn trim_trailing_line_endings(value: &mut String) {
 ///
 /// Shared by `--password-stdin` and `--passphrase-stdin` so both credentials
 /// are handled with the same zeroize discipline.
-fn read_secret_line<R: io::BufRead>(
-    mut reader: R,
-    label: &str,
-) -> anyhow::Result<Zeroizing<String>> {
-    let mut buffer = Zeroizing::new(String::new());
+fn read_secret_line<R: io::BufRead>(reader: R, label: &str) -> anyhow::Result<Zeroizing<String>> {
+    // Allow CRLF plus one excess-byte probe, reserving the entire read limit
+    // so even rejected input cannot reallocate and leave unzeroed copies on
+    // the heap (issue #649).
+    let max_secret_len = max_secret_len()?;
+    let read_limit = max_secret_len + 3;
+    let mut buffer = Zeroizing::new(String::with_capacity(read_limit));
     reader
+        .take(read_limit as u64)
         .read_line(&mut buffer)
         .map_err(|err| anyhow::anyhow!("failed to read {label} from stdin: {err}"))?;
+    let reached_read_limit = buffer.len() == read_limit;
     trim_trailing_line_endings(&mut buffer);
+    if reached_read_limit || buffer.len() > max_secret_len {
+        anyhow::bail!("{label} from stdin exceeded {max_secret_len} bytes");
+    }
     if buffer.is_empty() {
         anyhow::bail!("{label} read from stdin was empty");
     }
@@ -114,7 +139,7 @@ pub fn resolve_passphrase(passphrase_stdin: bool) -> anyhow::Result<Option<Zeroi
 
 #[cfg(test)]
 mod tests {
-    use super::{io, read_secret_line, trim_trailing_line_endings};
+    use super::{io, max_secret_len, read_secret_line, trim_trailing_line_endings};
 
     #[test]
     fn trim_trailing_line_endings_removes_unix_newline() {
@@ -184,6 +209,43 @@ mod tests {
         let secret = read_secret_line(&mut cursor, "passphrase").expect("read secret");
         // Then: only the secret remains
         assert_eq!(secret.as_str(), "secret");
+    }
+
+    #[test]
+    fn read_secret_line_applies_byte_limit_independently_of_line_ending() {
+        let max_secret_len = max_secret_len().unwrap();
+        for length in [max_secret_len - 1, max_secret_len, max_secret_len + 1] {
+            for ending in ["", "\n", "\r\n"] {
+                let input = format!("{}{ending}", "x".repeat(length));
+                // Small chunks exercise reads across the allocation boundary.
+                let reader = io::BufReader::with_capacity(1024, io::Cursor::new(input));
+                let result = read_secret_line(reader, "password");
+                if length <= max_secret_len {
+                    assert_eq!(result.unwrap().as_str(), "x".repeat(length));
+                } else {
+                    assert!(result.unwrap_err().to_string().contains("exceeded"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn read_secret_line_accepts_utf8_at_byte_limit() {
+        let max_secret_len = max_secret_len().unwrap();
+        let input = format!("{}\r\n", "é".repeat(max_secret_len / 2));
+        let secret = read_secret_line(io::Cursor::new(input), "passphrase").unwrap();
+        assert_eq!(secret.len(), max_secret_len);
+        assert_eq!(secret.as_str(), "é".repeat(max_secret_len / 2));
+    }
+
+    #[test]
+    fn read_secret_line_rejects_truncated_input_even_when_suffix_is_cr() {
+        let max_secret_len = max_secret_len().unwrap();
+        let input = format!("{}{}hidden", "x".repeat(max_secret_len), "\r".repeat(8));
+        let mut reader = io::Cursor::new(input);
+        let err = read_secret_line(&mut reader, "password").unwrap_err();
+        assert!(err.to_string().contains("exceeded"));
+        assert!(reader.position() < reader.get_ref().len() as u64);
     }
 
     #[test]

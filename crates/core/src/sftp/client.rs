@@ -2736,9 +2736,10 @@ mod tests {
 
     use super::{
         append_cleanup_context, apply_downloaded_metadata, classify_sftp_client_error,
-        create_exclusive_local_partial, download_pipelined_to_writer, is_remote_file_exists_error,
-        is_remote_no_such_file_error, normalize_remote_path, open_exclusive_local_file,
-        partial_file_name, partial_local_path_for_suffix, partial_remote_path_for_suffix,
+        create_exclusive_local_partial, download_pipelined_to_writer,
+        find_resumable_download_offset, is_remote_file_exists_error, is_remote_no_such_file_error,
+        normalize_remote_path, open_exclusive_local_file, partial_file_name,
+        partial_local_path_for_suffix, partial_remote_path_for_suffix,
         pipeline_depth_for_chunk_budget, prepare_local_finalize_destination, random_partial_suffix,
         remote_status_code, rename_local_noreplace, resume_partial_suffix, upload_from_reader,
         DownloadFlowError, PartialLocalTransfer, PartialRemoteTransfer, PipelinableTransferWriter,
