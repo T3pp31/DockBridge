@@ -69,8 +69,10 @@ new = """    public static func lift(_ buf: RustBuffer) throws -> SwiftType {
 if old in src:
     open(path, "w").write(src.replace(old, new))
     print("patched RustBuffer.lift")
+elif new in src:
+    print("RustBuffer.lift already patched")
 else:
-    print("RustBuffer.lift already patched or pattern changed")
+    sys.exit("RustBuffer.lift pattern changed; review the allocation cleanup patch")
 PATCH
 
 echo "Swift bindings written to $OUT_DIR"
