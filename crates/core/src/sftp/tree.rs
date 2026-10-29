@@ -164,6 +164,15 @@ async fn async_canonicalize_local_path(path: &Path) -> Result<PathBuf, SftpError
 }
 
 async fn resolve_local_path_for_root_check(path: &Path) -> Result<PathBuf, SftpError> {
+    if let Ok(metadata) = tokio::fs::symlink_metadata(path).await {
+        if metadata.file_type().is_symlink() {
+            // A dangling symlink is not a new file to create. It would write
+            // through the link on the next I/O operation, so it must be
+            // resolved (or rejected if broken) before the root check.
+            return async_canonicalize_local_path(path).await;
+        }
+    }
+
     if tokio::fs::try_exists(path).await.unwrap_or(false) {
         return async_canonicalize_local_path(path).await;
     }
@@ -179,7 +188,15 @@ async fn resolve_local_path_for_root_check(path: &Path) -> Result<PathBuf, SftpE
         .to_path_buf();
     let mut pending_components: Vec<std::ffi::OsString> = Vec::new();
 
-    while !parent.as_os_str().is_empty() && !tokio::fs::try_exists(&parent).await.unwrap_or(false) {
+    while !parent.as_os_str().is_empty() {
+        // A dangling intermediate symlink is an existing path component.
+        // Stop here so canonicalization rejects it instead of treating it as
+        // an ordinary missing directory under the root.
+        match tokio::fs::symlink_metadata(&parent).await {
+            Ok(_) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(invalid_local_path(path)),
+        }
         if let Some(name) = parent.file_name() {
             pending_components.push(name.to_os_string());
         }
@@ -908,6 +925,43 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ensure_local_path_within_root_rejects_dangling_symlink_escape() {
+        // Given: a symlink under root whose target does not yet exist
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("download");
+        fs::create_dir(&root).unwrap();
+        let outside = tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path().join("later.txt"), root.join("dangling.txt"))
+            .unwrap();
+
+        // When: the path is checked for the local root
+        // Then: it is rejected instead of being treated as a new root-local path
+        let escaped = root.join("dangling.txt");
+        let err = ensure_local_path_within_root(&root, &escaped)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ensure_local_path_within_root_rejects_dangling_intermediate_symlink() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("download");
+        fs::create_dir(&root).unwrap();
+        let outside = tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path().join("missing"), root.join("link")).unwrap();
+
+        let error = ensure_local_path_within_root(&root, &root.join("link/new/leaf.txt"))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, SftpError::InvalidRemotePath { .. }));
+        assert!(!outside.path().join("missing").exists());
     }
 
     #[test]
