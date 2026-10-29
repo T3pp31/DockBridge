@@ -150,24 +150,23 @@ pub enum SftpError {
 /// a free-form, server-localized string. Judging errors by these codes works
 /// with OpenSSH and any standards-conforming server regardless of locale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
 pub enum RemoteStatusCode {
     /// End-of-file condition.
-    Eof = 1,
+    Eof,
     /// The referenced file or directory should exist but does not.
-    NoSuchFile = 2,
+    NoSuchFile,
     /// The authenticated user lacks sufficient permissions.
-    PermissionDenied = 3,
+    PermissionDenied,
     /// Generic catch-all failure.
-    Failure = 4,
+    Failure,
     /// Badly formatted packet or protocol incompatibility.
-    BadMessage = 5,
+    BadMessage,
     /// No connection to the server (generated locally).
-    NoConnection = 6,
+    NoConnection,
     /// The connection to the server has been lost (generated locally).
-    ConnectionLost = 7,
+    ConnectionLost,
     /// The server does not implement the requested operation.
-    OpUnsupported = 8,
+    OpUnsupported,
     /// Any other status code.
     Other(u32),
 }
