@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::sftp::tree::normalize_remote_path;
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId};
@@ -243,17 +244,6 @@ impl SftpHandler {
         }
     }
 
-    fn canonical(&self, path: &str) -> String {
-        if path == "." || path.is_empty() {
-            return "/".to_string();
-        }
-        if path.starts_with('/') {
-            path.to_string()
-        } else {
-            format!("/{path}")
-        }
-    }
-
     fn attrs_for(path: &Path) -> FileAttributes {
         let mut attrs = FileAttributes::empty();
         #[cfg(unix)]
@@ -386,9 +376,17 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
+        // Match real servers: the resolved path must exist and the returned
+        // remote path must be a normalized absolute form (issue #795).
+        let local = self.resolve(&path);
+        if !local.exists() {
+            return Err(StatusCode::NoSuchFile);
+        }
         Ok(Name {
             id,
-            files: vec![File::dummy(self.canonical(&path))],
+            files: vec![File::dummy(
+                normalize_remote_path(&path).unwrap_or_else(|_| format!("/{path}")),
+            )],
         })
     }
 
