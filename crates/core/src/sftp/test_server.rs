@@ -463,6 +463,9 @@ impl russh_sftp::server::Handler for SftpHandler {
         if pflags.contains(OpenFlags::TRUNCATE) {
             options.truncate(true);
         }
+        if pflags.contains(OpenFlags::APPEND) {
+            options.append(true);
+        }
 
         let file = options.open(&local).await.map_err(|err| {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
