@@ -29,6 +29,12 @@ pass=0
 fail=0
 
 cleanup() {
+  if (( fail > 0 )); then
+    # Keep the diagnostics when verification failed; otherwise remove the
+    # whole temporary workdir (issue #673).
+    log "Keeping debug log: $LOG"
+    cp "$LOG" "${TMPDIR:-/tmp}/dockbridge-e2e-verify.log"
+  fi
   rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
