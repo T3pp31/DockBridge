@@ -160,8 +160,8 @@ impl AppConfig {
                 message: err.to_string(),
             })?;
 
-        config.known_hosts_path = expand_tilde(&config.known_hosts_path);
-        config.openssh_known_hosts_path = expand_tilde(&config.openssh_known_hosts_path);
+        config.known_hosts_path = expand_tilde(&config.known_hosts_path)?;
+        config.openssh_known_hosts_path = expand_tilde(&config.openssh_known_hosts_path)?;
         // Single source of truth for validation: validate() normalizes and
         // checks chunk size / pipeline depth / retry count / timeouts here too.
         config = config.validate()?;
@@ -341,13 +341,13 @@ pub fn clamp_transfer_upload_pipeline_depth(depth: usize) -> usize {
 /// redirecting config paths (e.g. `known_hosts`) to unexpected locations.
 /// The `~/` remainder is rejected if it contains `..` segments to prevent
 /// traversal outside the home directory.
-pub fn expand_tilde(path: &Path) -> PathBuf {
+pub fn expand_tilde(path: &Path) -> Result<PathBuf, ConfigError> {
     expand_tilde_with_home(path, home_dir().as_deref())
 }
 
-fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBuf {
+fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> Result<PathBuf, ConfigError> {
     let Some(path_str) = path.to_str() else {
-        return path.to_path_buf();
+        return Ok(path.to_path_buf());
     };
 
     // Only accept absolute home directories; a relative HOME could redirect
@@ -357,19 +357,22 @@ fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBuf {
     if let Some(rest) = path_str.strip_prefix("~/") {
         if let Some(home) = home {
             if rest.split('/').any(|segment| segment == "..") {
-                return path.to_path_buf();
+                return Err(ConfigError::InvalidPath {
+                    path: path.display().to_string(),
+                    reason: "`~/` paths cannot contain `..` segments".to_string(),
+                });
             }
-            return home.join(rest);
+            return Ok(home.join(rest));
         }
     }
 
     if path_str == "~" {
         if let Some(home) = home {
-            return home.to_path_buf();
+            return Ok(home.to_path_buf());
         }
     }
 
-    path.to_path_buf()
+    Ok(path.to_path_buf())
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -384,10 +387,12 @@ fn home_dir() -> Option<PathBuf> {
 
 fn default_known_hosts_path() -> PathBuf {
     expand_tilde(Path::new("~/.dockbridge/known_hosts.json"))
+        .expect("the default known hosts path is a safe tilde path")
 }
 
 fn default_openssh_known_hosts_path() -> PathBuf {
     expand_tilde(Path::new("~/.ssh/known_hosts"))
+        .expect("the default OpenSSH known hosts path is a safe tilde path")
 }
 
 fn default_ssh_inactivity_timeout_secs() -> Option<u64> {
@@ -461,7 +466,8 @@ mod tests {
     fn expand_tilde_replaces_home_prefix() {
         let home = PathBuf::from("/tmp/home");
         let expanded =
-            expand_tilde_with_home(Path::new("~/.dockbridge/known_hosts.json"), Some(&home));
+            expand_tilde_with_home(Path::new("~/.dockbridge/known_hosts.json"), Some(&home))
+                .unwrap();
         assert_eq!(
             expanded,
             PathBuf::from("/tmp/home/.dockbridge/known_hosts.json")
@@ -473,7 +479,7 @@ mod tests {
         // A relative HOME should not be used to expand ~.
         let relative = PathBuf::from("relative/path");
         assert_eq!(
-            expand_tilde_with_home(Path::new("~/known_hosts.json"), Some(&relative)),
+            expand_tilde_with_home(Path::new("~/known_hosts.json"), Some(&relative)).unwrap(),
             PathBuf::from("~/known_hosts.json")
         );
     }
@@ -481,10 +487,27 @@ mod tests {
     #[test]
     fn expand_tilde_rejects_parent_dir_in_remainder() {
         let home = PathBuf::from("/tmp/home");
-        assert_eq!(
-            expand_tilde_with_home(Path::new("~/../etc/passwd"), Some(&home)),
-            PathBuf::from("~/../etc/passwd")
-        );
+        let err = expand_tilde_with_home(Path::new("~/../etc/passwd"), Some(&home)).unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidPath { .. }));
+    }
+
+    #[test]
+    fn from_toml_file_rejects_tilde_traversal() {
+        // Given: a tilde path whose remainder escapes the home directory
+        // When: loading an AppConfig that uses the path
+        // Then: loading fails instead of treating `~` as a relative directory
+        let dir =
+            std::env::temp_dir().join(format!("dockbridge-config-tilde-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tilde-traversal.toml");
+        std::fs::write(
+            &path,
+            "known_hosts_path = \"~/../Documents/known_hosts.json\"\n",
+        )
+        .unwrap();
+
+        let err = AppConfig::from_toml_file(&path).unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidPath { .. }));
     }
 
     #[test]

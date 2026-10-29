@@ -293,6 +293,9 @@ pub enum ConfigError {
         value: u64,
         reason: &'static str,
     },
+
+    #[error("invalid path {path}: {reason}")]
+    InvalidPath { path: String, reason: String },
 }
 
 impl AppError {

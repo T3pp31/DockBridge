@@ -193,7 +193,7 @@ impl ConnectionArgs {
             // later, unlocked by the core authenticator.
             let passphrase = password::resolve_passphrase(self.passphrase_stdin)?
                 .map(|value| SecretPassword::new(value.as_str()));
-            let key_path = expand_tilde(&key_path);
+            let key_path = expand_tilde(&key_path)?;
             let algorithm =
                 inspect_private_key_algorithm(&key_path, passphrase.as_ref().map(|p| p.expose()))?;
             if !is_supported_key_algorithm(&algorithm) {
