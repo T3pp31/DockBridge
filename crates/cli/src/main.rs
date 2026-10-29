@@ -260,16 +260,26 @@ fn is_supported_key_algorithm(algorithm: &PrivateKeyAlgorithm) -> bool {
     matches!(algorithm, Ed25519 | Ecdsa | Rsa)
 }
 
+impl CliHostKeyPrompt {
+    fn print_message(&self, text: &str) {
+        if self.policy == HostKeyPolicy::Ask {
+            print_to_tty_or_stderr(text);
+        } else {
+            eprintln!("{text}");
+        }
+    }
+}
+
 impl HostKeyPrompt for CliHostKeyPrompt {
     fn prompt_unknown_host(&self, host: &str, port: u16, fingerprint_sha256: &str) -> bool {
-        print_to_tty_or_stderr(&format!(
+        self.print_message(&format!(
             "The authenticity of host '{host}:{port}' can't be established."
         ));
-        print_to_tty_or_stderr(&format!("Host key fingerprint is {fingerprint_sha256}."));
+        self.print_message(&format!("Host key fingerprint is {fingerprint_sha256}."));
         match self.policy {
             HostKeyPolicy::AcceptNew => true,
             HostKeyPolicy::Strict => {
-                print_to_tty_or_stderr("Host key verification failed (--host-key-policy strict).");
+                self.print_message("Host key verification failed (--host-key-policy strict).");
                 false
             }
             HostKeyPolicy::Ask => {
@@ -285,14 +295,14 @@ impl HostKeyPrompt for CliHostKeyPrompt {
         expected_fingerprint_sha256: &str,
         actual_fingerprint_sha256: &str,
     ) -> bool {
-        print_to_tty_or_stderr("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
-        print_to_tty_or_stderr("@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @");
-        print_to_tty_or_stderr("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
-        print_to_tty_or_stderr(&format!("Host key for '{host}:{port}' has changed."));
-        print_to_tty_or_stderr(&format!(
+        self.print_message("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+        self.print_message("@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @");
+        self.print_message("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+        self.print_message(&format!("Host key for '{host}:{port}' has changed."));
+        self.print_message(&format!(
             "Expected fingerprint: {expected_fingerprint_sha256}"
         ));
-        print_to_tty_or_stderr(&format!(
+        self.print_message(&format!(
             "Received fingerprint: {actual_fingerprint_sha256}"
         ));
         match self.policy {
@@ -300,7 +310,7 @@ impl HostKeyPrompt for CliHostKeyPrompt {
                 prompt_yes_no_tty("Are you sure you want to continue connecting (yes/no)? ")
             }
             HostKeyPolicy::AcceptNew | HostKeyPolicy::Strict => {
-                print_to_tty_or_stderr(&format!(
+                self.print_message(&format!(
                     "Host key verification failed (--host-key-policy {}).",
                     match self.policy {
                         HostKeyPolicy::AcceptNew => "accept-new",
@@ -350,8 +360,9 @@ fn prompt_yes_no_tty(prompt: &str) -> bool {
         }
     };
     use std::io::Write;
-    if tty.write_all(prompt.as_bytes()).is_ok() {
-        let _ = tty.flush();
+    if let Err(err) = tty.write_all(prompt.as_bytes()).and_then(|_| tty.flush()) {
+        eprintln!("cannot write host key prompt to controlling terminal: {err}; refusing to accept host key");
+        return false;
     }
 
     let mut input = String::new();
