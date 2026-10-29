@@ -348,6 +348,7 @@ async fn main() -> ExitCode {
 async fn run() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
         .with_target(false)
         .init();
 
