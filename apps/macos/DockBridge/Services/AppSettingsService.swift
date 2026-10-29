@@ -232,7 +232,7 @@ final class AppSettingsService: @unchecked Sendable {
             forKey: AppSettingsKeys.transferDownloadPipelineDepth
         )
         defaults.set(
-            Int(config.transferUploadPipelineDepth),
+            Int(clamping: config.transferUploadPipelineDepth),
             forKey: AppSettingsKeys.transferUploadPipelineDepth
         )
         if let inactivity = config.sshInactivityTimeoutSecs {

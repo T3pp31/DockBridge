@@ -102,6 +102,18 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
         XCTAssertEqual(highConfig.transferDownloadPipelineDepth, 256)
     }
 
+    func testSaveConfigClampsOversizedPipelineDepths() {
+        var config = service.loadConfig()
+        config.transferDownloadPipelineDepth = UInt64.max
+        config.transferUploadPipelineDepth = UInt64.max
+
+        service.saveConfig(config)
+        let reloaded = service.loadConfig()
+
+        XCTAssertEqual(reloaded.transferDownloadPipelineDepth, 256)
+        XCTAssertEqual(reloaded.transferUploadPipelineDepth, 256)
+    }
+
     func testSaveConfigPreservesUploadPipelineDepth() {
         // Given: a non-default upload pipeline depth
         var config = service.loadConfig()
