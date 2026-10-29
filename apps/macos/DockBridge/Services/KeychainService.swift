@@ -113,6 +113,12 @@ final class KeychainService: @unchecked Sendable {
             if updateStatus == errSecSuccess {
                 return
             }
+            // The item can be deleted by a concurrent save/delete operation
+            // between the existence check and update. Re-add it in that case.
+            if updateStatus == errSecItemNotFound {
+                try addItem(account: account, kind: kind, attributes: attributes)
+                return
+            }
             throw KeychainServiceError.unexpectedStatus(updateStatus)
 
         case errSecItemNotFound:
@@ -182,23 +188,41 @@ final class KeychainService: @unchecked Sendable {
     ) throws {
         var addQuery = makeQuery(account: account, kind: kind)
         addQuery.merge(attributes) { _, new in new }
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-        if addStatus == errSecSuccess {
-            return
-        }
-        // A concurrent save may have created the item between our
-        // copy-matching check and this add. Treat duplicate as an update.
-        if addStatus == errSecDuplicateItem {
-            let updateStatus = SecItemUpdate(
-                makeQuery(account: account, kind: kind) as CFDictionary,
-                attributes as CFDictionary
-            )
-            if updateStatus == errSecSuccess {
-                return
+        try Self.addOrUpdateItem(
+            add: { SecItemAdd(addQuery as CFDictionary, nil) },
+            update: {
+                SecItemUpdate(
+                    self.makeQuery(account: account, kind: kind) as CFDictionary,
+                    attributes as CFDictionary
+                )
             }
+        )
+    }
+
+    /// Handles a save/delete race and a competing save during recovery.
+    /// Continued external contention is reported rather than retried indefinitely.
+    static func addOrUpdateItem(add: () -> OSStatus, update: () -> OSStatus) throws {
+        let addStatus = add()
+        if addStatus == errSecSuccess { return }
+        guard addStatus == errSecDuplicateItem else {
+            throw KeychainServiceError.unexpectedStatus(addStatus)
+        }
+        let updateStatus = update()
+        if updateStatus == errSecSuccess { return }
+        guard updateStatus == errSecItemNotFound else {
             throw KeychainServiceError.unexpectedStatus(updateStatus)
         }
-        throw KeychainServiceError.unexpectedStatus(addStatus)
+        let recoveryStatus = add()
+        if recoveryStatus == errSecSuccess { return }
+        guard recoveryStatus == errSecDuplicateItem else {
+            throw KeychainServiceError.unexpectedStatus(recoveryStatus)
+        }
+        // Another writer recreated the item after the failed update. Preserve
+        // this save's value by updating that item instead of failing as duplicate.
+        let recoveryUpdateStatus = update()
+        guard recoveryUpdateStatus == errSecSuccess else {
+            throw KeychainServiceError.unexpectedStatus(recoveryUpdateStatus)
+        }
     }
 
     private func makeQuery(account: String, kind: String) -> [String: Any] {
