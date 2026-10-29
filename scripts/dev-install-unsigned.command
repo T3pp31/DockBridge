@@ -31,25 +31,7 @@ if [[ ! -w "/Applications" ]] || [[ -d "$INSTALL_PATH" && ! -w "$INSTALL_PATH" ]
 fi
 
 echo "DockBridge を Applications にインストールしています..."
-if ! ditto "$SOURCE_PATH" "$INSTALL_PATH"; then
-  alert "DockBridge.app のインストールに失敗しました。"
-  exit 1
-fi
-
-echo "macOS のセキュリティ制限を解除しています..."
-if ! xattr -cr "$INSTALL_PATH"; then
-  alert "DockBridge.app のセキュリティ属性の更新に失敗しました。"
-  exit 1
-fi
-
-echo "DockBridge を起動しています..."
-if ! open "$INSTALL_PATH"; then
-  alert "DockBridge.app の起動に失敗しました。"
-  exit 1
-fi
-
-notify "インストールが完了しました"
-
-echo ""
-echo "完了しました。このウィンドウは閉じてください。"
-read -r -p "Enter キーで終了します... " _
+# Remove the existing bundle first so stale resources/frameworks from older
+# builds cannot survive the copy (issue #671).
+rm -rf "$INSTALL_PATH"
+ditto "$SOURCE_PATH" "$INSTALL_PATH"
