@@ -38,6 +38,25 @@ final class UpdateCheckViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.showUpdateSheet)
     }
 
+    func testCheckOnLaunchPresentsWithoutHostKeyPrompt() async {
+        mockSession.responseJSON = newerReleaseJSON
+
+        await viewModel.checkOnLaunch(isHostKeyBlocking: false)
+
+        XCTAssertTrue(viewModel.showUpdateSheet)
+    }
+
+    func testHostKeyDismissedBeforeUpdateResponseStillPresentsSheet() async {
+        mockSession.responseJSON = newerReleaseJSON
+        mockSession.onRequest = { [viewModel = viewModel!] in
+            await viewModel.onHostKeyDismissed()
+        }
+
+        await viewModel.checkOnLaunch(isHostKeyBlocking: true)
+
+        XCTAssertTrue(viewModel.showUpdateSheet)
+    }
+
     func testSkipVersionPersistsSkippedVersionAndSuppressesRelaunch() async {
         mockSession.responseJSON = newerReleaseJSON
 
@@ -144,8 +163,10 @@ final class UpdateCheckViewModelTests: XCTestCase {
 private final class MockUpdateURLSession: URLSessionDataProviding, @unchecked Sendable {
     var responseJSON = "{}"
     var shouldFail = false
+    var onRequest: (@Sendable () async -> Void)?
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        await onRequest?()
         if shouldFail {
             throw URLError(.notConnectedToInternet)
         }
