@@ -6436,6 +6436,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_discards_stale_partial_and_restarts_from_scratch() {
+        // Given: a stale partial that no longer matches the remote prefix
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/file.bin", b"NEWNEWNEW")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+
+        let partial_path = local_dir.path().join(format!(
+            ".dockbridge-{}.partial",
+            resume_partial_suffix(&local_path.display().to_string(), "/download/file.bin")
+        ));
+        tokio::fs::write(&partial_path, b"OLDDD").await.unwrap();
+
+        // When: the download is restarted against the changed remote file
+        client
+            .download("/download/file.bin", &local_path)
+            .await
+            .unwrap();
+
+        // Then: the final file is not a mix of old and new bytes
+        assert_eq!(tokio::fs::read(&local_path).await.unwrap(), b"NEWNEWNEW");
+        assert!(list_partial_paths(local_dir.path()).is_empty());
+    }
+
+    #[tokio::test]
     async fn download_restarts_from_zero_when_partial_prefix_mismatches() {
         // Given: a remote file whose content no longer matches the leftover
         // partial prefix.
