@@ -6262,6 +6262,7 @@ mod tests {
             .await,
             Some(4)
         );
+        assert_eq!(tokio::fs::read(&partial_path).await.unwrap(), b"AAAA");
 
         // When: the download runs to the same paths
         client
