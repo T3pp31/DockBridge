@@ -2245,6 +2245,9 @@ const RESUME_VERIFICATION_BYTES: u64 = 64 * 1024;
 /// a leftover local partial for this `(local, remote)` pair exists, is a
 /// strict prefix of the remote file, and all saved bytes match the current
 /// remote content (issue #313, #655). `None` starts from scratch.
+/// Verification re-reads every saved byte over the network, preserving local
+/// writes rather than network bandwidth. Size/mtime alone cannot establish
+/// content identity when the remote file changes without changing metadata.
 async fn find_resumable_download_offset(
     client: &SftpClient<'_>,
     local_parent: &Path,
@@ -2567,9 +2570,10 @@ mod tests {
 
     use super::{
         append_cleanup_context, apply_downloaded_metadata, classify_sftp_client_error,
-        create_exclusive_local_partial, download_pipelined_to_writer, is_remote_file_exists_error,
-        is_remote_no_such_file_error, normalize_remote_path, open_exclusive_local_file,
-        partial_file_name, partial_local_path_for_suffix, partial_remote_path_for_suffix,
+        create_exclusive_local_partial, download_pipelined_to_writer,
+        find_resumable_download_offset, is_remote_file_exists_error, is_remote_no_such_file_error,
+        normalize_remote_path, open_exclusive_local_file, partial_file_name,
+        partial_local_path_for_suffix, partial_remote_path_for_suffix,
         pipeline_depth_for_chunk_budget, prepare_local_finalize_destination, random_partial_suffix,
         remote_status_code, rename_local_noreplace, resume_partial_suffix, upload_from_reader,
         DownloadFlowError, PartialLocalTransfer, PartialRemoteTransfer, PipelinableTransferWriter,
@@ -5812,6 +5816,52 @@ mod tests {
         // Then: the final file carries the full payload and the partial is gone
         assert_eq!(tokio::fs::read(&local_path).await.unwrap(), b"AAAABBBBCCCC");
         assert!(list_partial_paths(local_dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn download_resumes_matching_partials_across_verification_chunks() {
+        let server = TestSftpServer::start().await;
+        let chunk_size = super::RESUME_VERIFICATION_BYTES as usize;
+        let payload: Vec<u8> = (0..chunk_size * 2 + 1)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        server
+            .write_remote_file("/download/file.bin", &payload)
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        for saved_size in [chunk_size, chunk_size + 1, chunk_size + chunk_size / 2] {
+            let local_dir = tempfile::tempdir().unwrap();
+            let local_path = local_dir.path().join("file.bin");
+            let local = local_path.display().to_string();
+            let partial_path = local_dir.path().join(format!(
+                ".dockbridge-{}.partial",
+                resume_partial_suffix(&local, "/download/file.bin")
+            ));
+            tokio::fs::write(&partial_path, &payload[..saved_size])
+                .await
+                .unwrap();
+
+            assert_eq!(
+                find_resumable_download_offset(
+                    &client,
+                    local_dir.path(),
+                    payload.len() as u64,
+                    &local,
+                    "/download/file.bin",
+                )
+                .await,
+                Some(saved_size as u64),
+                "matching partial must resume at {saved_size}"
+            );
+            client
+                .download("/download/file.bin", &local_path)
+                .await
+                .unwrap();
+            assert_eq!(tokio::fs::read(&local_path).await.unwrap(), payload);
+            assert!(list_partial_paths(local_dir.path()).is_empty());
+        }
     }
 
     #[tokio::test]
