@@ -551,15 +551,15 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
     func testCancelPendingConnectDiscardsInFlightRsaInspectionResult() async {
         let inspectionStarted = DispatchSemaphore(value: 0)
         let finishInspection = DispatchSemaphore(value: 0)
-        let resultApplied = DispatchSemaphore(value: 0)
+        let inspectionCompleted = DispatchSemaphore(value: 0)
         let viewModel = makeViewModel(
             rsaKeyInspector: { _, _, _ in
                 inspectionStarted.signal()
                 finishInspection.wait()
                 return true
             },
-            onRsaInspectionResult: { _ in
-                resultApplied.signal()
+            onRsaInspectionCompleted: { _ in
+                inspectionCompleted.signal()
             }
         )
         let profile = ConnectionProfile(
@@ -574,8 +574,8 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertTrue(didStartInspection)
         viewModel.cancelPendingConnect()
         finishInspection.signal()
-        let didApplyResult = await waitForSignal(resultApplied)
-        XCTAssertTrue(didApplyResult)
+        let didCompleteInspection = await waitForSignal(inspectionCompleted)
+        XCTAssertTrue(didCompleteInspection)
 
         XCTAssertNil(viewModel.pendingConnectProfile)
         XCTAssertFalse(viewModel.showRsaKeyWarning)
@@ -584,15 +584,15 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
     func testNewConnectRequestDiscardsPreviousRsaInspectionResult() async {
         let inspectionStarted = DispatchSemaphore(value: 0)
         let finishInspection = DispatchSemaphore(value: 0)
-        let resultApplied = DispatchSemaphore(value: 0)
+        let inspectionCompleted = DispatchSemaphore(value: 0)
         let viewModel = makeViewModel(
             rsaKeyInspector: { _, _, _ in
                 inspectionStarted.signal()
                 finishInspection.wait()
                 return true
             },
-            onRsaInspectionResult: { _ in
-                resultApplied.signal()
+            onRsaInspectionCompleted: { _ in
+                inspectionCompleted.signal()
             }
         )
         let firstProfile = ConnectionProfile(
@@ -615,8 +615,8 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
             await Task.yield()
         }
         finishInspection.signal()
-        let didApplyResult = await waitForSignal(resultApplied)
-        XCTAssertTrue(didApplyResult)
+        let didCompleteInspection = await waitForSignal(inspectionCompleted)
+        XCTAssertTrue(didCompleteInspection)
 
         XCTAssertTrue(viewModel.showRootWarning)
         XCTAssertFalse(viewModel.showRsaKeyWarning)
@@ -738,7 +738,7 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
             KeychainService,
             SecurityScopedBookmarkService
         ) -> Bool?,
-        onRsaInspectionResult: ((Bool?) -> Void)? = nil
+        onRsaInspectionCompleted: ((Bool?) -> Void)? = nil
     ) -> ConnectionListViewModel {
         ConnectionListViewModel(
             store: store,
@@ -746,7 +746,7 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
             bookmarkService: .shared,
             bridge: RustBridgeService(),
             rsaKeyInspector: rsaKeyInspector,
-            onRsaInspectionResult: onRsaInspectionResult
+            onRsaInspectionCompleted: onRsaInspectionCompleted
         )
     }
 
