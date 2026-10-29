@@ -662,29 +662,27 @@ impl DockBridgeClient {
         })??;
         let transfer_manager = Arc::clone(&self.transfer_manager);
         let overwrite_policy: TransferOverwritePolicy = overwrite_policy.into();
-        // Run the transfer on the shared runtime instead of the caller's
-        // thread: the future only resolves when the whole batch has finished,
-        // and blocking a Swift cooperative thread that long starves the pool
-        // (issue #286). Progress and completion surface through
-        // `get_transfer_queue` polling.
         let upload_manager = Arc::clone(&transfer_manager);
         let upload_session = Arc::clone(&session);
         let upload_local = local_path.clone();
         let upload_remote = remote_directory.clone();
         let upload_policy = overwrite_policy;
+        // Register the entry synchronously so path/walk errors reach Swift. The
+        // transfer itself remains on the shared runtime because it may run for
+        // a long time (issue #286); queue progress is observed by polling.
+        let prepared = block_on(upload_manager.prepare_upload_entry_for_session_with_policy(
+            upload_session.as_ref(),
+            session_id,
+            &upload_local,
+            upload_remote,
+            upload_policy,
+        ))?
+        .map_err(map_error)?;
+        let prepared_policy = overwrite_policy;
         runtime()?.spawn(async move {
-            if let Err(err) = upload_manager
-                .enqueue_upload_entry_for_session_with_policy(
-                    upload_session.as_ref(),
-                    session_id,
-                    &upload_local,
-                    upload_remote,
-                    upload_policy,
-                )
-                .await
-            {
-                eprintln!("dockbridge: background upload failed for session {session_id}: {err}");
-            }
+            let _ = upload_manager
+                .execute_upload_tasks(upload_session.as_ref(), prepared.tasks, prepared_policy)
+                .await;
         });
         Ok(())
     }
@@ -706,25 +704,28 @@ impl DockBridgeClient {
         })??;
         let transfer_manager = Arc::clone(&self.transfer_manager);
         let overwrite_policy: TransferOverwritePolicy = overwrite_policy.into();
-        // See `upload_entry`: never block the caller for the whole batch.
         let download_manager = Arc::clone(&transfer_manager);
         let download_session = Arc::clone(&session);
         let download_remote = remote_path.clone();
         let download_local = local_directory.clone();
         let download_policy = overwrite_policy;
+        // See `upload_entry`: observe registration errors synchronously and
+        // run the potentially long transfer on the shared runtime.
+        let prepared = block_on(
+            download_manager.prepare_download_entry_for_session_with_policy(
+                download_session.as_ref(),
+                session_id,
+                download_remote,
+                &download_local,
+                download_policy,
+            ),
+        )?
+        .map_err(map_error)?;
+        let prepared_policy = overwrite_policy;
         runtime()?.spawn(async move {
-            if let Err(err) = download_manager
-                .enqueue_download_entry_for_session_with_policy(
-                    download_session.as_ref(),
-                    session_id,
-                    download_remote,
-                    &download_local,
-                    download_policy,
-                )
-                .await
-            {
-                eprintln!("dockbridge: background download failed for session {session_id}: {err}");
-            }
+            let _ = download_manager
+                .execute_download_tasks(download_session.as_ref(), prepared.tasks, prepared_policy)
+                .await;
         });
         Ok(())
     }
