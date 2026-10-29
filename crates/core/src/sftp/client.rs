@@ -21,8 +21,8 @@ use crate::config::{
     DEFAULT_TRANSFER_CHUNK_SIZE_BYTES, DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
 };
 use crate::error::{RemoteStatusCode, SftpError};
-use crate::ssh::session::SshSession;
 use crate::ssh::connection_health::is_connection_lost_message;
+use crate::ssh::session::SshSession;
 use crate::transfer::TransferOverwritePolicy;
 
 use super::path::parent_remote_path;
