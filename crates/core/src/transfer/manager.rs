@@ -137,27 +137,31 @@ impl TransferManager {
 
     /// Removes every task from the queue, cancelling active transfers first.
     pub fn clear_all_transfers(&self) -> Result<(), TransferError> {
-        let active_ids: Vec<u64> = self
-            .get_transfer_queue()
-            .into_iter()
-            .filter(|task| {
-                matches!(
-                    task.status,
-                    TransferStatus::Pending | TransferStatus::InProgress
-                )
-            })
-            .map(|task| task.id)
-            .collect();
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|_| TransferError::TaskNotFound { task_id: 0 })?;
+        let mut flags = self
+            .cancellation_flags
+            .lock()
+            .map_err(|_| TransferError::TaskNotFound { task_id: 0 })?;
 
-        for task_id in active_ids {
-            let _ = self.cancel_transfer(task_id);
-        }
-
-        if let Ok(mut tasks) = self.tasks.lock() {
-            tasks.clear();
-            if let Ok(mut policies) = self.overwrite_policies.lock() {
-                policies.clear();
+        for task in tasks.iter_mut() {
+            if !matches!(
+                task.status,
+                TransferStatus::Pending | TransferStatus::InProgress
+            ) {
+                continue;
             }
+            flags
+                .entry(task.id)
+                .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+                .store(true, Ordering::Relaxed);
+            task.status = TransferStatus::Cancelled;
+        }
+        tasks.clear();
+        if let Ok(mut policies) = self.overwrite_policies.lock() {
+            policies.clear();
         }
 
         Ok(())
