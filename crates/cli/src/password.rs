@@ -2,6 +2,8 @@ use std::io::{self, BufRead};
 
 use zeroize::Zeroizing;
 
+const MAX_SECRET_LEN: usize = 8 * 1024;
+
 #[cfg(not(feature = "disable-cli-password"))]
 mod insecure_password {
     use std::sync::OnceLock;
@@ -60,19 +62,20 @@ fn trim_trailing_line_endings(value: &mut String) {
 /// Shared by `--password-stdin` and `--passphrase-stdin` so both credentials
 /// are handled with the same zeroize discipline.
 fn read_secret_line<R: io::BufRead>(reader: R, label: &str) -> anyhow::Result<Zeroizing<String>> {
-    // Pre-allocate the accepted capacity so the secret stays in one buffer
-    // that can be zeroized; growing String would leave unzeroed copies on the
-    // heap (issue #649).
-    const MAX_SECRET_LEN: usize = 8 * 1024;
-    let mut buffer = Zeroizing::new(String::with_capacity(MAX_SECRET_LEN));
+    // Allow CRLF plus one excess-byte probe, reserving the entire read limit
+    // so even rejected input cannot reallocate and leave unzeroed copies on
+    // the heap (issue #649).
+    let read_limit = MAX_SECRET_LEN + 3;
+    let mut buffer = Zeroizing::new(String::with_capacity(read_limit));
     reader
-        .take((MAX_SECRET_LEN as u64) + 1)
+        .take(read_limit as u64)
         .read_line(&mut buffer)
         .map_err(|err| anyhow::anyhow!("failed to read {label} from stdin: {err}"))?;
-    if buffer.len() > MAX_SECRET_LEN {
+    let reached_read_limit = buffer.len() == read_limit;
+    trim_trailing_line_endings(&mut buffer);
+    if reached_read_limit || buffer.len() > MAX_SECRET_LEN {
         anyhow::bail!("{label} from stdin exceeded {MAX_SECRET_LEN} bytes");
     }
-    trim_trailing_line_endings(&mut buffer);
     if buffer.is_empty() {
         anyhow::bail!("{label} read from stdin was empty");
     }
@@ -119,7 +122,7 @@ pub fn resolve_passphrase(passphrase_stdin: bool) -> anyhow::Result<Option<Zeroi
 
 #[cfg(test)]
 mod tests {
-    use super::{io, read_secret_line, trim_trailing_line_endings};
+    use super::{io, read_secret_line, trim_trailing_line_endings, MAX_SECRET_LEN};
 
     #[test]
     fn trim_trailing_line_endings_removes_unix_newline() {
@@ -189,6 +192,40 @@ mod tests {
         let secret = read_secret_line(&mut cursor, "passphrase").expect("read secret");
         // Then: only the secret remains
         assert_eq!(secret.as_str(), "secret");
+    }
+
+    #[test]
+    fn read_secret_line_applies_byte_limit_independently_of_line_ending() {
+        for length in [MAX_SECRET_LEN - 1, MAX_SECRET_LEN, MAX_SECRET_LEN + 1] {
+            for ending in ["", "\n", "\r\n"] {
+                let input = format!("{}{ending}", "x".repeat(length));
+                // Small chunks exercise reads across the allocation boundary.
+                let reader = io::BufReader::with_capacity(1024, io::Cursor::new(input));
+                let result = read_secret_line(reader, "password");
+                if length <= MAX_SECRET_LEN {
+                    assert_eq!(result.unwrap().as_str(), "x".repeat(length));
+                } else {
+                    assert!(result.unwrap_err().to_string().contains("exceeded"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn read_secret_line_accepts_utf8_at_byte_limit() {
+        let input = format!("{}\r\n", "é".repeat(MAX_SECRET_LEN / 2));
+        let secret = read_secret_line(io::Cursor::new(input), "passphrase").unwrap();
+        assert_eq!(secret.len(), MAX_SECRET_LEN);
+        assert_eq!(secret.as_str(), "é".repeat(MAX_SECRET_LEN / 2));
+    }
+
+    #[test]
+    fn read_secret_line_rejects_truncated_input_even_when_suffix_is_cr() {
+        let input = format!("{}{}hidden", "x".repeat(MAX_SECRET_LEN), "\r".repeat(8));
+        let mut reader = io::Cursor::new(input);
+        let err = read_secret_line(&mut reader, "password").unwrap_err();
+        assert!(err.to_string().contains("exceeded"));
+        assert!(reader.position() < reader.get_ref().len() as u64);
     }
 
     #[test]
