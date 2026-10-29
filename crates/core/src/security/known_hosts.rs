@@ -3,9 +3,10 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use hmac::{Hmac, KeyInit, Mac};
 use russh::keys::{HashAlg, PublicKey};
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
+use sha1::Sha1;
 use ssh_key::known_hosts::{
     HostPatterns, KnownHosts as OpenSshKnownHosts, Marker as OpenSshMarker,
 };
@@ -755,6 +756,25 @@ impl KnownHostsManager {
             ));
         }
 
+        let mut hashed_entries = self.hashed_entries.iter().collect::<Vec<_>>();
+        hashed_entries.sort_by(|left, right| {
+            left.fingerprint_sha256
+                .cmp(&right.fingerprint_sha256)
+                .then_with(|| left.hash.cmp(&right.hash))
+        });
+        for entry in hashed_entries {
+            if entry.marker.is_some() {
+                continue;
+            }
+            let Some(public_key_openssh) = entry.public_key_openssh.as_deref() else {
+                continue;
+            };
+            let encode = base64::engine::general_purpose::STANDARD;
+            let salt = base64::Engine::encode(&encode, &entry.salt);
+            let hash = base64::Engine::encode(&encode, entry.hash);
+            lines.push(format!("|1|{salt}|{hash} {public_key_openssh}"));
+        }
+
         let payload = if lines.is_empty() {
             String::new()
         } else {
@@ -1449,16 +1469,10 @@ fn openssh_marker_to_known_host_marker(marker: &OpenSshMarker) -> KnownHostMarke
 }
 
 fn openssh_hostname_hash(salt: &[u8], host: &str, port: u16) -> [u8; 20] {
-    // OpenSSH hashed-hostname entries use SHA-1 per the known_hosts format (see ssh-key crate).
-    // SHA-256 is used for fingerprint display; this hash is spec-mandated for |1| entries.
-    let mut hasher = Sha1::new();
-    hasher.update(salt);
-    if port == 22 {
-        hasher.update(host.as_bytes());
-    } else {
-        hasher.update(format!("[{host}]:{port}").as_bytes());
-    }
-    hasher.finalize().into()
+    // OpenSSH |1| entries use HMAC-SHA1 with the salt as the HMAC key.
+    let mut hasher = Hmac::<Sha1>::new_from_slice(salt).expect("HMAC accepts keys of any length");
+    hasher.update(openssh_host_pattern(host, port).as_bytes());
+    hasher.finalize().into_bytes().into()
 }
 
 /// Constant-time comparison of two fingerprint strings to mitigate timing
@@ -2009,6 +2023,89 @@ mod tests {
         let exported = fs::read_to_string(&openssh_path).unwrap();
         assert!(exported.contains("example.com,203.0.113.1"));
         assert!(exported.contains("ssh-ed25519"));
+    }
+
+    #[test]
+    fn hashed_export_round_trips_and_matches_openssh() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let exported_path = dir.path().join("exported_known_hosts");
+        let key = test_public_key();
+        let public_key = key.to_openssh().unwrap();
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        let salt = b"test-salt-bytes!!!!!";
+        for port in [22, 2222] {
+            let host = "hashed.example.com";
+            let hash = openssh_hostname_hash(salt, host, port);
+            manager.hashed_entries.push(HashedHostEntry {
+                salt: salt.to_vec(),
+                hash,
+                fingerprint_sha256: fingerprint_sha256(&key),
+                algorithm: "ssh-ed25519".into(),
+                public_key_openssh: Some(public_key.clone()),
+                marker: None,
+            });
+        }
+        manager.export_openssh(&exported_path).unwrap();
+        let exported = fs::read_to_string(&exported_path).unwrap();
+        assert_eq!(exported.lines().count(), 2);
+        for line in exported.lines() {
+            assert!(line.starts_with("|1|dGVzdC1zYWx0LWJ5dGVzISEhISE=|"));
+            assert!(line.ends_with(&public_key));
+        }
+        let mut reloaded = KnownHostsManager::load(dir.path().join("reimported.json")).unwrap();
+        reloaded.import_openssh(&exported_path).unwrap();
+        for host in ["hashed.example.com", "[hashed.example.com]:2222"] {
+            match std::process::Command::new("ssh-keygen")
+                .args(["-F", host, "-f"])
+                .arg(&exported_path)
+                .output()
+            {
+                Ok(output) => assert!(
+                    output.status.success(),
+                    "OpenSSH could not match {host}: {:?}",
+                    output
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("ssh-keygen failed: {error}"),
+            }
+        }
+        for port in [22, 2222] {
+            assert_eq!(
+                reloaded.check_host_key("hashed.example.com", port, &key, true),
+                HostKeyCheckResult::Trust
+            );
+        }
+    }
+
+    #[test]
+    fn hashed_export_omits_marked_and_unexportable_keys() {
+        let dir = tempdir().unwrap();
+        let mut manager = KnownHostsManager::load(dir.path().join("known_hosts.json")).unwrap();
+        let key = test_public_key();
+        let base = HashedHostEntry {
+            salt: b"test-salt-bytes!!".to_vec(),
+            hash: [0; 20],
+            fingerprint_sha256: fingerprint_sha256(&key),
+            algorithm: "ssh-ed25519".into(),
+            public_key_openssh: Some(key.to_openssh().unwrap()),
+            marker: Some(KnownHostMarker::Revoked),
+        };
+        manager.hashed_entries.push(base.clone());
+        manager.hashed_entries.push(HashedHostEntry {
+            marker: Some(KnownHostMarker::CertAuthority),
+            ..base.clone()
+        });
+        manager.hashed_entries.push(HashedHostEntry {
+            marker: None,
+            public_key_openssh: None,
+            ..base
+        });
+        let exported_path = dir.path().join("exported_known_hosts");
+
+        manager.export_openssh(&exported_path).unwrap();
+
+        assert!(fs::read_to_string(exported_path).unwrap().is_empty());
     }
 
     #[test]

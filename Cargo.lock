@@ -725,6 +725,7 @@ dependencies = [
  "async-trait",
  "base64",
  "bssh-russh-sftp",
+ "hmac",
  "libc",
  "rand",
  "russh",
