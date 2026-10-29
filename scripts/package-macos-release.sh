@@ -74,6 +74,15 @@ mkdir -p "$DERIVED_DATA"
 
 SIGN_AND_NOTARIZE="${SIGN_AND_NOTARIZE:-false}"
 
+if [[ "$SIGN_AND_NOTARIZE" == "true" ]]; then
+  require_signed_updates="$(awk -F'"' '/^require_signed_updates / { print $2; exit }' "$ROOT/config/release.toml")"
+  require_notarized_updates="$(awk -F'"' '/^require_notarized_updates / { print $2; exit }' "$ROOT/config/release.toml")"
+  if [[ "$require_signed_updates" != "true" || "$require_notarized_updates" != "true" ]]; then
+    echo "error: SIGN_AND_NOTARIZE=true requires require_signed_updates and require_notarized_updates=true in config/release.toml" >&2
+    exit 1
+  fi
+fi
+
 echo "Building macOS app (Release, archs: ${RELEASE_ARCHS})..."
 export DOCKBRIDGE_SKIP_HOST_BUILD=1
 (
