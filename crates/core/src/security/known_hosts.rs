@@ -3,9 +3,10 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use hmac::{Hmac, KeyInit, Mac};
 use russh::keys::{HashAlg, PublicKey};
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
+use sha1::Sha1;
 use ssh_key::known_hosts::{
     HostPatterns, KnownHosts as OpenSshKnownHosts, Marker as OpenSshMarker,
 };
@@ -217,13 +218,28 @@ impl KnownHostsManager {
         let _store_lock = acquire_store_lock(&self.path)?;
         self.reload_for_update()?;
 
-        let Some(canonical_key) = self.entries.iter().find_map(|(key, entry)| {
+        let canonical_key = self.entries.iter().find_map(|(key, entry)| {
             if entry_matches_host(entry, host, port) {
                 Some(key.clone())
             } else {
                 None
             }
-        }) else {
+        });
+
+        // Remove hashed entries too so a remove operation cannot leave a
+        // separate trust record behind for the same host.
+        let removed_hashed = self
+            .hashed_entries
+            .iter()
+            .any(|entry| hashed_entry_matches_host(entry, host, port));
+        self.hashed_entries
+            .retain(|entry| !hashed_entry_matches_host(entry, host, port));
+
+        let Some(canonical_key) = canonical_key else {
+            if removed_hashed {
+                self.persist()?;
+                return Ok(true);
+            }
             return Ok(false);
         };
 
@@ -321,9 +337,10 @@ impl KnownHostsManager {
     /// Lookup order:
     /// 1. `@revoked` entries (plain or hashed) matching host and fingerprint
     /// 2. Exact canonical host/port or stored alias (excluding cert-authority markers)
-    /// 3. Same port and matching fingerprint (hostname/IP alias normalization; skipped in strict mode)
-    /// 4. Hashed entries matching host and fingerprint
-    /// 5. Unknown
+    /// 3. Hashed entries matching host and fingerprint
+    /// 4. Hashed entry host mismatch (issue #566)
+    /// 5. Same port and matching fingerprint (hostname/IP alias normalization; skipped in strict mode)
+    /// 6. Unknown
     pub fn check_host_key(
         &self,
         host: &str,
@@ -341,14 +358,6 @@ impl KnownHostsManager {
             return fingerprint_check(entry, &actual);
         }
 
-        if !strict_mode
-            && self
-                .find_trusted_entry_by_fingerprint(host, port, &actual)
-                .is_some()
-        {
-            return HostKeyCheckResult::Trust;
-        }
-
         if self
             .find_matching_hashed_entry(host, port, &actual)
             .is_some()
@@ -361,6 +370,14 @@ impl KnownHostsManager {
         // a changed key as an unknown host (issue #566).
         if let Some(entry) = self.find_hashed_entry_for_host(host, port) {
             return fingerprint_check_hashed(entry, &actual);
+        }
+
+        if !strict_mode
+            && self
+                .find_trusted_entry_by_fingerprint(host, port, &actual)
+                .is_some()
+        {
+            return HostKeyCheckResult::Trust;
         }
 
         HostKeyCheckResult::Unknown
@@ -421,10 +438,11 @@ impl KnownHostsManager {
             }
 
             let host_is_canonical = existing.host == host && existing.port == port;
-            let has_remaining_alias = existing
-                .aliases
-                .iter()
-                .any(|alias| !(alias.host == host && alias.port == port));
+            let has_promotable_alias = existing.aliases.iter().any(|alias| {
+                let is_detached = alias.host == host && alias.port == port;
+                let is_excluded = entry_is_excluded_for_host(existing, &alias.host, alias.port);
+                !(is_detached || is_excluded)
+            });
             let has_remaining_exclusion = existing
                 .excluded_aliases
                 .iter()
@@ -434,7 +452,7 @@ impl KnownHostsManager {
             // old key would require two canonical rows for the same host, which
             // the current on-disk schema cannot represent. Fail closed instead
             // of silently dropping a negative trust rule.
-            if host_is_canonical && !has_remaining_alias && has_remaining_exclusion {
+            if host_is_canonical && !has_promotable_alias && has_remaining_exclusion {
                 return Err(SecurityError::KnownHostsWriteFailed {
                     path: self.path.display().to_string(),
                     message: "cannot replace this host key without losing excluded host patterns"
@@ -476,11 +494,25 @@ impl KnownHostsManager {
                 // aliases remain the old entry covered only (host, port) and is
                 // dropped entirely.
                 if !remaining_aliases.is_empty() {
-                    let promoted = remaining_aliases.remove(0);
+                    let Some(promoted_index) = remaining_aliases.iter().position(|alias| {
+                        !entry_is_excluded_for_host(&old_entry, &alias.host, alias.port)
+                    }) else {
+                        return Err(SecurityError::KnownHostsWriteFailed {
+                            path: self.path.display().to_string(),
+                            message:
+                                "cannot replace this host key without losing excluded host patterns"
+                                    .to_string(),
+                        });
+                    };
+                    let promoted = remaining_aliases.remove(promoted_index);
                     old_entry.host = promoted.host;
                     old_entry.port = promoted.port;
                     old_entry.aliases = remaining_aliases;
                     old_entry.excluded_aliases = remaining_excluded;
+                    old_entry.excluded_aliases.retain(|excluded| {
+                        !(excluded.host.eq_ignore_ascii_case(&old_entry.host)
+                            && excluded.port == old_entry.port)
+                    });
                     self.entries
                         .insert(entry_key(&old_entry.host, old_entry.port), old_entry);
                 }
@@ -722,6 +754,25 @@ impl KnownHostsManager {
                 host_patterns.join(","),
                 public_key_openssh
             ));
+        }
+
+        let mut hashed_entries = self.hashed_entries.iter().collect::<Vec<_>>();
+        hashed_entries.sort_by(|left, right| {
+            left.fingerprint_sha256
+                .cmp(&right.fingerprint_sha256)
+                .then_with(|| left.hash.cmp(&right.hash))
+        });
+        for entry in hashed_entries {
+            if entry.marker.is_some() {
+                continue;
+            }
+            let Some(public_key_openssh) = entry.public_key_openssh.as_deref() else {
+                continue;
+            };
+            let encode = base64::engine::general_purpose::STANDARD;
+            let salt = base64::Engine::encode(&encode, &entry.salt);
+            let hash = base64::Engine::encode(&encode, entry.hash);
+            lines.push(format!("|1|{salt}|{hash} {public_key_openssh}"));
         }
 
         let payload = if lines.is_empty() {
@@ -1358,6 +1409,13 @@ fn merge_trusted_alias(entry: &mut KnownHostEntry, host: &str, port: u16) -> boo
 fn merge_excluded_aliases(entry: &mut KnownHostEntry, excluded: &[HostAlias]) -> bool {
     let mut changed = false;
     for alias in excluded {
+        if entry_matches_host(entry, &alias.host, alias.port)
+            || entry_is_excluded_for_host(entry, &alias.host, alias.port)
+        {
+            // A host that is already trusted (or excluded) must not be added
+            // to exclusions as well: precedence would silently untrust it.
+            continue;
+        }
         if !entry
             .excluded_aliases
             .iter()
@@ -1418,16 +1476,10 @@ fn openssh_marker_to_known_host_marker(marker: &OpenSshMarker) -> KnownHostMarke
 }
 
 fn openssh_hostname_hash(salt: &[u8], host: &str, port: u16) -> [u8; 20] {
-    // OpenSSH hashed-hostname entries use SHA-1 per the known_hosts format (see ssh-key crate).
-    // SHA-256 is used for fingerprint display; this hash is spec-mandated for |1| entries.
-    let mut hasher = Sha1::new();
-    hasher.update(salt);
-    if port == 22 {
-        hasher.update(host.as_bytes());
-    } else {
-        hasher.update(format!("[{host}]:{port}").as_bytes());
-    }
-    hasher.finalize().into()
+    // OpenSSH |1| entries use HMAC-SHA1 with the salt as the HMAC key.
+    let mut hasher = Hmac::<Sha1>::new_from_slice(salt).expect("HMAC accepts keys of any length");
+    hasher.update(openssh_host_pattern(host, port).as_bytes());
+    hasher.finalize().into_bytes().into()
 }
 
 /// Constant-time comparison of two fingerprint strings to mitigate timing
@@ -1768,6 +1820,12 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
         });
     }
 
+    if let Some(parent) = path.parent() {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|err| {
         SecurityError::KnownHostsWriteFailed {
             path: path.display().to_string(),
@@ -1780,10 +1838,60 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
 
 #[cfg(not(unix))]
 fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
-    fs::write(path, data).map_err(|err| SecurityError::KnownHostsWriteFailed {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    ensure_known_hosts_parent(path)?;
+    let mut temp_path = None;
+    for attempt in 0..MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS {
+        let candidate = parent.join(format!(
+            "{}.{}.{}.tmp",
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "known_hosts".to_string()),
+            std::process::id(),
+            attempt
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                temp_path = Some((candidate, file));
+                break;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(SecurityError::KnownHostsWriteFailed {
+                    path: path.display().to_string(),
+                    message: err.to_string(),
+                })
+            }
+        }
+    }
+    let (temp_path, mut file) = temp_path.ok_or_else(|| SecurityError::KnownHostsWriteFailed {
         path: path.display().to_string(),
-        message: err.to_string(),
-    })
+        message: format!(
+            "failed to create exclusive partial file after {MAX_KNOWN_HOSTS_PARTIAL_CREATE_ATTEMPTS} attempts"
+        ),
+    })?;
+
+    if let Err(err) = file.write_all(data).and_then(|_| file.sync_all()) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(SecurityError::KnownHostsWriteFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        });
+    }
+
+    if let Err(err) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(SecurityError::KnownHostsWriteFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        });
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1972,6 +2080,89 @@ mod tests {
         let exported = fs::read_to_string(&openssh_path).unwrap();
         assert!(exported.contains("example.com,203.0.113.1"));
         assert!(exported.contains("ssh-ed25519"));
+    }
+
+    #[test]
+    fn hashed_export_round_trips_and_matches_openssh() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let exported_path = dir.path().join("exported_known_hosts");
+        let key = test_public_key();
+        let public_key = key.to_openssh().unwrap();
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        let salt = b"test-salt-bytes!!!!!";
+        for port in [22, 2222] {
+            let host = "hashed.example.com";
+            let hash = openssh_hostname_hash(salt, host, port);
+            manager.hashed_entries.push(HashedHostEntry {
+                salt: salt.to_vec(),
+                hash,
+                fingerprint_sha256: fingerprint_sha256(&key),
+                algorithm: "ssh-ed25519".into(),
+                public_key_openssh: Some(public_key.clone()),
+                marker: None,
+            });
+        }
+        manager.export_openssh(&exported_path).unwrap();
+        let exported = fs::read_to_string(&exported_path).unwrap();
+        assert_eq!(exported.lines().count(), 2);
+        for line in exported.lines() {
+            assert!(line.starts_with("|1|dGVzdC1zYWx0LWJ5dGVzISEhISE=|"));
+            assert!(line.ends_with(&public_key));
+        }
+        let mut reloaded = KnownHostsManager::load(dir.path().join("reimported.json")).unwrap();
+        reloaded.import_openssh(&exported_path).unwrap();
+        for host in ["hashed.example.com", "[hashed.example.com]:2222"] {
+            match std::process::Command::new("ssh-keygen")
+                .args(["-F", host, "-f"])
+                .arg(&exported_path)
+                .output()
+            {
+                Ok(output) => assert!(
+                    output.status.success(),
+                    "OpenSSH could not match {host}: {:?}",
+                    output
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => panic!("ssh-keygen failed: {error}"),
+            }
+        }
+        for port in [22, 2222] {
+            assert_eq!(
+                reloaded.check_host_key("hashed.example.com", port, &key, true),
+                HostKeyCheckResult::Trust
+            );
+        }
+    }
+
+    #[test]
+    fn hashed_export_omits_marked_and_unexportable_keys() {
+        let dir = tempdir().unwrap();
+        let mut manager = KnownHostsManager::load(dir.path().join("known_hosts.json")).unwrap();
+        let key = test_public_key();
+        let base = HashedHostEntry {
+            salt: b"test-salt-bytes!!".to_vec(),
+            hash: [0; 20],
+            fingerprint_sha256: fingerprint_sha256(&key),
+            algorithm: "ssh-ed25519".into(),
+            public_key_openssh: Some(key.to_openssh().unwrap()),
+            marker: Some(KnownHostMarker::Revoked),
+        };
+        manager.hashed_entries.push(base.clone());
+        manager.hashed_entries.push(HashedHostEntry {
+            marker: Some(KnownHostMarker::CertAuthority),
+            ..base.clone()
+        });
+        manager.hashed_entries.push(HashedHostEntry {
+            marker: None,
+            public_key_openssh: None,
+            ..base
+        });
+        let exported_path = dir.path().join("exported_known_hosts");
+
+        manager.export_openssh(&exported_path).unwrap();
+
+        assert!(fs::read_to_string(exported_path).unwrap().is_empty());
     }
 
     #[test]
@@ -2326,6 +2517,54 @@ mod tests {
             HostKeyCheckResult::Mismatch { .. } => {}
             other => panic!("expected Mismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn non_strict_fingerprint_alias_does_not_bypass_hashed_mismatch() {
+        // Given: a hashed entry for one host with key K1 and a plain entry for
+        //        another host on the same port with key K2
+        // When: K2 is presented for the hashed host in non-strict mode
+        // Then: the hashed host's key change is still reported as Mismatch,
+        //       rather than trusting K2 via the unrelated plain entry
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let hashed_key = test_public_key();
+        let other_key = test_other_public_key();
+        let host = "changed-hashed.example.com";
+        let salt = b"change-salt-00002";
+        let hash = openssh_hostname_hash(salt, host, 22);
+        let openssh_path = dir.path().join("known_hosts");
+        let salt_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, salt);
+        let hash_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, hash);
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!(
+                "|1|{salt_b64}|{hash_b64} {}\nother.example.com {}\n",
+                hashed_key.to_openssh().unwrap(),
+                other_key.to_openssh().unwrap()
+            ),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        assert_eq!(
+            manager.check_host_key(host, 22, &hashed_key, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key(host, 22, &other_key, false) {
+            HostKeyCheckResult::Mismatch {
+                expected_fingerprint,
+                ..
+            } => {
+                assert_eq!(expected_fingerprint, fingerprint_sha256(&hashed_key));
+            }
+            other => panic!("expected Mismatch, got {other:?}"),
+        }
+        assert_eq!(
+            manager.check_host_key("other.example.com", 22, &other_key, false),
+            HostKeyCheckResult::Trust
+        );
     }
 
     #[test]
@@ -3062,6 +3301,85 @@ mod tests {
     }
 
     #[test]
+    fn accept_changed_key_skips_excluded_alias_when_promoting() {
+        // Given: an entry whose aliases include both a trusted host and the
+        //        same host listed as an exclusion
+        // When: the canonical host's key changes and an alias is promoted
+        // Then: the excluded alias is never promoted into self-exclusion
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+        let openssh_key = old_key.to_openssh().unwrap();
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("example.com,old.example.com,bad.example.com,!bad.example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &new_key)
+            .unwrap();
+
+        // Then: the next trusted alias keeps the old key and the exclusion
+        //       still applies to the host it names.
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("old.example.com", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key("bad.example.com", 22, &old_key, false) {
+            HostKeyCheckResult::Unknown => {}
+            other => panic!("expected unknown for excluded alias, got {other:?}"),
+        }
+
+        let entry = manager.find_entry("old.example.com", 22).unwrap();
+        assert_eq!(entry.host, "old.example.com");
+        assert!(entry
+            .excluded_aliases
+            .iter()
+            .any(|alias| alias.host == "bad.example.com" && alias.port == 22));
+    }
+
+    #[test]
+    fn accept_changed_key_fails_closed_when_only_alias_is_excluded() {
+        // Given: the only remaining alias is also stored as an exclusion
+        // When: the canonical host's key changes
+        // Then: promotion fails closed instead of creating self-exclusion
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+        let openssh_key = old_key.to_openssh().unwrap();
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("example.com,bad.example.com,!bad.example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        let err = manager
+            .accept_host_key("example.com", 22, &new_key)
+            .expect_err("an excluded alias must not be promoted");
+        assert!(matches!(err, SecurityError::KnownHostsWriteFailed { .. }));
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("bad.example.com", 22, &old_key, false),
+            HostKeyCheckResult::Unknown
+        );
+    }
+
+    #[test]
     fn accept_host_key_does_not_drop_revoked_marker() {
         // Given: a @revoked entry for a host
         // When: the same key is (re)accepted for that host
@@ -3363,12 +3681,14 @@ mod tests {
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
 
+        // Issue #744: the parent directory already existed (tempdir), so its
+        // permissions must not be modified by the save path.
         let parent_mode = fs::metadata(path.parent().unwrap())
             .unwrap()
             .permissions()
             .mode()
             & 0o777;
-        assert_eq!(parent_mode, 0o700);
+        assert_ne!(parent_mode, 0o700);
     }
 
     #[cfg(unix)]

@@ -10,9 +10,10 @@ Reporting** (Security tab → "Report a vulnerability") rather than opening a
 public issue. This keeps the report private until a fix is available.
 
 - Report target: <https://github.com/T3pp31/DockBridge/security/advisories/new>
-- If PVR is unavailable for your account, open a **private** issue or contact
-  the maintainer through the GitHub profile page, and do not include secrets or
-  passwords in the report.
+- If PVR is unavailable for your account, contact the maintainer through the
+  GitHub profile page instead. Do not create a public issue with vulnerability
+  details, secrets, or passwords; describe only that a report is pending until
+  a private channel is available.
 
 Please include (when applicable):
 

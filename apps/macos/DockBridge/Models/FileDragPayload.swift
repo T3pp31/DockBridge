@@ -21,7 +21,7 @@ struct LocalFileDragPayload: Codable, Hashable, Transferable {
     }
 
     var url: URL {
-        URL(fileURLWithPath: path)
+        URL(fileURLWithPath: path, isDirectory: isDirectory)
     }
 
     static var transferRepresentation: some TransferRepresentation {

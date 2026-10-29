@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::sftp::tree::normalize_remote_path;
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId};
@@ -243,17 +244,6 @@ impl SftpHandler {
         }
     }
 
-    fn canonical(&self, path: &str) -> String {
-        if path == "." || path.is_empty() {
-            return "/".to_string();
-        }
-        if path.starts_with('/') {
-            path.to_string()
-        } else {
-            format!("/{path}")
-        }
-    }
-
     fn attrs_for(path: &Path) -> FileAttributes {
         let mut attrs = FileAttributes::empty();
         #[cfg(unix)]
@@ -313,6 +303,9 @@ impl SftpHandler {
 
     async fn read_directory_entries(&self, path: &str) -> Result<Vec<File>, StatusCode> {
         let local = self.resolve(path);
+        if !local.exists() {
+            return Err(StatusCode::NoSuchFile);
+        }
         if !local.is_dir() {
             return Err(StatusCode::Failure);
         }
@@ -383,9 +376,17 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
+        // Match real servers: the resolved path must exist and the returned
+        // remote path must be a normalized absolute form (issue #795).
+        let local = self.resolve(&path);
+        if !local.exists() {
+            return Err(StatusCode::NoSuchFile);
+        }
         Ok(Name {
             id,
-            files: vec![File::dummy(self.canonical(&path))],
+            files: vec![File::dummy(
+                normalize_remote_path(&path).unwrap_or_else(|_| format!("/{path}")),
+            )],
         })
     }
 
@@ -444,12 +445,6 @@ impl russh_sftp::server::Handler for SftpHandler {
         _attrs: FileAttributes,
     ) -> Result<Handle, Self::Error> {
         let local = self.resolve(&filename);
-        if let Some(parent) = local.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|_| StatusCode::Failure)?;
-        }
-
         let mut options = OpenOptions::new();
         if pflags.contains(OpenFlags::READ) {
             options.read(true);
@@ -466,6 +461,9 @@ impl russh_sftp::server::Handler for SftpHandler {
         if pflags.contains(OpenFlags::TRUNCATE) {
             options.truncate(true);
         }
+        if pflags.contains(OpenFlags::APPEND) {
+            options.append(true);
+        }
 
         let file = options.open(&local).await.map_err(|err| {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -481,6 +479,8 @@ impl russh_sftp::server::Handler for SftpHandler {
                 }
             } else if err.kind() == std::io::ErrorKind::NotFound {
                 StatusCode::NoSuchFile
+            } else if err.kind() == std::io::ErrorKind::PermissionDenied {
+                StatusCode::PermissionDenied
             } else {
                 StatusCode::Failure
             }
@@ -648,16 +648,28 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn remove(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
         let local = self.resolve(&path);
-        if fs::remove_file(&local).await.is_err() {
-            return Ok(Self::err_status(id, StatusCode::NoSuchFile, "no such file"));
+        if let Err(err) = fs::remove_file(&local).await {
+            // Match real servers: only a missing target is NoSuchFile; other
+            // failures (EISDIR/EPERM/I/O) map to their own statuses (issue #794).
+            let code = match err.kind() {
+                std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+                std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+                _ => StatusCode::Failure,
+            };
+            return Ok(Self::err_status(id, code, "remove failed"));
         }
         Ok(Self::ok_status(id))
     }
 
     async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
         let local = self.resolve(&path);
-        if fs::remove_dir(&local).await.is_err() {
-            return Ok(Self::err_status(id, StatusCode::Failure, "rmdir failed"));
+        if let Err(err) = fs::remove_dir(&local).await {
+            let status = match err.kind() {
+                std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+                std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+                _ => StatusCode::Failure,
+            };
+            return Ok(Self::err_status(id, status, "rmdir failed"));
         }
         Ok(Self::ok_status(id))
     }
@@ -726,9 +738,13 @@ impl russh_sftp::server::Handler for SftpHandler {
             }
         }
         if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|_| StatusCode::Failure)?;
+            if !parent.is_dir() {
+                return Ok(Self::err_status(
+                    id,
+                    StatusCode::NoSuchFile,
+                    "rename parent does not exist",
+                ));
+            }
         }
         fs::rename(&from, &to)
             .await
@@ -763,9 +779,13 @@ impl russh_sftp::server::Handler for SftpHandler {
                 let from = self.resolve(&parsed.oldpath);
                 let to = self.resolve(&parsed.newpath);
                 if let Some(parent) = to.parent() {
-                    fs::create_dir_all(parent)
-                        .await
-                        .map_err(|_| StatusCode::Failure)?;
+                    if !parent.is_dir() {
+                        return Ok(Packet::Status(Self::err_status(
+                            id,
+                            StatusCode::NoSuchFile,
+                            "rename parent does not exist",
+                        )));
+                    }
                 }
                 // posix-rename replaces an existing destination atomically.
                 fs::rename(&from, &to)
@@ -786,6 +806,17 @@ impl russh_sftp::server::Handler for SftpHandler {
         let local = self.resolve(&path);
         if self.failures.fail_setstat.swap(false, Ordering::SeqCst) {
             return Err(StatusCode::Failure);
+        }
+
+        if let Some(size) = attrs.size {
+            // Match real servers: SETSTAT with size truncates/extends the file
+            // (issue #793).
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .open(&local)
+                .await
+                .map_err(|_| StatusCode::Failure)?;
+            file.set_len(size).await.map_err(|_| StatusCode::Failure)?;
         }
 
         if attrs.atime.is_some() || attrs.mtime.is_some() {
@@ -849,6 +880,7 @@ impl TestSftpServer {
         let root_dir = tempfile::tempdir().unwrap();
         let root = root_dir.path().to_path_buf();
         fs::create_dir_all(&root).await.unwrap();
+        fs::create_dir_all(root.join("upload")).await.unwrap();
 
         let failures = Arc::new(FailureConfig::default());
         // Advertise posix-rename@openssh.com by default (OpenSSH-compatible);
@@ -873,7 +905,14 @@ impl TestSftpServer {
             loop {
                 let (socket, _) = match listener.accept().await {
                     Ok(connection) => connection,
-                    Err(_) => break,
+                    Err(err) => {
+                        if !is_transient_accept_error(&err) {
+                            tracing::error!(error = %err, "test SFTP server accept failed");
+                            panic!("test SFTP server accept failed: {err}");
+                        }
+                        tracing::warn!(error = %err, "test SFTP server accept retrying");
+                        continue;
+                    }
                 };
                 let mut factory = ServerFactory {
                     clients: Arc::clone(&clients),
@@ -989,6 +1028,10 @@ impl TestSftpServer {
         fs::write(local, contents).await.unwrap();
     }
 
+    pub async fn create_remote_dir(&self, remote_path: &str) {
+        fs::create_dir_all(self.resolve(remote_path)).await.unwrap();
+    }
+
     pub fn remote_file_exists(&self, remote_path: &str) -> bool {
         self.resolve(remote_path).is_file()
     }
@@ -1040,4 +1083,29 @@ pub fn list_partial_paths(dir: &Path) -> Vec<PathBuf> {
 
 pub fn is_partial_file_name(name: &str) -> bool {
     name.starts_with(".dockbridge-") && name.ends_with(".partial")
+}
+
+fn is_transient_accept_error(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ResourceBusy
+            | std::io::ErrorKind::TimedOut
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transient_accept_errors_are_classified() {
+        // Given: a connection aborted before accept
+        let aborted = std::io::Error::from(std::io::ErrorKind::ConnectionAborted);
+
+        // Then: it is retried rather than silently stopping the server task
+        assert!(is_transient_accept_error(&aborted));
+    }
 }

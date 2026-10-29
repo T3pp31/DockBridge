@@ -35,20 +35,24 @@ struct HdiutilDMGImageMounter: DMGImageMounting {
         }
 
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let plist = try PropertyListSerialization.propertyList(from: outputData, format: nil)
-        guard let dictionary = plist as? [String: Any],
-              let systemEntities = dictionary["system-entities"] as? [[String: Any]] else {
-            throw AppUpdateDownloadError.mountFailed
-        }
+        let plist = try? PropertyListSerialization.propertyList(from: outputData, format: nil)
+        let systemEntities = (plist as? [String: Any])?["system-entities"] as? [[String: Any]]
 
-        for entity in systemEntities {
+
+        for entity in systemEntities ?? [] {
             guard let mountPoint = entity["mount-point"] as? String,
-                  entity["content"] as? String == "Apple_HFS" || entity["content"] as? String == "Apple_APFS" else {
+                  let content = entity["content-hint"] as? String ?? entity["content"] as? String,
+                  content == "Apple_HFS" || content == "Apple_APFS" else {
                 continue
             }
             return URL(fileURLWithPath: mountPoint, isDirectory: true)
         }
 
+        // A successful attach can still lack a usable volume. Detach only
+        // on this failure path; the caller owns a successfully mounted image.
+        if let deviceEntry = systemEntities?.compactMap({ $0["dev-entry"] as? String }).first {
+            try? unmount(mountPoint: URL(fileURLWithPath: deviceEntry))
+        }
         throw AppUpdateDownloadError.mountFailed
     }
 
@@ -150,11 +154,8 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
     func downloadVerifyAndReveal(update: AppUpdateInfo) async throws {
         let downloadedURL = try await downloadDMG(from: update.downloadURL)
 
-        var shouldCleanUpDownload = true
         defer {
-            if shouldCleanUpDownload {
-                try? fileManager.removeItem(at: downloadedURL)
-            }
+            try? fileManager.removeItem(at: downloadedURL)
         }
 
         if let checksumURL = update.checksumURL {
@@ -184,9 +185,12 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
             throw AppUpdateDownloadError.signatureVerificationFailed(.unsignedBundle)
         }
 
-        NSWorkspace.shared.open(mountPoint)
-        shouldUnmount = false
-        shouldCleanUpDownload = false
+        if NSWorkspace.shared.open(mountPoint) {
+            // Finder needs the mounted volume for the user's manual copy.
+            // Removing the backing pathname is safe while the image remains
+            // mounted, and avoids leaving the downloaded DMG in temporary files.
+            shouldUnmount = false
+        }
     }
 
     private func downloadDMG(from url: URL) async throws -> URL {
@@ -227,8 +231,16 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
             throw AppUpdateDownloadError.checksumFetchFailed
         }
 
-        let fileData = try Data(contentsOf: fileURL)
-        let digest = SHA256.hash(data: fileData)
+        let fileHandle = try FileHandle(forReadingFrom: fileURL)
+        defer {
+            try? fileHandle.close()
+        }
+
+        var hasher = SHA256()
+        while let chunk = try fileHandle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        let digest = hasher.finalize()
         let actualChecksum = digest.map { String(format: "%02x", $0) }.joined()
         guard actualChecksum == expectedChecksum.lowercased() else {
             throw AppUpdateDownloadError.checksumMismatch

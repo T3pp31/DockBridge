@@ -47,4 +47,10 @@ final class VersionComparatorTests: XCTestCase {
         XCTAssertThrowsError(try VersionComparator.compareStrict("1.2.bad", "1.2.3"))
         XCTAssertThrowsError(try VersionComparator.compareStrict("1.2.3", "1.2.bad"))
     }
+
+    func testCompareStrictRejectsEmptyComponents() {
+        XCTAssertThrowsError(try VersionComparator.compareStrict("1..2", "1.2.0"))
+        XCTAssertThrowsError(try VersionComparator.compareStrict(".1", "1.0.0"))
+        XCTAssertThrowsError(try VersionComparator.compareStrict("1.", "1.0.0"))
+    }
 }

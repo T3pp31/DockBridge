@@ -29,6 +29,12 @@ pass=0
 fail=0
 
 cleanup() {
+  if (( fail > 0 )); then
+    # Keep the diagnostics when verification failed; otherwise remove the
+    # whole temporary workdir (issue #673).
+    log "Keeping debug log: $LOG"
+    cp "$LOG" "${TMPDIR:-/tmp}/dockbridge-e2e-verify.log"
+  fi
   rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
@@ -74,13 +80,12 @@ ensure_key() {
 }
 
 ensure_container() {
-  if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
-    return 0
-  fi
   ensure_key
-  log "Starting Docker SFTP container $CONTAINER_NAME ..."
+  log "Recreating Docker SFTP container $CONTAINER_NAME ..."
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  docker run -d --name "$CONTAINER_NAME" -p "${PORT}:22" -e SFTP_USER="$USER" \
+  # Bind to loopback only: weak demo credentials must not be reachable from
+  # the LAN (issue #674).
+  docker run -d --name "$CONTAINER_NAME" -p "127.0.0.1:${PORT}:22" -e SFTP_USER="$USER" \
     -v "$WORKDIR/id_ed25519.pub:/home/$USER/.ssh/keys/id_ed25519.pub:ro" \
     -v "$WORKDIR/id_ed25519_enc.pub:/home/$USER/.ssh/keys/id_ed25519_enc.pub:ro" \
     atmoz/sftp "${USER}:${PASSWORD}:::upload" >/dev/null
@@ -97,8 +102,14 @@ host_key_reject() {
     --host-key-policy strict --path upload
   local status=$?
   set -e
-  [[ "$status" -eq 3 ]]
-  test ! -s "$KNOWN_HOSTS"
+  if [[ "$status" -ne 3 ]]; then
+    echo "host_key_reject expected exit 3, got $status" >&2
+    return 1
+  fi
+  if [[ -s "$KNOWN_HOSTS" ]]; then
+    echo "host_key_reject unexpectedly persisted known_hosts" >&2
+    return 1
+  fi
 }
 
 host_key_accept() {
@@ -197,7 +208,7 @@ download_file() {
 }
 
 transfer_queue_states() {
-  cargo test -q -p dockbridge-core transfer::manager::tests -- --nocapture >/dev/null
+  cargo test -q -p dockbridge-core transfer::manager::tests -- --nocapture
 }
 
 corrupted_known_hosts_errors() {
@@ -213,7 +224,10 @@ corrupted_known_hosts_errors() {
     --host-key-policy accept-new 2>&1)
   local status=$?
   set -e
-  [[ "$status" -ne 0 ]]
+  if [[ "$status" -eq 0 ]]; then
+    echo "corrupted_known_hosts_errors expected nonzero exit" >&2
+    return 1
+  fi
   echo "$output" | grep -qi 'known hosts'
 }
 
@@ -228,12 +242,11 @@ swift_corrupted_known_hosts_message() {
     CODE_SIGN_IDENTITY="-" \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGNING_ALLOWED=NO \
-    DEVELOPMENT_TEAM="" \
-    >/dev/null 2>&1
+    DEVELOPMENT_TEAM=""
 }
 
 transfer_cancel_in_progress() {
-  "$ROOT/scripts/verify-transfer-cancel.sh" >/dev/null 2>&1
+  "$ROOT/scripts/verify-transfer-cancel.sh"
 }
 
 main() {

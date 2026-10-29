@@ -60,6 +60,14 @@ pub struct BatchResult {
     pub skipped: u64,
 }
 
+/// Transfer tasks that have been registered in the queue but not started yet.
+#[derive(Debug)]
+pub struct PreparedEntryTasks {
+    pub tasks: Vec<TransferTask>,
+    /// Directory-walk entries that were skipped before task registration.
+    pub skipped: u64,
+}
+
 /// Sequential transfer queue manager.
 pub struct TransferManager {
     next_id: AtomicU64,
@@ -129,27 +137,31 @@ impl TransferManager {
 
     /// Removes every task from the queue, cancelling active transfers first.
     pub fn clear_all_transfers(&self) -> Result<(), TransferError> {
-        let active_ids: Vec<u64> = self
-            .get_transfer_queue()
-            .into_iter()
-            .filter(|task| {
-                matches!(
-                    task.status,
-                    TransferStatus::Pending | TransferStatus::InProgress
-                )
-            })
-            .map(|task| task.id)
-            .collect();
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|_| TransferError::TaskNotFound { task_id: 0 })?;
+        let mut flags = self
+            .cancellation_flags
+            .lock()
+            .map_err(|_| TransferError::TaskNotFound { task_id: 0 })?;
 
-        for task_id in active_ids {
-            let _ = self.cancel_transfer(task_id);
-        }
-
-        if let Ok(mut tasks) = self.tasks.lock() {
-            tasks.clear();
-            if let Ok(mut policies) = self.overwrite_policies.lock() {
-                policies.clear();
+        for task in tasks.iter_mut() {
+            if !matches!(
+                task.status,
+                TransferStatus::Pending | TransferStatus::InProgress
+            ) {
+                continue;
             }
+            flags
+                .entry(task.id)
+                .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+                .store(true, Ordering::Relaxed);
+            task.status = TransferStatus::Cancelled;
+        }
+        tasks.clear();
+        if let Ok(mut policies) = self.overwrite_policies.lock() {
+            policies.clear();
         }
 
         Ok(())
@@ -161,14 +173,11 @@ impl TransferManager {
         session: &SshSession,
         task_id: u64,
     ) -> Result<TransferTask, TransferError> {
+        // Atomically verify the task is retryable and remove it so concurrent
+        // retries of the same id cannot both enqueue a replacement (issue #757).
         let (task, overwrite_policy) = self
-            .find_task_with_policy(task_id)
+            .remove_retryable_task(task_id)
             .ok_or(TransferError::TaskNotFound { task_id })?;
-
-        match task.status {
-            TransferStatus::Failed { .. } | TransferStatus::Cancelled => {}
-            _ => return Err(TransferError::TaskNotFound { task_id }),
-        }
 
         // Reject the retry while the original transfer future is still
         // unwinding. `cancel_transfer` flips the task status synchronously but
@@ -176,14 +185,10 @@ impl TransferManager {
         // re-enqueueing here would start a second transfer against the same
         // destination while the first one is still active (issue #307).
         if self.is_in_flight(task_id) {
+            // Restore the task so a later retry (after the future unwinds)
+            // can still find it.
+            self.restore_removed_task(task, overwrite_policy);
             return Err(TransferError::TaskStillRunning { task_id });
-        }
-
-        if let Ok(mut tasks) = self.tasks.lock() {
-            tasks.retain(|existing| existing.id != task_id);
-            if let Ok(mut policies) = self.overwrite_policies.lock() {
-                policies.remove(&task_id);
-            }
         }
         // The cancellation flag is *not* removed here: it is removed by
         // `finalize_task_result` when the original future completes. Removing
@@ -282,15 +287,40 @@ impl TransferManager {
         }
     }
 
-    fn find_task_with_policy(
+    /// Atomically verifies that `task_id` refers to a failed or cancelled task
+    /// and removes it from the queue. Returns `None` when the task is missing,
+    /// not retryable, or already removed by a concurrent retry (issue #757).
+    fn remove_retryable_task(
         &self,
         task_id: u64,
     ) -> Option<(TransferTask, TransferOverwritePolicy)> {
-        let tasks = self.tasks.lock().ok()?;
-        let task = tasks.iter().find(|task| task.id == task_id)?.clone();
-        let policies = self.overwrite_policies.lock().ok()?;
-        let overwrite_policy = policies.get(&task_id).copied().unwrap_or_default();
-        Some((task, overwrite_policy))
+        let mut tasks = self.tasks.lock().ok()?;
+        let index = tasks.iter().position(|task| task.id == task_id)?;
+        let task = tasks[index].clone();
+        match task.status {
+            TransferStatus::Failed { .. } | TransferStatus::Cancelled => {}
+            _ => return None,
+        }
+        tasks.remove(index);
+        let policy = self
+            .overwrite_policies
+            .lock()
+            .ok()
+            .and_then(|mut policies| policies.remove(&task_id))
+            .unwrap_or_default();
+        Some((task, policy))
+    }
+
+    /// Puts a previously removed task back into the queue when a retry was
+    /// rejected after the atomic removal (e.g. still in flight).
+    fn restore_removed_task(&self, task: TransferTask, policy: TransferOverwritePolicy) {
+        let task_id = task.id;
+        if let Ok(mut tasks) = self.tasks.lock() {
+            tasks.push(task);
+        }
+        if let Ok(mut policies) = self.overwrite_policies.lock() {
+            policies.insert(task_id, policy);
+        }
     }
 
     fn update_task_status(&self, task_id: u64, status: TransferStatus) {
@@ -325,6 +355,7 @@ impl TransferManager {
         }
     }
 
+    #[cfg(test)]
     fn mark_task_progress_complete(&self, task_id: u64) {
         if let Ok(mut tasks) = self.tasks.lock() {
             if let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) {
@@ -350,6 +381,7 @@ impl TransferManager {
         }
     }
 
+    #[cfg(test)]
     fn remove_cancellation_flag(&self, task_id: u64) {
         if let Ok(mut flags) = self.cancellation_flags.lock() {
             flags.remove(&task_id);
@@ -388,12 +420,6 @@ impl TransferManager {
         }
     }
 
-    fn clear_in_flight(&self, task_id: u64) {
-        if let Ok(mut in_flight) = self.in_flight.lock() {
-            in_flight.remove(&task_id);
-        }
-    }
-
     fn is_in_flight(&self, task_id: u64) -> bool {
         self.in_flight
             .lock()
@@ -406,65 +432,59 @@ impl TransferManager {
         task_id: u64,
         result: Result<(), TransferError>,
     ) -> Result<(), TransferError> {
-        let was_cancelled = self.is_cancelled(task_id);
-        self.remove_cancellation_flag(task_id);
-        self.clear_in_flight(task_id);
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|_| TransferError::TaskNotFound { task_id })?;
+        let mut flags = self
+            .cancellation_flags
+            .lock()
+            .map_err(|_| TransferError::TaskNotFound { task_id })?;
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .map_err(|_| TransferError::TaskNotFound { task_id })?;
 
-        if was_cancelled {
-            return match result {
-                Ok(()) => {
-                    self.update_task_status(task_id, TransferStatus::Completed);
-                    Ok(())
-                }
-                Err(TransferError::Cancelled) => {
-                    self.update_task_status(task_id, TransferStatus::Cancelled);
-                    Err(TransferError::Cancelled)
-                }
-                // A cancel raced with an actual partial-file cleanup failure.
-                Err(TransferError::CleanupFailed { message }) => {
-                    let failure = TransferError::CleanupFailed { message };
-                    self.update_task_status(
-                        task_id,
-                        TransferStatus::Failed {
-                            message: failure.to_string(),
-                        },
-                    );
-                    Err(failure)
-                }
-                // Any other error that surfaces after a cancel is reported as
-                // itself, never relabeled as a cleanup failure (issue #319).
-                Err(err) => {
-                    self.update_task_status(
-                        task_id,
-                        TransferStatus::Failed {
-                            message: err.to_string(),
-                        },
-                    );
-                    Err(err)
-                }
-            };
-        }
+        let was_cancelled = flags
+            .get(&task_id)
+            .map(|flag| flag.load(Ordering::Relaxed))
+            .unwrap_or(false);
+        flags.remove(&task_id);
+        in_flight.remove(&task_id);
 
-        match result {
-            Ok(()) => {
-                self.mark_task_progress_complete(task_id);
-                self.update_task_status(task_id, TransferStatus::Completed);
-                Ok(())
+        let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) else {
+            return result;
+        };
+
+        let final_status = match (&result, was_cancelled) {
+            (Ok(()), true) => TransferStatus::Completed,
+            (Err(TransferError::Cancelled), true) => TransferStatus::Cancelled,
+            // A cancel raced with an actual partial-file cleanup failure.
+            (Err(TransferError::CleanupFailed { message }), true) => TransferStatus::Failed {
+                message: TransferError::CleanupFailed {
+                    message: message.clone(),
+                }
+                .to_string(),
+            },
+            // Any other error that surfaces after a cancel is reported as
+            // itself, never relabeled as a cleanup failure (issue #319).
+            (Err(err), true) => TransferStatus::Failed {
+                message: err.to_string(),
+            },
+            (Ok(()), false) => {
+                if task.total_bytes > 0 {
+                    task.bytes_transferred = task.total_bytes;
+                }
+                TransferStatus::Completed
             }
-            Err(TransferError::Cancelled) => {
-                self.update_task_status(task_id, TransferStatus::Cancelled);
-                Err(TransferError::Cancelled)
-            }
-            Err(err) => {
-                self.update_task_status(
-                    task_id,
-                    TransferStatus::Failed {
-                        message: err.to_string(),
-                    },
-                );
-                Err(err)
-            }
-        }
+            (Err(TransferError::Cancelled), false) => TransferStatus::Cancelled,
+            (Err(err), false) => TransferStatus::Failed {
+                message: err.to_string(),
+            },
+        };
+        task.status = final_status;
+
+        result
     }
 
     /// Enqueues and immediately executes a single upload task.
@@ -749,10 +769,38 @@ impl TransferManager {
         remote_directory: impl Into<String>,
         overwrite_policy: TransferOverwritePolicy,
     ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
+        let prepared = self
+            .prepare_upload_entry_for_session_with_policy(
+                session,
+                session_id,
+                local_path,
+                remote_directory,
+                overwrite_policy,
+            )
+            .await?;
+        self.execute_upload_tasks(session, prepared.tasks, overwrite_policy)
+            .await
+            .map(|(tasks, mut batch)| {
+                batch.skipped = prepared.skipped;
+                (tasks, batch)
+            })
+    }
+
+    /// Validates an upload entry and registers its transfer tasks without starting them.
+    ///
+    /// This lets an FFI caller observe queue-registration errors synchronously while the
+    /// potentially long transfer itself remains on a background task (issue #867).
+    pub async fn prepare_upload_entry_for_session_with_policy(
+        &self,
+        session: &SshSession,
+        session_id: u64,
+        local_path: impl AsRef<std::path::Path>,
+        remote_directory: impl Into<String>,
+        overwrite_policy: TransferOverwritePolicy,
+    ) -> Result<PreparedEntryTasks, TransferError> {
         let local_path = local_path.as_ref();
         let remote_directory = remote_directory.into();
         let client = SftpClient::new(session);
-        let mut batch = BatchResult::default();
 
         if is_local_directory(local_path)
             .await
@@ -796,8 +844,6 @@ impl TransferManager {
             .await
             .map_err(transfer_error_from_sftp)?;
 
-            // Register every task as Pending BEFORE running any of them, so a
-            // failure in one file never leaves later files unregistered.
             let tasks: Vec<TransferTask> = result
                 .files
                 .iter()
@@ -815,7 +861,6 @@ impl TransferManager {
                 })
                 .collect::<Result<_, _>>()?;
 
-            // Ensure every file parent exists while reusing the batch cache.
             for task in &tasks {
                 if let Some(parent) =
                     parent_remote_path(&task.remote_path).map_err(transfer_error_from_sftp)?
@@ -827,43 +872,15 @@ impl TransferManager {
                 }
             }
 
-            batch.skipped = result.skipped.len() as u64;
-            if !result.skipped.is_empty() {
-                tracing::warn!(
-                    skipped = ?result.skipped,
-                    "local directory walk skipped unreadable entries"
-                );
-            }
-
-            // Register all tasks (Pending), then execute each; failures
-            // continue to the next file.
             for task in &tasks {
                 self.register_task(task.clone(), overwrite_policy);
                 self.register_cancellation_flag(task.id);
             }
 
-            let mut executed = Vec::with_capacity(tasks.len());
-            for task in tasks {
-                let task_id = task.id;
-                let final_task = match self.run_upload_task(session, task, overwrite_policy).await {
-                    Ok(final_task) => final_task,
-                    Err(_) => {
-                        batch.failed += 1;
-                        executed.push(
-                            self.find_task(task_id)
-                                .ok_or(TransferError::TaskNotFound { task_id })?,
-                        );
-                        continue;
-                    }
-                };
-                match final_task.status {
-                    TransferStatus::Completed => batch.succeeded += 1,
-                    TransferStatus::Cancelled | TransferStatus::Failed { .. } => batch.failed += 1,
-                    _ => {}
-                }
-                executed.push(final_task);
-            }
-            return Ok((executed, batch));
+            return Ok(PreparedEntryTasks {
+                tasks,
+                skipped: result.skipped.len() as u64,
+            });
         }
 
         let remote_path = join_remote_path(
@@ -877,17 +894,49 @@ impl TransferManager {
                 .await
                 .map_err(transfer_error_from_sftp)?;
         }
-        let task = self
-            .enqueue_upload_for_session_with_policy(
-                session,
-                session_id,
-                local_path,
-                remote_path,
-                overwrite_policy,
-            )
-            .await?;
-        batch.succeeded += 1;
-        Ok((vec![task], batch))
+        let task = self.make_task(
+            session_id,
+            TransferDirection::Upload,
+            local_path,
+            &remote_path,
+        );
+        self.register_task(task.clone(), overwrite_policy);
+        self.register_cancellation_flag(task.id);
+        Ok(PreparedEntryTasks {
+            tasks: vec![task],
+            skipped: 0,
+        })
+    }
+
+    pub async fn execute_upload_tasks(
+        &self,
+        session: &SshSession,
+        tasks: Vec<TransferTask>,
+        overwrite_policy: TransferOverwritePolicy,
+    ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
+        let mut batch = BatchResult::default();
+        let mut executed = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            let task_id = task.id;
+            let final_task = match self.run_upload_task(session, task, overwrite_policy).await {
+                Ok(final_task) => final_task,
+                Err(_) => {
+                    batch.failed += 1;
+                    executed.push(
+                        self.find_task(task_id)
+                            .ok_or(TransferError::TaskNotFound { task_id })?,
+                    );
+                    continue;
+                }
+            };
+            match final_task.status {
+                TransferStatus::Completed => batch.succeeded += 1,
+                TransferStatus::Cancelled | TransferStatus::Failed { .. } => batch.failed += 1,
+                _ => {}
+            }
+            executed.push(final_task);
+        }
+        Ok((executed, batch))
     }
 
     /// Enqueues and executes download tasks for a remote file or directory tree.
@@ -946,11 +995,39 @@ impl TransferManager {
         local_directory: impl AsRef<std::path::Path>,
         overwrite_policy: TransferOverwritePolicy,
     ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
+        let prepared = self
+            .prepare_download_entry_for_session_with_policy(
+                session,
+                session_id,
+                remote_path,
+                local_directory,
+                overwrite_policy,
+            )
+            .await?;
+        self.execute_download_tasks(session, prepared.tasks, overwrite_policy)
+            .await
+            .map(|(tasks, mut batch)| {
+                batch.skipped = prepared.skipped;
+                (tasks, batch)
+            })
+    }
+
+    /// Validates a download entry and registers its transfer tasks without starting them.
+    ///
+    /// This lets an FFI caller observe queue-registration errors synchronously while the
+    /// potentially long transfer itself remains on a background task (issue #867).
+    pub async fn prepare_download_entry_for_session_with_policy(
+        &self,
+        session: &SshSession,
+        session_id: u64,
+        remote_path: impl Into<String>,
+        local_directory: impl AsRef<std::path::Path>,
+        overwrite_policy: TransferOverwritePolicy,
+    ) -> Result<PreparedEntryTasks, TransferError> {
         let remote_path = remote_path.into();
         let local_directory = local_directory.as_ref();
         let normalized = normalize_remote_path(&remote_path).map_err(transfer_error_from_sftp)?;
         let client = SftpClient::new(session);
-        let mut batch = BatchResult::default();
 
         if client
             .remote_is_directory(&normalized)
@@ -968,8 +1045,6 @@ impl TransferManager {
                 .await
                 .map_err(|err| transfer_error_from_message(err.to_string()))?;
 
-            // Mirror the complete directory tree before any file transfer,
-            // including empty directories (issue #312).
             let mut created_dirs = HashSet::new();
             created_dirs.insert(local_root.clone());
             for relative_dir in remote_directories(&client, &normalized, self.directory_walk_limits)
@@ -991,7 +1066,6 @@ impl TransferManager {
                     .await
                     .map_err(transfer_error_from_sftp)?;
 
-            // Register every task as Pending before running any.
             let mut tasks = Vec::with_capacity(result.files.len());
             for entry in &result.files {
                 let local_path = local_root.join(&entry.relative_path);
@@ -1006,7 +1080,6 @@ impl TransferManager {
                 ));
             }
 
-            // Create all local parent directories once, before transfers.
             for task in &tasks {
                 if let Some(parent) = task.local_path.parent() {
                     if created_dirs.contains(parent) {
@@ -1019,63 +1092,69 @@ impl TransferManager {
                 }
             }
 
-            batch.skipped = result.skipped.len() as u64;
-            if !result.skipped.is_empty() {
-                tracing::warn!(
-                    skipped = ?result.skipped,
-                    "remote directory walk skipped unreadable entries"
-                );
-            }
-
             for task in &tasks {
                 self.register_task(task.clone(), overwrite_policy);
                 self.register_cancellation_flag(task.id);
             }
 
-            let mut executed = Vec::with_capacity(tasks.len());
-            for task in tasks {
-                let task_id = task.id;
-                let final_task = match self
-                    .run_download_task(session, task, overwrite_policy)
-                    .await
-                {
-                    Ok(final_task) => final_task,
-                    Err(_) => {
-                        batch.failed += 1;
-                        executed.push(
-                            self.find_task(task_id)
-                                .ok_or(TransferError::TaskNotFound { task_id })?,
-                        );
-                        continue;
-                    }
-                };
-                match final_task.status {
-                    TransferStatus::Completed => batch.succeeded += 1,
-                    TransferStatus::Cancelled | TransferStatus::Failed { .. } => batch.failed += 1,
-                    _ => {}
-                }
-                executed.push(final_task);
-            }
-            Ok((executed, batch))
-        } else {
-            let file_name = normalized
-                .rsplit('/')
-                .next()
-                .filter(|name| !name.is_empty())
-                .unwrap_or("download");
-            let local_path = local_directory.join(file_name);
-            let task = self
-                .enqueue_download_for_session_with_policy(
-                    session,
-                    session_id,
-                    &normalized,
-                    &local_path,
-                    overwrite_policy,
-                )
-                .await?;
-            batch.succeeded += 1;
-            Ok((vec![task], batch))
+            return Ok(PreparedEntryTasks {
+                tasks,
+                skipped: result.skipped.len() as u64,
+            });
         }
+
+        let file_name = normalized
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or("download");
+        let local_path = local_directory.join(file_name);
+        let task = self.make_task(
+            session_id,
+            TransferDirection::Download,
+            &local_path,
+            &normalized,
+        );
+        self.register_task(task.clone(), overwrite_policy);
+        self.register_cancellation_flag(task.id);
+        Ok(PreparedEntryTasks {
+            tasks: vec![task],
+            skipped: 0,
+        })
+    }
+
+    pub async fn execute_download_tasks(
+        &self,
+        session: &SshSession,
+        tasks: Vec<TransferTask>,
+        overwrite_policy: TransferOverwritePolicy,
+    ) -> Result<(Vec<TransferTask>, BatchResult), TransferError> {
+        let mut batch = BatchResult::default();
+        let mut executed = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            let task_id = task.id;
+            let final_task = match self
+                .run_download_task(session, task, overwrite_policy)
+                .await
+            {
+                Ok(final_task) => final_task,
+                Err(_) => {
+                    batch.failed += 1;
+                    executed.push(
+                        self.find_task(task_id)
+                            .ok_or(TransferError::TaskNotFound { task_id })?,
+                    );
+                    continue;
+                }
+            };
+            match final_task.status {
+                TransferStatus::Completed => batch.succeeded += 1,
+                TransferStatus::Cancelled | TransferStatus::Failed { .. } => batch.failed += 1,
+                _ => {}
+            }
+            executed.push(final_task);
+        }
+        Ok((executed, batch))
     }
 
     async fn run_upload_with_retries(
@@ -1146,7 +1225,10 @@ impl TransferManager {
                         // Exponential backoff with jitter between retries;
                         // still abortable while waiting.
                         retry_index = retry_index.saturating_add(1);
-                        if self.sleep_backoff(task_id, retry_index).await {
+                        if self
+                            .sleep_backoff(Arc::clone(&cancel_flag), retry_index)
+                            .await
+                        {
                             return Err(TransferError::Cancelled);
                         }
                         tracing::warn!(
@@ -1171,7 +1253,7 @@ impl TransferManager {
     /// Sleeps with exponential backoff + jitter (1s, 2s, 4s, ... capped at 30s)
     /// between retry attempts. Returns `true` when the transfer was cancelled
     /// during the wait (so the caller aborts immediately).
-    async fn sleep_backoff(&self, task_id: u64, retry_index: u32) -> bool {
+    async fn sleep_backoff(&self, cancel_flag: Arc<AtomicBool>, retry_index: u32) -> bool {
         #[cfg(test)]
         let delay = Duration::from_millis(
             self.backoff_override_ms
@@ -1181,14 +1263,13 @@ impl TransferManager {
         let delay = Duration::from_millis(backoff_delay_ms(retry_index));
 
         tracing::info!(
-            task_id,
             retry_backoff_ms = delay.as_millis(),
             "waiting before retrying transfer"
         );
 
         tokio::time::timeout(delay, async {
             loop {
-                if self.is_cancelled(task_id) {
+                if cancel_flag.load(Ordering::Relaxed) {
                     return true;
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1260,7 +1341,10 @@ impl TransferManager {
                         // Exponential backoff with jitter between retries;
                         // still abortable while waiting.
                         retry_index = retry_index.saturating_add(1);
-                        if self.sleep_backoff(task_id, retry_index).await {
+                        if self
+                            .sleep_backoff(Arc::clone(&cancel_flag), retry_index)
+                            .await
+                        {
                             return Err(TransferError::Cancelled);
                         }
                         tracing::warn!(
@@ -1649,6 +1733,19 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn sleep_backoff_uses_captured_cancellation_flag() {
+        let mut manager = TransferManager::new(&AppConfig::default());
+        manager.backoff_override_ms = Some(0);
+        manager.register_cancellation_flag(22);
+        manager.request_cancellation(22);
+
+        let captured = manager.cancellation_flag(22);
+        manager.remove_cancellation_flag(22);
+
+        assert!(manager.sleep_backoff(captured, 1).await);
+    }
+
     #[test]
     fn finalize_clears_in_flight_marking() {
         let manager = TransferManager::new(&AppConfig::default());
@@ -1672,6 +1769,51 @@ mod tests {
         assert!(!manager.is_in_flight(23), "finalize must clear in-flight");
         let queue = manager.get_transfer_queue();
         assert!(matches!(queue[0].status, TransferStatus::Completed));
+    }
+
+    #[test]
+    fn finalize_removed_task_preserves_result_and_clears_tracking() {
+        for result in [
+            Ok(()),
+            Err(TransferError::Cancelled),
+            Err(TransferError::CleanupFailed {
+                message: "cleanup failed".into(),
+            }),
+        ] {
+            let manager = TransferManager::new(&AppConfig::default());
+            manager.register_cancellation_flag(24);
+            manager.mark_in_flight(24);
+            let expected = result.as_ref().err().map(ToString::to_string);
+
+            let actual = manager.finalize_task_result(24, result);
+
+            assert_eq!(actual.as_ref().err().map(ToString::to_string), expected);
+            assert!(!manager.is_cancelled(24));
+            assert!(!manager.is_in_flight(24));
+            assert!(manager.get_transfer_queue().is_empty());
+        }
+    }
+
+    #[test]
+    fn finalize_task_result_clears_cancel_flag() {
+        let manager = TransferManager::new(&AppConfig::default());
+        manager.insert_task(TransferTask {
+            id: 24,
+            session_id: 1,
+            direction: TransferDirection::Upload,
+            local_path: PathBuf::from("/tmp/file.txt"),
+            remote_path: "/remote/file.txt".to_string(),
+            status: TransferStatus::InProgress,
+            bytes_transferred: 0,
+            total_bytes: 0,
+        });
+        manager.register_cancellation_flag(24);
+        manager.mark_in_flight(24);
+
+        manager.finalize_task_result(24, Ok(())).unwrap();
+
+        assert!(!manager.is_cancelled(24));
+        assert!(!manager.is_in_flight(24));
     }
 
     #[test]
@@ -2546,6 +2688,47 @@ mod tests {
             .filter(|name| server.remote_file_exists(&format!("/batchero/batchsrc/{name}")))
             .count();
         assert_eq!(remote_found, 2, "two remote files should be uploaded");
+    }
+
+    #[tokio::test]
+    async fn prepare_upload_entry_reports_missing_local_before_starting() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let manager = TransferManager::new(&AppConfig::default());
+
+        let result = manager
+            .prepare_upload_entry_for_session_with_policy(
+                &session,
+                1,
+                "/does/not/exist",
+                "/upload",
+                TransferOverwritePolicy::default(),
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(manager.get_transfer_queue().is_empty());
+    }
+
+    #[tokio::test]
+    async fn prepare_download_entry_reports_missing_remote_before_starting() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let manager = TransferManager::new(&AppConfig::default());
+        let local_dir = tempfile::tempdir().unwrap();
+
+        let result = manager
+            .prepare_download_entry_for_session_with_policy(
+                &session,
+                1,
+                "/does/not/exist",
+                local_dir.path(),
+                TransferOverwritePolicy::default(),
+            )
+            .await;
+
+        assert!(result.is_err());
+        assert!(manager.get_transfer_queue().is_empty());
     }
 
     #[tokio::test]

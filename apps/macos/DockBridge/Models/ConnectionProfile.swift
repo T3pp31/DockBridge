@@ -87,8 +87,9 @@ struct ConnectionProfile: Identifiable, Codable, Equatable, Sendable {
 }
 
 extension UInt16 {
-    /// Port numbers must never use locale-specific grouping (e.g. 2222, not 2,222).
+    /// Port numbers must be locale-independent ASCII (e.g. "2222", not "2,222"
+    /// or non-ASCII numerals from locale numbering systems) (issue #685).
     var portLabel: String {
-        formatted(.number.grouping(.never))
+        String(self)
     }
 }

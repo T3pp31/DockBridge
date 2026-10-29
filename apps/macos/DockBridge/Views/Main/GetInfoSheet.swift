@@ -31,17 +31,28 @@ struct GetInfoSheet: View {
     }
 }
 
-/// Formats POSIX permission bits (e.g. 0o755 -> "rwxr-xr-x").
+/// Formats POSIX permission bits including setuid/setgid/sticky
+/// (e.g. 0o4755 -> "rwsr-xr-x", 0o1777 -> "rwxrwxrwt").
 enum PermissionFormatter {
     static func string(from mode: UInt32) -> String {
-        // Bit 8 = owner-read ... bit 0 = other-execute
-        let bits: [(shift: UInt32, ch: Character)] = [
-            (8, "r"), (7, "w"), (6, "x"),
-            (5, "r"), (4, "w"), (3, "x"),
-            (2, "r"), (1, "w"), (0, "x"),
-        ]
-        return bits.map { (shift, ch) in
-            (mode & (1 << shift)) != 0 ? String(ch) : "-"
-        }.joined()
+        func read(_ shift: UInt32) -> Bool { (mode & (1 << shift)) != 0 }
+
+        let ownerX = read(6)
+        let groupX = read(3)
+        let otherX = read(0)
+
+        var owner = read(8) ? "r" : "-"
+        owner += read(7) ? "w" : "-"
+        owner += read(11) ? (ownerX ? "s" : "S") : (ownerX ? "x" : "-")
+
+        var group = read(5) ? "r" : "-"
+        group += read(4) ? "w" : "-"
+        group += read(10) ? (groupX ? "s" : "S") : (groupX ? "x" : "-")
+
+        var other = read(2) ? "r" : "-"
+        other += read(1) ? "w" : "-"
+        other += read(9) ? (otherX ? "t" : "T") : (otherX ? "x" : "-")
+
+        return owner + group + other
     }
 }

@@ -20,9 +20,9 @@
 | Status | Count |
 |--------|------:|
 | CONFIRMED | 0 |
-| NEEDS_VERIFICATION | 0 |
+| NEEDS_VERIFICATION | 1 |
 | NOT_AFFECTED | 0 |
-| SECURITY_HARDENING | 0 |
+| SECURITY_HARDENING | 6 |
 | FALSE_POSITIVE | 0 |
 
 - Detected CI platform: GitHub Actions

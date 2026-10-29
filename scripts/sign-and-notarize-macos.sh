@@ -65,7 +65,12 @@ sign_dmg() {
   # Optional: sign and notarize the DMG as well so Gatekeeper accepts it when
   # the user mounts the image. This is idempotent for local dev when the
   # .app itself was already signed.
-  if [[ -n "${DMG_PATH:-}" && -f "$DMG_PATH" ]]; then
+  if [[ -n "${DMG_PATH:-}" ]]; then
+    if [[ ! -f "$DMG_PATH" ]]; then
+      echo "DMG not found: ${DMG_PATH}" >&2
+      exit 1
+    fi
+
     echo "Signing DMG ${DMG_PATH}..."
     codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
     codesign --verify --strict --verbose=2 "$DMG_PATH"
@@ -100,12 +105,6 @@ if [[ "$SKIP_NOTARIZATION" == "true" ]]; then
   echo "SKIP_NOTARIZATION=true — skipping notarization."
   sign_dmg
   exit 0
-fi
-
-if ! xcrun notarytool history --keychain-profile "$NOTARY_KEYCHAIN_PROFILE" >/dev/null 2>&1; then
-  echo "Notary keychain profile not found: ${NOTARY_KEYCHAIN_PROFILE}" >&2
-  echo "Run: xcrun notarytool store-credentials ${NOTARY_KEYCHAIN_PROFILE} ..." >&2
-  exit 1
 fi
 
 SUBMIT_DIR="$(mktemp -d)"

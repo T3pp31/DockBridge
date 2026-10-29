@@ -25,6 +25,8 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     private(set) var activeSessionID: UUID?
 
     private var client: DockBridgeClient?
+    /// Most recent Rust client configuration, exposed for test verification.
+    private(set) var lastAppConfigRecord: AppConfigRecord?
     private let settings: AppSettingsService
     private let hostKeyStore: HostKeyStore
     private let bookmarkService: SecurityScopedBookmarkService
@@ -47,7 +49,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     func prepareClient() throws {
         // One DockBridgeClient owns the Rust-side session registry. Replacing
         // it while sessions are open would orphan every existing session.
-        guard client == nil else { return }
+        guard client == nil || sessions.isEmpty else { return }
         try hostKeyStore.ensureStoreDirectoryExists()
         let record = settings.buildAppConfigRecord(knownHostsPath: hostKeyStore.knownHostsPath.path)
         client = try DockBridgeClient(
@@ -56,6 +58,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
             authPromptHandler: self,
             connectionEventHandler: self
         )
+        lastAppConfigRecord = record
     }
 
     // MARK: - Session management
@@ -586,16 +589,21 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     }
 
     private func removeSession(_ session: RemoteSession) {
+        let wasActive = activeSessionID == session.id
         sessions.removeValue(forKey: session.id)
         sessionOrder.removeAll { $0 == session.id }
         sessionCancellables.removeValue(forKey: session.id)
-        if activeSessionID == session.id {
+        if wasActive {
             activeSessionID = nil
-        }
-        if let next = allSessions.last {
-            setActiveSession(next)
+            if let next = allSessions.last {
+                setActiveSession(next)
+            } else {
+                resetPublishedSessionFields()
+            }
         } else {
-            resetPublishedSessionFields()
+            // A non-active session was closed; do not steal the active slot
+            // (issue #774).
+            refreshActiveSessionState()
         }
     }
 

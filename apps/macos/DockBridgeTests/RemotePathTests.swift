@@ -106,7 +106,9 @@ final class RemotePathTests: XCTestCase {
     }
 
     func testPathMatchesEntryRejectsInvalidName() {
-        XCTAssertFalse(RemotePath.pathMatchesEntry(parent: "/var/www", entryPath: "/var/www/evil", name: "../etc"))
-        XCTAssertFalse(RemotePath.pathMatchesEntry(parent: "/var/www", entryPath: "/var/www/evil", name: ""))
+        // The entry path must be exactly parent+name so the invalid name alone
+        // decides the outcome (issue #700).
+        XCTAssertFalse(RemotePath.pathMatchesEntry(parent: "/var/www", entryPath: "/var/www/../etc", name: "../etc"))
+        XCTAssertFalse(RemotePath.pathMatchesEntry(parent: "/var/www", entryPath: "/var/www/", name: ""))
     }
 }

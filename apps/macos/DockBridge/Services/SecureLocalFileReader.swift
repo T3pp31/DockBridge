@@ -6,6 +6,7 @@ enum SecureLocalFileReaderError: LocalizedError {
     case symlinkNotAllowed
     case ownerMismatch
     case insecurePermissions
+    case fileTooLarge
 
     var errorDescription: String? {
         switch self {
@@ -17,11 +18,17 @@ enum SecureLocalFileReaderError: LocalizedError {
             return String(localized: "File is not owned by the current user.")
         case .insecurePermissions:
             return String(localized: "File has insecure permissions.")
+        case .fileTooLarge:
+            return String(localized: "File is too large.")
         }
     }
 }
 
 enum SecureLocalFileReader {
+    /// Local JSON stores are small; this limit prevents pathological files and
+    /// files growing during the read from exhausting memory.
+    private static let maxFileSizeBytes: UInt64 = 5 * 1024 * 1024
+
     static func readData(from url: URL) throws -> Data {
         let path = url.path
 
@@ -34,7 +41,13 @@ enum SecureLocalFileReader {
             throw SecureLocalFileReaderError.symlinkNotAllowed
         }
 
-        let fd = open(path, O_RDONLY | O_NOFOLLOW)
+        // FIFOs/devices can block forever on open or read; only regular
+        // files are eligible (issue #692).
+        guard (linkStat.st_mode & S_IFMT) == S_IFREG else {
+            throw SecureLocalFileReaderError.readFailed("not a regular file")
+        }
+
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
         guard fd >= 0 else {
             let openError = errno
             if openError == ELOOP {
@@ -49,6 +62,10 @@ enum SecureLocalFileReader {
             throw SecureLocalFileReaderError.readFailed(String(cString: strerror(errno)))
         }
 
+        guard (fileStat.st_mode & S_IFMT) == S_IFREG else {
+            throw SecureLocalFileReaderError.readFailed("not a regular file")
+        }
+
         let effectiveUID = geteuid()
         if fileStat.st_uid != effectiveUID {
             throw SecureLocalFileReaderError.ownerMismatch
@@ -59,8 +76,13 @@ enum SecureLocalFileReader {
             throw SecureLocalFileReaderError.insecurePermissions
         }
 
+        if fileStat.st_size > maxFileSizeBytes {
+            throw SecureLocalFileReaderError.fileTooLarge
+        }
+
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
+        var totalBytesRead: UInt64 = 0
         while true {
             let bytesRead = read(fd, &buffer, buffer.count)
             if bytesRead < 0 {
@@ -68,6 +90,10 @@ enum SecureLocalFileReader {
             }
             if bytesRead == 0 {
                 break
+            }
+            totalBytesRead += UInt64(bytesRead)
+            if totalBytesRead > maxFileSizeBytes {
+                throw SecureLocalFileReaderError.fileTooLarge
             }
             data.append(buffer, count: bytesRead)
         }

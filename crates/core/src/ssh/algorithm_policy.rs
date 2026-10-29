@@ -25,26 +25,45 @@ const ALLOWED_KEX: &[kex::Name] = &[
     kex::EXTENSION_OPENSSH_STRICT_KEX_AS_CLIENT,
 ];
 
-const ALLOWED_HOST_KEY: &[Algorithm] = &[
-    Algorithm::Ed25519,
-    Algorithm::Ecdsa {
-        curve: EcdsaCurve::NistP256,
-    },
-    Algorithm::Ecdsa {
-        curve: EcdsaCurve::NistP384,
-    },
-    Algorithm::Ecdsa {
-        curve: EcdsaCurve::NistP521,
-    },
-    // RSA with SHA-512/256 is retained for server compatibility. A future Ed25519/ECDSA-only
-    // policy option could drop these entries for environments that do not host legacy RSA keys.
-    Algorithm::Rsa {
-        hash: Some(HashAlg::Sha512),
-    },
-    Algorithm::Rsa {
-        hash: Some(HashAlg::Sha256),
-    },
-];
+static ALLOWED_HOST_KEY: std::sync::LazyLock<Vec<Algorithm>> = std::sync::LazyLock::new(|| {
+    vec![
+        Algorithm::Ed25519,
+        Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP256,
+        },
+        Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP384,
+        },
+        Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP521,
+        },
+        // RSA with SHA-512/256 is retained for server compatibility. A future Ed25519/ECDSA-only
+        // policy option could drop these entries for environments that do not host legacy RSA keys.
+        Algorithm::Rsa {
+            hash: Some(HashAlg::Sha512),
+        },
+        Algorithm::Rsa {
+            hash: Some(HashAlg::Sha256),
+        },
+        // OpenSSH host-certificate algorithms (issue #797). These come after raw
+        // key types so servers that accept both prefer the simpler names.
+        host_certificate_algorithm("ssh-ed25519-cert-v01@openssh.com"),
+        host_certificate_algorithm("ecdsa-sha2-nistp256-cert-v01@openssh.com"),
+        host_certificate_algorithm("ecdsa-sha2-nistp384-cert-v01@openssh.com"),
+        host_certificate_algorithm("ecdsa-sha2-nistp521-cert-v01@openssh.com"),
+        host_certificate_algorithm("rsa-sha2-512-cert-v01@openssh.com"),
+        host_certificate_algorithm("rsa-sha2-256-cert-v01@openssh.com"),
+    ]
+});
+
+/// Wraps an OpenSSH certificate name in `Algorithm::Other` so russh sends
+/// the literal `*-cert-v01@openssh.com` string in KEXINIT (issue #797).
+fn host_certificate_algorithm(id: &str) -> Algorithm {
+    Algorithm::Other(
+        ssh_key::AlgorithmName::from_certificate_type(id)
+            .unwrap_or_else(|_| ssh_key::AlgorithmName::new(id).expect("valid algorithm id")),
+    )
+}
 
 const ALLOWED_CIPHER: &[cipher::Name] = &[
     cipher::CHACHA20_POLY1305,
@@ -67,7 +86,7 @@ const ALLOWED_COMPRESSION: &[compression::Name] = &[compression::NONE];
 pub fn secure_client_preferred() -> Preferred {
     Preferred {
         kex: Cow::Borrowed(ALLOWED_KEX),
-        key: Cow::Borrowed(ALLOWED_HOST_KEY),
+        key: Cow::Owned(ALLOWED_HOST_KEY.clone()),
         cipher: Cow::Borrowed(ALLOWED_CIPHER),
         mac: Cow::Borrowed(ALLOWED_MAC),
         compression: Cow::Borrowed(ALLOWED_COMPRESSION),
@@ -160,7 +179,7 @@ mod tests {
             );
         }
 
-        for host_key in ALLOWED_HOST_KEY {
+        for host_key in ALLOWED_HOST_KEY.iter() {
             assert!(
                 preferred.key.contains(host_key),
                 "expected allowed host key `{host_key}`"

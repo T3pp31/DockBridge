@@ -36,6 +36,12 @@ final class KnownHostsErrorMessageTests: XCTestCase {
                 "failed to upload 'geoff.txt': no such file"
             )
         )
+        // A standalone path segment must also not count (issue #689).
+        XCTAssertFalse(
+            DockBridgeError.isConnectionLostMessage(
+                "failed to upload '/srv/eof.txt': no such file"
+            )
+        )
     }
 
     func testConnectionStatusTitles() {
@@ -106,6 +112,20 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         )
     }
 
+    func testUnsupportedPasswordAuthenticationMessageIsNotCredentialPrompt() {
+        let message = DockBridgeError.friendlyMessage(
+            for: "password authentication is not supported by the server"
+        )
+
+        XCTAssertEqual(
+            message,
+            String(
+                localized: "This server does not accept password authentication. Use public key authentication or another supported method."
+            )
+        )
+        XCTAssertFalse(DockBridgeError.isAuthenticationMessage(message))
+    }
+
     func testAuthenticationMessageDetectionUsesRawBridgeTokens() {
         XCTAssertTrue(
             DockBridgeError.isAuthenticationMessage(
@@ -130,6 +150,33 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         )
         XCTAssertFalse(
             DockBridgeError.isAuthenticationMessage("host key rejected by user for example.com:22")
+        )
+    }
+
+    func testPrivateKeyLoadFailedMessageMentionsKeyPathAndPassphrase() {
+        let error = DockBridgeError.PrivateKeyLoadFailed(
+            path: "/tmp/id_ed25519",
+            message: "incorrect passphrase"
+        )
+
+        XCTAssertEqual(
+            error.dockBridgeUserMessage,
+            String(
+                localized: "Unable to load the private key. Check the key file path, permissions, and passphrase."
+            )
+        )
+    }
+
+    func testRawPrivateKeyLoadFailureMapsToKeySpecificMessage() {
+        let message = DockBridgeError.friendlyMessage(
+            for: "failed to load private key from /tmp/id_ed25519: incorrect passphrase"
+        )
+
+        XCTAssertEqual(
+            message,
+            String(
+                localized: "Unable to load the private key. Check the key file path, permissions, and passphrase."
+            )
         )
     }
 

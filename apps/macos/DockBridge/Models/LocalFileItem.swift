@@ -71,7 +71,9 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
         // protected directory.
         let items = urls.compactMap { url -> LocalFileItem? in
             guard let values = try? url.resourceValues(forKeys: keys) else {
-                return nil
+                // Keep the entry visible with unknown size/date instead of
+                // silently dropping it (issue #686).
+                return LocalFileItem(url: url)
             }
             return LocalFileItem(url: url, resourceValues: values)
         }

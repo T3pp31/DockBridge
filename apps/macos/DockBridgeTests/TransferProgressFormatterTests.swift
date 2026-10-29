@@ -18,6 +18,15 @@ final class TransferProgressFormatterTests: XCTestCase {
         XCTAssertTrue(label?.contains("/") == true)
     }
 
+    func testProgressLabelHandlesSpeedsAtAndAboveInt64Limit() {
+        for speed in [Double(Int64.max).nextDown, Double(Int64.max), Double.greatestFiniteMagnitude] {
+            let label = TransferProgressFormatter.progressLabel(
+                transferred: 1, total: 2, bytesPerSecond: speed
+            )
+            XCTAssertNotNil(label)
+        }
+    }
+
     func testProgressLabelReturnsNilWhenTotalIsZero() {
         // Given: zero total bytes
         // When: progress label is generated

@@ -181,24 +181,25 @@ struct LocalPaneDropModifier: ViewModifier {
     private func acceptLocalMoves(_ items: [LocalFileDragPayload]) -> Bool {
         var accepted = false
         var hasInvalidMove = false
-        var hasMoveError = false
+        let target = viewModel.localPath
         for item in items {
             guard FileDropValidation.isDisplayedLocalItem(item, in: viewModel.localTableItems) else {
                 continue
             }
-            guard FileDropValidation.canMoveLocalItem(from: item.url, to: viewModel.localPath) else {
+            guard FileDropValidation.canMoveLocalItem(from: item.url, to: target) else {
                 hasInvalidMove = true
                 continue
             }
-            do {
-                try viewModel.moveLocalItem(from: item.url, toDirectory: viewModel.localPath)
-                accepted = true
-            } catch {
-                hasMoveError = true
-                viewModel.errorMessage = error.dockBridgeUserMessage
+            Task {
+                do {
+                    try await viewModel.moveLocalItem(from: item.url, toDirectory: target)
+                } catch {
+                    viewModel.errorMessage = error.dockBridgeUserMessage
+                }
             }
+            accepted = true
         }
-        if !accepted, !hasMoveError {
+        if !accepted {
             if hasInvalidMove {
                 viewModel.errorMessage = FileDropError.invalidMove.localizedDescription
             } else {
@@ -306,10 +307,16 @@ struct LocalFileTable: View {
         // Apply the column sort first, then stable-sort folders to the front
         // (KeyPathComparator cannot order `Bool`, so folder-first is applied
         // as a stable secondary pass).
-        let columnSorted = viewModel.localItems.sorted(using: sortOrder)
-        return columnSorted.sorted { lhs, rhs in
-            lhs.isDirectory && !rhs.isDirectory
-        }
+        return viewModel.localItems
+            .sorted(using: sortOrder)
+            .enumerated()
+            .sorted { lhs, rhs in
+                if lhs.element.isDirectory != rhs.element.isDirectory {
+                    return lhs.element.isDirectory
+                }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
     }
 
     var body: some View {
@@ -380,10 +387,12 @@ struct LocalFileTable: View {
                   FileDropValidation.canMoveLocalItem(from: payload.url, to: target) else {
                 continue
             }
-            do {
-                try viewModel.moveLocalItem(from: payload.url, toDirectory: target)
-            } catch {
-                viewModel.errorMessage = error.dockBridgeUserMessage
+            Task {
+                do {
+                    try await viewModel.moveLocalItem(from: payload.url, toDirectory: target)
+                } catch {
+                    viewModel.errorMessage = error.dockBridgeUserMessage
+                }
             }
         }
     }
@@ -407,10 +416,16 @@ struct RemoteFileTable: View {
     @State private var sortOrder = [KeyPathComparator(\RemoteFileRecord.name, order: .forward)]
 
     private var sortedItems: [RemoteFileRecord] {
-        let columnSorted = viewModel.remoteItems.sorted(using: sortOrder)
-        return columnSorted.sorted { lhs, rhs in
-            lhs.isDirectory && !rhs.isDirectory
-        }
+        return viewModel.remoteItems
+            .sorted(using: sortOrder)
+            .enumerated()
+            .sorted { lhs, rhs in
+                if lhs.element.isDirectory != rhs.element.isDirectory {
+                    return lhs.element.isDirectory
+                }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
     }
 
     var body: some View {

@@ -6,7 +6,12 @@ struct SSHConfigHost: Equatable, Sendable {
     var hostName: String?
     var user: String?
     var port: UInt16?
-    var identityFile: String?
+    /// All IdentityFile values in order. OpenSSH applies IdentityFile
+    /// cumulatively (unlike other parameters) (issue #771).
+    var identityFiles: [String] = []
+
+    /// Kept as the first value for the single-key profile model.
+    var identityFile: String? { identityFiles.first }
 }
 
 /// Minimal parser for the subset of OpenSSH `~/.ssh/config` that DockBridge
@@ -41,9 +46,7 @@ enum SSHConfigParser {
                     if hosts[index].port == nil {
                         hosts[index].port = candidate.port
                     }
-                    if hosts[index].identityFile == nil {
-                        hosts[index].identityFile = candidate.identityFile
-                    }
+                    hosts[index].identityFiles += candidate.identityFiles
                 } else {
                     hosts.append(candidate)
                 }
@@ -51,7 +54,15 @@ enum SSHConfigParser {
         }
 
         for rawLine in contents.components(separatedBy: .newlines) {
-            guard let directive = parseDirective(rawLine) else { continue }
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isBlockDirective = trimmed.lowercased().hasPrefix("host")
+                || trimmed.lowercased().hasPrefix("match")
+            guard let directive = parseDirective(rawLine) else {
+                if isBlockDirective {
+                    finishCurrentBlock()
+                }
+                continue
+            }
 
             switch directive.key {
             case "host":
@@ -76,7 +87,9 @@ enum SSHConfigParser {
             }
         }
         finishCurrentBlock()
-        return hosts.filter { $0.hostName != nil }
+        return hosts.filter { host in
+            host.hostName != nil || host.user != nil || host.port != nil || host.identityFile != nil
+        }
     }
 
     static func toProfiles(_ hosts: [SSHConfigHost]) -> [ConnectionProfile] {
@@ -106,10 +119,8 @@ enum SSHConfigParser {
         case "hostname":
             guard directive.arguments.count == 1,
                   let value = directive.arguments.first,
-                  !containsUnsupportedExpansion(value) else {
-                currentBlockIsValid = false
-                return
-            }
+                  !value.trimmingCharacters(in: .whitespaces).isEmpty,
+                  !containsUnsupportedExpansion(value) else { return }
             for index in hosts.indices where hosts[index].hostName == nil {
                 hosts[index].hostName = value
             }
@@ -117,6 +128,7 @@ enum SSHConfigParser {
         case "user":
             guard directive.arguments.count == 1,
                   let value = directive.arguments.first,
+                  !value.trimmingCharacters(in: .whitespaces).isEmpty,
                   !containsUnsupportedExpansion(value) else { return }
             for index in hosts.indices where hosts[index].user == nil {
                 hosts[index].user = value
@@ -138,11 +150,12 @@ enum SSHConfigParser {
         case "identityfile":
             guard directive.arguments.count == 1,
                   let rawPath = directive.arguments.first,
+                  !rawPath.trimmingCharacters(in: .whitespaces).isEmpty,
                   rawPath.lowercased() != "none",
                   !containsUnsupportedExpansion(rawPath),
                   let expandedPath = expandTilde(rawPath) else { return }
-            for index in hosts.indices where hosts[index].identityFile == nil {
-                hosts[index].identityFile = expandedPath
+            for index in hosts.indices {
+                hosts[index].identityFiles.append(expandedPath)
             }
 
         default:

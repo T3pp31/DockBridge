@@ -12,11 +12,11 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.count, 1)
-        XCTAssertEqual(hosts[0].alias, "myserver")
-        XCTAssertEqual(hosts[0].hostName, "192.168.1.10")
-        XCTAssertEqual(hosts[0].user, "alice")
-        XCTAssertEqual(hosts[0].port, 2222)
-        XCTAssertEqual(hosts[0].identityFile, NSHomeDirectory() + "/.ssh/id_ed25519")
+        XCTAssertEqual(hosts.first?.alias, "myserver")
+        XCTAssertEqual(hosts.first?.hostName, "192.168.1.10")
+        XCTAssertEqual(hosts.first?.user, "alice")
+        XCTAssertEqual(hosts.first?.port, 2222)
+        XCTAssertEqual(hosts.first?.identityFile, NSHomeDirectory() + "/.ssh/id_ed25519")
     }
 
     func testSkipsCommentsAndParsesQuotedValues() {
@@ -29,9 +29,9 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.count, 1)
-        XCTAssertEqual(hosts[0].alias, "quoted")
-        XCTAssertEqual(hosts[0].hostName, "server.example.com")
-        XCTAssertEqual(hosts[0].identityFile, NSHomeDirectory() + "/.ssh/My Key")
+        XCTAssertEqual(hosts.first?.alias, "quoted")
+        XCTAssertEqual(hosts.first?.hostName, "server.example.com")
+        XCTAssertEqual(hosts.first?.identityFile, NSHomeDirectory() + "/.ssh/My Key")
     }
 
     func testSkipsWildcardAndNegatedPatternsButKeepsFollowingExactHost() {
@@ -73,7 +73,7 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertTrue(hosts.isEmpty)
     }
 
-    func testIncludesOnlyHostsWithHostName() {
+    func testIncludesHostsWithoutHostNameWhenDirectivesPresent() {
         let hosts = SSHConfigParser.parse("""
         Host no-hostname
             User bob
@@ -82,7 +82,58 @@ final class SSHConfigParserTests: XCTestCase {
             HostName real.example.com
         """)
 
-        XCTAssertEqual(hosts.map(\.alias), ["with-hostname"])
+        XCTAssertEqual(hosts.map(\.alias), ["no-hostname", "with-hostname"])
+
+        let profiles = SSHConfigParser.toProfiles(hosts)
+        XCTAssertEqual(profiles[0].host, "no-hostname")
+    }
+
+    func testHostNameFallbackSkipsPatternsAndEmptyBlocks() {
+        let hosts = SSHConfigParser.parse("""
+        Host *
+            User deploy
+            IdentityFile ~/.ssh/id_ed25519
+
+        Host *.example.com
+            User deploy
+
+        Host !*.secret.example.com
+            Port 2222
+
+        Host empty
+
+        Host web01
+            User deploy
+        """)
+
+        XCTAssertEqual(hosts.map(\.alias), ["web01"])
+        XCTAssertNil(hosts.first?.hostName)
+        XCTAssertEqual(SSHConfigParser.toProfiles(hosts).map(\.host), ["web01"])
+    }
+
+    func testHostNameFallbackImportsEachSupportedDirectiveAndExactAlias() {
+        let hosts = SSHConfigParser.parse("""
+        Host user-only
+            User deploy
+
+        Host port-only
+            Port 2222
+
+        Host key-only
+            IdentityFile ~/.ssh/id_ed25519
+
+        Host alias-one alias-two
+            User deploy
+        """)
+
+        XCTAssertEqual(hosts.map(\.alias), ["user-only", "port-only", "key-only", "alias-one", "alias-two"])
+        XCTAssertTrue(hosts.allSatisfy { $0.hostName == nil })
+        let profiles = SSHConfigParser.toProfiles(hosts)
+        XCTAssertEqual(profiles.map(\.host), hosts.map(\.alias))
+        XCTAssertEqual(profiles[0].username, "deploy")
+        XCTAssertEqual(profiles[1].port, 2222)
+        XCTAssertEqual(profiles[2].authType, .privateKey)
+        XCTAssertEqual(profiles[2].privateKeyPath, NSHomeDirectory() + "/.ssh/id_ed25519")
     }
 
     func testDirectiveKeysAreCaseInsensitiveAndSupportEqualsSyntax() {
@@ -93,8 +144,8 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.count, 1)
-        XCTAssertEqual(hosts[0].hostName, "case.example.com")
-        XCTAssertEqual(hosts[0].user, "alice")
+        XCTAssertEqual(hosts.first?.hostName, "case.example.com")
+        XCTAssertEqual(hosts.first?.user, "alice")
     }
 
     func testTabSeparatedDirectives() {
@@ -126,7 +177,7 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.map(\.alias), ["valid"])
-        XCTAssertEqual(hosts[0].port, 65535)
+        XCTAssertEqual(hosts.first?.port, 65535)
     }
 
     func testMatchSectionCannotMutatePrecedingHost() {
@@ -144,8 +195,8 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.map(\.alias), ["first", "second"])
-        XCTAssertEqual(hosts[0].hostName, "first.example.com")
-        XCTAssertEqual(hosts[0].user, "alice")
+        XCTAssertEqual(hosts.first?.hostName, "first.example.com")
+        XCTAssertEqual(hosts.first?.user, "alice")
     }
 
     func testRepeatedAliasMergesMissingValuesAndKeepsFirstValues() {
@@ -164,10 +215,27 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.count, 1)
-        XCTAssertEqual(hosts[0].alias, "duplicate")
-        XCTAssertEqual(hosts[0].hostName, "first.example.com")
+        XCTAssertEqual(hosts.first?.alias, "duplicate")
+        XCTAssertEqual(hosts.first?.hostName, "first.example.com")
+        XCTAssertEqual(hosts.first?.user, "alice")
+        XCTAssertEqual(hosts.first?.port, 2200)
+    }
+
+    func testQuotedEmptyValuesDoNotBlockLaterValidValues() {
+        let hosts = SSHConfigParser.parse("""
+        Host empty
+            HostName ""
+            User ""
+            IdentityFile ""
+            HostName valid.example.com
+            User alice
+            IdentityFile ~/.ssh/id_ed25519
+        """)
+
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertEqual(hosts[0].hostName, "valid.example.com")
         XCTAssertEqual(hosts[0].user, "alice")
-        XCTAssertEqual(hosts[0].port, 2200)
+        XCTAssertEqual(hosts[0].identityFile, NSHomeDirectory() + "/.ssh/id_ed25519")
     }
 
     func testExpandsCurrentUserAndNamedUserIdentityPaths() throws {
@@ -183,8 +251,8 @@ final class SSHConfigParserTests: XCTestCase {
             IdentityFile ~\(currentUser)/.ssh/named
         """)
 
-        XCTAssertEqual(hosts[0].identityFile, NSHomeDirectory() + "/.ssh/current")
-        XCTAssertEqual(hosts[1].identityFile, namedHome.path + "/.ssh/named")
+        XCTAssertEqual(hosts.first?.identityFile, NSHomeDirectory() + "/.ssh/current")
+        XCTAssertEqual(hosts.dropFirst().first?.identityFile, namedHome.path + "/.ssh/named")
     }
 
     func testUnknownTildeUserDoesNotProduceUnresolvedKeyPath() {
@@ -195,7 +263,7 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.count, 1)
-        XCTAssertNil(hosts[0].identityFile)
+        XCTAssertNil(hosts.first?.identityFile)
     }
 
     func testEmptyConfigReturnsNoHosts() {
@@ -214,10 +282,10 @@ final class SSHConfigParserTests: XCTestCase {
         """))
 
         XCTAssertEqual(profiles.count, 2)
-        XCTAssertEqual(profiles[0].port, 22)
-        XCTAssertEqual(profiles[0].authType, .password)
-        XCTAssertEqual(profiles[1].authType, .privateKey)
-        XCTAssertNotNil(profiles[1].privateKeyPath)
-        XCTAssertNil(profiles[1].privateKeyBookmark)
+        XCTAssertEqual(profiles.first?.port, 22)
+        XCTAssertEqual(profiles.first?.authType, .password)
+        XCTAssertEqual(profiles.dropFirst().first?.authType, .privateKey)
+        XCTAssertNotNil(profiles.dropFirst().first?.privateKeyPath)
+        XCTAssertNil(profiles.dropFirst().first?.privateKeyBookmark)
     }
 }
