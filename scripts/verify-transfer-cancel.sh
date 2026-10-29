@@ -29,7 +29,7 @@ ensure_container() {
   else
     log "Starting Docker SFTP container $CONTAINER_NAME on port $PORT ..."
     docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-    docker run -d --name "$CONTAINER_NAME" -p "${PORT}:22" -e SFTP_USER="$USER" \
+    docker run -d --name "$CONTAINER_NAME" -p "127.0.0.1:${PORT}:22" -e SFTP_USER="$USER" \
       "$IMAGE" "${USER}:${PASSWORD}:::upload" >/dev/null
   fi
   wait_for_sftp_readiness
