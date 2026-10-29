@@ -110,7 +110,12 @@ expected_url=$(curl -s -H "Accept: application/vnd.github+json" https://api.gith
   | python3 -c "import sys,json; r=json.load(sys.stdin); print(next(a['browser_download_url'] for a in r['assets'] if a['name'].endswith('.dmg')))")
 expected_asset_name=$(awk -F'"' '/^asset_name_template / { print $2; exit }' config/release.toml)
 release_version=$(awk -F'"' '/^version / { print $2; exit }' config/release.toml)
-expected_dmg_name="${expected_asset_name//\{app_name\}/DockBridge}"
+release_app_name=$(awk -F'"' '/^app_name / { print $2; exit }' config/release.toml)
+if [[ -z "$expected_asset_name" || -z "$release_version" || -z "$release_app_name" ]]; then
+  echo "FAIL: Required release asset configuration is missing" >&2
+  exit 1
+fi
+expected_dmg_name="${expected_asset_name//\{app_name\}/${release_app_name}}"
 expected_dmg_name="${expected_dmg_name//\{version\}/${release_version}}"
 if [[ "$expected_url" == *"$expected_dmg_name" ]]; then
   echo "PASS: Download button clicked; target URL is $expected_url"
