@@ -26,6 +26,12 @@ use crate::ssh::{ConnectionProfile, HostKeyPrompt, SshSession};
 
 #[derive(Default)]
 pub struct FailureConfig {
+    /// Post-handshake connection phases that can stop replying in timeout tests.
+    pub hang_auth: AtomicBool,
+    pub hang_channel_open: AtomicBool,
+    pub hang_subsystem_request: AtomicBool,
+    pub hang_sftp_init: AtomicBool,
+    pub connection_phase_started: tokio::sync::Notify,
     pub fail_remote_write: AtomicBool,
     pub fail_remote_read: AtomicBool,
     pub fail_remote_close: AtomicBool,
@@ -79,6 +85,11 @@ pub struct FailureConfig {
 /// Secret required by the test server's keyboard-interactive challenge.
 pub const KEYBOARD_INTERACTIVE_SECRET: &str = "kbd-interactive-secret";
 
+#[derive(serde::Deserialize)]
+struct TestServerSettings {
+    accept_retry_delay_ms: u64,
+}
+
 struct AcceptAllPrompt;
 impl HostKeyPrompt for AcceptAllPrompt {
     fn prompt_unknown_host(&self, _: &str, _: u16, _: &str) -> bool {
@@ -125,6 +136,10 @@ impl russh::server::Handler for ServerImpl {
     type Error = anyhow::Error;
 
     async fn auth_password(&mut self, _user: &str, _password: &str) -> Result<Auth, Self::Error> {
+        if self.failures.hang_auth.load(Ordering::SeqCst) {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         if self.failures.reject_all_auth.load(Ordering::SeqCst) {
             // An explicit empty set: no method is offered afterwards, which
             // the client must map to AuthError::MethodUnavailable.
@@ -188,6 +203,10 @@ impl russh::server::Handler for ServerImpl {
         channel: Channel<Msg>,
         _session: &mut Session,
     ) -> Result<bool, Self::Error> {
+        if self.failures.hang_channel_open.load(Ordering::SeqCst) {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         self.clients.lock().unwrap().insert(channel.id(), channel);
         Ok(true)
     }
@@ -198,6 +217,10 @@ impl russh::server::Handler for ServerImpl {
         name: &str,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if self.failures.hang_subsystem_request.load(Ordering::SeqCst) {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         if name != "sftp" {
             session.channel_failure(channel_id)?;
             return Ok(());
@@ -235,13 +258,27 @@ struct SftpHandler {
 }
 
 impl SftpHandler {
+    /// Resolves a remote path inside the sandbox, rejecting paths that escape
+    /// via lexical components (issue #657).
     fn resolve(&self, path: &str) -> PathBuf {
-        let trimmed = path.trim_start_matches('/');
-        if trimmed.is_empty() {
-            self.root.clone()
-        } else {
-            self.root.join(trimmed)
+        let mut components: Vec<String> = vec![];
+        for raw in path.split('/') {
+            match raw {
+                "" | "." => continue,
+                ".." => {
+                    components.pop();
+                }
+                other => components.push(other.to_string()),
+            }
         }
+        components
+            .iter()
+            .fold(self.root.clone(), |acc, component| acc.join(component))
+    }
+
+    /// Returns whether the resolved path is still inside the sandbox root.
+    fn is_within_root(&self, path: &Path) -> bool {
+        path.starts_with(&self.root)
     }
 
     fn attrs_for(path: &Path) -> FileAttributes {
@@ -366,6 +403,10 @@ impl russh_sftp::server::Handler for SftpHandler {
         _version: u32,
         _extensions: HashMap<String, String>,
     ) -> Result<Version, Self::Error> {
+        if self.failures.hang_sftp_init.load(Ordering::SeqCst) {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         let mut version = Version::new();
         if self.failures.advertise_posix_rename.load(Ordering::SeqCst) {
             version
@@ -445,6 +486,15 @@ impl russh_sftp::server::Handler for SftpHandler {
         _attrs: FileAttributes,
     ) -> Result<Handle, Self::Error> {
         let local = self.resolve(&filename);
+        if !self.is_within_root(&local) {
+            return Err(StatusCode::PermissionDenied);
+        }
+        // Missing parents must fail instead of being created by OPEN.
+        if let Some(parent) = local.parent() {
+            if !parent.is_dir() {
+                return Err(StatusCode::NoSuchFile);
+            }
+        }
         let mut options = OpenOptions::new();
         if pflags.contains(OpenFlags::READ) {
             options.read(true);
@@ -510,12 +560,10 @@ impl russh_sftp::server::Handler for SftpHandler {
         }
 
         #[cfg(test)]
-        {
-            self.failures.read_started.notify_one();
-            let delay = self.failures.read_delay_ms.load(Ordering::Relaxed);
-            if delay > 0 {
-                tokio::time::sleep(Duration::from_millis(delay)).await;
-            }
+        self.failures.read_started.notify_one();
+        let delay = self.failures.read_delay_ms.load(Ordering::Relaxed);
+        if delay > 0 {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
         }
 
         let open = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;
@@ -552,7 +600,13 @@ impl russh_sftp::server::Handler for SftpHandler {
         // this handler until `write_unhang` is notified. The client must time
         // out or cancel out of the write rather than hang forever.
         if self.failures.hang_write.load(Ordering::Relaxed) {
-            self.failures.write_unhang.notified().await;
+            // Register the waiter before yielding; notify_waiters would
+            // otherwise lose the wakeup if it fires before the first poll
+            // (issue #659).
+            let unhang = self.failures.write_unhang.notified();
+            tokio::pin!(unhang);
+            unhang.as_mut().enable();
+            unhang.await;
         }
 
         let open = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;
@@ -820,20 +874,30 @@ impl russh_sftp::server::Handler for SftpHandler {
         }
 
         if attrs.atime.is_some() || attrs.mtime.is_some() {
-            let mut times = std::fs::FileTimes::new();
-            if let Some(atime) = attrs.atime {
-                times = times.set_accessed(
-                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(atime as u64),
-                );
+            #[cfg(unix)]
+            {
+                set_file_times_by_path(&local, attrs.atime, attrs.mtime)
+                    .map_err(|_| StatusCode::Failure)?;
             }
-            if let Some(mtime) = attrs.mtime {
-                times = times.set_modified(
-                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64),
-                );
+            #[cfg(not(unix))]
+            {
+                let mut times = std::fs::FileTimes::new();
+                if let Some(atime) = attrs.atime {
+                    times = times.set_accessed(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(atime as u64),
+                    );
+                }
+                if let Some(mtime) = attrs.mtime {
+                    times = times.set_modified(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64),
+                    );
+                }
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&local)
+                    .and_then(|file| file.set_times(times))
+                    .map_err(|_| StatusCode::Failure)?;
             }
-            std::fs::File::open(&local)
-                .and_then(|file| file.set_times(times))
-                .map_err(|_| StatusCode::Failure)?;
         }
 
         if let Some(mode) = attrs.permissions {
@@ -880,7 +944,10 @@ impl TestSftpServer {
         let root_dir = tempfile::tempdir().unwrap();
         let root = root_dir.path().to_path_buf();
         fs::create_dir_all(&root).await.unwrap();
+        // Tests commonly upload into /upload; create the standard sandbox
+        // directories up front (issue #658).
         fs::create_dir_all(root.join("upload")).await.unwrap();
+        fs::create_dir_all(root.join("download")).await.unwrap();
 
         let failures = Arc::new(FailureConfig::default());
         // Advertise posix-rename@openssh.com by default (OpenSSH-compatible);
@@ -894,6 +961,11 @@ impl TestSftpServer {
 
         let server_root = root.clone();
         let server_failures = Arc::clone(&failures);
+        let settings: TestServerSettings =
+            toml::from_str(include_str!("../../../../config/test-server.toml"))
+                .expect("valid test server settings");
+        assert!(settings.accept_retry_delay_ms > 0);
+        let accept_retry_delay = Duration::from_millis(settings.accept_retry_delay_ms);
         let server_task = tokio::spawn(async move {
             let config = Arc::new(russh::server::Config {
                 auth_rejection_time: Duration::from_secs(1),
@@ -911,6 +983,7 @@ impl TestSftpServer {
                             panic!("test SFTP server accept failed: {err}");
                         }
                         tracing::warn!(error = %err, "test SFTP server accept retrying");
+                        tokio::time::sleep(accept_retry_delay).await;
                         continue;
                     }
                 };
@@ -1093,12 +1166,71 @@ fn is_transient_accept_error(err: &std::io::Error) -> bool {
             | std::io::ErrorKind::ConnectionAborted
             | std::io::ErrorKind::ResourceBusy
             | std::io::ErrorKind::TimedOut
+    ) || matches!(
+        err.raw_os_error(),
+        Some(libc::EMFILE) | Some(libc::ENFILE) | Some(libc::ENOBUFS) | Some(libc::ENOMEM)
     )
+}
+
+#[cfg(unix)]
+fn set_file_times_by_path(
+    path: &Path,
+    atime: Option<u32>,
+    mtime: Option<u32>,
+) -> Result<(), std::io::Error> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+    let to_timespec = |secs: Option<u32>| libc::timespec {
+        tv_sec: secs.unwrap_or_default() as libc::time_t,
+        tv_nsec: if secs.is_some() { 0 } else { libc::UTIME_OMIT },
+    };
+    let times = [to_timespec(atime), to_timespec(mtime)];
+
+    let result = unsafe { libc::utimensat(libc::AT_FDCWD, path.as_ptr(), times.as_ptr(), 0) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn path_timestamp_updates_preserve_omitted_times_and_follow_symlinks() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        let link = directory.path().join("link");
+        std::fs::write(&target, b"data").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        set_file_times_by_path(&target, Some(123), Some(456)).unwrap();
+
+        set_file_times_by_path(&link, None, Some(789)).unwrap();
+
+        let metadata = std::fs::metadata(&target).unwrap();
+        assert_eq!(
+            metadata.accessed().unwrap(),
+            std::time::UNIX_EPOCH + Duration::from_secs(123)
+        );
+        assert_eq!(
+            metadata.modified().unwrap(),
+            std::time::UNIX_EPOCH + Duration::from_secs(789)
+        );
+        set_file_times_by_path(&link, Some(321), None).unwrap();
+        let metadata = std::fs::metadata(&target).unwrap();
+        assert_eq!(
+            metadata.accessed().unwrap(),
+            std::time::UNIX_EPOCH + Duration::from_secs(321)
+        );
+        assert_eq!(
+            metadata.modified().unwrap(),
+            std::time::UNIX_EPOCH + Duration::from_secs(789)
+        );
+    }
 
     #[test]
     fn transient_accept_errors_are_classified() {
@@ -1107,5 +1239,13 @@ mod tests {
 
         // Then: it is retried rather than silently stopping the server task
         assert!(is_transient_accept_error(&aborted));
+        for code in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM] {
+            assert!(is_transient_accept_error(
+                &std::io::Error::from_raw_os_error(code)
+            ));
+        }
+        assert!(!is_transient_accept_error(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied
+        )));
     }
 }
