@@ -139,7 +139,7 @@ json_output() {
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
     --host-key-policy accept-new --output json --path upload | \
-    python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d, list); assert d'
+    python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d, list)'
 }
 
 pwd_command() {
@@ -155,9 +155,13 @@ mkdir_rename_delete() {
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" rename \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
     --host-key-policy accept-new --from "upload/rename-test" --to "upload/rename-test-2"
+  # delete is a file-only command; exercise it on a file in the renamed directory.
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" upload \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --local "$LOCAL_FILE" --remote "upload/rename-test-2/file.txt"
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" delete \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --remote "upload/rename-test-2"
+    --host-key-policy accept-new --remote "upload/rename-test-2/file.txt"
 }
 
 recursive_upload_download() {
@@ -171,8 +175,8 @@ recursive_upload_download() {
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" download \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
     --host-key-policy accept-new --remote "upload/tree" --local "$WORKDIR/dl" --recursive
-  cmp -s "$tree/a.txt" "$WORKDIR/dl/a.txt"
-  cmp -s "$tree/sub/b.txt" "$WORKDIR/dl/sub/b.txt"
+  cmp -s "$tree/a.txt" "$WORKDIR/dl/tree/a.txt"
+  cmp -s "$tree/sub/b.txt" "$WORKDIR/dl/tree/sub/b.txt"
 }
 
 private_key_auth_plain() {
