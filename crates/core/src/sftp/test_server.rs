@@ -1187,14 +1187,7 @@ fn set_file_times_by_path(
     };
     let times = [to_timespec(atime), to_timespec(mtime)];
 
-    let result = unsafe {
-        libc::utimensat(
-            libc::AT_FDCWD,
-            path.as_ptr(),
-            times.as_ptr(),
-            libc::AT_SYMLINK_NOFOLLOW,
-        )
-    };
+    let result = unsafe { libc::utimensat(libc::AT_FDCWD, path.as_ptr(), times.as_ptr(), 0) };
     if result == 0 {
         Ok(())
     } else {
@@ -1205,6 +1198,39 @@ fn set_file_times_by_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn path_timestamp_updates_preserve_omitted_times_and_follow_symlinks() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        let link = directory.path().join("link");
+        std::fs::write(&target, b"data").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        set_file_times_by_path(&target, Some(123), Some(456)).unwrap();
+
+        set_file_times_by_path(&link, None, Some(789)).unwrap();
+
+        let metadata = std::fs::metadata(&target).unwrap();
+        assert_eq!(
+            metadata.accessed().unwrap(),
+            std::time::UNIX_EPOCH + Duration::from_secs(123)
+        );
+        assert_eq!(
+            metadata.modified().unwrap(),
+            std::time::UNIX_EPOCH + Duration::from_secs(789)
+        );
+        set_file_times_by_path(&link, Some(321), None).unwrap();
+        let metadata = std::fs::metadata(&target).unwrap();
+        assert_eq!(
+            metadata.accessed().unwrap(),
+            std::time::UNIX_EPOCH + Duration::from_secs(321)
+        );
+        assert_eq!(
+            metadata.modified().unwrap(),
+            std::time::UNIX_EPOCH + Duration::from_secs(789)
+        );
+    }
 
     #[test]
     fn transient_accept_errors_are_classified() {

@@ -6094,6 +6094,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_resumes_matching_multiple_verification_chunks() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("file.bin");
+        let chunk = super::RESUME_VERIFICATION_BYTES as usize;
+        let payload: Vec<u8> = (0..chunk * 3 + 17)
+            .map(|index| ((index * 37 + index / chunk) % 251) as u8)
+            .collect();
+        tokio::fs::write(&source, &payload).await.unwrap();
+        let local = source.display().to_string();
+        let remote = "/upload/file.bin";
+        let partial = format!(
+            "/upload/.dockbridge-{}.partial",
+            resume_partial_suffix(&local, remote)
+        );
+        let offset = chunk * 2 + 3;
+        server.write_remote_file(&partial, &payload[..offset]).await;
+        assert_eq!(
+            client
+                .find_resumable_upload_offset(payload.len() as u64, "/upload", &local, remote)
+                .await
+                .unwrap(),
+            Some(offset as u64)
+        );
+
+        client.upload(&source, remote).await.unwrap();
+
+        assert_eq!(
+            tokio::fs::read(server.root.join("upload/file.bin"))
+                .await
+                .unwrap(),
+            payload
+        );
+        assert!(server.remote_partial_paths().is_empty());
+    }
+
+    #[tokio::test]
     async fn upload_restarts_when_partial_prefix_mismatches() {
         let server = TestSftpServer::start().await;
         let session = server.connect_session().await;
