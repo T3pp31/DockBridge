@@ -88,6 +88,54 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertEqual(profiles[0].host, "no-hostname")
     }
 
+    func testHostNameFallbackSkipsPatternsAndEmptyBlocks() {
+        let hosts = SSHConfigParser.parse("""
+        Host *
+            User deploy
+            IdentityFile ~/.ssh/id_ed25519
+
+        Host *.example.com
+            User deploy
+
+        Host !*.secret.example.com
+            Port 2222
+
+        Host empty
+
+        Host web01
+            User deploy
+        """)
+
+        XCTAssertEqual(hosts.map(\.alias), ["web01"])
+        XCTAssertNil(hosts.first?.hostName)
+        XCTAssertEqual(SSHConfigParser.toProfiles(hosts).map(\.host), ["web01"])
+    }
+
+    func testHostNameFallbackImportsEachSupportedDirectiveAndExactAlias() {
+        let hosts = SSHConfigParser.parse("""
+        Host user-only
+            User deploy
+
+        Host port-only
+            Port 2222
+
+        Host key-only
+            IdentityFile ~/.ssh/id_ed25519
+
+        Host alias-one alias-two
+            User deploy
+        """)
+
+        XCTAssertEqual(hosts.map(\.alias), ["user-only", "port-only", "key-only", "alias-one", "alias-two"])
+        XCTAssertTrue(hosts.allSatisfy { $0.hostName == nil })
+        let profiles = SSHConfigParser.toProfiles(hosts)
+        XCTAssertEqual(profiles.map(\.host), hosts.map(\.alias))
+        XCTAssertEqual(profiles[0].username, "deploy")
+        XCTAssertEqual(profiles[1].port, 2222)
+        XCTAssertEqual(profiles[2].authType, .privateKey)
+        XCTAssertEqual(profiles[2].privateKeyPath, NSHomeDirectory() + "/.ssh/id_ed25519")
+    }
+
     func testDirectiveKeysAreCaseInsensitiveAndSupportEqualsSyntax() {
         let hosts = SSHConfigParser.parse("""
         hOsT=CaseHost
