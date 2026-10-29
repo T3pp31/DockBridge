@@ -261,7 +261,9 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
         XCTAssertNil(viewModel.errorMessage)
         XCTAssertNil(viewModel.localRenameTarget)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: destinationURL.path))
+        let names = try FileManager.default.contentsOfDirectory(atPath: baseDirectory.path)
+        XCTAssertTrue(names.contains("Before.txt"))
+        XCTAssertFalse(names.contains("before.txt"))
         XCTAssertEqual(try String(contentsOf: destinationURL, encoding: .utf8), "contents")
     }
 
