@@ -2318,6 +2318,7 @@ const RESUME_VERIFICATION_BYTES: u64 = 64 * 1024;
 /// a leftover local partial for this `(local, remote)` pair exists, is a
 /// strict prefix of the remote file, and all saved bytes match the current
 /// remote content (issue #313, #655). `None` starts from scratch.
+/// The supplied download handle must be positioned at offset zero.
 ///
 /// Checking S saved bytes reads S remote bytes before downloading R-S remaining
 /// bytes, for R bytes total. This saves local writes rather than bandwidth.
@@ -2348,14 +2349,20 @@ async fn find_resumable_download_offset(
     use tokio::io::AsyncReadExt;
     while remaining > 0 {
         let verify_len = remaining.min(RESUME_VERIFICATION_BYTES) as usize;
-        verification_file
+        if let Err(error) = verification_file
             .read_exact(&mut remote_prefix[..verify_len])
             .await
-            .ok()?;
-        partial_file
+        {
+            tracing::debug!(%error, "remote resume verification read failed; retaining saved partial");
+            return None;
+        }
+        if let Err(error) = partial_file
             .read_exact(&mut partial_prefix[..verify_len])
             .await
-            .ok()?;
+        {
+            tracing::debug!(%error, "local resume verification read failed; retaining saved partial");
+            return None;
+        }
         if remote_prefix[..verify_len] != partial_prefix[..verify_len] {
             drop(partial_file);
             let _ = tokio::fs::remove_file(&partial_path).await;
@@ -6153,7 +6160,9 @@ mod tests {
     async fn download_resumes_after_matching_multiple_verification_chunks() {
         let server = TestSftpServer::start().await;
         let chunk = super::RESUME_VERIFICATION_BYTES as usize;
-        let payload = vec![b'A'; chunk * 3 + 13];
+        let payload: Vec<u8> = (0..chunk * 3 + 13)
+            .map(|index| ((index * 37 + index / chunk) % 251) as u8)
+            .collect();
         let remote = "/download/file.bin";
         server.write_remote_file(remote, &payload).await;
         let session = server.connect_session().await;
@@ -6185,6 +6194,50 @@ mod tests {
             assert_eq!(tokio::fs::read(&local_path).await.unwrap(), payload);
             assert!(list_partial_paths(local_dir.path()).is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn download_preserves_resume_partial_after_verification_read_error() {
+        let server = TestSftpServer::start().await;
+        let remote = "/download/file.bin";
+        let payload = b"previously downloaded prefix and remaining bytes";
+        server.write_remote_file(remote, payload).await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        let local = local_path.display().to_string();
+        let saved = &payload[..12];
+        let partial_path = local_dir.path().join(format!(
+            ".dockbridge-{}.partial",
+            resume_partial_suffix(&local, remote)
+        ));
+        tokio::fs::write(&partial_path, saved).await.unwrap();
+        server
+            .failures
+            .fail_remote_read
+            .store(true, Ordering::SeqCst);
+
+        let mut handle = client.sftp().open(remote).await.unwrap();
+        assert_eq!(
+            super::find_resumable_download_offset(
+                &mut handle,
+                local_dir.path(),
+                payload.len() as u64,
+                &local,
+                remote,
+            )
+            .await,
+            None
+        );
+        assert!(!local_path.exists());
+        assert_eq!(tokio::fs::read(&partial_path).await.unwrap(), saved);
+        assert_eq!(list_partial_paths(local_dir.path()), vec![partial_path]);
+
+        // The server injects one READ error; a later retry can still resume.
+        client.download(remote, &local_path).await.unwrap();
+        assert_eq!(tokio::fs::read(&local_path).await.unwrap(), payload);
+        assert!(list_partial_paths(local_dir.path()).is_empty());
     }
 
     #[tokio::test]

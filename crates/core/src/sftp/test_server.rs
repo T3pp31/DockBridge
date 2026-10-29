@@ -552,7 +552,13 @@ impl russh_sftp::server::Handler for SftpHandler {
         // this handler until `write_unhang` is notified. The client must time
         // out or cancel out of the write rather than hang forever.
         if self.failures.hang_write.load(Ordering::Relaxed) {
-            self.failures.write_unhang.notified().await;
+            // Register the waiter before yielding; notify_waiters would
+            // otherwise lose the wakeup if it fires before the first poll
+            // (issue #659).
+            let unhang = self.failures.write_unhang.notified();
+            tokio::pin!(unhang);
+            unhang.as_mut().enable();
+            unhang.await;
         }
 
         let open = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;
