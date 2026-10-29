@@ -90,6 +90,9 @@ jobs:
       - name: Build workspace
         run: cargo build --workspace
 
+      - name: Check UniFFI bindgen CLI feature
+        run: cargo check -p dockbridge-uniffi --features cli --bin uniffi-bindgen
+
       - name: Build hardened CLI (release configuration)
         run: cargo build -p dockbridge-cli --release --features disable-cli-password
 
