@@ -1,11 +1,7 @@
 ---
-
 description: "Swift / SwiftUI / iOS・macOSアプリの実装、修正、リファクタリング、レビュー時に適用するルール"
-globs:
-
-* "**/*.swift"
-  alwaysApply: false
-
+globs: "**/*.swift"
+alwaysApply: false
 ---
 
 # Swift Coding Rules
