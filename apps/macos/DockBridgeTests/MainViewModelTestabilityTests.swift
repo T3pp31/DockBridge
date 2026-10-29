@@ -503,6 +503,35 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertEqual(bridge.uploaded.last?.overwritePolicy.rawValue, "failIfExists")
     }
 
+    func testFailIfExistsShowsAskWhenDestinationCheckIsIndeterminate() async throws {
+        // Given: failIfExists is configured and the parent directory cannot
+        //        be listed, so destination existence is unknown
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        viewModel.remotePath = "/srv/files"
+        var config = settings.loadConfig()
+        config.transferOverwritePolicy = .failIfExists
+        settings.saveConfig(config)
+
+        let localFile = baseDirectory.appendingPathComponent("new.txt")
+        try "data".write(to: localFile, atomically: true, encoding: .utf8)
+
+        let uploadTask = Task { @MainActor in
+            await viewModel.upload(localURL: localFile, toRemoteDirectory: nil)
+        }
+        await Task.yield()
+
+        // Then: the user is asked instead of silently failing with an
+        //       ambiguous destination conflict.
+        XCTAssertTrue(viewModel.showOverwriteAsk)
+        XCTAssertEqual(viewModel.overwriteAskDestination, "/srv/files/new.txt")
+        XCTAssertTrue(bridge.uploaded.isEmpty)
+
+        viewModel.confirmOverwriteAsk()
+        let accepted = await uploadTask.value
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(bridge.uploaded.last?.overwritePolicy.rawValue, "replace")
+    }
+
     // MARK: - External edit monitoring
 
     func testRemoteEditChangeUploadsWithReplaceAndReturnsToWatching() async throws {
