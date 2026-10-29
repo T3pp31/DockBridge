@@ -42,6 +42,8 @@ pub struct FailureConfig {
     /// Artificial delay applied to every SSH_FXP_READ reply, used by benchmarks
     /// to emulate a high-latency link (milliseconds).
     pub read_delay_ms: AtomicU64,
+    /// Signals that a READ handler has started, before its optional delay.
+    pub read_started: tokio::sync::Notify,
     /// When `true`, `open` with `SSH_FX_EXCLUDE` reports `SSH_FX_PERMISSION_DENIED`
     /// for an already-existing exclusive path (some servers' EEXIST).
     pub exclude_exists_permission_denied: AtomicBool,
@@ -477,6 +479,7 @@ impl russh_sftp::server::Handler for SftpHandler {
 
         #[cfg(test)]
         {
+            self.failures.read_started.notify_one();
             let delay = self.failures.read_delay_ms.load(Ordering::Relaxed);
             if delay > 0 {
                 tokio::time::sleep(Duration::from_millis(delay)).await;
