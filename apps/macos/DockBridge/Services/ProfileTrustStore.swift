@@ -197,13 +197,10 @@ final class ProfileTrustStore: @unchecked Sendable {
         }
 
         if let records = try? decoder.decode([String: TrustedProfileEndpoint].self, from: data) {
-            if signingKeyStore.hasExistingKey {
-                throw ProfileTrustStoreError.verificationFailed
-            }
-
-            let endpoints = parseEndpointRecords(records)
-            try saveTrustedEndpoints(endpoints)
-            return endpoints
+            // Legacy unsigned files are not authenticated. Route them through
+            // the explicit initial-trust confirmation flow instead of silently
+            // accepting and re-signing an attacker-controlled payload.
+            throw ProfileTrustStoreError.verificationFailed
         }
 
         throw ProfileTrustStoreError.readFailed(

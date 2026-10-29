@@ -208,7 +208,7 @@ final class ProfileTrustStoreTests: XCTestCase {
         XCTAssertTrue(detection.pendingNewProfileTrust.isEmpty)
     }
 
-    func testLegacyUnsignedTrustStoreMigratesWhenNoSigningKeyExists() throws {
+    func testLegacyUnsignedTrustStoreRequiresExplicitTrust() throws {
         let profile = ConnectionProfile(
             name: "Test",
             host: "example.com",
@@ -219,13 +219,13 @@ final class ProfileTrustStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         try JSONEncoder().encode(records).write(to: trustURL)
 
-        let trusted = try trustStore.loadTrustedEndpoints()
+        XCTAssertThrowsError(try trustStore.loadTrustedEndpoints()) { error in
+            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+        }
+        XCTAssertFalse(signingKeyStore.hasExistingKey)
 
-        XCTAssertEqual(trusted[profile.id], TrustedProfileEndpoint(profile: profile))
-        XCTAssertTrue(signingKeyStore.hasExistingKey)
-
-        let migratedData = try Data(contentsOf: trustURL)
-        XCTAssertNoThrow(try JSONDecoder().decode(SignedTrustedEndpointsEnvelopeForTests.self, from: migratedData))
+        let detection = try trustStore.detectEndpointChanges(in: [profile])
+        XCTAssertEqual(detection.pendingInitialTrust, [profile])
     }
     func testLoadTrustedEndpointsRejectsSymlinkedStoreFile() throws {
         let profile = ConnectionProfile(
