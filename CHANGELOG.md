@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Resolve home directories with the platform-standard `dirs` API. On Windows,
+  this intentionally uses the user profile known folder instead of honoring a
+  custom `HOME` override.
+
 ### Fixed
 
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)

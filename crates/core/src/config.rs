@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use dirs::home_dir as system_home_dir;
 use serde::Deserialize;
 
 use crate::error::{ConfigError, SecurityError};
@@ -376,14 +377,12 @@ fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> Result<PathBuf, C
     Ok(path.to_path_buf())
 }
 
+fn normalize_home(home: Option<PathBuf>) -> Option<PathBuf> {
+    home.filter(|path| path.is_absolute())
+}
+
 fn home_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    let path = PathBuf::from(home);
-    if path.is_absolute() {
-        Some(path)
-    } else {
-        None
-    }
+    normalize_home(system_home_dir())
 }
 
 fn default_known_hosts_path() -> PathBuf {
@@ -473,6 +472,35 @@ mod tests {
             expanded,
             PathBuf::from("/tmp/home/.dockbridge/known_hosts.json")
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn normalize_home_accepts_absolute_home() {
+        let home = PathBuf::from("/home/user");
+        assert_eq!(normalize_home(Some(home.clone())), Some(home));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalize_home_accepts_absolute_home() {
+        let home = PathBuf::from(r"C:\Users\user");
+        assert_eq!(normalize_home(Some(home.clone())), Some(home));
+    }
+
+    #[test]
+    fn normalize_home_rejects_relative_home() {
+        assert_eq!(normalize_home(Some(PathBuf::from("relative/home"))), None);
+    }
+
+    #[test]
+    fn normalize_home_rejects_empty_home() {
+        assert_eq!(normalize_home(Some(PathBuf::new())), None);
+    }
+
+    #[test]
+    fn normalize_home_returns_none_when_home_is_unresolved() {
+        assert_eq!(normalize_home(None), None);
     }
 
     #[test]
