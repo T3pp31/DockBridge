@@ -650,8 +650,13 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
         let local = self.resolve(&path);
-        if fs::remove_dir(&local).await.is_err() {
-            return Ok(Self::err_status(id, StatusCode::Failure, "rmdir failed"));
+        if let Err(err) = fs::remove_dir(&local).await {
+            let status = match err.kind() {
+                std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+                std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+                _ => StatusCode::Failure,
+            };
+            return Ok(Self::err_status(id, status, "rmdir failed"));
         }
         Ok(Self::ok_status(id))
     }
