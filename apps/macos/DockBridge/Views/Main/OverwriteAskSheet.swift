@@ -21,5 +21,6 @@ struct OverwriteAskSheet: View {
                 .keyboardShortcut(.defaultAction)
             Button(String(localized: "Replace"), role: .destructive, action: onReplace)
         }
+        .onExitCommand(perform: onKeep)
     }
 }
