@@ -2543,7 +2543,10 @@ async fn prepare_local_finalize_destination(
         Ok(metadata) if metadata.is_dir() => Err(SftpError::DownloadFailed {
             remote: remote.to_string(),
             local: local.to_string(),
-            message: format!("destination '{}' is a directory", final_path.display()),
+            message: format!(
+                "destination '{}' is a directory and cannot be replaced by a file",
+                final_path.display()
+            ),
         }),
         Ok(_) => match overwrite_policy {
             TransferOverwritePolicy::FailIfExists => Err(SftpError::DownloadFailed {
@@ -6237,6 +6240,37 @@ mod tests {
         // The server injects one READ error; a later retry can still resume.
         client.download(remote, &local_path).await.unwrap();
         assert_eq!(tokio::fs::read(&local_path).await.unwrap(), payload);
+        assert!(list_partial_paths(local_dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn download_rejects_directory_destination_without_changing_contents() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/file.bin", b"new remote data")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let destination = local_dir.path().join("existing-directory");
+        tokio::fs::create_dir(&destination).await.unwrap();
+        let existing = destination.join("keep.txt");
+        tokio::fs::write(&existing, b"existing data").await.unwrap();
+
+        let error = client
+            .download("/download/file.bin", &destination)
+            .await
+            .expect_err("a directory cannot be replaced with a downloaded file");
+
+        match error {
+            crate::error::SftpError::DownloadFailed { message, .. } => {
+                assert!(message.contains("is a directory"), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(destination.is_dir());
+        assert_eq!(tokio::fs::read(&existing).await.unwrap(), b"existing data");
+        assert_eq!(std::fs::read_dir(&destination).unwrap().count(), 1);
         assert!(list_partial_paths(local_dir.path()).is_empty());
     }
 
