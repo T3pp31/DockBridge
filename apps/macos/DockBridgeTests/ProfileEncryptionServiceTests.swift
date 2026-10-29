@@ -31,6 +31,27 @@ final class ProfileEncryptionServiceTests: XCTestCase {
         XCTAssertEqual(decrypted, [profile])
     }
 
+    func testConcurrentServicesUseTheSameMasterKey() async throws {
+        let sharedKeychain = keychain!
+        let profile = StoredConnectionProfile(
+            from: ConnectionProfile(name: "Concurrent", host: "example.com", username: "user")
+        )
+        let envelopes = try await withThrowingTaskGroup(of: Data.self) { group in
+            for _ in 0..<32 {
+                group.addTask {
+                    let service = ProfileEncryptionService(keychain: sharedKeychain)
+                    return try JSONEncoder().encode(service.encrypt([profile]))
+                }
+            }
+            return try await group.reduce(into: []) { $0.append($1) }
+        }
+        let reader = ProfileEncryptionService(keychain: sharedKeychain)
+        for data in envelopes {
+            let envelope = try JSONDecoder().decode(EncryptedProfilesEnvelope.self, from: data)
+            XCTAssertEqual(try reader.decrypt(envelope), [profile])
+        }
+    }
+
     func testDecryptRejectsUnsupportedFormat() throws {
         let badJSON = """
         {"format":"unsupported","payload":"dGVzdA=="}
