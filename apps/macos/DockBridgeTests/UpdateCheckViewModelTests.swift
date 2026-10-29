@@ -38,10 +38,28 @@ final class UpdateCheckViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.showUpdateSheet)
     }
 
+    func testCheckOnLaunchPresentsWithoutHostKeyPrompt() async {
+        mockSession.responseJSON = newerReleaseJSON
+
+        await viewModel.checkOnLaunch(isHostKeyBlocking: false)
+
+        XCTAssertTrue(viewModel.showUpdateSheet)
+    }
+
+    func testHostKeyDismissedBeforeUpdateResponseStillPresentsSheet() async {
+        mockSession.responseJSON = newerReleaseJSON
+        mockSession.onRequest = { [viewModel = viewModel!] in
+            await viewModel.onHostKeyDismissed()
+        }
+
+        await viewModel.checkOnLaunch(isHostKeyBlocking: true)
+
+        XCTAssertTrue(viewModel.showUpdateSheet)
+    }
+
     func testSkipVersionPersistsSkippedVersionAndSuppressesRelaunch() async {
         mockSession.responseJSON = newerReleaseJSON
 
-        viewModel.onHostKeyDismissed()
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
         viewModel.skipVersion()
 
@@ -53,7 +71,6 @@ final class UpdateCheckViewModelTests: XCTestCase {
             downloadService: mockDownloadService,
             settingsService: settingsService
         )
-        viewModel.onHostKeyDismissed()
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
 
         XCTAssertFalse(viewModel.showUpdateSheet)
@@ -62,7 +79,6 @@ final class UpdateCheckViewModelTests: XCTestCase {
     func testLaterDismissesWithoutPersistingSkip() async {
         mockSession.responseJSON = newerReleaseJSON
 
-        viewModel.onHostKeyDismissed()
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
         viewModel.skipUpdate()
 
@@ -75,7 +91,6 @@ final class UpdateCheckViewModelTests: XCTestCase {
             downloadService: mockDownloadService,
             settingsService: settingsService
         )
-        viewModel.onHostKeyDismissed()
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
 
         // The update is offered again on the next launch.
@@ -85,7 +100,6 @@ final class UpdateCheckViewModelTests: XCTestCase {
     func testCheckOnLaunchIgnoresNetworkFailure() async {
         mockSession.shouldFail = true
 
-        viewModel.onHostKeyDismissed()
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
 
         XCTAssertNil(viewModel.pendingUpdate)
@@ -104,7 +118,6 @@ final class UpdateCheckViewModelTests: XCTestCase {
         mockSession.responseJSON = newerReleaseJSON
         mockDownloadService.error = .signatureVerificationFailed(.unsignedBundle)
 
-        viewModel.onHostKeyDismissed()
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
         await viewModel.downloadUpdate()
 
@@ -119,7 +132,6 @@ final class UpdateCheckViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.inAppUpdateInstallationEnabled)
 
         mockSession.responseJSON = newerReleaseJSON
-        viewModel.onHostKeyDismissed()
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
         await viewModel.downloadUpdate()
 
@@ -151,8 +163,10 @@ final class UpdateCheckViewModelTests: XCTestCase {
 private final class MockUpdateURLSession: URLSessionDataProviding, @unchecked Sendable {
     var responseJSON = "{}"
     var shouldFail = false
+    var onRequest: (@Sendable () async -> Void)?
 
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        await onRequest?()
         if shouldFail {
             throw URLError(.notConnectedToInternet)
         }

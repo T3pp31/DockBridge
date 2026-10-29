@@ -26,6 +26,7 @@ final class UpdateCheckViewModel: ObservableObject {
     }
 
     func checkOnLaunch(isHostKeyBlocking: Bool) async {
+        isHostKeyResolved = !isHostKeyBlocking
         do {
             let update = try await updateService.checkForUpdate(
                 skippedVersion: settingsService.loadSkippedUpdateVersion()
