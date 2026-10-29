@@ -2245,6 +2245,12 @@ const RESUME_VERIFICATION_BYTES: u64 = 64 * 1024;
 /// a leftover local partial for this `(local, remote)` pair exists, is a
 /// strict prefix of the remote file, and all saved bytes match the current
 /// remote content (issue #313, #655). `None` starts from scratch.
+///
+/// Checking a saved prefix of S bytes costs S remote bytes; continuing the
+/// remaining R-S bytes therefore transfers R bytes in total. This saves local
+/// writes, not network bandwidth. Size/mtime alone cannot detect replacement
+/// with different content but identical metadata. Concurrent in-place changes
+/// during verification or download are not covered by a snapshot guarantee.
 async fn find_resumable_download_offset(
     client: &SftpClient<'_>,
     local_parent: &Path,

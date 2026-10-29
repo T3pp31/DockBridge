@@ -3975,6 +3975,10 @@ mod tests {
             reloaded.check_host_key("example.COM", 22, &new_key, true),
             HostKeyCheckResult::Trust
         );
+        assert!(matches!(
+            reloaded.check_host_key("Example.com", 22, &old_key, true),
+            HostKeyCheckResult::Mismatch { .. }
+        ));
         assert_eq!(
             reloaded.check_host_key("ALIAS.example.com", 22, &old_key, true),
             HostKeyCheckResult::Trust
@@ -3983,6 +3987,35 @@ mod tests {
             reloaded.check_host_key("alias.example.com", 22, &new_key, true),
             HostKeyCheckResult::Mismatch { .. }
         ));
+    }
+
+    #[test]
+    fn changed_key_with_mixed_case_without_alias_rejects_old_key() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager
+            .accept_host_key("Example.COM", 22, &old_key)
+            .unwrap();
+        manager
+            .accept_host_key("EXAMPLE.com", 22, &new_key)
+            .unwrap();
+
+        for store in [&manager, &KnownHostsManager::load(&path).unwrap()] {
+            assert_eq!(store.entries().len(), 1);
+            for host in ["example.com", "Example.COM", "EXAMPLE.com"] {
+                assert_eq!(
+                    store.check_host_key(host, 22, &new_key, true),
+                    HostKeyCheckResult::Trust
+                );
+                assert!(matches!(
+                    store.check_host_key(host, 22, &old_key, true),
+                    HostKeyCheckResult::Mismatch { .. }
+                ));
+            }
+        }
     }
 
     #[test]
