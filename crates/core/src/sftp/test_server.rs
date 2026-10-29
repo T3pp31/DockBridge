@@ -238,17 +238,6 @@ impl SftpHandler {
         }
     }
 
-    fn canonical(&self, path: &str) -> String {
-        if path == "." || path.is_empty() {
-            return "/".to_string();
-        }
-        if path.starts_with('/') {
-            path.to_string()
-        } else {
-            format!("/{path}")
-        }
-    }
-
     fn attrs_for(path: &Path) -> FileAttributes {
         let mut attrs = FileAttributes::empty();
         #[cfg(unix)]
