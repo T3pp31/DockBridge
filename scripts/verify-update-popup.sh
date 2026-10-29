@@ -108,8 +108,13 @@ fi
 echo "== Test 2: Download opens DMG URL =="
 click_sheet_button 2
 sleep 2
-expected_url=$(curl -s -H "Accept: application/vnd.github+json" https://api.github.com/repos/T3pp31/DockBridge/releases/latest \
-  | python3 -c "import sys,json; r=json.load(sys.stdin); print(next(a['browser_download_url'] for a in r['assets'] if a['name'].endswith('.dmg')))")
+api_json=$(curl -fsS --max-time 30 -H "Accept: application/vnd.github+json" https://api.github.com/repos/T3pp31/DockBridge/releases/latest) \
+  || { echo "FAIL: GitHub API request failed" >&2; exit 1; }
+expected_url=$(printf '%s' "$api_json" | python3 -c "import sys,json; r=json.load(sys.stdin); print(next((a['browser_download_url'] for a in r.get('assets', []) if a['name'].endswith('.dmg')), ''))")
+if [[ -z "$expected_url" ]]; then
+  echo "FAIL: no DMG asset in latest release" >&2
+  exit 1
+fi
 if [[ "$expected_url" == *"DockBridge-0.1.2-macOS.dmg" ]]; then
   echo "PASS: Download button clicked; target URL is $expected_url"
 else
