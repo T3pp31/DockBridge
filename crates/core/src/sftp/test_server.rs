@@ -25,6 +25,12 @@ use crate::ssh::{ConnectionProfile, HostKeyPrompt, SshSession};
 
 #[derive(Default)]
 pub struct FailureConfig {
+    /// Post-handshake connection phases that can stop replying in timeout tests.
+    pub hang_auth: AtomicBool,
+    pub hang_channel_open: AtomicBool,
+    pub hang_subsystem_request: AtomicBool,
+    pub hang_sftp_init: AtomicBool,
+    pub connection_phase_started: tokio::sync::Notify,
     pub fail_remote_write: AtomicBool,
     pub fail_remote_read: AtomicBool,
     pub fail_remote_close: AtomicBool,
@@ -124,6 +130,10 @@ impl russh::server::Handler for ServerImpl {
     type Error = anyhow::Error;
 
     async fn auth_password(&mut self, _user: &str, _password: &str) -> Result<Auth, Self::Error> {
+        if self.failures.hang_auth.load(Ordering::SeqCst) {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         if self.failures.reject_all_auth.load(Ordering::SeqCst) {
             // An explicit empty set: no method is offered afterwards, which
             // the client must map to AuthError::MethodUnavailable.
@@ -187,6 +197,10 @@ impl russh::server::Handler for ServerImpl {
         channel: Channel<Msg>,
         _session: &mut Session,
     ) -> Result<bool, Self::Error> {
+        if self.failures.hang_channel_open.load(Ordering::SeqCst) {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         self.clients.lock().unwrap().insert(channel.id(), channel);
         Ok(true)
     }
@@ -197,6 +211,10 @@ impl russh::server::Handler for ServerImpl {
         name: &str,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if self.failures.hang_subsystem_request.load(Ordering::SeqCst) {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         if name != "sftp" {
             session.channel_failure(channel_id)?;
             return Ok(());
@@ -373,6 +391,10 @@ impl russh_sftp::server::Handler for SftpHandler {
         _version: u32,
         _extensions: HashMap<String, String>,
     ) -> Result<Version, Self::Error> {
+        if self.failures.hang_sftp_init.load(Ordering::SeqCst) {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         let mut version = Version::new();
         if self.failures.advertise_posix_rename.load(Ordering::SeqCst) {
             version
