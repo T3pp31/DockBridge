@@ -444,16 +444,41 @@ async fn authenticate(
                 }
             })?;
             let signing_key = PrivateKeyWithHashAlg::new(Arc::new(private_key), rsa_hash.flatten());
-            handle
+            let result = handle
                 .authenticate_publickey(username, signing_key)
                 .await
                 .map_err(|err| ConnectionError::ConnectFailed {
                     host: host.to_string(),
                     port,
                     message: err.to_string(),
-                })
-                .map(|result| result.success())
-                .map_err(Into::into)
+                })?;
+            // Public key accepted but the server still requires an additional
+            // challenge (e.g. TOTP via keyboard-interactive). Fall through to
+            // keyboard-interactive when offered and a prompt handler is wired
+            // up (issue #800).
+            if result.success() {
+                return Ok(true);
+            }
+            match &result {
+                AuthResult::Failure {
+                    remaining_methods, ..
+                } => {
+                    if remaining_methods.contains(&MethodKind::KeyboardInteractive) {
+                        if let Some(handler) = auth_prompt {
+                            return keyboard_interactive_auth(
+                                handle, username, host, port, handler,
+                            )
+                            .await;
+                        }
+                        return Ok(false);
+                    }
+                    if remaining_methods.is_empty() {
+                        return Err(AuthError::MethodUnavailable.into());
+                    }
+                    Ok(false)
+                }
+                _ => Ok(false),
+            }
         }
     }
 }
