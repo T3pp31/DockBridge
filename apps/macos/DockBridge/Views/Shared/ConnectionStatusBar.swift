@@ -33,7 +33,7 @@ struct ConnectionStatusBar: View {
 
                 Menu {
                     ForEach(remoteEditSessions) { session in
-                        Section(session.localURL.lastPathComponent) {
+                        Section(Self.remoteEditSectionTitle(session, all: remoteEditSessions)) {
                             Label(session.state.title, systemImage: session.state.systemImage)
 
                             if session.state.canRetry {
@@ -86,5 +86,21 @@ struct ConnectionStatusBar: View {
         remoteEditSessions.contains { $0.state.canRetry }
             ? "exclamationmark.triangle"
             : "pencil.and.outline"
+    }
+
+    /// Disambiguates duplicate file names with their parent directory so the
+    /// destructive Retry/Stop controls are attributable (issue #696).
+    private static func remoteEditSectionTitle(
+        _ session: MainViewModel.RemoteEditSession,
+        all sessions: [MainViewModel.RemoteEditSession]
+    ) -> String {
+        let name = session.localURL.lastPathComponent
+        let duplicates = sessions.filter {
+            $0.localURL.lastPathComponent == name
+        }
+        guard duplicates.count > 1, let parent = session.localURL.pathComponents.dropLast().last else {
+            return name
+        }
+        return "\(parent)/\(name)"
     }
 }
