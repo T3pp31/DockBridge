@@ -112,7 +112,10 @@ final class TransferQueueViewModel: ObservableObject {
 
         do {
             let fetched = try await bridge.fetchTransferTasks()
-            guard generation == refreshGeneration, bridge.isConnected else {
+            // A stale refresh must not wipe state that a newer refresh already
+            // applied (issue #781).
+            guard generation == refreshGeneration else { return }
+            guard bridge.isConnected else {
                 progressSamples.removeAll()
                 transferSpeeds.removeAll()
                 updateDockBadge(tasks: [])
