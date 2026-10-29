@@ -96,19 +96,17 @@ struct MainViewCommands: Commands {
         }
 
         CommandGroup(after: .toolbar) {
-            if let selected = connectionList.profiles.first(where: { $0.id == connectionList.selectedProfileID }) {
-                if connectionList.connectionStatus.isConnected {
-                    Button(String(localized: "Disconnect")) {
-                        Task { await connectionList.disconnect() }
-                    }
-                    .keyboardShortcut("c", modifiers: [.command, .shift])
-                } else {
-                    Button(String(localized: "Connect")) {
-                        connectionList.requestConnect(profile: selected)
-                    }
-                    .keyboardShortcut("c", modifiers: [.command, .shift])
-                    .disabled(connectionList.connectionStatus.isConnecting)
+            if connectionList.connectionStatus.isConnected {
+                Button(String(localized: "Disconnect")) {
+                    Task { await connectionList.disconnect() }
                 }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+            } else if let selected = connectionList.profiles.first(where: { $0.id == connectionList.selectedProfileID }) {
+                Button(String(localized: "Connect")) {
+                    connectionList.requestConnect(profile: selected)
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(connectionList.connectionStatus.isConnecting)
             }
         }
 
