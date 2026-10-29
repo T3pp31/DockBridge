@@ -940,10 +940,9 @@ impl TransferManager {
                 Ok(final_task) => final_task,
                 Err(_) => {
                     batch.failed += 1;
-                    executed.push(
-                        self.find_task(task_id)
-                            .ok_or(TransferError::TaskNotFound { task_id })?,
-                    );
+                    if let Some(current) = self.find_task(task_id) {
+                        executed.push(current);
+                    }
                     continue;
                 }
             };
@@ -1158,10 +1157,9 @@ impl TransferManager {
                 Ok(final_task) => final_task,
                 Err(_) => {
                     batch.failed += 1;
-                    executed.push(
-                        self.find_task(task_id)
-                            .ok_or(TransferError::TaskNotFound { task_id })?,
-                    );
+                    if let Some(current) = self.find_task(task_id) {
+                        executed.push(current);
+                    }
                     continue;
                 }
             };
