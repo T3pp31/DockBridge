@@ -101,6 +101,15 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         )
     }
 
+    func testHostKeyRejectedTypedErrorMessageIsUserFriendly() {
+        let error = DockBridgeError.HostKeyRejected(host: "example.com", port: 22)
+
+        XCTAssertEqual(
+            error.userFriendlyMessage,
+            String(localized: "Connection aborted because the host key was not approved.")
+        )
+    }
+
     func testAuthenticationRejectedErrorIsNotMappedToHostKeyMessage() {
         let message = DockBridgeError.friendlyMessage(
             for: "connection rejected: authentication failed for user 'demo'"
