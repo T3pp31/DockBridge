@@ -116,6 +116,19 @@ mod tests {
     }
 
     #[test]
+    fn ignores_non_connection_error_with_path_containing_closed() {
+        // Given: a permission error whose path contains a disconnect phrase
+        // When: checked for connection loss
+        // Then: it is NOT treated as disconnected (issue #798)
+        assert!(!is_connection_lost_message(
+            "failed to delete '/home/user/session closed.txt': Permission denied"
+        ));
+        assert!(!is_connection_lost_message(
+            "failed to delete '/srv/channel closed/x.txt': No such file"
+        ));
+    }
+
+    #[test]
     fn ignores_unrelated_errors() {
         assert!(!is_connection_lost_message("permission denied"));
         assert!(!is_connection_lost_message("no such file"));
