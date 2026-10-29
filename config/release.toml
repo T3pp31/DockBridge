@@ -23,3 +23,5 @@ xcodegen_sha256 = "090ec29491aad50aec10631bf6e62253fed733c50f3aab0f5ffc86bc170bd
 # Manual offline-launch verification in scripts/verify-update-popup.sh.
 offline_api_host = "api.github.com"
 offline_probe_timeout_secs = 5
+offline_observation_secs = 30
+offline_poll_interval_secs = 1

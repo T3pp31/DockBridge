@@ -158,6 +158,13 @@ elif ! sudo -n pfctl -sr 2>/dev/null | grep -Fq 'anchor "com.apple/*"'; then
 else
   offline_api_host=$(awk -F'"' '/^offline_api_host / { print $2; exit }' config/release.toml)
   offline_probe_timeout_secs=$(awk '/^offline_probe_timeout_secs / { print $3; exit }' config/release.toml)
+  offline_observation_secs=$(awk '/^offline_observation_secs / { print $3; exit }' config/release.toml)
+  offline_poll_interval_secs=$(awk '/^offline_poll_interval_secs / { print $3; exit }' config/release.toml)
+  if [[ ! "$offline_observation_secs" =~ ^[1-9][0-9]*$ || ! "$offline_poll_interval_secs" =~ ^[1-9][0-9]*$ ]] ||
+     (( offline_poll_interval_secs > offline_observation_secs )); then
+    echo "FAIL: Invalid offline observation settings" >&2
+    exit 1
+  fi
   if [[ ! "$offline_api_host" =~ ^[a-zA-Z0-9.-]+$ || ! "$offline_probe_timeout_secs" =~ ^[1-9][0-9]*$ ]]; then
     echo "FAIL: Invalid offline verification configuration" >&2
     exit 1
@@ -192,11 +199,31 @@ else
     fi
 
     open "$APP"
-    sleep 6
+    offline_check_deadline=$((SECONDS + offline_observation_secs))
+    # LaunchServices may return before the process appears. Wait for startup
+    # within the same deadline before treating process absence as a crash.
+    while ! pgrep -x DockBridge >/dev/null; do
+      if (( SECONDS >= offline_check_deadline )); then
+        echo "FAIL: App did not launch offline"
+        exit 1
+      fi
+      sleep "$offline_poll_interval_secs"
+    done
+    while (( SECONDS < offline_check_deadline )); do
+      if ! pgrep -x DockBridge >/dev/null; then
+        echo "FAIL: App did not stay running offline"
+        exit 1
+      fi
+      if [[ "$(sheet_absent)" != "true" ]]; then
+        echo "FAIL: Unexpected sheet while offline"
+        exit 1
+      fi
+      sleep "$offline_poll_interval_secs"
+    done
     if pgrep -x DockBridge >/dev/null && [[ "$(sheet_absent)" == "true" ]]; then
-      echo "PASS: App launched without an update sheet while API connectivity was blocked"
+      echo "PASS: App stayed running without a sheet while GitHub API was unreachable"
     else
-      echo "FAIL: App failed to start offline or displayed an unexpected sheet"
+      echo "FAIL: App or sheet state changed during offline launch"
       exit 1
     fi
     restore_pf
