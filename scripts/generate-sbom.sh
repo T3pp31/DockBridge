@@ -53,7 +53,11 @@ MANIFEST_DIR="$(dirname "$MANIFEST_ABS")"
 OVERRIDE_BASENAME="dockbridge-sbom-${VERSION}"
 GENERATED_JSON="${MANIFEST_DIR}/${OVERRIDE_BASENAME}.json"
 
+STAGE_PATH=""
+CHECKSUM_STAGE=""
 cleanup_generated_files() {
+  [[ -z "$STAGE_PATH" ]] || rm -f "$STAGE_PATH"
+  [[ -z "$CHECKSUM_STAGE" ]] || rm -f "$CHECKSUM_STAGE"
   for crate_dir in crates/cli crates/core crates/uniffi; do
     rm -f "${ROOT}/${crate_dir}/${OVERRIDE_BASENAME}.json"
   done
@@ -83,8 +87,6 @@ OUT_PATH="${OUT_DIR}/${SBOM_FILENAME}"
 # Stage, validate, then publish atomically so a failed validation cannot
 # leave an invalid SBOM or mismatched checksum in the artifact dir (issue #675).
 STAGE_PATH="$(mktemp "${OUT_DIR}/${SBOM_FILENAME}.tmp.XXXXXX")"
-cleanup_stage() { rm -f "$STAGE_PATH"; }
-trap cleanup_stage EXIT
 
 cp "$GENERATED_JSON" "$STAGE_PATH"
 
@@ -103,11 +105,13 @@ if ! jq -e '[.components[]?.purl // empty | capture("pkg:cargo/(?<name>[^@]+)").
   exit 1
 fi
 
+# Compute the checksum before publishing either artifact. The checksum names
+# the final SBOM, while its digest comes from the validated staged contents.
+CHECKSUM_STAGE="$(mktemp "${OUT_DIR}/${SBOM_FILENAME}.sha256.tmp.XXXXXX")"
+DIGEST="$(shasum -a 256 "$STAGE_PATH")"
+DIGEST="${DIGEST%% *}"
+printf '%s  %s\n' "$DIGEST" "$SBOM_FILENAME" > "$CHECKSUM_STAGE"
 mv "$STAGE_PATH" "$OUT_PATH"
-
-(
-  cd "$OUT_DIR"
-  shasum -a 256 "${SBOM_FILENAME}" > "${SBOM_FILENAME}.sha256"
-)
+mv "$CHECKSUM_STAGE" "${OUT_PATH}.sha256"
 
 echo "SBOM written to ${OUT_PATH}"
