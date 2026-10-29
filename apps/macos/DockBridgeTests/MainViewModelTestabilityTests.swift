@@ -249,6 +249,24 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertNotNil(viewModel.localRenameTarget)
     }
 
+    func testCommitLocalRenameAllowsCaseOnlyChange() async throws {
+        // Given: an existing item that differs from the new name only by case
+        let sourceURL = baseDirectory.appendingPathComponent("before.txt")
+        let destinationURL = baseDirectory.appendingPathComponent("Before.txt")
+        try "contents".write(to: sourceURL, atomically: true, encoding: .utf8)
+        viewModel.beginLocalRename(item: LocalFileItem(url: sourceURL))
+        viewModel.localRenameText = destinationURL.lastPathComponent
+
+        await viewModel.commitLocalRename()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.localRenameTarget)
+        let names = try FileManager.default.contentsOfDirectory(atPath: baseDirectory.path)
+        XCTAssertTrue(names.contains("Before.txt"))
+        XCTAssertFalse(names.contains("before.txt"))
+        XCTAssertEqual(try String(contentsOf: destinationURL, encoding: .utf8), "contents")
+    }
+
     func testBeginLocalRenameUsesIndependentTextState() throws {
         let sourceURL = baseDirectory.appendingPathComponent("local.txt")
         try "contents".write(to: sourceURL, atomically: true, encoding: .utf8)
