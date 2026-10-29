@@ -548,6 +548,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertFalse(
             FileManager.default.fileExists(
                 atPath: tracked.file.deletingLastPathComponent()
+                    .deletingLastPathComponent()
                     .appendingPathComponent(".dockbridge-unsynced").path
             )
         )
