@@ -541,7 +541,15 @@ impl<'a> SftpClient<'a> {
             let remote_size = remote_metadata.as_ref().and_then(|metadata| metadata.size);
             let resume_offset = match remote_size {
                 Some(size) => {
-                    find_resumable_download_offset(self, local_parent, size, &local, &remote).await
+                    let offset = tokio::select! {
+                        biased;
+                        () = cancel_watch(&is_cancelled) => return Err(SftpError::Cancelled),
+                        offset = find_resumable_download_offset(self, local_parent, size, &local, &remote) => offset,
+                    };
+                    if is_cancelled() {
+                        return Err(SftpError::Cancelled);
+                    }
+                    offset
                 }
                 None => None,
             };
@@ -5883,6 +5891,55 @@ mod tests {
         client.download(remote, &local_path).await.unwrap();
         assert_eq!(tokio::fs::read(&local_path).await.unwrap(), payload);
         assert!(list_partial_paths(local_dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn download_cancels_while_resume_verification_is_waiting_for_read() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/file.bin", b"AAAABBBBCCCC")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        let partial_path = local_dir.path().join(format!(
+            ".dockbridge-{}.partial",
+            resume_partial_suffix(&local_path.display().to_string(), "/download/file.bin")
+        ));
+        tokio::fs::write(&partial_path, b"AAAA").await.unwrap();
+        server
+            .failures
+            .read_delay_ms
+            .store(10_000, Ordering::SeqCst);
+        let cancelled = AtomicBool::new(false);
+        let transfer = client.download_cancellable(
+            "/download/file.bin",
+            &local_path,
+            DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
+            1,
+            TransferOverwritePolicy::Replace,
+            || cancelled.load(Ordering::SeqCst),
+            |_| panic!("verification must not write download bytes"),
+        );
+        let cancel_during_read = async {
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                server.failures.read_started.notified(),
+            )
+            .await
+            .expect("verification must reach the server READ handler");
+            cancelled.store(true, Ordering::SeqCst);
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(transfer, cancel_during_read)
+        })
+        .await
+        .expect("cancellation must interrupt the stalled verification READ");
+        assert!(matches!(result, Err(SftpError::Cancelled)));
+        assert!(!local_path.exists());
+        assert_eq!(tokio::fs::read(&partial_path).await.unwrap(), b"AAAA");
+        assert_eq!(list_partial_paths(local_dir.path()), vec![partial_path]);
     }
 
     #[tokio::test]
