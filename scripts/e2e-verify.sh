@@ -11,6 +11,9 @@ PORT="${SFTP_PORT:-2222}"
 USER="${SFTP_USER:-demo}"
 PASSWORD="${SFTP_PASSWORD:-password}"
 CONTAINER_NAME="${SFTP_CONTAINER:-dockbridge-e2e}"
+# shellcheck source=config/sftp-test.conf
+source "$ROOT/config/sftp-test.conf"
+IMAGE="${SFTP_IMAGE:-$DEFAULT_SFTP_IMAGE}"
 
 WORKDIR="$(mktemp -d)"
 KNOWN_HOSTS="$WORKDIR/known_hosts.json"
@@ -88,7 +91,7 @@ ensure_container() {
   docker run -d --name "$CONTAINER_NAME" -p "127.0.0.1:${PORT}:22" -e SFTP_USER="$USER" \
     -v "$WORKDIR/id_ed25519.pub:/home/$USER/.ssh/keys/id_ed25519.pub:ro" \
     -v "$WORKDIR/id_ed25519_enc.pub:/home/$USER/.ssh/keys/id_ed25519_enc.pub:ro" \
-    atmoz/sftp "${USER}:${PASSWORD}:::upload" >/dev/null
+    "$IMAGE" "${USER}:${PASSWORD}:::upload" >/dev/null
   sleep 3
 }
 
