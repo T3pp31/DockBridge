@@ -103,13 +103,13 @@ else
   exit 1
 fi
 
-echo "== Test 2: Download opens DMG URL =="
+echo "== Test 2: Download opens release page =="
 LOG_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 click_sheet_button 2
 sleep 2
-expected_url=$(curl -s -H "Accept: application/vnd.github+json" https://api.github.com/repos/T3pp31/DockBridge/releases/latest \
-  | python3 -c "import sys,json; r=json.load(sys.stdin); print(next(a['browser_download_url'] for a in r['assets'] if a['name'].endswith('.dmg')))")
-observed_url=$(log show --start "$LOG_START" --style compact \
+expected_url=$(curl -fsS -H "Accept: application/vnd.github+json" https://api.github.com/repos/T3pp31/DockBridge/releases/latest \
+  | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['html_url'])")
+observed_url=$(log show --info --start "$LOG_START" --style compact \
   --predicate 'process == "DockBridge" AND eventMessage CONTAINS "opening update release page:"' 2>/dev/null \
   | sed -n 's/.*opening update release page: \(https:\/\/[^ ]*\).*/\1/p' | tail -1)
 if [[ -n "$observed_url" && "$observed_url" == "$expected_url" ]]; then
