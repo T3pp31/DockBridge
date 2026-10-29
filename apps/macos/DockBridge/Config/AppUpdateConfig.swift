@@ -48,13 +48,16 @@ enum AppUpdateConfig {
         return dir.appendingPathComponent(releaseBodyCacheFileName, isDirectory: false)
     }
 
-    static func persistReleaseBody(_ body: Data) {
+    @discardableResult
+    static func persistReleaseBody(_ body: Data) -> Bool {
         do {
             let entry = ReleaseBodyCacheEntry(storedAt: Date(), body: body)
             let data = try JSONEncoder().encode(entry)
             try data.write(to: releaseBodyCacheURL(), options: .atomic)
+            return true
         } catch {
             // Cache failures must never break the update check.
+            return false
         }
     }
 
@@ -71,8 +74,10 @@ enum AppUpdateConfig {
     }
 
     static func clearReleaseBody() {
-        try? FileManager.default.removeItem(at: releaseBodyCacheURL())
+        // A leftover body is safe after interruption; an ETag without a body
+        // would cause a conditional request that cannot reuse the response.
         clearETag()
+        try? FileManager.default.removeItem(at: releaseBodyCacheURL())
     }
 
     static let allowedDownloadHosts: Set<String> = ["github.com", "objects.githubusercontent.com"]
