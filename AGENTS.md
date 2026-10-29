@@ -34,7 +34,7 @@ mkdir -p /tmp/sftpdemo
 ssh-keygen -t ed25519 -f /tmp/sftpdemo/ssh_host_ed25519_key -N ""
 sudo chown root:root /tmp/sftpdemo/ssh_host_ed25519_key
 echo "ubuntu:password" | sudo chpasswd        # gives the ubuntu user a known password
-printf 'Port 2222\nListenAddress 127.0.0.1\nHostKey /tmp/sftpdemo/ssh_host_ed25519_key\nUsePAM yes\nPasswordAuthentication yes\nSubsystem sftp internal-sftp\n' > /tmp/sftpdemo/sshd_config
+printf 'Port 2222\nListenAddress 127.0.0.1\nHostKey /tmp/sftpdemo/ssh_host_ed25519_key\nPidFile /tmp/sftpdemo/sshd.pid\nUsePAM yes\nPasswordAuthentication yes\nSubsystem sftp internal-sftp\n' > /tmp/sftpdemo/sshd_config
 sudo /usr/sbin/sshd -f /tmp/sftpdemo/sshd_config
 ```
 
