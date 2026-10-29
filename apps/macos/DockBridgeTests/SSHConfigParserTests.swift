@@ -288,4 +288,52 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertNotNil(profiles.dropFirst().first?.privateKeyPath)
         XCTAssertNil(profiles.dropFirst().first?.privateKeyBookmark)
     }
+    func testTrailingUniversalHostProvidesDefaultsWithoutCreatingProfile() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostName server.example.com
+            User specific
+            IdentityFile ~/.ssh/specific
+        Host *
+            User default
+            Port 2200
+            IdentityFile ~/.ssh/default
+        """)
+        XCTAssertEqual(hosts.count, 1)
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(host.alias, "server")
+        XCTAssertEqual(host.user, "specific")
+        XCTAssertEqual(host.port, 2200)
+        XCTAssertEqual(host.identityFiles, [NSHomeDirectory() + "/.ssh/specific", NSHomeDirectory() + "/.ssh/default"])
+    }
+
+    func testLeadingDefaultsKeepFirstObtainedValues() throws {
+        let hosts = SSHConfigParser.parse("""
+        User global
+        Host *
+            Port 2200
+        Host server
+            HostName server.example.com
+            User specific
+            Port 2222
+        """)
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertEqual(host.user, "global")
+        XCTAssertEqual(host.port, 2200)
+    }
+
+    func testMatchValuesDoNotBecomeGlobalDefaults() throws {
+        let hosts = SSHConfigParser.parse("""
+        Match user unrelated
+            User ignored
+            Port 2200
+        Host server
+            HostName server.example.com
+        """)
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertNil(host.user)
+        XCTAssertNil(host.port)
+    }
+
 }
