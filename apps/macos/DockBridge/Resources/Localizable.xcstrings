@@ -1612,6 +1612,23 @@
         }
       }
     },
+    "This server does not accept password authentication. Use public key authentication or another supported method.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server does not accept password authentication. Use public key authentication or another supported method."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサーバーはパスワード認証に対応していません。公開鍵認証または対応する別の方法を使用してください。"
+          }
+        }
+      }
+    },
     "Timeout: %@": {
       "localizations": {
         "en": {
