@@ -158,10 +158,7 @@ final class ProfileTrustStore: @unchecked Sendable {
     }
 
     func seedInitialTrust(from profiles: [ConnectionProfile]) throws {
-        let trusted = Dictionary(
-            uniqueKeysWithValues: profiles.map { ($0.id, TrustedProfileEndpoint(profile: $0)) }
-        )
-        try saveTrustedEndpoints(trusted)
+        try replaceTrustedEndpoints(for: profiles)
     }
 
     func updateTrust(for profile: ConnectionProfile) throws {
@@ -171,6 +168,8 @@ final class ProfileTrustStore: @unchecked Sendable {
     }
 
     func replaceTrustedEndpoints(for profiles: [ConnectionProfile]) throws {
+        trustLock.lock()
+        defer { trustLock.unlock() }
         let trusted = Dictionary(
             uniqueKeysWithValues: profiles.map { ($0.id, TrustedProfileEndpoint(profile: $0)) }
         )
