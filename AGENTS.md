@@ -30,6 +30,7 @@ this VM run a local OpenSSH server instead:
 ```bash
 sudo apt-get update -qq && sudo apt-get install -y openssh-server
 sudo mkdir -p /run/sshd
+mkdir -p /tmp/sftpdemo
 ssh-keygen -t ed25519 -f /tmp/sftpdemo/ssh_host_ed25519_key -N ""
 echo "ubuntu:password" | sudo chpasswd        # gives the ubuntu user a known password
 printf 'Port 2222\nListenAddress 127.0.0.1\nHostKey /tmp/sftpdemo/ssh_host_ed25519_key\nUsePAM yes\nPasswordAuthentication yes\nSubsystem sftp internal-sftp\n' > /tmp/sftpdemo/sshd_config
