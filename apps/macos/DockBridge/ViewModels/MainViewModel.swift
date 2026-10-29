@@ -1583,18 +1583,19 @@ final class MainViewModel: ObservableObject {
         return items.contains { $0.name == name && !$0.isParentDirectory }
     }
 
-    func moveLocalItem(from source: URL, toDirectory directory: URL) throws {
+    func moveLocalItem(from source: URL, toDirectory directory: URL) async throws {
         guard FileDropValidation.canMoveLocalItem(from: source, to: directory) else {
             throw FileDropError.invalidMove
         }
 
         let destination = directory.appendingPathComponent(source.lastPathComponent)
-        // Re-validate immediately before the move to narrow the TOCTOU
-        // window between symlink resolution and the actual file operation.
-        guard FileDropValidation.canMoveLocalItem(from: source, to: directory) else {
-            throw FileDropError.invalidMove
-        }
-        try FileManager.default.moveItem(at: source, to: destination)
+        try await Task.detached(priority: .userInitiated) {
+            // Re-validate on the worker immediately before the file operation.
+            guard FileDropValidation.canMoveLocalItem(from: source, to: directory) else {
+                throw FileDropError.invalidMove
+            }
+            try FileManager.default.moveItem(at: source, to: destination)
+        }.value
         reloadLocal()
     }
 

@@ -181,24 +181,25 @@ struct LocalPaneDropModifier: ViewModifier {
     private func acceptLocalMoves(_ items: [LocalFileDragPayload]) -> Bool {
         var accepted = false
         var hasInvalidMove = false
-        var hasMoveError = false
+        let target = viewModel.localPath
         for item in items {
             guard FileDropValidation.isDisplayedLocalItem(item, in: viewModel.localTableItems) else {
                 continue
             }
-            guard FileDropValidation.canMoveLocalItem(from: item.url, to: viewModel.localPath) else {
+            guard FileDropValidation.canMoveLocalItem(from: item.url, to: target) else {
                 hasInvalidMove = true
                 continue
             }
-            do {
-                try viewModel.moveLocalItem(from: item.url, toDirectory: viewModel.localPath)
-                accepted = true
-            } catch {
-                hasMoveError = true
-                viewModel.errorMessage = error.dockBridgeUserMessage
+            Task {
+                do {
+                    try await viewModel.moveLocalItem(from: item.url, toDirectory: target)
+                } catch {
+                    viewModel.errorMessage = error.dockBridgeUserMessage
+                }
             }
+            accepted = true
         }
-        if !accepted, !hasMoveError {
+        if !accepted {
             if hasInvalidMove {
                 viewModel.errorMessage = FileDropError.invalidMove.localizedDescription
             } else {
@@ -386,10 +387,12 @@ struct LocalFileTable: View {
                   FileDropValidation.canMoveLocalItem(from: payload.url, to: target) else {
                 continue
             }
-            do {
-                try viewModel.moveLocalItem(from: payload.url, toDirectory: target)
-            } catch {
-                viewModel.errorMessage = error.dockBridgeUserMessage
+            Task {
+                do {
+                    try await viewModel.moveLocalItem(from: payload.url, toDirectory: target)
+                } catch {
+                    viewModel.errorMessage = error.dockBridgeUserMessage
+                }
             }
         }
     }
