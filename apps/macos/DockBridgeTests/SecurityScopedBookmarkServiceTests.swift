@@ -5,7 +5,7 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
     private var service: SecurityScopedBookmarkService!
     private var tempDir: URL!
     /// Track the ephemeral defaults suite for cleanup (issue #645).
-    var testUserDefaultsSuite: String?
+    private var testUserDefaultsSuite: String?
 
     override func setUp() {
         super.setUp()
@@ -18,6 +18,10 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
 
     override func tearDown() {
         service.stopAllAccess()
+        if let suiteName = testUserDefaultsSuite {
+            UserDefaults.standard.removePersistentDomain(forName: suiteName)
+        }
+        testUserDefaultsSuite = nil
         try? FileManager.default.removeItem(at: tempDir)
         super.tearDown()
     }
