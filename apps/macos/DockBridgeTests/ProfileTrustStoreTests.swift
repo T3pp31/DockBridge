@@ -71,6 +71,19 @@ final class ProfileTrustStoreTests: XCTestCase {
         XCTAssertEqual(Set(keys).count, 1)
     }
 
+    func testReplaceTrustedEndpointsRemovesPreviousTrust() throws {
+        let previous = ConnectionProfile(name: "Previous", host: "old.example.com", username: "user")
+        let replacement = ConnectionProfile(name: "Replacement", host: "new.example.com", username: "user")
+        try trustStore.seedInitialTrust(from: [previous])
+
+        try trustStore.replaceTrustedEndpoints(for: [replacement])
+
+        let trusted = try trustStore.loadTrustedEndpoints()
+        XCTAssertEqual(trusted.count, 1)
+        XCTAssertNil(trusted[previous.id])
+        XCTAssertEqual(trusted[replacement.id], TrustedProfileEndpoint(profile: replacement))
+    }
+
     func testDetectEndpointChangesRequiresInitialTrustConfirmation() throws {
         let profile = ConnectionProfile(
             name: "Test",
