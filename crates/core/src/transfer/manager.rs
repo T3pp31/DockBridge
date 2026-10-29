@@ -423,7 +423,7 @@ impl TransferManager {
         in_flight.remove(&task_id);
 
         let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) else {
-            return Ok(());
+            return result;
         };
 
         let final_status = match (&result, was_cancelled) {
@@ -1662,6 +1662,29 @@ mod tests {
         assert!(!manager.is_in_flight(23), "finalize must clear in-flight");
         let queue = manager.get_transfer_queue();
         assert!(matches!(queue[0].status, TransferStatus::Completed));
+    }
+
+    #[test]
+    fn finalize_removed_task_preserves_result_and_clears_tracking() {
+        for result in [
+            Ok(()),
+            Err(TransferError::Cancelled),
+            Err(TransferError::CleanupFailed {
+                message: "cleanup failed".into(),
+            }),
+        ] {
+            let manager = TransferManager::new(&AppConfig::default());
+            manager.register_cancellation_flag(24);
+            manager.mark_in_flight(24);
+            let expected = result.as_ref().err().map(ToString::to_string);
+
+            let actual = manager.finalize_task_result(24, result);
+
+            assert_eq!(actual.as_ref().err().map(ToString::to_string), expected);
+            assert!(!manager.is_cancelled(24));
+            assert!(!manager.is_in_flight(24));
+            assert!(manager.get_transfer_queue().is_empty());
+        }
     }
 
     #[test]
