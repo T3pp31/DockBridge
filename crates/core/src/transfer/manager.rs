@@ -83,6 +83,9 @@ pub struct TransferManager {
     /// cannot be re-enqueued while its original future is still unwinding
     /// (which used to revive the cancelled transfer: issue #307).
     in_flight: Mutex<HashSet<u64>>,
+    /// Task ids explicitly removed from the queue. Prevents a stale batch loop
+    /// from re-registering a task after clear-all or clear-completed.
+    removed_task_ids: Mutex<HashSet<u64>>,
     /// Fixed backoff delay in milliseconds between retries, used by tests to
     /// avoid real sleeping. `None` uses the exponential jittered backoff.
     #[cfg(test)]
@@ -102,6 +105,7 @@ impl TransferManager {
             overwrite_policies: Mutex::new(HashMap::new()),
             cancellation_flags: Mutex::new(HashMap::new()),
             in_flight: Mutex::new(HashSet::new()),
+            removed_task_ids: Mutex::new(HashSet::new()),
             #[cfg(test)]
             backoff_override_ms: None,
         }
@@ -119,6 +123,7 @@ impl TransferManager {
     pub fn clear_completed_transfers(&self) {
         if let Ok(mut tasks) = self.tasks.lock() {
             let mut retained_ids = HashSet::new();
+            let mut removed_ids = HashSet::new();
             tasks.retain(|task| {
                 let retain = matches!(
                     task.status,
@@ -126,9 +131,14 @@ impl TransferManager {
                 );
                 if retain {
                     retained_ids.insert(task.id);
+                } else {
+                    removed_ids.insert(task.id);
                 }
                 retain
             });
+            if let Ok(mut removed) = self.removed_task_ids.lock() {
+                removed.extend(removed_ids);
+            }
             if let Ok(mut policies) = self.overwrite_policies.lock() {
                 policies.retain(|task_id, _| retained_ids.contains(task_id));
             }
@@ -158,6 +168,9 @@ impl TransferManager {
                 .or_insert_with(|| Arc::new(AtomicBool::new(false)))
                 .store(true, Ordering::Relaxed);
             task.status = TransferStatus::Cancelled;
+        }
+        if let Ok(mut removed) = self.removed_task_ids.lock() {
+            removed.extend(tasks.iter().map(|task| task.id));
         }
         tasks.clear();
         if let Ok(mut policies) = self.overwrite_policies.lock() {
@@ -280,6 +293,11 @@ impl TransferManager {
 
     fn register_task(&self, task: TransferTask, overwrite_policy: TransferOverwritePolicy) {
         if let Ok(mut tasks) = self.tasks.lock() {
+            if let Ok(removed) = self.removed_task_ids.lock() {
+                if removed.contains(&task.id) {
+                    return;
+                }
+            }
             if let Ok(mut policies) = self.overwrite_policies.lock() {
                 policies.insert(task.id, overwrite_policy);
                 tasks.push(task);
@@ -585,6 +603,9 @@ impl TransferManager {
         if self.find_task(task_id).is_none() {
             self.register_task(task, overwrite_policy);
         }
+        if self.find_task(task_id).is_none() {
+            return Err(TransferError::TaskNotFound { task_id });
+        }
         self.register_cancellation_flag(task_id);
         self.mark_in_flight(task_id);
         self.update_task_status(task_id, TransferStatus::InProgress);
@@ -686,6 +707,9 @@ impl TransferManager {
 
         if self.find_task(task_id).is_none() {
             self.register_task(task, overwrite_policy);
+        }
+        if self.find_task(task_id).is_none() {
+            return Err(TransferError::TaskNotFound { task_id });
         }
         self.register_cancellation_flag(task_id);
         self.mark_in_flight(task_id);
@@ -922,10 +946,9 @@ impl TransferManager {
                 Ok(final_task) => final_task,
                 Err(_) => {
                     batch.failed += 1;
-                    executed.push(
-                        self.find_task(task_id)
-                            .ok_or(TransferError::TaskNotFound { task_id })?,
-                    );
+                    if let Some(current) = self.find_task(task_id) {
+                        executed.push(current);
+                    }
                     continue;
                 }
             };
@@ -1140,10 +1163,9 @@ impl TransferManager {
                 Ok(final_task) => final_task,
                 Err(_) => {
                     batch.failed += 1;
-                    executed.push(
-                        self.find_task(task_id)
-                            .ok_or(TransferError::TaskNotFound { task_id })?,
-                    );
+                    if let Some(current) = self.find_task(task_id) {
+                        executed.push(current);
+                    }
                     continue;
                 }
             };
@@ -2229,7 +2251,14 @@ mod tests {
             total_bytes: 10,
         });
 
+        let stale_completed = manager.get_transfer_queue()[0].clone();
         manager.clear_completed_transfers();
+        // A stale batch must not resurrect a task removed by the user.
+        manager.insert_task(stale_completed);
+        // Retained work must remain eligible for registration.
+        let active = manager.get_transfer_queue()[0].clone();
+        manager.tasks.lock().unwrap().clear();
+        manager.insert_task(active);
 
         let queue = manager.get_transfer_queue();
         assert_eq!(queue.len(), 1);
@@ -2632,6 +2661,63 @@ mod tests {
             .map(|task| task.status.clone())
             .unwrap();
         assert_eq!(status, TransferStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn batches_skip_removed_tasks_and_complete_remaining_transfers() {
+        for direction in [TransferDirection::Upload, TransferDirection::Download] {
+            let manager = TransferManager::new(&AppConfig::default());
+            let server = TestSftpServer::start().await;
+            let session = server.connect_session().await;
+            let directory = tempfile::tempdir().unwrap();
+            let first_path = directory.path().join("first");
+            let second_path = directory.path().join("second");
+            match direction {
+                TransferDirection::Upload => {
+                    tokio::fs::write(&first_path, b"first").await.unwrap();
+                    tokio::fs::write(&second_path, b"second").await.unwrap();
+                }
+                TransferDirection::Download => {
+                    server.write_remote_file("/upload/first", b"first").await;
+                    server.write_remote_file("/upload/second", b"second").await;
+                }
+            }
+            let mut first = manager.make_task(0, direction, &first_path, "/upload/first");
+            first.status = TransferStatus::Cancelled;
+            let second = manager.make_task(0, direction, &second_path, "/upload/second");
+            manager.insert_task(first.clone());
+            manager.insert_task(second.clone());
+            manager.clear_completed_transfers();
+
+            let tasks = vec![first.clone(), second.clone()];
+            let (finished, batch) = match direction {
+                TransferDirection::Upload => {
+                    manager
+                        .execute_upload_tasks(&session, tasks, TransferOverwritePolicy::default())
+                        .await
+                }
+                TransferDirection::Download => {
+                    manager
+                        .execute_download_tasks(&session, tasks, TransferOverwritePolicy::default())
+                        .await
+                }
+            }
+            .unwrap();
+
+            assert_eq!(batch.failed, 1);
+            assert_eq!(batch.succeeded, 1);
+            assert_eq!(finished.len(), 1);
+            assert_eq!(finished[0].id, second.id);
+            assert!(manager.find_task(first.id).is_none());
+            assert_eq!(
+                manager.find_task(second.id).unwrap().status,
+                TransferStatus::Completed
+            );
+            match direction {
+                TransferDirection::Upload => assert!(!server.remote_file_exists("/upload/first")),
+                TransferDirection::Download => assert!(!first_path.exists()),
+            }
+        }
     }
 
     #[tokio::test]

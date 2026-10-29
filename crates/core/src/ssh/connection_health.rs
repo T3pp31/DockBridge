@@ -61,7 +61,7 @@ pub fn is_connection_lost_message(message: &str) -> bool {
     // User-controlled paths may contain disconnect phrases (e.g. a file named
     // "eof.txt" or "session closed"). Remove quoted paths before matching
     // (issue #662).
-    let stripped = strip_quoted_paths(message);
+    let stripped = strip_quoted_paths(connection_error_detail(message));
     let lower = stripped.to_lowercase();
     if lower.contains("session closed")
         || lower.contains("connection reset")
@@ -86,6 +86,16 @@ pub fn is_connection_lost_message(message: &str) -> bool {
         && !lower.contains("not found")
 }
 
+/// SFTP display errors separate their quoted paths from the underlying
+/// error using `': `. Use the final separator so apostrophes (including
+/// separators embedded in a path) cannot hide the actual error detail.
+/// Unstructured messages are preserved, including ordinary contractions.
+fn connection_error_detail(message: &str) -> &str {
+    message
+        .rsplit_once("': ")
+        .map_or(message, |(_, detail)| detail)
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_connection_lost_message;
@@ -106,6 +116,19 @@ mod tests {
     }
 
     #[test]
+    fn ignores_non_connection_error_with_path_containing_closed() {
+        // Given: a permission error whose path contains a disconnect phrase
+        // When: checked for connection loss
+        // Then: it is NOT treated as disconnected (issue #798)
+        assert!(!is_connection_lost_message(
+            "failed to delete '/home/user/session closed.txt': Permission denied"
+        ));
+        assert!(!is_connection_lost_message(
+            "failed to delete '/srv/channel closed/x.txt': No such file"
+        ));
+    }
+
+    #[test]
     fn ignores_unrelated_errors() {
         assert!(!is_connection_lost_message("permission denied"));
         assert!(!is_connection_lost_message("no such file"));
@@ -121,6 +144,37 @@ mod tests {
         ));
         assert!(!is_connection_lost_message(
             "failed to upload 'geoff.txt': no such file"
+        ));
+    }
+
+    #[test]
+    fn detects_eof_with_path_containing_not_found() {
+        // Given: a real EOF and a user-controlled path containing a suppressive phrase
+        // When: checked for connection loss
+        // Then: quoted paths are removed before applying the suppression
+        assert!(is_connection_lost_message(
+            "failed to upload '/home/u/not found.txt': unexpected eof"
+        ));
+    }
+
+    #[test]
+    fn apostrophes_do_not_hide_connection_failure() {
+        assert!(is_connection_lost_message("can't read: unexpected eof"));
+        assert!(is_connection_lost_message(
+            "failed to upload '/home/user's/not found.txt': unexpected eof"
+        ));
+        assert!(is_connection_lost_message(
+            "unmatched ' quote: connection reset"
+        ));
+    }
+
+    #[test]
+    fn connection_words_inside_paths_do_not_drop_live_session() {
+        assert!(!is_connection_lost_message(
+            "failed to delete '/broken pipe': permission denied"
+        ));
+        assert!(!is_connection_lost_message(
+            "failed to upload '/eof': unexpected eof' to '/target': permission denied"
         ));
     }
 
