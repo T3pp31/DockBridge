@@ -141,19 +141,59 @@ else
   echo "FAIL: Offline/network failure handling test failed"
   exit 1
 fi
-HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 open "$APP"
-sleep 6
-if pgrep -x DockBridge >/dev/null; then
-  echo "PASS: App launched while GitHub API unreachable"
+# LaunchServices does not pass proxy environment variables through to the
+# app. Use a referenced system anchor and verify that it actually blocks I/O.
+if ! sudo -n true 2>/dev/null; then
+  echo "SKIP: offline-launch check requires passwordless sudo for pf rules"
+elif ! sudo -n pfctl -sr 2>/dev/null | grep -Fq 'anchor "com.apple/*"'; then
+  echo "SKIP: offline-launch check requires the standard com.apple anchor"
 else
-  echo "FAIL: App did not stay running offline"
-  exit 1
-fi
-if [[ "$(sheet_absent)" == "true" ]]; then
-  echo "PASS: No update sheet when offline"
-else
-  echo "FAIL: Unexpected sheet while offline"
-  exit 1
+  offline_api_host=$(awk -F'"' '/^offline_api_host / { print $2; exit }' config/release.toml)
+  offline_probe_timeout_secs=$(awk '/^offline_probe_timeout_secs / { print $3; exit }' config/release.toml)
+  if [[ ! "$offline_api_host" =~ ^[a-zA-Z0-9.-]+$ || ! "$offline_probe_timeout_secs" =~ ^[1-9][0-9]*$ ]]; then
+    echo "FAIL: Invalid offline verification configuration" >&2
+    exit 1
+  fi
+  if ! curl --silent --show-error --noproxy '*' --max-time "$offline_probe_timeout_secs" \
+    --output /dev/null "https://$offline_api_host/"; then
+    echo "SKIP: offline-launch check requires initial connectivity to $offline_api_host"
+  else
+    BLOCK_ANCHOR="com.apple/dockbridge_offline_check_$$"
+    PF_TOKEN=""
+    restore_pf() {
+      sudo -n pfctl -a "$BLOCK_ANCHOR" -F rules >/dev/null 2>&1 || true
+      if [[ -n "$PF_TOKEN" ]]; then
+        sudo -n pfctl -X "$PF_TOKEN" >/dev/null 2>&1 || true
+        PF_TOKEN=""
+      fi
+    }
+    trap restore_pf EXIT
+    pf_enable_output=$(sudo -n pfctl -E 2>&1)
+    PF_TOKEN=$(printf '%s\n' "$pf_enable_output" | awk '/Token[[:space:]]*:/ { print $3; exit }')
+    if [[ ! "$PF_TOKEN" =~ ^[0-9]+$ ]]; then
+      PF_TOKEN=""
+      echo "FAIL: PF did not return an enable-reference token" >&2
+      exit 1
+    fi
+    printf 'block drop out quick proto tcp to %s port {80, 443}\n' "$offline_api_host" \
+      | sudo -n pfctl -a "$BLOCK_ANCHOR" -f - >/dev/null
+    if curl --silent --noproxy '*' --max-time "$offline_probe_timeout_secs" \
+      --output /dev/null "https://$offline_api_host/"; then
+      echo "FAIL: Offline rule did not block $offline_api_host" >&2
+      exit 1
+    fi
+
+    open "$APP"
+    sleep 6
+    if pgrep -x DockBridge >/dev/null && [[ "$(sheet_absent)" == "true" ]]; then
+      echo "PASS: App launched without an update sheet while API connectivity was blocked"
+    else
+      echo "FAIL: App failed to start offline or displayed an unexpected sheet"
+      exit 1
+    fi
+    restore_pf
+    trap - EXIT
+  fi
 fi
 
 echo "== Test 5: HostKey deferral =="
