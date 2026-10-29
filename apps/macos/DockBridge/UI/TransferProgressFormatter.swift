@@ -7,18 +7,33 @@ enum TransferProgressFormatter {
         return formatter
     }()
 
+    /// Converts a byte count to `Int64` without trapping on values above
+    /// `Int64.max` (issue #777).
+    private static func safeByteCount(_ value: UInt64) -> Int64 {
+        Int64(min(value, UInt64(Int64.max)))
+    }
+
+    /// Converts a speed to `Int64` without trapping on non-finite or
+    /// out-of-range values (issue #777).
+    private static func safeSpeed(_ value: Double) -> Int64 {
+        guard value.isFinite, value > 0 else { return 0 }
+        // Int64.max rounds up to 2^63 when represented as Double.
+        guard value < Double(Int64.max) else { return Int64.max }
+        return Int64(value)
+    }
+
     static func progressLabel(
         transferred: UInt64,
         total: UInt64,
         bytesPerSecond: Double? = nil
     ) -> String? {
         guard total > 0 else { return nil }
-        let transferredLabel = byteFormatter.string(fromByteCount: Int64(transferred))
-        let totalLabel = byteFormatter.string(fromByteCount: Int64(total))
+        let transferredLabel = byteFormatter.string(fromByteCount: safeByteCount(transferred))
+        let totalLabel = byteFormatter.string(fromByteCount: safeByteCount(total))
         var label = "\(transferredLabel) / \(totalLabel)"
 
-        if let bytesPerSecond, bytesPerSecond > 0 {
-            let speedLabel = byteFormatter.string(fromByteCount: Int64(bytesPerSecond))
+        if let bytesPerSecond, bytesPerSecond.isFinite, bytesPerSecond > 0 {
+            let speedLabel = byteFormatter.string(fromByteCount: safeSpeed(bytesPerSecond))
             label += String(
                 format: String(localized: " · %@/s"),
                 speedLabel
@@ -53,8 +68,8 @@ enum TransferProgressFormatter {
 
         let additionalCount = inProgressTasks.count - 1
         if additionalCount > 0 {
-            if let totalBytesPerSecond, totalBytesPerSecond > 0 {
-                let speed = byteFormatter.string(fromByteCount: Int64(totalBytesPerSecond))
+            if let totalBytesPerSecond, totalBytesPerSecond.isFinite, totalBytesPerSecond > 0 {
+                let speed = byteFormatter.string(fromByteCount: safeSpeed(totalBytesPerSecond))
                 let format = String(localized: "%@: %@ +%lld more · %@/s total")
                 return String(format: format, prefix, label, Int64(additionalCount), speed)
             }
