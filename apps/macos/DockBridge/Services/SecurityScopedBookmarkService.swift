@@ -26,7 +26,16 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
     private let lock = NSLock()
     private var activeAccessCounts: [URL: Int] = [:]
 
-    private init() {}
+    private let startAccess: @Sendable (URL) -> Bool
+    private let stopAccess: @Sendable (URL) -> Void
+
+    init(
+        startAccess: @escaping @Sendable (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
+        stopAccess: @escaping @Sendable (URL) -> Void = { $0.stopAccessingSecurityScopedResource() }
+    ) {
+        self.startAccess = startAccess
+        self.stopAccess = stopAccess
+    }
 
     func createBookmark(for url: URL, readOnly: Bool = false) throws -> Data {
         var options: URL.BookmarkCreationOptions = .withSecurityScope
@@ -79,16 +88,15 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
 
     func stopAccessing(_ url: URL) {
         lock.lock()
+        defer { lock.unlock() }
         let count = activeAccessCounts[url] ?? 0
         if count > 1 {
             activeAccessCounts[url] = count - 1
         } else if count == 1 {
             activeAccessCounts.removeValue(forKey: url)
-        }
-        lock.unlock()
-
-        if count > 0 {
-            url.stopAccessingSecurityScopedResource()
+            // Keep the lock until the OS release completes so a concurrent
+            // begin cannot have its newly acquired access revoked here.
+            stopAccess(url)
         }
     }
 
@@ -102,7 +110,7 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
             return true
         }
 
-        let started = url.startAccessingSecurityScopedResource()
+        let started = startAccess(url)
         if started {
             activeAccessCounts[url] = 1
         }
@@ -111,13 +119,11 @@ final class SecurityScopedBookmarkService: @unchecked Sendable {
 
     func stopAllAccess() {
         lock.lock()
-        let urls = Array(activeAccessCounts.keys)
-        activeAccessCounts.removeAll()
-        lock.unlock()
-
-        for url in urls {
-            url.stopAccessingSecurityScopedResource()
+        defer { lock.unlock() }
+        for url in activeAccessCounts.keys {
+            stopAccess(url)
         }
+        activeAccessCounts.removeAll()
     }
 
     func isAccessActive(for url: URL) -> Bool {
