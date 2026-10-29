@@ -17,7 +17,9 @@ enum TransferProgressFormatter {
     /// out-of-range values (issue #777).
     private static func safeSpeed(_ value: Double) -> Int64 {
         guard value.isFinite, value > 0 else { return 0 }
-        return Int64(min(value, Double(Int64.max)))
+        // Int64.max rounds up to 2^63 when represented as Double.
+        guard value < Double(Int64.max) else { return Int64.max }
+        return Int64(value)
     }
 
     static func progressLabel(
