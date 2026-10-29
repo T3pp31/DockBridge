@@ -507,20 +507,30 @@ async fn authenticate(
 /// Keeps structured connection errors intact and only flattens low-level
 /// transport errors into `ConnectFailed`. This preserves host-key rejection and
 /// mismatch details across `client::connect`.
-fn preserve_connection_error(error: ConnectionError, host: &str, port: u16) -> ConnectionError {
+fn preserve_connection_error(
+    error: ConnectionError,
+    host: &str,
+    port: u16,
+) -> crate::error::AppError {
     match error {
-        err if matches!(
-            err,
-            ConnectionError::HostKeyRejected { .. } | ConnectionError::Timeout { .. }
-        ) =>
-        {
-            err
+        err @ (ConnectionError::HostKeyRejected { .. } | ConnectionError::Timeout { .. }) => {
+            err.into()
         }
+        ConnectionError::Other(source) => match source.downcast::<SecurityError>() {
+            Ok(security) => security.into(),
+            Err(source) => ConnectionError::ConnectFailed {
+                host: host.to_string(),
+                port,
+                message: source.to_string(),
+            }
+            .into(),
+        },
         error => ConnectionError::ConnectFailed {
             host: host.to_string(),
             port,
             message: error.to_string(),
-        },
+        }
+        .into(),
     }
 }
 
@@ -601,9 +611,30 @@ mod tests {
         // Then: the typed rejection is preserved instead of becoming ConnectFailed
         assert!(matches!(
             mapped,
-            ConnectionError::HostKeyRejected { host, port }
+            crate::error::AppError::Connection(ConnectionError::HostKeyRejected { host, port })
                 if host == "example.com" && port == 2222
         ));
+    }
+
+    #[test]
+    fn preserve_connection_error_keeps_handler_security_errors() {
+        for security in [
+            SecurityError::HostKeyRejected {
+                host: "example.com".into(),
+                port: 2222,
+            },
+            SecurityError::HostKeyMismatch {
+                host: "example.com".into(),
+                port: 2222,
+                expected: "old".into(),
+                actual: "new".into(),
+            },
+        ] {
+            let expected = security.to_string();
+            let mapped = preserve_connection_error(security.into(), "example.com", 2222);
+            assert!(matches!(mapped, crate::error::AppError::Security(_)));
+            assert_eq!(mapped.to_string(), expected);
+        }
     }
 
     use std::sync::atomic::{AtomicBool, Ordering};

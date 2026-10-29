@@ -36,19 +36,42 @@ source_language = data.get("sourceLanguage", "en")
 print(f"Verifying {len(strings)} keys (sourceLanguage={source_language})")
 
 errors = []
-format_pattern = re.compile(r"%(?:(\d+)\$)?(lld|@)")
+# Keep argument positions and length modifiers: %ld and %lld need distinct
+# argument types. A literal %% consumes no argument; dynamic width/precision do.
+format_pattern = re.compile(
+    r"%(?:%|(?:(?P<position>\d+)\$)?[+#0\- ']*"
+    r"(?P<width>\*(?:\d+\$)?|\d+)?"
+    r"(?:\.(?P<precision>\*(?:\d+\$)?|\d*))?"
+    r"(?P<length>hh|h|ll|l|q|L|z|t|j)?"
+    r"(?P<conversion>[diouxXeEfgGaAcCsSpFnDUO@]))"
+)
 
 
 def format_signature(value):
     signature = []
     next_index = 1
-    for match in format_pattern.finditer(value):
-        if match.group(1) is None:
+
+    def add_argument(position, kind):
+        nonlocal next_index
+        if position is None:
             index = next_index
             next_index += 1
         else:
-            index = int(match.group(1))
-        signature.append((index, match.group(2)))
+            index = int(position)
+        signature.append((index, kind))
+
+    for match in format_pattern.finditer(value):
+        if match.group() == "%%":
+            continue
+        for field in ("width", "precision"):
+            specifier = match.group(field)
+            if specifier and specifier.startswith("*"):
+                position = specifier[1:-1] if specifier.endswith("$") else None
+                add_argument(position, "d")
+        length = match.group("length") or ""
+        if length == "q":
+            length = "ll"
+        add_argument(match.group("position"), length + match.group("conversion"))
     return sorted(signature)
 
 

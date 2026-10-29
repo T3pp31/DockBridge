@@ -11,6 +11,9 @@ PORT="${SFTP_PORT:-2222}"
 USER="${SFTP_USER:-demo}"
 PASSWORD="${SFTP_PASSWORD:-password}"
 CONTAINER_NAME="${SFTP_CONTAINER:-dockbridge-e2e}"
+# shellcheck source=config/sftp-test.conf
+source "$ROOT/config/sftp-test.conf"
+IMAGE="${SFTP_IMAGE:-$DEFAULT_SFTP_IMAGE}"
 
 WORKDIR="$(mktemp -d)"
 KNOWN_HOSTS="$WORKDIR/known_hosts.json"
@@ -27,13 +30,21 @@ CLI=(cargo run -q -p dockbridge-cli -- --config "$CONFIG")
 
 pass=0
 fail=0
+LOCK_DIR="${TMPDIR:-/tmp}/dockbridge-sftp-${CONTAINER_NAME}.lock"
+LOCK_ACQUIRED=false
 
 cleanup() {
   if (( fail > 0 )); then
     # Keep the diagnostics when verification failed; otherwise remove the
     # whole temporary workdir (issue #673).
     log "Keeping debug log: $LOG"
-    cp "$LOG" "${TMPDIR:-/tmp}/dockbridge-e2e-verify.log"
+    cp "$LOG" "${TMPDIR:-/tmp}/dockbridge-e2e-verify.log" || true
+  fi
+  # Discard the per-run container so stale authorized_keys cannot survive into
+  # the next run (issue #672).
+  if [[ "$LOCK_ACQUIRED" == true ]]; then
+    docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    rmdir "$LOCK_DIR"
   fi
   rm -rf "$WORKDIR"
 }
@@ -80,6 +91,11 @@ ensure_key() {
 }
 
 ensure_container() {
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "SFTP verification already holds $LOCK_DIR; use a different SFTP_CONTAINER or remove a stale lock after checking no run is active" >&2
+    return 1
+  fi
+  LOCK_ACQUIRED=true
   ensure_key
   log "Recreating Docker SFTP container $CONTAINER_NAME ..."
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -88,7 +104,7 @@ ensure_container() {
   docker run -d --name "$CONTAINER_NAME" -p "127.0.0.1:${PORT}:22" -e SFTP_USER="$USER" \
     -v "$WORKDIR/id_ed25519.pub:/home/$USER/.ssh/keys/id_ed25519.pub:ro" \
     -v "$WORKDIR/id_ed25519_enc.pub:/home/$USER/.ssh/keys/id_ed25519_enc.pub:ro" \
-    atmoz/sftp "${USER}:${PASSWORD}:::upload" >/dev/null
+    "$IMAGE" "${USER}:${PASSWORD}:::upload" >/dev/null
   sleep 3
 }
 
@@ -133,7 +149,7 @@ json_output() {
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
     --host-key-policy accept-new --output json --path upload | \
-    python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d, list); assert d'
+    python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d, list)'
 }
 
 pwd_command() {
@@ -149,9 +165,13 @@ mkdir_rename_delete() {
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" rename \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
     --host-key-policy accept-new --from "upload/rename-test" --to "upload/rename-test-2"
+  # delete is a file-only command; exercise it on a file in the renamed directory.
+  printf '%s\n' "$PASSWORD" | "${CLI[@]}" upload \
+    --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
+    --host-key-policy accept-new --local "$LOCAL_FILE" --remote "upload/rename-test-2/file.txt"
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" delete \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --remote "upload/rename-test-2"
+    --host-key-policy accept-new --remote "upload/rename-test-2/file.txt"
 }
 
 recursive_upload_download() {
@@ -165,8 +185,8 @@ recursive_upload_download() {
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" download \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
     --host-key-policy accept-new --remote "upload/tree" --local "$WORKDIR/dl" --recursive
-  cmp -s "$tree/a.txt" "$WORKDIR/dl/a.txt"
-  cmp -s "$tree/sub/b.txt" "$WORKDIR/dl/sub/b.txt"
+  cmp -s "$tree/a.txt" "$WORKDIR/dl/tree/a.txt"
+  cmp -s "$tree/sub/b.txt" "$WORKDIR/dl/tree/sub/b.txt"
 }
 
 private_key_auth_plain() {
