@@ -603,6 +603,9 @@ impl TransferManager {
         if self.find_task(task_id).is_none() {
             self.register_task(task, overwrite_policy);
         }
+        if self.find_task(task_id).is_none() {
+            return Err(TransferError::TaskNotFound { task_id });
+        }
         self.register_cancellation_flag(task_id);
         self.mark_in_flight(task_id);
         self.update_task_status(task_id, TransferStatus::InProgress);
@@ -704,6 +707,9 @@ impl TransferManager {
 
         if self.find_task(task_id).is_none() {
             self.register_task(task, overwrite_policy);
+        }
+        if self.find_task(task_id).is_none() {
+            return Err(TransferError::TaskNotFound { task_id });
         }
         self.register_cancellation_flag(task_id);
         self.mark_in_flight(task_id);
@@ -2655,6 +2661,63 @@ mod tests {
             .map(|task| task.status.clone())
             .unwrap();
         assert_eq!(status, TransferStatus::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn batches_skip_removed_tasks_and_complete_remaining_transfers() {
+        for direction in [TransferDirection::Upload, TransferDirection::Download] {
+            let manager = TransferManager::new(&AppConfig::default());
+            let server = TestSftpServer::start().await;
+            let session = server.connect_session().await;
+            let directory = tempfile::tempdir().unwrap();
+            let first_path = directory.path().join("first");
+            let second_path = directory.path().join("second");
+            match direction {
+                TransferDirection::Upload => {
+                    tokio::fs::write(&first_path, b"first").await.unwrap();
+                    tokio::fs::write(&second_path, b"second").await.unwrap();
+                }
+                TransferDirection::Download => {
+                    server.write_remote_file("/upload/first", b"first").await;
+                    server.write_remote_file("/upload/second", b"second").await;
+                }
+            }
+            let mut first = manager.make_task(0, direction.clone(), &first_path, "/upload/first");
+            first.status = TransferStatus::Cancelled;
+            let second = manager.make_task(0, direction.clone(), &second_path, "/upload/second");
+            manager.insert_task(first.clone());
+            manager.insert_task(second.clone());
+            manager.clear_completed_transfers();
+
+            let tasks = vec![first.clone(), second.clone()];
+            let (finished, batch) = match direction {
+                TransferDirection::Upload => {
+                    manager
+                        .execute_upload_tasks(&session, tasks, TransferOverwritePolicy::default())
+                        .await
+                }
+                TransferDirection::Download => {
+                    manager
+                        .execute_download_tasks(&session, tasks, TransferOverwritePolicy::default())
+                        .await
+                }
+            }
+            .unwrap();
+
+            assert_eq!(batch.failed, 1);
+            assert_eq!(batch.succeeded, 1);
+            assert_eq!(finished.len(), 1);
+            assert_eq!(finished[0].id, second.id);
+            assert!(manager.find_task(first.id).is_none());
+            assert_eq!(
+                manager.find_task(second.id).unwrap().status,
+                TransferStatus::Completed
+            );
+            match direction {
+                TransferDirection::Upload => assert!(!server.remote_file_exists("/upload/first")),
+                TransferDirection::Download => assert!(!first_path.exists()),
+            }
+        }
     }
 
     #[tokio::test]
