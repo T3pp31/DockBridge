@@ -8,13 +8,29 @@ cd "$ROOT"
 
 RUST_TARGET="${1:-}"
 PROFILE="${2:-release}"
+# Cargo has no --debug/--dev flags and dev artifacts live under target/debug.
+# Normalize the profile before constructing paths or cargo flags (issue #676).
+case "$PROFILE" in
+  release)
+    CARGO_FLAG=(--release)
+    PROFILE_DIR="release"
+    ;;
+  debug|dev)
+    CARGO_FLAG=(--profile dev)
+    PROFILE_DIR="debug"
+    ;;
+  *)
+    echo "error: unsupported profile '$PROFILE' (use release or debug)" >&2
+    exit 1
+    ;;
+esac
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 OUT_DIR="$ROOT/apps/macos/DockBridge/Generated"
 
 if [[ -n "$RUST_TARGET" ]]; then
-  LIB_PATH="$CARGO_TARGET_DIR/${RUST_TARGET}/${PROFILE}/libdockbridge_uniffi.a"
+  LIB_PATH="$CARGO_TARGET_DIR/${RUST_TARGET}/${PROFILE_DIR}/libdockbridge_uniffi.a"
 else
-  LIB_PATH="$CARGO_TARGET_DIR/${PROFILE}/libdockbridge_uniffi.a"
+  LIB_PATH="$CARGO_TARGET_DIR/${PROFILE_DIR}/libdockbridge_uniffi.a"
 fi
 
 if [[ ! -f "$LIB_PATH" ]]; then
@@ -23,7 +39,7 @@ fi
 
 mkdir -p "$OUT_DIR"
 
-BINDGEN_BIN="$CARGO_TARGET_DIR/${PROFILE}/uniffi-bindgen"
+BINDGEN_BIN="$CARGO_TARGET_DIR/${PROFILE_DIR}/uniffi-bindgen"
 
 echo "Generating Swift bindings from $LIB_PATH ..."
 if [[ -x "$BINDGEN_BIN" ]]; then
@@ -31,7 +47,7 @@ if [[ -x "$BINDGEN_BIN" ]]; then
   "$BINDGEN_BIN" generate --library "$LIB_PATH" --language swift --out-dir "$OUT_DIR"
 else
   echo "bindgen not found; building via cargo run --$PROFILE"
-  cargo run -p dockbridge-uniffi --bin uniffi-bindgen --"$PROFILE" -- \
+  cargo run -p dockbridge-uniffi --bin uniffi-bindgen "${CARGO_FLAG[@]}" -- \
     generate --library "$LIB_PATH" --language swift --out-dir "$OUT_DIR"
 fi
 
