@@ -501,12 +501,16 @@ async fn keyboard_interactive_auth(
                 echo: prompt.echo,
             })
             .collect();
-        let answers = auth_prompt.prompt(&name, &instructions, &challenge);
+        let mut answers = auth_prompt.prompt(&name, &instructions, &challenge);
         if answers.len() != challenge.len() || answers.iter().any(Option::is_none) {
             // Cancelled: abandon the round instead of sending partial answers.
+            answers.zeroize();
             return Ok(false);
         }
-        let responses: Vec<String> = answers
+        // russh owns Vec<String> while sending the round. Move the answers
+        // directly rather than retaining an extra plaintext clone. Cancellation
+        // above is zeroized here; russh's internal buffers are outside our control.
+        let responses = answers
             .into_iter()
             .map(|answer| answer.unwrap_or_default())
             .collect();
