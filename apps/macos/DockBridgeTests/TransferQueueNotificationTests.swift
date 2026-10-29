@@ -90,6 +90,24 @@ final class TransferQueueNotificationTests: XCTestCase {
         XCTAssertEqual(again.map { $0.id }, [UInt64(1)], "new session must not inherit old notified IDs")
     }
 
+    func testRetryClearsNotifiedTaskID() {
+        let queue = TransferQueueViewModel(bridge: FakeBridge())
+        let previous = [makeTask(id: 1, status: .inProgress)]
+        let completed = [makeTask(id: 1, status: .completed)]
+        let firstFinished = queue.finishedTransitions(from: previous, to: completed)
+        XCTAssertEqual(firstFinished.map { $0.id }, [UInt64(1)])
+        queue.markFinishedTasksNotified(firstFinished)
+
+        // A retried task keeps its ID while returning to an active state.
+        let retried = [makeTask(id: 1, status: .pending)]
+        let activeFinished = queue.finishedTransitions(from: completed, to: retried)
+        XCTAssertTrue(activeFinished.isEmpty)
+        queue.markActiveTasksNotifiable(for: retried)
+
+        let finishedAgain = queue.finishedTransitions(from: retried, to: completed)
+        XCTAssertEqual(finishedAgain.map { $0.id }, [UInt64(1)], "retry must allow the next terminal transition to notify")
+    }
+
     func testCancelledTaskDoesNotNotifyLater() {
         let queue = TransferQueueViewModel(bridge: FakeBridge())
         let previous = [makeTask(id: 1, status: .inProgress)]
