@@ -537,15 +537,41 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
     }
 
     func testRequestConnectDoesNotShowRsaKeyWarningForEd25519PrivateKey() async throws {
-        let profile = try makeGeneratedPrivateKeyProfile(keyFilename: "id_ed25519", keyType: "ed25519")
+        var profile = try makeGeneratedPrivateKeyProfile(
+            keyFilename: "id_ed25519",
+            keyType: "ed25519"
+        )
+        // Avoid the root-user warning so the RSA branch is exercised.
+        profile.username = "testuser"
 
-        viewModel.requestConnect(profile: profile)
-        for _ in 0..<50 where viewModel.pendingConnectProfile != nil {
+        let inspectionCompleted = DispatchSemaphore(value: 0)
+        let localViewModel = makeViewModel { profile, _, bookmarkService in
+            defer { inspectionCompleted.signal() }
+            do {
+                guard let bookmark = profile.privateKeyBookmark else {
+                    XCTFail("Expected generated key bookmark")
+                    return nil
+                }
+                let algorithm = try bookmarkService.withAccess(to: bookmark) { keyURL in
+                    try inspectPrivateKeyAlgorithm(keyPath: keyURL.path, passphrase: nil)
+                }
+                XCTAssertEqual(algorithm, .ed25519)
+                return algorithm == .rsa
+            } catch {
+                XCTFail("Generated Ed25519 key inspection failed: \(error)")
+                return nil
+            }
+        }
+
+        localViewModel.requestConnect(profile: profile)
+        let didCompleteInspection = await waitForSignal(inspectionCompleted)
+        XCTAssertTrue(didCompleteInspection)
+        for _ in 0..<50 where localViewModel.pendingConnectProfile != nil {
             try await Task.sleep(for: .milliseconds(20))
         }
 
-        XCTAssertFalse(viewModel.showRsaKeyWarning)
-        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertFalse(localViewModel.showRsaKeyWarning)
+        XCTAssertNil(localViewModel.pendingConnectProfile)
     }
 
     func testCancelPendingConnectDiscardsInFlightRsaInspectionResult() async {
