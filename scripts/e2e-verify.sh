@@ -208,7 +208,7 @@ download_file() {
 }
 
 transfer_queue_states() {
-  cargo test -q -p dockbridge-core transfer::manager::tests -- --nocapture >/dev/null
+  cargo test -q -p dockbridge-core transfer::manager::tests -- --nocapture
 }
 
 corrupted_known_hosts_errors() {
@@ -242,12 +242,11 @@ swift_corrupted_known_hosts_message() {
     CODE_SIGN_IDENTITY="-" \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGNING_ALLOWED=NO \
-    DEVELOPMENT_TEAM="" \
-    >/dev/null 2>&1
+    DEVELOPMENT_TEAM=""
 }
 
 transfer_cancel_in_progress() {
-  "$ROOT/scripts/verify-transfer-cancel.sh" >/dev/null 2>&1
+  "$ROOT/scripts/verify-transfer-cancel.sh"
 }
 
 main() {
