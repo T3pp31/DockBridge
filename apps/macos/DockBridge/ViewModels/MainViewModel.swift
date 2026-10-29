@@ -723,17 +723,12 @@ final class MainViewModel: ObservableObject {
                 }
                 return showHiddenFiles || !item.name.hasPrefix(".")
             }
-            guard generation == remoteLoadGeneration, path == remotePath else {
-                isLoadingRemote = false
-                return
-            }
+            // A stale load must not clear the flag of the newer request.
+            guard generation == remoteLoadGeneration, path == remotePath else { return }
             remoteItems = filtered
             isLoadingRemote = false
         } catch {
-            guard generation == remoteLoadGeneration else {
-                isLoadingRemote = false
-                return
-            }
+            guard generation == remoteLoadGeneration else { return }
             isLoadingRemote = false
             errorMessage = error.dockBridgeUserMessage
             if error.isConnectionLost {
