@@ -88,7 +88,7 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertEqual(profiles[0].host, "no-hostname")
     }
 
-    func testHostNameFallbackSkipsPatternsAndEmptyBlocks() {
+    func testHostNameFallbackAppliesUniversalDefaultsToExactAliases() {
         let hosts = SSHConfigParser.parse("""
         Host *
             User deploy
@@ -106,9 +106,11 @@ final class SSHConfigParserTests: XCTestCase {
             User deploy
         """)
 
-        XCTAssertEqual(hosts.map(\.alias), ["web01"])
-        XCTAssertNil(hosts.first?.hostName)
-        XCTAssertEqual(SSHConfigParser.toProfiles(hosts).map(\.host), ["web01"])
+        // Both exact aliases inherit the unconditional defaults. Patterns do
+        // not become profiles; an empty exact block is usable via defaults.
+        XCTAssertEqual(hosts.map(\.alias), ["empty", "web01"])
+        XCTAssertTrue(hosts.allSatisfy { $0.hostName == nil && $0.user == "deploy" })
+        XCTAssertEqual(SSHConfigParser.toProfiles(hosts).map(\.host), ["empty", "web01"])
     }
 
     func testHostNameFallbackImportsEachSupportedDirectiveAndExactAlias() {
@@ -334,6 +336,44 @@ final class SSHConfigParserTests: XCTestCase {
         let host = try XCTUnwrap(hosts.first)
         XCTAssertNil(host.user)
         XCTAssertNil(host.port)
+    }
+
+    func testLaterInvalidValuesDoNotOverrideEarlierExactOrGlobalValues() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host *
+            Port 2200
+        Host server
+            HostName server.example.com
+            HostName %h.unsupported
+            Port invalid
+        Host server
+            HostName ${UNSUPPORTED}
+            Port 0
+        """)
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertEqual(host.hostName, "server.example.com")
+        XCTAssertEqual(host.port, 2200)
+    }
+
+    func testWhitespaceHostNameDoesNotPreventLaterValidValue() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostName "   "
+            HostName server.example.com
+        """)
+        XCTAssertEqual(try XCTUnwrap(hosts.first).hostName, "server.example.com")
+    }
+
+    func testMalformedHostHeaderDoesNotApplyFollowingValuesToPreviousAlias() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostName server.example.com
+        Host "unterminated
+            User ignored
+        """)
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertNil(try XCTUnwrap(hosts.first).user)
     }
 
 }

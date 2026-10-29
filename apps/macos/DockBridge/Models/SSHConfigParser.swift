@@ -97,7 +97,8 @@ enum SSHConfigParser {
     ) {
         switch directive.key {
         case "hostname":
-            if directive.arguments == [""] { return }
+            if directive.arguments.count == 1,
+               directive.arguments[0].trimmingCharacters(in: .whitespaces).isEmpty { return }
             guard directive.arguments.count == 1,
                   let value = directive.arguments.first,
                   !containsUnsupportedExpansion(value) else {
