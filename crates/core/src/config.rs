@@ -654,12 +654,12 @@ mod tests {
     #[test]
     fn all_repo_config_toml_files_parse() {
         // Given: the repository's AppConfig-format config files
-        // (release.toml uses a separate `[release]` schema and is excluded)
+        // (release.toml and test-server.toml have separate schemas)
         // When: every one is loaded as an AppConfig
         // Then: every file parses successfully (regression for duplicate-key
         // files like the old config/test.toml)
         //
-        // NOTE: every `.toml` file in this directory other than release.toml
+        // NOTE: every `.toml` file in this directory other than release.toml and test-server.toml
         // must use the AppConfig schema - this test fails (loudly) when a
         // different schema is added so the exclusion list is kept in sync.
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -686,7 +686,7 @@ mod tests {
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if name.ends_with(".toml") && name != "release.toml" {
+            if name.ends_with(".toml") && !matches!(name, "release.toml" | "test-server.toml") {
                 found_any = true;
                 AppConfig::from_toml_file(&path).unwrap_or_else(|err| {
                     panic!(
