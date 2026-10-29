@@ -1,4 +1,5 @@
 import XCTest
+import Darwin
 @testable import DockBridge
 
 final class HostKeyStoreTests: XCTestCase {
@@ -55,6 +56,49 @@ final class HostKeyStoreTests: XCTestCase {
         let store = HostKeyStore(baseDirectory: baseDirectory)
 
         XCTAssertThrowsError(try store.ensureStoreDirectoryExists())
+    }
+
+    func testEnsureStoreRepairsReadOnlyFileWithoutChangingContents() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = HostKeyStore(baseDirectory: directory)
+        let original = Data("{\"entries\":[]}".utf8)
+        try original.write(to: store.knownHostsPath)
+        try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: store.knownHostsPath.path)
+
+        try store.ensureStoreDirectoryExists()
+
+        XCTAssertEqual(try Data(contentsOf: store.knownHostsPath), original)
+        let attributes = try FileManager.default.attributesOfItem(atPath: store.knownHostsPath.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
+    }
+
+    func testEnsureStoreRejectsFIFO() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = HostKeyStore(baseDirectory: directory)
+        XCTAssertEqual(Darwin.mkfifo(store.knownHostsPath.path, S_IRUSR | S_IWUSR), 0)
+
+        XCTAssertThrowsError(try store.ensureStoreDirectoryExists())
+    }
+
+    func testConcurrentInitializationPublishesValidStoreAndCleansTemporaryFiles() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = HostKeyStore(baseDirectory: directory)
+        DispatchQueue.concurrentPerform(iterations: 16) { _ in
+            do {
+                try store.ensureStoreDirectoryExists()
+                let data = try Data(contentsOf: store.knownHostsPath)
+                let document = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                XCTAssertEqual((document?["entries"] as? [Any])?.count, 0)
+            } catch {
+                XCTFail("Concurrent initialization failed: \(error)")
+            }
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), ["known_hosts.json"])
     }
 
 }

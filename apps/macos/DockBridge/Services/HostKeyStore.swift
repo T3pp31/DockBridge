@@ -22,28 +22,48 @@ final class HostKeyStore: @unchecked Sendable {
         return baseDirectory.appendingPathComponent(fileName, isDirectory: false)
     }
 
+    /// Creates a valid owner-only store if absent, and secures an existing regular file.
+    /// Existing contents are preserved; symlinks and non-regular files are rejected.
     func ensureStoreDirectoryExists() throws {
         let path = knownHostsPath
         let parent = path.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        if try secureExistingStore(at: path) { return }
 
-        // Exclusive creation never truncates an existing store or follows a
-        // symlink placed at the destination between checking and opening it.
-        let createdDescriptor = Darwin.open(path.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR)
-        if createdDescriptor >= 0 {
-            let file = FileHandle(fileDescriptor: createdDescriptor, closeOnDealloc: true)
-            defer { try? file.close() }
-            let emptyStore = try JSONSerialization.data(withJSONObject: ["entries": [Any]()])
-            try file.write(contentsOf: emptyStore)
-        } else {
+        // Publish only a fully written store. Linking is atomic and refuses to
+        // replace any destination created by another caller in the meantime.
+        let temporary = parent.appendingPathComponent(".known-hosts-\(UUID().uuidString).partial")
+        let descriptor = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { Darwin.unlink(temporary.path) }
+        let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? file.close() }
+        let emptyStore = try JSONSerialization.data(withJSONObject: ["entries": [Any]()])
+        try file.write(contentsOf: emptyStore)
+        try file.synchronize()
+        if Darwin.link(temporary.path, path.path) != 0 {
             guard errno == EEXIST else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-            let descriptor = Darwin.open(path.path, O_WRONLY | O_NOFOLLOW)
-            guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-            defer { Darwin.close(descriptor) }
-            guard Darwin.fchmod(descriptor, S_IRUSR | S_IWUSR) == 0 else {
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            }
+            guard try secureExistingStore(at: path) else { throw POSIXError(.ENOENT) }
         }
+    }
+
+    private func secureExistingStore(at path: URL) throws -> Bool {
+        // Nonblocking open prevents a FIFO at the store path from hanging startup.
+        let descriptor = Darwin.open(path.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            if errno == ENOENT { return false }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { Darwin.close(descriptor) }
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        guard metadata.st_mode & S_IFMT == S_IFREG else { throw POSIXError(.EINVAL) }
+        guard Darwin.fchmod(descriptor, S_IRUSR | S_IWUSR) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        return true
     }
 
     func setSecurePermissions(for url: URL) throws {
