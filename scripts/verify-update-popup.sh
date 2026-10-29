@@ -69,6 +69,19 @@ return true
 APPLESCRIPT
 }
 
+modals_absent() {
+  osascript <<'APPLESCRIPT'
+tell application "System Events"
+  if not (exists process "DockBridge") then return true
+  tell process "DockBridge"
+    if not (exists window 1) then return true
+    return not ((exists sheet 1 of window 1) or (exists alert 1))
+  end tell
+end tell
+return true
+APPLESCRIPT
+}
+
 click_sheet_button() {
   local index="$1"
   osascript <<APPLESCRIPT
@@ -189,6 +202,10 @@ else
     restore_pf
     trap - EXIT
   fi
+fi
+if [[ "$(modals_absent)" != "true" ]]; then
+  echo "FAIL: Blocking modal or alert appeared while offline"
+  exit 1
 fi
 
 echo "== Test 5: HostKey deferral =="
