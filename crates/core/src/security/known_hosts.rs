@@ -252,14 +252,12 @@ impl KnownHostsManager {
                     !(excluded.host.eq_ignore_ascii_case(&entry.host)
                         && excluded.port == entry.port)
                 });
-                self.entries
-                    .insert(entry_key(&entry.host, entry.port), entry);
+                self.entries.insert(storage_key(&entry), entry);
             }
         } else {
             entry.aliases = remaining;
             let entry = normalize_entry_case(entry);
-            self.entries
-                .insert(entry_key(&entry.host, entry.port), entry);
+            self.entries.insert(storage_key(&entry), entry);
         }
 
         self.persist()?;
@@ -849,14 +847,7 @@ impl KnownHostsManager {
                 return Ok(MergeOutcome::default());
             }
 
-            // Do not overwrite an existing trusted entry when recording a
-            // revocation; use a unique marker key instead (issue #653).
-            let canonical = entry_key(&host, port);
-            let insert_key = if self.entries.contains_key(&canonical) {
-                format!("{canonical}#revoked:{}", fingerprint_sha256)
-            } else {
-                canonical
-            };
+            let insert_key = marked_entry_key(&host, port, marker, &fingerprint_sha256);
 
             self.entries.insert(
                 insert_key,
@@ -886,13 +877,7 @@ impl KnownHostsManager {
                 return Ok(MergeOutcome::default());
             }
 
-            // Same as revoked: preserve an existing trusted entry (issue #653).
-            let canonical = entry_key(&host, port);
-            let insert_key = if self.entries.contains_key(&canonical) {
-                format!("{canonical}#ca:{}", fingerprint_sha256)
-            } else {
-                canonical
-            };
+            let insert_key = marked_entry_key(&host, port, marker, &fingerprint_sha256);
 
             self.entries.insert(
                 insert_key,
@@ -948,8 +933,13 @@ impl KnownHostsManager {
             });
         }
 
-        if let Some(existing) = self.find_entry(&host, port) {
-            let canonical_key = entry_key(&existing.host, existing.port);
+        if let Some(existing) = self.find_trusted_entry(&host, port).or_else(|| {
+            self.entries.values().find(|entry| {
+                entry_matches_host(entry, &host, port)
+                    && fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256)
+            })
+        }) {
+            let canonical_key = storage_key(existing);
             let entry = self.entries.get_mut(&canonical_key).ok_or_else(|| {
                 SecurityError::KnownHostsWriteFailed {
                     path: self.path.display().to_string(),
@@ -1055,6 +1045,29 @@ impl KnownHostsManager {
     }
 }
 
+fn marked_entry_key(
+    host: &str,
+    port: u16,
+    marker: Option<KnownHostMarker>,
+    fingerprint: &str,
+) -> String {
+    let canonical = entry_key(host, port);
+    match marker {
+        Some(KnownHostMarker::Revoked) => format!("{canonical}#revoked:{fingerprint}"),
+        Some(KnownHostMarker::CertAuthority) => format!("{canonical}#ca:{fingerprint}"),
+        None => canonical,
+    }
+}
+
+fn storage_key(entry: &KnownHostEntry) -> String {
+    marked_entry_key(
+        &entry.host,
+        entry.port,
+        entry.marker,
+        &entry.fingerprint_sha256,
+    )
+}
+
 fn load_store_contents(
     path: &Path,
 ) -> Result<(HashMap<String, KnownHostEntry>, Vec<HashedHostEntry>), SecurityError> {
@@ -1081,7 +1094,7 @@ fn load_store_contents(
         .entries
         .into_iter()
         .map(normalize_entry_case)
-        .map(|entry| (entry_key(&entry.host, entry.port), entry))
+        .map(|entry| (storage_key(&entry), entry))
         .collect();
     Ok((entries, file.hashed_entries))
 }
@@ -2213,6 +2226,46 @@ mod tests {
     }
 
     #[test]
+    fn marked_and_trusted_keys_survive_import_order_and_reload() {
+        for markers_first in [false, true] {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("known_hosts.json");
+            let openssh_path = dir.path().join("known_hosts");
+            let trusted = test_public_key();
+            let revoked = test_public_key();
+            let ca = test_public_key();
+            let trusted_line = format!("example.com {}\n", trusted.to_openssh().unwrap());
+            let marker_lines = format!(
+                "@revoked example.com {}\n@cert-authority example.com {}\n",
+                revoked.to_openssh().unwrap(),
+                ca.to_openssh().unwrap()
+            );
+            let input = if markers_first {
+                format!("{marker_lines}{trusted_line}")
+            } else {
+                format!("{trusted_line}{marker_lines}")
+            };
+            write_test_file_mode_0600(&openssh_path, input);
+            let mut manager = KnownHostsManager::load(&path).unwrap();
+            manager.import_openssh(&openssh_path).unwrap();
+            assert_eq!(manager.entries().len(), 3);
+
+            let mut reloaded = KnownHostsManager::load(&path).unwrap();
+            assert_eq!(reloaded.entries().len(), 3);
+            assert_eq!(
+                reloaded.check_host_key("example.com", 22, &trusted, true),
+                HostKeyCheckResult::Trust
+            );
+            assert_eq!(
+                reloaded.check_host_key("example.com", 22, &revoked, true),
+                HostKeyCheckResult::Reject
+            );
+            reloaded.import_openssh(&openssh_path).unwrap();
+            assert_eq!(KnownHostsManager::load(&path).unwrap().entries().len(), 3);
+        }
+    }
+
+    #[test]
     fn import_openssh_revoked_entry_merges_aliases_and_keeps_marker() {
         // Given: a @revoked entry for example.com
         // When: a later import lists the same host with an additional alias
@@ -2487,7 +2540,11 @@ mod tests {
 
         let ca_entry = manager
             .entries
-            .get(&entry_key("*.example.com", 22))
+            .values()
+            .find(|entry| {
+                entry.host == "*.example.com"
+                    && entry.marker == Some(KnownHostMarker::CertAuthority)
+            })
             .unwrap();
         assert_eq!(ca_entry.marker, Some(KnownHostMarker::CertAuthority));
         assert!(ca_entry.aliases.is_empty());
@@ -2575,7 +2632,11 @@ mod tests {
 
         let ca_entry = manager
             .entries
-            .get(&entry_key("*.example.com", 22))
+            .values()
+            .find(|entry| {
+                entry.host == "*.example.com"
+                    && entry.marker == Some(KnownHostMarker::CertAuthority)
+            })
             .unwrap();
         assert_eq!(ca_entry.marker, Some(KnownHostMarker::CertAuthority));
         assert!(ca_entry.aliases.is_empty());
