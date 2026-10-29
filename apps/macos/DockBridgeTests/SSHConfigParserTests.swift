@@ -184,7 +184,7 @@ final class SSHConfigParserTests: XCTestCase {
         """)
 
         XCTAssertEqual(hosts.first?.identityFile, NSHomeDirectory() + "/.ssh/current")
-        XCTAssertEqual(hosts[1]?.identityFile, namedHome.path + "/.ssh/named")
+        XCTAssertEqual(hosts.dropFirst().first?.identityFile, namedHome.path + "/.ssh/named")
     }
 
     func testUnknownTildeUserDoesNotProduceUnresolvedKeyPath() {
@@ -216,8 +216,8 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertEqual(profiles.count, 2)
         XCTAssertEqual(profiles.first?.port, 22)
         XCTAssertEqual(profiles.first?.authType, .password)
-        XCTAssertEqual(profiles[1]?.authType, .privateKey)
-        XCTAssertNotNil(profiles[1]?.privateKeyPath)
-        XCTAssertNil(profiles[1]?.privateKeyBookmark)
+        XCTAssertEqual(profiles.dropFirst().first?.authType, .privateKey)
+        XCTAssertNotNil(profiles.dropFirst().first?.privateKeyPath)
+        XCTAssertNil(profiles.dropFirst().first?.privateKeyBookmark)
     }
 }
