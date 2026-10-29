@@ -123,8 +123,8 @@ struct RemoteDeleteConfirmSheet: View {
             HStack {
                 Spacer()
                 Button(String(localized: "Cancel"), role: .cancel, action: onCancel)
-                Button(String(localized: "Delete"), role: .destructive, action: onDelete)
                     .keyboardShortcut(.defaultAction)
+                Button(String(localized: "Delete"), role: .destructive, action: onDelete)
             }
         }
         .padding(24)
