@@ -507,17 +507,16 @@ async fn keyboard_interactive_auth(
             answers.zeroize();
             return Ok(false);
         }
-        let mut responses = Zeroizing::new(
-            answers
-                .into_iter()
-                .map(|answer| answer.unwrap_or_default())
-                .collect::<Vec<String>>(),
-        );
-        let result = handle
-            .authenticate_keyboard_interactive_respond(responses.to_vec())
+        // russh owns Vec<String> while sending the round. Move the answers
+        // directly rather than retaining an extra plaintext clone. Cancellation
+        // above is zeroized here; russh's internal buffers are outside our control.
+        let responses = answers
+            .into_iter()
+            .map(|answer| answer.unwrap_or_default())
+            .collect();
+        response = handle
+            .authenticate_keyboard_interactive_respond(responses)
             .await
             .map_err(connect_failed)?;
-        responses.zeroize();
-        response = result;
     }
 }
