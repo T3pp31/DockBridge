@@ -35,20 +35,24 @@ struct HdiutilDMGImageMounter: DMGImageMounting {
         }
 
         let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let plist = try PropertyListSerialization.propertyList(from: outputData, format: nil)
-        guard let dictionary = plist as? [String: Any],
-              let systemEntities = dictionary["system-entities"] as? [[String: Any]] else {
-            throw AppUpdateDownloadError.mountFailed
-        }
+        let plist = try? PropertyListSerialization.propertyList(from: outputData, format: nil)
+        let systemEntities = (plist as? [String: Any])?["system-entities"] as? [[String: Any]]
 
-        for entity in systemEntities {
+
+        for entity in systemEntities ?? [] {
             guard let mountPoint = entity["mount-point"] as? String,
-                  entity["content"] as? String == "Apple_HFS" || entity["content"] as? String == "Apple_APFS" else {
+                  let content = entity["content-hint"] as? String ?? entity["content"] as? String,
+                  content == "Apple_HFS" || content == "Apple_APFS" else {
                 continue
             }
             return URL(fileURLWithPath: mountPoint, isDirectory: true)
         }
 
+        // A successful attach can still lack a usable volume. Detach only
+        // on this failure path; the caller owns a successfully mounted image.
+        if let deviceEntry = systemEntities?.compactMap({ $0["dev-entry"] as? String }).first {
+            try? unmount(mountPoint: URL(fileURLWithPath: deviceEntry))
+        }
         throw AppUpdateDownloadError.mountFailed
     }
 
