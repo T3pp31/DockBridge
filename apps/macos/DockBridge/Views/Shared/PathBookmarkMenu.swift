@@ -28,7 +28,8 @@ struct PathBookmarkMenu: View {
                 }
             }
         } label: {
-            Image(systemName: "star")
+            Label("Path bookmarks", systemImage: "star")
+                .labelStyle(.iconOnly)
         }
         .help(String(localized: "Path bookmarks"))
         .menuStyle(.borderlessButton)
