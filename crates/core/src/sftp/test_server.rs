@@ -79,6 +79,11 @@ pub struct FailureConfig {
 /// Secret required by the test server's keyboard-interactive challenge.
 pub const KEYBOARD_INTERACTIVE_SECRET: &str = "kbd-interactive-secret";
 
+#[derive(serde::Deserialize)]
+struct TestServerSettings {
+    accept_retry_delay_ms: u64,
+}
+
 struct AcceptAllPrompt;
 impl HostKeyPrompt for AcceptAllPrompt {
     fn prompt_unknown_host(&self, _: &str, _: u16, _: &str) -> bool {
@@ -900,6 +905,11 @@ impl TestSftpServer {
 
         let server_root = root.clone();
         let server_failures = Arc::clone(&failures);
+        let settings: TestServerSettings =
+            toml::from_str(include_str!("../../../../config/test-server.toml"))
+                .expect("valid test server settings");
+        assert!(settings.accept_retry_delay_ms > 0);
+        let accept_retry_delay = Duration::from_millis(settings.accept_retry_delay_ms);
         let server_task = tokio::spawn(async move {
             let config = Arc::new(russh::server::Config {
                 auth_rejection_time: Duration::from_secs(1),
@@ -917,6 +927,7 @@ impl TestSftpServer {
                             panic!("test SFTP server accept failed: {err}");
                         }
                         tracing::warn!(error = %err, "test SFTP server accept retrying");
+                        tokio::time::sleep(accept_retry_delay).await;
                         continue;
                     }
                 };
@@ -1099,6 +1110,9 @@ fn is_transient_accept_error(err: &std::io::Error) -> bool {
             | std::io::ErrorKind::ConnectionAborted
             | std::io::ErrorKind::ResourceBusy
             | std::io::ErrorKind::TimedOut
+    ) || matches!(
+        err.raw_os_error(),
+        Some(libc::EMFILE) | Some(libc::ENFILE) | Some(libc::ENOBUFS) | Some(libc::ENOMEM)
     )
 }
 
@@ -1113,5 +1127,13 @@ mod tests {
 
         // Then: it is retried rather than silently stopping the server task
         assert!(is_transient_accept_error(&aborted));
+        for code in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM] {
+            assert!(is_transient_accept_error(
+                &std::io::Error::from_raw_os_error(code)
+            ));
+        }
+        assert!(!is_transient_accept_error(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied
+        )));
     }
 }
