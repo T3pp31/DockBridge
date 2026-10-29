@@ -137,13 +137,13 @@ struct MainView: View {
             }
         }
         .sheet(isPresented: $showNewConnection) {
-            ConnectionFormView { profile, password, passphrase in
-                connectionList.save(profile, password: password, passphrase: passphrase)
+            ConnectionFormView { profile, password, passphrase, saveSecrets in
+                connectionList.save(profile, password: password, passphrase: passphrase, saveSecrets: saveSecrets)
             }
         }
         .sheet(item: $editingProfile) { profile in
-            ConnectionFormView(profile: profile) { updated, password, passphrase in
-                connectionList.save(updated, password: password, passphrase: passphrase)
+            ConnectionFormView(profile: profile) { updated, password, passphrase, saveSecrets in
+                connectionList.save(updated, password: password, passphrase: passphrase, saveSecrets: saveSecrets)
             }
         }
         .sheet(isPresented: $showSettings) {

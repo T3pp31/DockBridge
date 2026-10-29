@@ -697,6 +697,41 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         )
     }
 
+    func testUnsavedFormPasswordOverridesStoredSecretWithoutChangingKeychain() throws {
+        let profile = ConnectionProfile(name: "Temporary", host: "example.com", username: "user")
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        try keychain.savePassword("previous", account: account)
+
+        viewModel.save(profile, password: "typed", passphrase: nil, saveSecrets: false)
+
+        XCTAssertEqual(try viewModel.credentialsForConnection(profile: profile).password, "typed")
+        XCTAssertEqual(try keychain.loadPassword(account: account), "previous")
+        viewModel.save(profile, password: "persisted", passphrase: nil, saveSecrets: true)
+        XCTAssertEqual(try viewModel.credentialsForConnection(profile: profile).password, "persisted")
+    }
+
+    func testUnsavedEmptyPasswordDoesNotFallBackToStoredSecret() throws {
+        let profile = ConnectionProfile(name: "Temporary", host: "example.com", username: "user")
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        try keychain.savePassword("previous", account: account)
+
+        viewModel.save(profile, password: nil, passphrase: nil, saveSecrets: false)
+
+        XCTAssertNil(try viewModel.credentialsForConnection(profile: profile).password)
+        XCTAssertEqual(try keychain.loadPassword(account: account), "previous")
+    }
+
+    func testUnsavedPassphraseOverridesStoredSecretWithoutChangingKeychain() throws {
+        let profile = try makeGeneratedPrivateKeyProfile(keyFilename: "id_ed25519", keyType: "ed25519")
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        try keychain.savePassphrase("previous", account: account)
+
+        viewModel.save(profile, password: nil, passphrase: "typed", saveSecrets: false)
+
+        XCTAssertEqual(try viewModel.credentialsForConnection(profile: profile).passphrase, "typed")
+        XCTAssertEqual(try keychain.loadPassphrase(account: account), "previous")
+    }
+
     private func makeGeneratedPrivateKeyProfile(
         id: UUID = UUID(),
         keyFilename: String,
