@@ -38,13 +38,13 @@ tell application "System Events"
     tell process "DockBridge"
       if exists (sheet 1 of window 1) then
         if exists static text "Update Available" of sheet 1 of window 1 then
-          return true
+          return "true"
         end if
       end if
     end tell
   end if
 end tell
-return false
+return "false"
 APPLESCRIPT
     ) || result=""
     if [[ "$result" == "true" ]]; then
