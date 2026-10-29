@@ -475,6 +475,8 @@ impl russh_sftp::server::Handler for SftpHandler {
                 }
             } else if err.kind() == std::io::ErrorKind::NotFound {
                 StatusCode::NoSuchFile
+            } else if err.kind() == std::io::ErrorKind::PermissionDenied {
+                StatusCode::PermissionDenied
             } else {
                 StatusCode::Failure
             }
