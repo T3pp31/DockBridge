@@ -31,7 +31,8 @@ wait_for_update_sheet() {
   local timeout="${1:-20}"
   local elapsed=0
   while (( elapsed < timeout )); do
-    if osascript <<'APPLESCRIPT' >/dev/null 2>&1
+    local result
+    result=$(osascript <<'APPLESCRIPT' 2>/dev/null
 tell application "System Events"
   if exists process "DockBridge" then
     tell process "DockBridge"
@@ -45,7 +46,8 @@ tell application "System Events"
 end tell
 return false
 APPLESCRIPT
-    then
+    ) || result=""
+    if [[ "$result" == "true" ]]; then
       return 0
     fi
     sleep 1
