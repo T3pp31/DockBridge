@@ -421,10 +421,11 @@ impl KnownHostsManager {
             }
 
             let host_is_canonical = existing.host == host && existing.port == port;
-            let has_remaining_alias = existing
-                .aliases
-                .iter()
-                .any(|alias| !(alias.host == host && alias.port == port));
+            let has_promotable_alias = existing.aliases.iter().any(|alias| {
+                let is_detached = alias.host == host && alias.port == port;
+                let is_excluded = entry_is_excluded_for_host(existing, &alias.host, alias.port);
+                !(is_detached || is_excluded)
+            });
             let has_remaining_exclusion = existing
                 .excluded_aliases
                 .iter()
@@ -434,7 +435,7 @@ impl KnownHostsManager {
             // old key would require two canonical rows for the same host, which
             // the current on-disk schema cannot represent. Fail closed instead
             // of silently dropping a negative trust rule.
-            if host_is_canonical && !has_remaining_alias && has_remaining_exclusion {
+            if host_is_canonical && !has_promotable_alias && has_remaining_exclusion {
                 return Err(SecurityError::KnownHostsWriteFailed {
                     path: self.path.display().to_string(),
                     message: "cannot replace this host key without losing excluded host patterns"
@@ -476,11 +477,25 @@ impl KnownHostsManager {
                 // aliases remain the old entry covered only (host, port) and is
                 // dropped entirely.
                 if !remaining_aliases.is_empty() {
-                    let promoted = remaining_aliases.remove(0);
+                    let Some(promoted_index) = remaining_aliases.iter().position(|alias| {
+                        !entry_is_excluded_for_host(&old_entry, &alias.host, alias.port)
+                    }) else {
+                        return Err(SecurityError::KnownHostsWriteFailed {
+                            path: self.path.display().to_string(),
+                            message:
+                                "cannot replace this host key without losing excluded host patterns"
+                                    .to_string(),
+                        });
+                    };
+                    let promoted = remaining_aliases.remove(promoted_index);
                     old_entry.host = promoted.host;
                     old_entry.port = promoted.port;
                     old_entry.aliases = remaining_aliases;
                     old_entry.excluded_aliases = remaining_excluded;
+                    old_entry.excluded_aliases.retain(|excluded| {
+                        !(excluded.host.eq_ignore_ascii_case(&old_entry.host)
+                            && excluded.port == old_entry.port)
+                    });
                     self.entries
                         .insert(entry_key(&old_entry.host, old_entry.port), old_entry);
                 }
@@ -3058,6 +3073,85 @@ mod tests {
                 host: "203.0.113.1".to_string(),
                 port: 22,
             }]
+        );
+    }
+
+    #[test]
+    fn accept_changed_key_skips_excluded_alias_when_promoting() {
+        // Given: an entry whose aliases include both a trusted host and the
+        //        same host listed as an exclusion
+        // When: the canonical host's key changes and an alias is promoted
+        // Then: the excluded alias is never promoted into self-exclusion
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+        let openssh_key = old_key.to_openssh().unwrap();
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("example.com,old.example.com,bad.example.com,!bad.example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+        manager
+            .accept_host_key("example.com", 22, &new_key)
+            .unwrap();
+
+        // Then: the next trusted alias keeps the old key and the exclusion
+        //       still applies to the host it names.
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &new_key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("old.example.com", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        match manager.check_host_key("bad.example.com", 22, &old_key, false) {
+            HostKeyCheckResult::Unknown => {}
+            other => panic!("expected unknown for excluded alias, got {other:?}"),
+        }
+
+        let entry = manager.find_entry("old.example.com", 22).unwrap();
+        assert_eq!(entry.host, "old.example.com");
+        assert!(entry
+            .excluded_aliases
+            .iter()
+            .any(|alias| alias.host == "bad.example.com" && alias.port == 22));
+    }
+
+    #[test]
+    fn accept_changed_key_fails_closed_when_only_alias_is_excluded() {
+        // Given: the only remaining alias is also stored as an exclusion
+        // When: the canonical host's key changes
+        // Then: promotion fails closed instead of creating self-exclusion
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let openssh_path = dir.path().join("known_hosts");
+        let old_key = test_public_key();
+        let new_key = test_public_key();
+        let openssh_key = old_key.to_openssh().unwrap();
+        write_test_file_mode_0600(
+            &openssh_path,
+            format!("example.com,bad.example.com,!bad.example.com {openssh_key}\n"),
+        );
+
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.import_openssh(&openssh_path).unwrap();
+
+        let err = manager
+            .accept_host_key("example.com", 22, &new_key)
+            .expect_err("an excluded alias must not be promoted");
+        assert!(matches!(err, SecurityError::KnownHostsWriteFailed { .. }));
+        assert_eq!(
+            manager.check_host_key("example.com", 22, &old_key, false),
+            HostKeyCheckResult::Trust
+        );
+        assert_eq!(
+            manager.check_host_key("bad.example.com", 22, &old_key, false),
+            HostKeyCheckResult::Unknown
         );
     }
 
