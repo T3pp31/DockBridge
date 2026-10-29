@@ -1784,6 +1784,12 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
         });
     }
 
+    if let Some(parent) = path.parent() {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+
     fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|err| {
         SecurityError::KnownHostsWriteFailed {
             path: path.display().to_string(),
