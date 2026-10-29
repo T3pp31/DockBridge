@@ -381,7 +381,11 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
                 OutputFormat::Text => {
                     for entry in entries {
                         let kind = if entry.is_directory { "dir" } else { "file" };
-                        println!("{kind}\t{}\t{}", entry.size, entry.path);
+                        println!(
+                            "{kind}\t{}\t{}",
+                            entry.size,
+                            terminal_safe_text(&entry.path)
+                        );
                     }
                 }
                 OutputFormat::Json => print_json_listing(entries)?,
@@ -489,11 +493,33 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
             let session = connect(&connection, &config, known_hosts).await?;
 
             let directory = SftpClient::new(&session).initial_directory().await?;
-            println!("{directory}");
+            println!("{}", terminal_safe_text(&directory));
         }
     }
 
     Ok(())
+}
+
+/// Makes server-provided text safe for line-oriented terminal output.
+///
+/// Control characters can change cursor position or emit terminal escape
+/// sequences, so they are rendered as visible Unicode escapes. This preserves
+/// normal UTF-8 paths while keeping text output structurally stable.
+fn terminal_safe_text(value: &str) -> String {
+    if !value.chars().any(char::is_control) {
+        return value.to_string();
+    }
+
+    let mut sanitized = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control() {
+            use std::fmt::Write;
+            let _ = write!(sanitized, "\\u{{{:04x}}}", character as u32);
+        } else {
+            sanitized.push(character);
+        }
+    }
+    sanitized
 }
 
 fn print_json_listing(entries: Vec<dockbridge_core::RemoteFile>) -> anyhow::Result<()> {
@@ -669,6 +695,18 @@ mod tests {
     use super::*;
     use dockbridge_core::AuthError;
     use serial_test::serial;
+
+    #[test]
+    fn terminal_safe_text_escapes_control_characters() {
+        // Given: server-derived text containing terminal control sequences
+        // When: rendering for the text output mode
+        // Then: escape and line-structure control characters are visible
+        assert_eq!(terminal_safe_text("/safe/path"), "/safe/path");
+        assert_eq!(
+            terminal_safe_text("\u{1b}[31m/path\u{a}\t"),
+            "\\u{001b}[31m/path\\u{000a}\\u{0009}"
+        );
+    }
 
     #[test]
     fn exit_code_mapping_covers_categories() {
