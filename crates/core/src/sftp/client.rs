@@ -5544,6 +5544,35 @@ mod tests {
         assert!(matches!(err, SftpError::Other(_)), "{err:?}");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_metadata_sets_times_without_read_permission() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/metadata/write-only.txt", b"data")
+            .await;
+        let path = server.root.join("metadata/write-only.txt");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o200)).unwrap();
+
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let mut attrs = russh_sftp::protocol::FileAttributes::empty();
+        attrs.atime = Some(1_700_000_123);
+        attrs.mtime = Some(1_700_000_123);
+
+        client
+            .set_metadata("/metadata/write-only.txt", attrs)
+            .await
+            .expect("owner may set file times without read permission");
+
+        let metadata = std::fs::metadata(&path).unwrap();
+        let expected = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_123);
+        assert_eq!(metadata.modified().unwrap(), expected);
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o200);
+    }
+
     #[tokio::test]
     async fn upload_succeeds_when_metadata_preservation_fails() {
         let server = TestSftpServer::start().await;
