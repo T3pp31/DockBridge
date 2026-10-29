@@ -53,6 +53,8 @@ final class FakeBridge: RemoteBridging {
         connectedUsername = profile.username
         if failConnect {
             connectionStatus = .disconnected
+            connectedProfileID = nil
+            connectedUsername = nil
             throw DockBridgeError.Other(message: "simulated connect failure")
         }
         connectionStatus = .connected(endpoint: profile.endpointLabel)
