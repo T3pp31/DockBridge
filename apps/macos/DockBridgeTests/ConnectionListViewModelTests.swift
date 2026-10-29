@@ -590,9 +590,6 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         )
 
         viewModel.requestConnect(profile: profile)
-        if viewModel.showRootWarning {
-            viewModel.confirmRootConnect()
-        }
         let didStartInspection = await waitForSignal(inspectionStarted)
         XCTAssertTrue(didStartInspection)
         viewModel.cancelPendingConnect()
