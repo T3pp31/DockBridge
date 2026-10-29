@@ -217,13 +217,28 @@ impl KnownHostsManager {
         let _store_lock = acquire_store_lock(&self.path)?;
         self.reload_for_update()?;
 
-        let Some(canonical_key) = self.entries.iter().find_map(|(key, entry)| {
+        let canonical_key = self.entries.iter().find_map(|(key, entry)| {
             if entry_matches_host(entry, host, port) {
                 Some(key.clone())
             } else {
                 None
             }
-        }) else {
+        });
+
+        // Remove hashed entries too so a remove operation cannot leave a
+        // separate trust record behind for the same host.
+        let removed_hashed = self
+            .hashed_entries
+            .iter()
+            .any(|entry| hashed_entry_matches_host(entry, host, port));
+        self.hashed_entries
+            .retain(|entry| !hashed_entry_matches_host(entry, host, port));
+
+        let Some(canonical_key) = canonical_key else {
+            if removed_hashed {
+                self.persist()?;
+                return Ok(true);
+            }
             return Ok(false);
         };
 
