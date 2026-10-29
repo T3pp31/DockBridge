@@ -44,6 +44,10 @@ pub struct FailureConfig {
     pub read_delay_ms: AtomicU64,
     /// Signals that a READ handler has started, before its optional delay.
     pub read_started: tokio::sync::Notify,
+    /// Pauses a single opened file so tests can replace its pathname.
+    pub pause_after_open: AtomicBool,
+    pub file_opened: tokio::sync::Notify,
+    pub continue_open: tokio::sync::Notify,
     /// When `true`, `open` with `SSH_FX_EXCLUDE` reports `SSH_FX_PERMISSION_DENIED`
     /// for an already-existing exclusive path (some servers' EEXIST).
     pub exclude_exists_permission_denied: AtomicBool,
@@ -407,6 +411,31 @@ impl russh_sftp::server::Handler for SftpHandler {
         })
     }
 
+    async fn fstat(&mut self, id: u32, handle: String) -> Result<Attrs, Self::Error> {
+        let open = self.handles.get(&handle).ok_or(StatusCode::Failure)?;
+        let metadata = open
+            .file
+            .metadata()
+            .await
+            .map_err(|_| StatusCode::Failure)?;
+        let mut attrs = FileAttributes::empty();
+        if metadata.is_file() {
+            attrs.set_regular(true);
+            attrs.size = Some(metadata.len());
+        } else if metadata.is_dir() {
+            attrs.set_dir(true);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            attrs.uid = Some(metadata.uid());
+            attrs.gid = Some(metadata.gid());
+            attrs.permissions = Some(metadata.mode());
+            attrs.mtime = metadata.mtime().try_into().ok();
+        }
+        Ok(Attrs { id, attrs })
+    }
+
     async fn open(
         &mut self,
         id: u32,
@@ -458,6 +487,11 @@ impl russh_sftp::server::Handler for SftpHandler {
                 StatusCode::Failure
             }
         })?;
+
+        if self.failures.pause_after_open.swap(false, Ordering::SeqCst) {
+            self.failures.file_opened.notify_one();
+            self.failures.continue_open.notified().await;
+        }
 
         let handle_id = self.next_handle;
         self.next_handle += 1;
