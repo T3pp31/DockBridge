@@ -41,7 +41,13 @@ enum SecureLocalFileReader {
             throw SecureLocalFileReaderError.symlinkNotAllowed
         }
 
-        let fd = open(path, O_RDONLY | O_NOFOLLOW)
+        // FIFOs/devices can block forever on open or read; only regular
+        // files are eligible (issue #692).
+        guard (linkStat.st_mode & S_IFMT) == S_IFREG else {
+            throw SecureLocalFileReaderError.readFailed("not a regular file")
+        }
+
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
         guard fd >= 0 else {
             let openError = errno
             if openError == ELOOP {
@@ -54,6 +60,10 @@ enum SecureLocalFileReader {
         var fileStat = stat()
         guard fstat(fd, &fileStat) == 0 else {
             throw SecureLocalFileReaderError.readFailed(String(cString: strerror(errno)))
+        }
+
+        guard (fileStat.st_mode & S_IFMT) == S_IFREG else {
+            throw SecureLocalFileReaderError.readFailed("not a regular file")
         }
 
         let effectiveUID = geteuid()
