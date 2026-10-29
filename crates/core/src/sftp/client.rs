@@ -708,6 +708,8 @@ impl<'a> SftpClient<'a> {
         }
 
         let mut count = 0usize;
+        let mut deleted_files = 0u64;
+        let mut deleted_bytes = 0u64;
         let mut stack = vec![Task::VisitDir(remote_path, 0)];
 
         while let Some(task) = stack.pop() {
@@ -732,6 +734,23 @@ impl<'a> SftpClient<'a> {
 
                     // Files, symlinks and special files: remove directly.
                     if !file_type.is_dir() {
+                        if deleted_files >= self.directory_walk_limits.max_files {
+                            return Err(SftpError::DirectoryWalkLimitExceeded {
+                                limit: "max_files".to_string(),
+                                value: deleted_files,
+                                path: path.to_string(),
+                            });
+                        }
+                        let size = metadata.size.unwrap_or(0);
+                        if deleted_bytes.saturating_add(size)
+                            > self.directory_walk_limits.max_total_bytes
+                        {
+                            return Err(SftpError::DirectoryWalkLimitExceeded {
+                                limit: "max_total_bytes".to_string(),
+                                value: deleted_bytes.saturating_add(size),
+                                path: path.to_string(),
+                            });
+                        }
                         self.sftp().remove_file(path).await.map_err(|err| {
                             SftpError::DeleteFailed {
                                 path: path.to_string(),
@@ -739,6 +758,8 @@ impl<'a> SftpClient<'a> {
                             }
                         })?;
                         count += 1;
+                        deleted_files += 1;
+                        deleted_bytes += size;
                         continue;
                     }
 
