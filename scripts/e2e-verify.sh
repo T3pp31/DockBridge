@@ -102,8 +102,14 @@ host_key_reject() {
     --host-key-policy strict --path upload
   local status=$?
   set -e
-  [[ "$status" -eq 3 ]]
-  test ! -s "$KNOWN_HOSTS"
+  if [[ "$status" -ne 3 ]]; then
+    echo "host_key_reject expected exit 3, got $status" >&2
+    return 1
+  fi
+  if [[ -s "$KNOWN_HOSTS" ]]; then
+    echo "host_key_reject unexpectedly persisted known_hosts" >&2
+    return 1
+  fi
 }
 
 host_key_accept() {
@@ -218,7 +224,10 @@ corrupted_known_hosts_errors() {
     --host-key-policy accept-new 2>&1)
   local status=$?
   set -e
-  [[ "$status" -ne 0 ]]
+  if [[ "$status" -eq 0 ]]; then
+    echo "corrupted_known_hosts_errors expected nonzero exit" >&2
+    return 1
+  fi
   echo "$output" | grep -qi 'known hosts'
 }
 
