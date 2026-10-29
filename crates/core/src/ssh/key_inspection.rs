@@ -32,13 +32,20 @@ pub fn inspect_private_key_algorithm(
             message: err.to_string(),
         }
     })?);
+    // ssh-key zeroizes the internal key material on drop (Ed25519, ECDSA
+    // and RSA all implement Drop). The file contents above are additionally
+    // wrapped in Zeroizing so no plaintext PEM lingers (issue #799).
     let private_key = decode_secret_key(key_contents.as_str(), passphrase).map_err(|err| {
         AuthError::PrivateKeyLoadFailed {
             path: key_path.display().to_string(),
             message: err.to_string(),
         }
     })?;
-    Ok(map_algorithm(private_key.algorithm()))
+    let algorithm = private_key.algorithm();
+    // Explicitly drop the decoded key so its zeroize-on-drop runs before
+    // the function returns.
+    drop(private_key);
+    Ok(map_algorithm(algorithm))
 }
 
 fn map_algorithm(algorithm: Algorithm) -> PrivateKeyAlgorithm {
