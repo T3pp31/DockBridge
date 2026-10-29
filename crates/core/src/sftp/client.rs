@@ -5978,6 +5978,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_rejects_directory_destination_without_changing_contents() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/file.bin", b"new remote data")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let destination = local_dir.path().join("existing-directory");
+        tokio::fs::create_dir(&destination).await.unwrap();
+        let existing = destination.join("keep.txt");
+        tokio::fs::write(&existing, b"existing data").await.unwrap();
+
+        let error = client
+            .download("/download/file.bin", &destination)
+            .await
+            .expect_err("a directory cannot be replaced with a downloaded file");
+
+        match error {
+            crate::error::SftpError::DownloadFailed { message, .. } => {
+                assert!(message.contains("is a directory"), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(destination.is_dir());
+        assert_eq!(tokio::fs::read(&existing).await.unwrap(), b"existing data");
+        assert_eq!(std::fs::read_dir(&destination).unwrap().count(), 1);
+        assert!(list_partial_paths(local_dir.path()).is_empty());
+    }
+
+    #[tokio::test]
     async fn download_restarts_from_zero_when_partial_prefix_mismatches() {
         // Given: a remote file whose content no longer matches the leftover
         // partial prefix.
