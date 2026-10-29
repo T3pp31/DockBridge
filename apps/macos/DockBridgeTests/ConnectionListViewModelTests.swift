@@ -544,25 +544,28 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         // Avoid the root-user warning so the RSA branch is exercised.
         profile.username = "testuser"
 
-        let inspectionStarted = DispatchSemaphore(value: 0)
-        let finishInspection = DispatchSemaphore(value: 0)
-        let localViewModel = makeViewModel { _, _, _ in
-            inspectionStarted.signal()
-            finishInspection.wait()
-            return true
+        let inspectionCompleted = DispatchSemaphore(value: 0)
+        let localViewModel = makeViewModel { profile, _, bookmarkService in
+            defer { inspectionCompleted.signal() }
+            do {
+                guard let bookmark = profile.privateKeyBookmark else {
+                    XCTFail("Expected generated key bookmark")
+                    return nil
+                }
+                let algorithm = try bookmarkService.withAccess(to: bookmark) { keyURL in
+                    try inspectPrivateKeyAlgorithm(keyPath: keyURL.path, passphrase: nil)
+                }
+                XCTAssertEqual(algorithm, .ed25519)
+                return algorithm == .rsa
+            } catch {
+                XCTFail("Generated Ed25519 key inspection failed: \(error)")
+                return nil
+            }
         }
 
-        if localViewModel.showRootWarning {
-            localViewModel.confirmRootConnect()
-        }
-        let didStartInspection = await waitForSignal(inspectionStarted)
-        // The inspector may finish before the wait starts if the task
-        // completes fast; treat a cleared pending profile as proof of a
-        // completed inspection.
-        XCTAssertTrue(didStartInspection || localViewModel.pendingConnectProfile == nil)
-        finishInspection.signal()
-        // Wait until the flow advances past inspection, as evidenced by
-        // pendingConnectProfile clearing (issue #642).
+        localViewModel.requestConnect(profile: profile)
+        let didCompleteInspection = await waitForSignal(inspectionCompleted)
+        XCTAssertTrue(didCompleteInspection)
         for _ in 0..<50 where localViewModel.pendingConnectProfile != nil {
             try await Task.sleep(for: .milliseconds(20))
         }
