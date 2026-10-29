@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Unable to check the remote destination. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to check the remote destination. Try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモートの宛先を確認できません。もう一度お試しください。"
+          }
+        }
+      }
+    },
     "A file already exists at the destination.": {
       "extractionState": "manual",
       "localizations": {

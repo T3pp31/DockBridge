@@ -101,6 +101,50 @@ final class MainViewModelTestabilityTests: XCTestCase {
         )
     }
 
+    func testRemoteMoveRequiresKnownAbsentDestination() async {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        bridge.directoryListings["/"] = []
+
+        let unknownResult = await viewModel.moveRemoteItem(from: "/source/file.txt", toDirectory: "/target")
+        XCTAssertFalse(unknownResult)
+        XCTAssertTrue(bridge.renamed.isEmpty)
+        XCTAssertEqual(viewModel.errorMessage, String(localized: "Unable to check the remote destination. Try again."))
+
+        bridge.directoryListings["/target"] = [makeRemoteItem(name: "file.txt", path: "/target/file.txt")]
+        let collisionResult = await viewModel.moveRemoteItem(from: "/source/file.txt", toDirectory: "/target")
+        XCTAssertFalse(collisionResult)
+        XCTAssertTrue(bridge.renamed.isEmpty)
+
+        bridge.directoryListings["/target"] = []
+        let absentResult = await viewModel.moveRemoteItem(from: "/source/file.txt", toDirectory: "/target")
+        XCTAssertTrue(absentResult)
+        XCTAssertEqual(bridge.renamed.count, 1)
+        XCTAssertEqual(bridge.renamed.first?.to, "/target/file.txt")
+    }
+
+    func testRemoteRenameRequiresKnownAbsentDestination() async {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        bridge.directoryListings["/"] = []
+        viewModel.beginRename(item: makeRemoteItem(name: "old.txt", path: "/target/old.txt"))
+        viewModel.renameText = "new.txt"
+
+        await viewModel.commitRename()
+        XCTAssertTrue(bridge.renamed.isEmpty)
+        XCTAssertNotNil(viewModel.renameTarget)
+        XCTAssertEqual(viewModel.errorMessage, String(localized: "Unable to check the remote destination. Try again."))
+
+        bridge.directoryListings["/target"] = [makeRemoteItem(name: "new.txt", path: "/target/new.txt")]
+        await viewModel.commitRename()
+        XCTAssertTrue(bridge.renamed.isEmpty)
+        XCTAssertNotNil(viewModel.renameTarget)
+
+        bridge.directoryListings["/target"] = []
+        await viewModel.commitRename()
+        XCTAssertEqual(bridge.renamed.count, 1)
+        XCTAssertEqual(bridge.renamed.first?.to, "/target/new.txt")
+        XCTAssertNil(viewModel.renameTarget)
+    }
+
     private func makeTrackedRemoteEditFile(
         contents: String = "original",
         remotePath: String = "/srv/config.txt"

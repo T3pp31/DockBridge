@@ -1618,7 +1618,11 @@ final class MainViewModel: ObservableObject {
             // Refuse to silently replace an existing item at the destination
             // (issue #694). The rename must be re-issued by the user after
             // resolving the conflict.
-            if await remoteDestinationExists(path: destination) {
+            guard let destinationExists = await remoteDestinationExists(path: destination) else {
+                errorMessage = String(localized: "Unable to check the remote destination. Try again.")
+                return false
+            }
+            if destinationExists {
                 errorMessage = String(localized: "A file already exists at the destination.")
                 return false
             }
@@ -1676,7 +1680,11 @@ final class MainViewModel: ObservableObject {
 
         do {
             // Refuse to silently replace an existing item (issue #694).
-            if await remoteDestinationExists(path: newPath) {
+            guard let destinationExists = await remoteDestinationExists(path: newPath) else {
+                errorMessage = String(localized: "Unable to check the remote destination. Try again.")
+                return
+            }
+            if destinationExists {
                 errorMessage = String(localized: "A file already exists at the destination.")
                 return
             }
