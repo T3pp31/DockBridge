@@ -26,6 +26,24 @@ class LocalizationTests(unittest.TestCase):
             }}))
             return subprocess.run(["bash", str(SCRIPT), str(path)], capture_output=True, text=True)
 
+    def test_printf_argument_types_and_positions(self):
+        cases = [
+            ("%d %f", "%2$f %1$d", True),
+            ("%lld", "%ld", False),
+            ("%qX", "%llX", True),
+            ("%.12f", "%f", True),
+            ("%*.*f", "%3$*1$.*2$f", True),
+            ("%*f", "%f", False),
+            ("%%@ %d", "%d", True),
+            ("%S", "%s", False),
+            ("%Lf", "%f", False),
+        ]
+        for source, target, valid in cases:
+            with self.subTest(source=source, target=target):
+                result = self.verify({"stringUnit": {"value": source}},
+                                     {"stringUnit": {"value": target}})
+                self.assertEqual(result.returncode == 0, valid, result.stdout + result.stderr)
+
     def test_japanese_other_without_one(self):
         self.assertEqual(self.verify(plural(one="%lld item", other="%lld items"), plural(other="%lld個")).returncode, 0)
 
