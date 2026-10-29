@@ -23,6 +23,10 @@ final class ConnectionListViewModel: ObservableObject {
     private let keychain: KeychainService
     private let bridge: RustBridgeService
     private let bookmarkService: SecurityScopedBookmarkService
+    // Form credentials retained only for this view model's lifetime; never
+    // serialized to a profile or written to Keychain.
+    private var transientCredentials: [UUID: (password: String?, passphrase: String?)] = [:]
+
     private let rsaKeyInspector: @Sendable (
         ConnectionProfile,
         KeychainService,
@@ -212,7 +216,11 @@ final class ConnectionListViewModel: ObservableObject {
             // When Keychain storage is disabled, skip all secret operations so
             // typed credentials are used only for the current session
             // (issue #782).
-            guard saveSecrets else { return }
+            guard saveSecrets else {
+                transientCredentials[profile.id] = (password, passphrase)
+                return
+            }
+            transientCredentials.removeValue(forKey: profile.id)
 
             let account = keychain.keychainAccount(for: profile.id, kind: "profile")
             switch profile.authType {
@@ -250,6 +258,7 @@ final class ConnectionListViewModel: ObservableObject {
         defer { confirmDeleteProfile = nil }
         do {
             profiles = try store.delete(id: profile.id)
+            transientCredentials.removeValue(forKey: profile.id)
             let account = keychain.keychainAccount(for: profile.id, kind: "profile")
             do {
 
@@ -322,8 +331,12 @@ final class ConnectionListViewModel: ObservableObject {
             let inspector = rsaKeyInspector
             let keychain = keychain
             let bookmarkService = bookmarkService
+            let transient = transientCredentials[profile.id]
             let usesRsa = await Task.detached(priority: .userInitiated) {
-                inspector(profile, keychain, bookmarkService)
+                if let transient {
+                    return Self.inspectRsa(profile: profile, bookmarkService: bookmarkService, passphrase: transient.passphrase)
+                }
+                return inspector(profile, keychain, bookmarkService)
             }.value
             guard generation == connectRequestGeneration,
                   pendingConnectProfile?.id == profile.id else { return }
@@ -548,18 +561,24 @@ final class ConnectionListViewModel: ObservableObject {
         }
     }
 
+    func credentialsForConnection(profile: ConnectionProfile) throws -> (password: String?, passphrase: String?) {
+        if let credentials = transientCredentials[profile.id] {
+            return (profile.authType == .password ? credentials.password : nil,
+                    profile.authType == .privateKey ? credentials.passphrase : nil)
+        }
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        return (profile.authType == .password ? try keychain.loadPassword(account: account) : nil,
+                profile.authType == .privateKey ? try keychain.loadPassphrase(account: account) : nil)
+    }
+
     private func performConnect(
         profile: ConnectionProfile,
         connectProfile: ConnectionProfile,
         allowCredentialPrompt: Bool = true
     ) async throws {
-        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
-        var password = connectProfile.authType == .password
-            ? try keychain.loadPassword(account: account)
-            : nil
-        var passphrase = connectProfile.authType == .privateKey
-            ? try keychain.loadPassphrase(account: account)
-            : nil
+        let credentials = try credentialsForConnection(profile: connectProfile)
+        var password = credentials.password
+        var passphrase = credentials.passphrase
 
         // A one-time override from the credential prompt always takes
         // precedence over a saved (possibly stale) Keychain value (issue #571).
@@ -610,11 +629,7 @@ final class ConnectionListViewModel: ObservableObject {
         keychain: KeychainService,
         bookmarkService: SecurityScopedBookmarkService
     ) -> Bool? {
-        guard let bookmark = profile.privateKeyBookmark else {
-            // Pre-check only: without a bookmark we cannot inspect the key.
-            // Treat as unknown and let the real connection flow produce the error.
-            return nil
-        }
+        guard profile.privateKeyBookmark != nil else { return nil }
 
         let account = keychain.keychainAccount(for: profile.id, kind: "profile")
         var passphrase: String? = try? keychain.loadPassphrase(account: account)
@@ -622,6 +637,15 @@ final class ConnectionListViewModel: ObservableObject {
             SensitiveString.clear(&passphrase)
         }
 
+        return inspectRsa(profile: profile, bookmarkService: bookmarkService, passphrase: passphrase)
+    }
+
+    private nonisolated static func inspectRsa(
+        profile: ConnectionProfile,
+        bookmarkService: SecurityScopedBookmarkService,
+        passphrase: String?
+    ) -> Bool? {
+        guard let bookmark = profile.privateKeyBookmark else { return nil }
         do {
             return try bookmarkService.withAccess(to: bookmark) { keyURL in
                 let algorithm = try inspectPrivateKeyAlgorithm(keyPath: keyURL.path, passphrase: passphrase)
