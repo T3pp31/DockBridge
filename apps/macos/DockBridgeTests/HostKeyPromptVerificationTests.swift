@@ -4,22 +4,9 @@ import XCTest
 final class HostKeyPromptVerificationTests: XCTestCase {
     private var tempDirectory: URL?
 
-    private func withTimeout<T: Sendable>(
-        seconds: UInt64,
-        operation: @escaping @Sendable () async throws -> T
-    ) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask {
-                try await operation()
-            }
-            group.addTask {
-                try await Task.sleep(nanoseconds: seconds * 1_000_000_000)
-                throw URLError(.timedOut)
-            }
-            let result = try await group.next()!
-            group.cancelAll()
-            return result
-        }
+    private actor BackgroundPromptResult {
+        private(set) var value: Bool?
+        func store(_ value: Bool) { self.value = value }
     }
 
     override func tearDown() {
@@ -42,7 +29,7 @@ final class HostKeyPromptVerificationTests: XCTestCase {
 
         async let decision = bridge.awaitHostKeyDecision(for: challenge)
 
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitForPendingHostKeyChallenge(on: bridge)
         guard let pending = bridge.pendingHostKeyChallenge else {
             return XCTFail("Expected host key challenge to appear")
         }
@@ -70,7 +57,7 @@ final class HostKeyPromptVerificationTests: XCTestCase {
 
         async let decision = bridge.awaitHostKeyDecision(for: challenge)
 
-        try await Task.sleep(for: .milliseconds(50))
+        try await waitForPendingHostKeyChallenge(on: bridge)
         guard let pending = bridge.pendingHostKeyChallenge else {
             return XCTFail("Expected host key mismatch challenge to appear")
         }
@@ -117,8 +104,12 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         )
 
         // When: promptUnknownHost is invoked from a detached task (mimicking a Rust callback)
-        let backgroundTask = Task.detached {
-            bridge.promptUnknownHost(challenge: challenge)
+        let result = BackgroundPromptResult()
+        let completed = expectation(description: "Background host key prompt completed")
+        Task.detached {
+            let value = bridge.promptUnknownHost(challenge: challenge)
+            await result.store(value)
+            completed.fulfill()
         }
 
         // Then: pendingHostKeyChallenge should appear on the main actor within 2 seconds
@@ -139,9 +130,8 @@ final class HostKeyPromptVerificationTests: XCTestCase {
             bridge.respondToHostKeyChallenge(accepted: true)
         }
 
-        let promptResult = try await withTimeout(seconds: 5) {
-            await backgroundTask.value
-        }
+        await fulfillment(of: [completed], timeout: 5)
+        let promptResult = await result.value
         XCTAssertEqual(promptResult, true)
     }
 
