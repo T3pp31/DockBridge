@@ -25,6 +25,8 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     private(set) var activeSessionID: UUID?
 
     private var client: DockBridgeClient?
+    /// Most recent Rust client configuration, exposed for test verification.
+    private(set) var lastAppConfigRecord: AppConfigRecord?
     private let settings: AppSettingsService
     private let hostKeyStore: HostKeyStore
     private let bookmarkService: SecurityScopedBookmarkService
@@ -47,7 +49,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     func prepareClient() throws {
         // One DockBridgeClient owns the Rust-side session registry. Replacing
         // it while sessions are open would orphan every existing session.
-        guard client == nil else { return }
+        guard client == nil || sessions.isEmpty else { return }
         try hostKeyStore.ensureStoreDirectoryExists()
         let record = settings.buildAppConfigRecord(knownHostsPath: hostKeyStore.knownHostsPath.path)
         client = try DockBridgeClient(
@@ -56,6 +58,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
             authPromptHandler: self,
             connectionEventHandler: self
         )
+        lastAppConfigRecord = record
     }
 
     // MARK: - Session management

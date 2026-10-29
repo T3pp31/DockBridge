@@ -178,7 +178,7 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         config.mergeOpensshKnownHostsOnConnect = false
         settings.saveConfig(config)
 
-        let record = settings.buildAppConfigRecord(knownHostsPath: directory.appendingPathComponent("store.json").path)
+        let record = settings.buildAppConfigRecord(knownHostsPath: HostKeyStore(baseDirectory: directory).knownHostsPath.path)
         XCTAssertEqual(
             URL(fileURLWithPath: record.opensshKnownHostsPath).standardizedFileURL.path,
             knownHostsFile.standardizedFileURL.path
@@ -222,7 +222,7 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         tempDirectory = directory
 
-        let knownHostsPath = directory.appendingPathComponent("store.json").path
+        let knownHostsPath = HostKeyStore(baseDirectory: directory).knownHostsPath.path
         let bridge = RustBridgeService(
             settings: settings,
             hostKeyStore: HostKeyStore(baseDirectory: directory)
@@ -232,8 +232,11 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         defaults.set(90, forKey: AppSettingsKeys.connectionTimeoutSecs)
         try bridge.prepareClient()
 
-        let record = settings.buildAppConfigRecord(knownHostsPath: knownHostsPath)
-        XCTAssertEqual(record.connectionTimeoutSecs, 90)
+        XCTAssertEqual(bridge.lastAppConfigRecord?.connectionTimeoutSecs, 90)
+        XCTAssertEqual(
+            bridge.lastAppConfigRecord?.knownHostsPath,
+            knownHostsPath
+        )
     }
 
     @MainActor
