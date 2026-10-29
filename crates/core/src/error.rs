@@ -149,6 +149,8 @@ pub enum SftpError {
 /// These are protocol-defined numeric codes, unlike `error_message` which is
 /// a free-form, server-localized string. Judging errors by these codes works
 /// with OpenSSH and any standards-conforming server regardless of locale.
+/// Convert wire values with [`Self::from_raw`]; Rust enum discriminants and
+/// memory layout do not represent the protocol codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteStatusCode {
     /// End-of-file condition.
@@ -304,5 +306,33 @@ impl AppError {
             self,
             AppError::Security(SecurityError::HostKeyMismatch { .. })
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RemoteStatusCode;
+
+    #[test]
+    fn remote_status_wire_codes_are_stable() {
+        let cases = [
+            (1, RemoteStatusCode::Eof),
+            (2, RemoteStatusCode::NoSuchFile),
+            (3, RemoteStatusCode::PermissionDenied),
+            (4, RemoteStatusCode::Failure),
+            (5, RemoteStatusCode::BadMessage),
+            (6, RemoteStatusCode::NoConnection),
+            (7, RemoteStatusCode::ConnectionLost),
+            (8, RemoteStatusCode::OpUnsupported),
+        ];
+        for (wire_code, expected) in cases {
+            assert_eq!(RemoteStatusCode::from_raw(wire_code), expected);
+        }
+        for wire_code in [0, 9, 42, u32::MAX] {
+            assert_eq!(
+                RemoteStatusCode::from_raw(wire_code),
+                RemoteStatusCode::Other(wire_code)
+            );
+        }
     }
 }
