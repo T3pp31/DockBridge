@@ -2682,9 +2682,9 @@ mod tests {
                     server.write_remote_file("/upload/second", b"second").await;
                 }
             }
-            let mut first = manager.make_task(0, direction.clone(), &first_path, "/upload/first");
+            let mut first = manager.make_task(0, direction, &first_path, "/upload/first");
             first.status = TransferStatus::Cancelled;
-            let second = manager.make_task(0, direction.clone(), &second_path, "/upload/second");
+            let second = manager.make_task(0, direction, &second_path, "/upload/second");
             manager.insert_task(first.clone());
             manager.insert_task(second.clone());
             manager.clear_completed_transfers();
