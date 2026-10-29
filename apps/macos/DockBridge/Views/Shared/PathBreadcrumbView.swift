@@ -4,8 +4,6 @@ struct PathBreadcrumbView: View {
     let segments: [PathBreadcrumb.Segment]
     let onSelect: (String) -> Void
 
-    @State private var hasScrolledToCurrent = false
-
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
