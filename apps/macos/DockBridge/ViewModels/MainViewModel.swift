@@ -401,6 +401,7 @@ final class MainViewModel: ObservableObject {
         connectionList.load()
         transferQueue.startPolling()
         refreshPathBookmarks()
+        restorePathBookmarkAccess()
         cleanupRemoteOpenTemp()
         startRemoteEditMonitoring()
     }
@@ -618,6 +619,20 @@ final class MainViewModel: ObservableObject {
             bookmarkService.stopAccessing(url)
         }
         pathBookmarkAccessURL = nil
+    }
+
+    private func restorePathBookmarkAccess() {
+        guard pathBookmarkAccessURL == nil, let bookmark = localPathBookmarks.first(where: {
+            $0.securityScopedBookmark != nil
+                && $0.path == localPath.path
+        }) else { return }
+
+        do {
+            let url = try bookmarkService.resolveBookmark(bookmark.securityScopedBookmark!)
+            pathBookmarkAccessURL = url
+        } catch {
+            errorMessage = error.dockBridgeUserMessage
+        }
     }
 
     private func remoteDirectoryExists(_ path: String) async -> Bool {
