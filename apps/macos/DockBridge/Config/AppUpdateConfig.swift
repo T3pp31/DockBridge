@@ -22,15 +22,17 @@ enum AppUpdateConfig {
     /// `If-None-Match` on the next check to conserve the unauthenticated
     /// rate limit (60 req/h/IP).
     static let etagDefaultsKey = "updateCheckETag"
+    /// Test-only storage override. Production code uses standard defaults.
+    static var etagDefaults: UserDefaults = .standard
     static func persistETag(_ etag: String) {
-        UserDefaults.standard.set(etag, forKey: etagDefaultsKey)
+        etagDefaults.set(etag, forKey: etagDefaultsKey)
     }
     static func showExistingETag() -> String? {
-        UserDefaults.standard.string(forKey: etagDefaultsKey)
+        etagDefaults.string(forKey: etagDefaultsKey)
     }
 
     static func clearETag() {
-        UserDefaults.standard.removeObject(forKey: etagDefaultsKey)
+        etagDefaults.removeObject(forKey: etagDefaultsKey)
     }
 
     /// Cached, decoded release body from the last successful 200 response.
@@ -42,9 +44,12 @@ enum AppUpdateConfig {
     /// timestamp so stale entries are invalidated after a day.
     static let releaseBodyCacheFileName = "updateCheckReleaseBody.json"
     static let releaseBodyCacheMaxAge: TimeInterval = 24 * 60 * 60
+    /// Test-only cache directory override. Production uses the app caches dir.
+    static var releaseBodyCacheDirectory: URL?
 
     private static func releaseBodyCacheURL() -> URL {
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let dir = releaseBodyCacheDirectory
+            ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         return dir.appendingPathComponent(releaseBodyCacheFileName, isDirectory: false)
     }
 
