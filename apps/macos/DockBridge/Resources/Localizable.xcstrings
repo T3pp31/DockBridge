@@ -4157,6 +4157,23 @@
         }
       }
     },
+    "Keychain access was denied while reading the encryption key. Unlock the Keychain and allow access, or restore the same code signature. Do not delete the connection or its keychain entries; encrypted profiles would become unrecoverable.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keychain access was denied while reading the encryption key. Unlock the Keychain and allow access, or restore the same code signature. Do not delete the connection or its keychain entries; encrypted profiles would become unrecoverable."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暗号化キーの読み込み時にキーチェーンへのアクセスが拒否されました。キーチェーンのロックを解除してアクセスを許可するか、以前と同じコード署名を復元してください。接続情報や対応するキーチェーン項目は削除しないでください。暗号化されたプロファイルを復元できなくなります。"
+          }
+        }
+      }
+    },
     "Keychain access was denied. This often happens after rebuilding with a different code signature. Delete the connection and save credentials again, or remove stale DockBridge entries in Keychain Access.": {
       "extractionState": "manual",
       "localizations": {
@@ -4187,6 +4204,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "現在のアプリ環境では Keychain を利用できません。Xcode で Development Team を選択して再ビルドするか、Keychain Access で古い DockBridge 項目を削除して認証情報を保存し直してください。"
+          }
+        }
+      }
+    },
+    "Keychain is not available in the current app context. Rebuild from Xcode with your Development Team selected. Do not delete DockBridge keychain items; existing encrypted connections would become unrecoverable.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keychain is not available in the current app context. Rebuild from Xcode with your Development Team selected. Do not delete DockBridge keychain items; existing encrypted connections would become unrecoverable."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現在のアプリの実行環境ではキーチェーンを利用できません。XcodeでDevelopment Teamを選択して再ビルドしてください。DockBridgeのキーチェーン項目は削除しないでください。既存の暗号化された接続情報を復元できなくなります。"
           }
         }
       }
