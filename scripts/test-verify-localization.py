@@ -29,6 +29,9 @@ class LocalizationTests(unittest.TestCase):
     def test_japanese_other_without_one(self):
         self.assertEqual(self.verify(plural(one="%lld item", other="%lld items"), plural(other="%lld個")).returncode, 0)
 
+    def test_japanese_scalar_for_english_plural(self):
+        self.assertEqual(self.verify(plural(one="%lld item", other="%lld items"), {"stringUnit": {"value": "%lld個"}}).returncode, 0)
+
     def test_additional_target_category(self):
         self.assertEqual(self.verify(plural(other="%lld items"), plural(one="%lld個", other="%lld個")).returncode, 0)
 
