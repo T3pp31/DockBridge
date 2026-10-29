@@ -666,7 +666,7 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
-				"$(SRCROOT)/Resources/Assets.xcassets",
+				"$(SRCROOT)/DockBridge/Resources/Assets.xcassets",
 				"$(SRCROOT)/../../scripts/generate-app-icon-icns.sh",
 			);
 			name = "Generate Dock App Icon icns";
