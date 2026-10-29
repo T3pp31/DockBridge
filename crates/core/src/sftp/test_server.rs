@@ -538,12 +538,10 @@ impl russh_sftp::server::Handler for SftpHandler {
         }
 
         #[cfg(test)]
-        {
-            self.failures.read_started.notify_one();
-            let delay = self.failures.read_delay_ms.load(Ordering::Relaxed);
-            if delay > 0 {
-                tokio::time::sleep(Duration::from_millis(delay)).await;
-            }
+        self.failures.read_started.notify_one();
+        let delay = self.failures.read_delay_ms.load(Ordering::Relaxed);
+        if delay > 0 {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
         }
 
         let open = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;
@@ -1187,10 +1185,7 @@ fn set_file_times_by_path(
         tv_sec: secs.unwrap_or_default() as libc::time_t,
         tv_nsec: if secs.is_some() { 0 } else { libc::UTIME_OMIT },
     };
-    let times = [
-        to_timespec(atime),
-        to_timespec(mtime),
-    ];
+    let times = [to_timespec(atime), to_timespec(mtime)];
 
     let result = unsafe {
         libc::utimensat(
