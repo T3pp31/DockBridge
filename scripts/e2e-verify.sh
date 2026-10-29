@@ -30,6 +30,8 @@ CLI=(cargo run -q -p dockbridge-cli -- --config "$CONFIG")
 
 pass=0
 fail=0
+LOCK_DIR="${TMPDIR:-/tmp}/dockbridge-sftp-${CONTAINER_NAME}.lock"
+LOCK_ACQUIRED=false
 
 cleanup() {
   if (( fail > 0 )); then
@@ -40,7 +42,10 @@ cleanup() {
   fi
   # Discard the per-run container so stale authorized_keys cannot survive into
   # the next run (issue #672).
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  if [[ "$LOCK_ACQUIRED" == true ]]; then
+    docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    rmdir "$LOCK_DIR"
+  fi
   rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
@@ -86,6 +91,11 @@ ensure_key() {
 }
 
 ensure_container() {
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "SFTP verification already holds $LOCK_DIR; use a different SFTP_CONTAINER or remove a stale lock after checking no run is active" >&2
+    return 1
+  fi
+  LOCK_ACQUIRED=true
   ensure_key
   log "Recreating Docker SFTP container $CONTAINER_NAME ..."
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
