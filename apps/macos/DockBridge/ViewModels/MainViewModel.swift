@@ -401,6 +401,19 @@ final class MainViewModel: ObservableObject {
     func onAppear() {
         connectionList.load()
         transferQueue.startPolling()
+        // Reacquire access to the default local folder if the view was
+        // previously removed and onDisappear released it.
+        if defaultLocalAccessURL == nil {
+            let config = settings.loadConfig()
+            let resolution = DefaultLocalPathResolver.resolve(
+                config: config,
+                bookmarkService: bookmarkService
+            )
+            defaultLocalAccessURL = resolution.accessURL
+            if case .bookmarkFailed(_, let error) = resolution {
+                errorMessage = DefaultLocalPathResolver.userMessage(for: error)
+            }
+        }
         refreshPathBookmarks()
         restorePathBookmarkAccess()
         cleanupRemoteOpenTemp()
