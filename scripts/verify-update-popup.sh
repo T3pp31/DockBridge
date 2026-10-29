@@ -123,7 +123,16 @@ if [[ -z "$expected_url" ]]; then
   echo "FAIL: no DMG asset in latest release" >&2
   exit 1
 fi
-if [[ "$expected_url" == *"DockBridge-0.1.2-macOS.dmg" ]]; then
+expected_asset_name=$(awk -F'"' '/^asset_name_template / { print $2; exit }' config/release.toml)
+release_version=$(awk -F'"' '/^version / { print $2; exit }' config/release.toml)
+release_app_name=$(awk -F'"' '/^app_name / { print $2; exit }' config/release.toml)
+if [[ -z "$expected_asset_name" || -z "$release_version" || -z "$release_app_name" ]]; then
+  echo "FAIL: Required release asset configuration is missing" >&2
+  exit 1
+fi
+expected_dmg_name="${expected_asset_name//\{app_name\}/${release_app_name}}"
+expected_dmg_name="${expected_dmg_name//\{version\}/${release_version}}"
+if [[ "$expected_url" == *"$expected_dmg_name" ]]; then
   echo "PASS: Download button clicked; target URL is $expected_url"
 else
   echo "FAIL: Unexpected DMG URL: $expected_url"
