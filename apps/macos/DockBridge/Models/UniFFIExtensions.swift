@@ -59,12 +59,12 @@ extension DockBridgeError {
             || lowercased.contains("recv error") {
             return true
         }
-        // "eof" only as its own token (not inside user-controlled path segments)
-        // so geoffrey / thereof.txt do not tear down a live session.
-        let tokens = lowercased.split {
-            !$0.isLetter && !$0.isNumber && $0 != "_"
-        }
-        return tokens.contains(where: { $0 == "eof" || $0 == "eof," })
+        // Match disconnect phrases rather than a bare token so a path
+        // segment like "eof.txt" does not tear down a live session (issue #689).
+        return lowercased.contains("unexpected eof")
+            || lowercased.contains("eof while reading")
+            || lowercased.contains("connection closed: eof")
+            || lowercased.contains("eof from server")
     }
 
     /// Detects SSH authentication / private-key unlock failures from raw bridge messages.
