@@ -370,7 +370,7 @@ impl<'a> SftpClient<'a> {
         let local_size = local_metadata.as_ref().map(|metadata| metadata.len());
         let resume_offset = match local_size {
             Some(size) => {
-                self.find_resumable_upload_offset(size, &parent, &local, &remote, &mut local_file)
+                self.find_resumable_upload_offset(size, &parent, &local, &remote)
                     .await?
             }
             None => None,
@@ -430,14 +430,9 @@ impl<'a> SftpClient<'a> {
         partial.finalize_rename(&remote_path, local_metadata).await
     }
 
-    /// Maximum number of leading bytes compared between the partial and the
-    /// local file before trusting a resume. This bounds the extra round-trip
-    /// cost while still catching content changes at the start of the file.
-    const RESUME_VERIFICATION_BYTES: u64 = 64 * 1024;
-
     /// Returns the byte offset to continue a previous attempt from, when a
     /// leftover partial for this `(local, remote)` pair exists, is a strict
-    /// prefix of the source file, AND its leading bytes match the current local
+    /// prefix of the source file, AND all its bytes match the current local
     /// content (issue #313, #750). `Ok(None)` starts from scratch.
     ///
     /// A partial that is empty, at least as large as the source, or missing is
@@ -449,7 +444,6 @@ impl<'a> SftpClient<'a> {
         parent: &str,
         local: &str,
         remote: &str,
-        local_file: &mut tokio::fs::File,
     ) -> Result<Option<u64>, SftpError> {
         let partial_path = join_remote_path(
             parent,
@@ -464,37 +458,36 @@ impl<'a> SftpClient<'a> {
         if size == 0 || size >= local_size {
             return Ok(None);
         }
-        // Compare the leading bytes of the partial against the current local
-        // content. If the local file was edited since the partial was written,
-        // the mismatch forces a fresh upload instead of silently concatenating
-        // old and new data (issue #750).
-        let verify_len = size.min(Self::RESUME_VERIFICATION_BYTES) as usize;
+        // Verify through independent handles so a rejected partial cannot
+        // advance the source handle used by the actual upload.
         let Ok(mut partial_file) = self.sftp().open(&partial_path).await else {
             return Ok(None);
         };
-        let mut partial_prefix = vec![0u8; verify_len];
+        let Ok(mut verification_file) = tokio::fs::File::open(local).await else {
+            return Ok(None);
+        };
+        let mut partial_prefix = vec![0u8; RESUME_VERIFICATION_BYTES as usize];
+        let mut local_prefix = vec![0u8; RESUME_VERIFICATION_BYTES as usize];
+        let mut remaining = size;
         use tokio::io::AsyncReadExt;
-        if partial_file.read_exact(&mut partial_prefix).await.is_err() {
-            return Ok(None);
+        while remaining > 0 {
+            let verify_len = remaining.min(RESUME_VERIFICATION_BYTES) as usize;
+            if partial_file
+                .read_exact(&mut partial_prefix[..verify_len])
+                .await
+                .is_err()
+                || verification_file
+                    .read_exact(&mut local_prefix[..verify_len])
+                    .await
+                    .is_err()
+                || partial_prefix[..verify_len] != local_prefix[..verify_len]
+            {
+                drop(partial_file);
+                let _ = self.delete(&partial_path).await;
+                return Ok(None);
+            }
+            remaining -= verify_len as u64;
         }
-        let mut local_prefix = vec![0u8; verify_len];
-        if local_file.read_exact(&mut local_prefix).await.is_err() {
-            return Ok(None);
-        }
-        if partial_prefix != local_prefix {
-            return Ok(None);
-        }
-        // Rewind the local file so the caller seeks to the resume offset from
-        // the beginning rather than from the post-verification position.
-        use tokio::io::AsyncSeekExt;
-        local_file
-            .seek(std::io::SeekFrom::Start(0))
-            .await
-            .map_err(|err| SftpError::UploadFailed {
-                local: local.to_string(),
-                remote: remote.to_string(),
-                message: format!("failed to rewind local file after resume verification: {err}"),
-            })?;
         Ok(Some(size))
     }
 
@@ -5819,6 +5812,70 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(contents, payload);
+        assert!(server.remote_partial_paths().is_empty());
+    }
+
+    #[tokio::test]
+    async fn upload_restarts_when_partial_prefix_mismatches() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        let payload = b"NEW-BYTES".to_vec();
+        tokio::fs::write(&local_path, &payload).await.unwrap();
+        let remote = "/upload/file.bin";
+        let partial_name = format!(
+            ".dockbridge-{}.partial",
+            resume_partial_suffix(&local_path.display().to_string(), remote)
+        );
+        let partial = b"OLD".to_vec();
+        server
+            .write_remote_file(&format!("/upload/{partial_name}"), &partial)
+            .await;
+
+        client.upload(&local_path, remote).await.unwrap();
+
+        assert_eq!(
+            tokio::fs::read(server.root.join("upload/file.bin"))
+                .await
+                .unwrap(),
+            payload
+        );
+        assert!(server.remote_partial_paths().is_empty());
+    }
+
+    #[tokio::test]
+    async fn upload_restarts_when_partial_differs_after_first_verification_chunk() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        let payload = vec![b'N'; super::RESUME_VERIFICATION_BYTES as usize * 2 + 1];
+        tokio::fs::write(&local_path, &payload).await.unwrap();
+        let remote = "/upload/file.bin";
+        let partial_name = format!(
+            ".dockbridge-{}.partial",
+            resume_partial_suffix(&local_path.display().to_string(), remote)
+        );
+        let partial = {
+            let mut bytes = payload[..super::RESUME_VERIFICATION_BYTES as usize + 3].to_vec();
+            bytes[super::RESUME_VERIFICATION_BYTES as usize + 1] = b'O';
+            bytes
+        };
+        server
+            .write_remote_file(&format!("/upload/{partial_name}"), &partial)
+            .await;
+
+        client.upload(&local_path, remote).await.unwrap();
+
+        assert_eq!(
+            tokio::fs::read(server.root.join("upload/file.bin"))
+                .await
+                .unwrap(),
+            payload
+        );
         assert!(server.remote_partial_paths().is_empty());
     }
 
