@@ -74,11 +74,8 @@ ensure_key() {
 }
 
 ensure_container() {
-  if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
-    return 0
-  fi
   ensure_key
-  log "Starting Docker SFTP container $CONTAINER_NAME ..."
+  log "Recreating Docker SFTP container $CONTAINER_NAME ..."
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   docker run -d --name "$CONTAINER_NAME" -p "${PORT}:22" -e SFTP_USER="$USER" \
     -v "$WORKDIR/id_ed25519.pub:/home/$USER/.ssh/keys/id_ed25519.pub:ro" \
