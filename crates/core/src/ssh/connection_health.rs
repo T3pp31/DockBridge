@@ -16,7 +16,15 @@ fn strip_quoted_paths(message: &str) -> String {
         let after_open = &rest[start + quote.len_utf8()..];
         if let Some(end) = after_open.find(quote) {
             result.push_str(&rest[..start]);
-            result.push_str(" \"path\" ");
+            // Debug formatting quotes error text as well as paths. Keep
+            // error fields and the SFTP IO wrapper visible to the classifier.
+            let prefix = rest[..start].trim_end().to_lowercase();
+            if prefix.ends_with("message:") || prefix.ends_with("error:") || prefix.ends_with("io(")
+            {
+                result.push_str(&after_open[..end]);
+            } else {
+                result.push_str(" \"path\" ");
+            }
             rest = &after_open[end + quote.len_utf8()..];
         } else {
             break;
@@ -39,14 +47,17 @@ pub fn is_connection_lost_message(message: &str) -> bool {
         || lower.contains("sender dropped")
         || lower.contains("channel closed")
         || lower.contains("recv error")
+        || lower.contains("connection closed by the remote side")
     {
         return true;
     }
-    // Match eof as a phrase only; a bare token can be a path segment.
-    (lower.contains("unexpected eof")
-        || lower.contains("eof while reading")
-        || lower.contains("connection closed: eof")
-        || lower.contains("eof from server"))
+    // Quoted paths have been removed. Keep path separators and extensions
+    // inside tokens so unquoted `/eof` and `eof.txt` are not bare EOF errors.
+    lower
+        .split(|character: char| {
+            !character.is_alphanumeric() && !matches!(character, '.' | '/' | '\\' | '_' | '-')
+        })
+        .any(|token| matches!(token, "eof" | "disconnected"))
         && !lower.contains("permission denied")
         && !lower.contains("no such file")
         && !lower.contains("not found")
@@ -107,6 +118,60 @@ mod tests {
         assert!(is_connection_lost_message("sender dropped"));
         assert!(is_connection_lost_message("write channel closed"));
         assert!(is_connection_lost_message("RecvError: channel closed"));
+    }
+
+    #[test]
+    fn detects_bare_and_io_eof_messages() {
+        for message in ["EOF", "read: EOF", "I/O: EOF", "early eof"] {
+            assert!(is_connection_lost_message(message), "{message}");
+        }
+    }
+
+    #[test]
+    fn detects_debug_formatted_error_messages() {
+        let error = std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "Connection reset by peer",
+        );
+        assert!(is_connection_lost_message(&format!("{error:?}")));
+        let sftp_error = russh_sftp::client::error::Error::IO("Connection reset by peer".into());
+        assert!(is_connection_lost_message(&format!("{sftp_error:?}")));
+        assert!(is_connection_lost_message(
+            "failed to download '/tmp/file': IO { message: \"unexpected eof\" }"
+        ));
+    }
+
+    #[test]
+    fn detects_russh_disconnect_displays() {
+        for error in [russh::Error::Disconnect, russh::Error::HUP] {
+            assert!(is_connection_lost_message(&error.to_string()), "{error}");
+        }
+    }
+
+    #[test]
+    fn ignores_disconnect_phrases_in_quoted_basenames_and_paths() {
+        for path in [
+            "eof",
+            "eof.txt",
+            "EOF.bin",
+            "session closed",
+            "broken pipe",
+            "/download/connection reset",
+            "/download/unexpected eof",
+        ] {
+            for quote in ['\'', '"'] {
+                let message = format!("failed to delete {quote}{path}{quote}: failure");
+                assert!(!is_connection_lost_message(&message), "{message}");
+            }
+        }
+    }
+
+    #[test]
+    fn ignores_unquoted_eof_paths() {
+        for path in ["eof.txt", "/eof", "eof/file", "eof.bin"] {
+            let message = format!("failed to delete {path}: failure");
+            assert!(!is_connection_lost_message(&message), "{message}");
+        }
     }
 
     #[test]
