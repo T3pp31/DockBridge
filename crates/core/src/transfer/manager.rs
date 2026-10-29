@@ -311,18 +311,6 @@ impl TransferManager {
         }
     }
 
-    #[cfg(test)]
-    fn find_task_with_policy(
-        &self,
-        task_id: u64,
-    ) -> Option<(TransferTask, TransferOverwritePolicy)> {
-        let tasks = self.tasks.lock().ok()?;
-        let task = tasks.iter().find(|task| task.id == task_id)?.clone();
-        let policies = self.overwrite_policies.lock().ok()?;
-        let overwrite_policy = policies.get(&task_id).copied().unwrap_or_default();
-        Some((task, overwrite_policy))
-    }
-
     fn update_task_status(&self, task_id: u64, status: TransferStatus) {
         if let Ok(mut tasks) = self.tasks.lock() {
             if let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) {
