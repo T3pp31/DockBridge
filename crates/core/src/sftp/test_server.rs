@@ -467,6 +467,12 @@ impl russh_sftp::server::Handler for SftpHandler {
         if !self.is_within_root(&local) {
             return Err(StatusCode::PermissionDenied);
         }
+        // Missing parents must fail instead of being created by OPEN.
+        if let Some(parent) = local.parent() {
+            if !parent.is_dir() {
+                return Err(StatusCode::NoSuchFile);
+            }
+        }
         let mut options = OpenOptions::new();
         if pflags.contains(OpenFlags::READ) {
             options.read(true);
@@ -908,7 +914,10 @@ impl TestSftpServer {
         let root_dir = tempfile::tempdir().unwrap();
         let root = root_dir.path().to_path_buf();
         fs::create_dir_all(&root).await.unwrap();
+        // Tests commonly upload into /upload; create the standard sandbox
+        // directories up front (issue #658).
         fs::create_dir_all(root.join("upload")).await.unwrap();
+        fs::create_dir_all(root.join("download")).await.unwrap();
 
         let failures = Arc::new(FailureConfig::default());
         // Advertise posix-rename@openssh.com by default (OpenSSH-compatible);
