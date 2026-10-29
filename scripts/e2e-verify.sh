@@ -36,7 +36,7 @@ cleanup() {
     # Keep the diagnostics when verification failed; otherwise remove the
     # whole temporary workdir (issue #673).
     log "Keeping debug log: $LOG"
-    cp "$LOG" "${TMPDIR:-/tmp}/dockbridge-e2e-verify.log"
+    cp "$LOG" "${TMPDIR:-/tmp}/dockbridge-e2e-verify.log" || true
   fi
   # Discard the per-run container so stale authorized_keys cannot survive into
   # the next run (issue #672).
