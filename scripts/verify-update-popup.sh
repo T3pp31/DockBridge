@@ -113,13 +113,14 @@ else
   exit 1
 fi
 
-echo "== Test 2: Download opens DMG URL =="
+echo "== Test 2: Download opens release page =="
+LOG_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 click_sheet_button 2
 sleep 2
 api_json=$(curl -fsS --max-time 30 -H "Accept: application/vnd.github+json" https://api.github.com/repos/T3pp31/DockBridge/releases/latest) \
   || { echo "FAIL: GitHub API request failed" >&2; exit 1; }
-expected_url=$(printf '%s' "$api_json" | python3 -c "import sys,json; r=json.load(sys.stdin); print(next((a['browser_download_url'] for a in r.get('assets', []) if a['name'].endswith('.dmg')), ''))")
-if [[ -z "$expected_url" ]]; then
+expected_asset_url=$(printf '%s' "$api_json" | python3 -c "import sys,json; r=json.load(sys.stdin); print(next((a['browser_download_url'] for a in r.get('assets', []) if a['name'].endswith('.dmg')), ''))")
+if [[ -z "$expected_asset_url" ]]; then
   echo "FAIL: no DMG asset in latest release" >&2
   exit 1
 fi
@@ -132,10 +133,19 @@ if [[ -z "$expected_asset_name" || -z "$release_version" || -z "$release_app_nam
 fi
 expected_dmg_name="${expected_asset_name//\{app_name\}/${release_app_name}}"
 expected_dmg_name="${expected_dmg_name//\{version\}/${release_version}}"
-if [[ "$expected_url" == *"$expected_dmg_name" ]]; then
+if [[ "$expected_asset_url" != *"$expected_dmg_name" ]]; then
+  echo "FAIL: Unexpected DMG URL: $expected_asset_url" >&2
+  exit 1
+fi
+
+expected_url=$(printf '%s' "$api_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['html_url'])")
+observed_url=$(log show --info --start "$LOG_START" --style compact \
+  --predicate 'process == "DockBridge" AND eventMessage CONTAINS "opening update release page:"' 2>/dev/null \
+  | sed -n 's/.*opening update release page: \(https:\/\/[^ ]*\).*/\1/p' | tail -1)
+if [[ -n "$observed_url" && "$observed_url" == "$expected_url" ]]; then
   echo "PASS: Download button clicked; target URL is $expected_url"
 else
-  echo "FAIL: Unexpected DMG URL: $expected_url"
+  echo "FAIL: Expected $expected_url, observed ${observed_url:-<none>}"
   exit 1
 fi
 
