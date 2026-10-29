@@ -1,27 +1,42 @@
-/// Returns `true` when an error message indicates the SSH/SFTP session is no longer usable.
-///
-/// Matching is deliberately *not* a raw substring scan for `"eof"`, because
-/// user-controlled remote paths routinely contain that substring (e.g.
-/// `geoffrey`, `thereof.txt`) and would cause live sessions to be torn down.
-/// "EOF" is only matched as a standalone token. Additional messages that the
-/// underlying libraries actually produce when a channel/session dies are
-/// covered as well.
 /// Strips quoted path-like segments before disconnect heuristics so a path
 /// containing a phrase cannot falsely indicate connection loss (issue #662).
 fn strip_quoted_paths(message: &str) -> String {
+    // First expose Debug error payloads, then remove paths nested inside them.
+    // Two bounded passes avoid recursively parsing server-controlled text.
+    strip_quoted_segments(&strip_quoted_segments(message, true), false)
+}
+
+fn strip_quoted_segments(message: &str, preserve_error_text: bool) -> String {
     let mut result = String::with_capacity(message.len());
     let mut rest = message;
     while let Some(start) = rest.find(['\'', '"']) {
         let quote = rest[start..].chars().next().unwrap();
         let after_open = &rest[start + quote.len_utf8()..];
-        if let Some(end) = after_open.find(quote) {
+        let mut escaped = false;
+        let end = after_open.char_indices().find_map(|(index, character)| {
+            if escaped {
+                escaped = false;
+                None
+            } else if character == '\\' {
+                escaped = true;
+                None
+            } else {
+                (character == quote).then_some(index)
+            }
+        });
+        if let Some(end) = end {
             result.push_str(&rest[..start]);
             // Debug formatting quotes error text as well as paths. Keep
             // error fields and the SFTP IO wrapper visible to the classifier.
             let prefix = rest[..start].trim_end().to_lowercase();
-            if prefix.ends_with("message:") || prefix.ends_with("error:") || prefix.ends_with("io(")
+            if preserve_error_text
+                && (prefix.ends_with("message:")
+                    || prefix.ends_with("error:")
+                    || prefix.ends_with("io("))
             {
-                result.push_str(&after_open[..end]);
+                // Debug escapes nested double quotes. Expose them to the
+                // second pass so quoted filenames are still removed.
+                result.push_str(&after_open[..end].replace("\\\"", "\""));
             } else {
                 result.push_str(" \"path\" ");
             }
@@ -34,6 +49,14 @@ fn strip_quoted_paths(message: &str) -> String {
     result
 }
 
+/// Returns `true` when an error message indicates the SSH/SFTP session is no longer usable.
+///
+/// Matching is deliberately *not* a raw substring scan for `"eof"`, because
+/// user-controlled remote paths routinely contain that substring (e.g.
+/// `geoffrey`, `thereof.txt`) and would cause live sessions to be torn down.
+/// "EOF" is only matched as a standalone token. Additional messages that the
+/// underlying libraries actually produce when a channel/session dies are
+/// covered as well.
 pub fn is_connection_lost_message(message: &str) -> bool {
     // User-controlled paths may contain disconnect phrases (e.g. a file named
     // "eof.txt" or "session closed"). Remove quoted paths before matching
@@ -162,6 +185,21 @@ mod tests {
             for quote in ['\'', '"'] {
                 let message = format!("failed to delete {quote}{path}{quote}: failure");
                 assert!(!is_connection_lost_message(&message), "{message}");
+            }
+        }
+    }
+
+    #[test]
+    fn ignores_paths_inside_debug_formatted_error_messages() {
+        for path in ["session closed", "broken pipe", "unexpected eof"] {
+            for quote in ['\'', '"'] {
+                let error = russh_sftp::client::error::Error::IO(format!(
+                    "failed to delete {quote}{path}{quote}: failure"
+                ));
+                assert!(
+                    !is_connection_lost_message(&format!("{error:?}")),
+                    "{error:?}"
+                );
             }
         }
     }
