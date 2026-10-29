@@ -644,7 +644,14 @@ impl<'a> SftpClient<'a> {
         }
 
         if is_cancelled() {
-            partial.abort(true, &mut remote_file).await?;
+            if let Err(err) = partial.abort(true, &mut remote_file).await {
+                tracing::warn!(
+                    remote = %remote,
+                    local = %local,
+                    error = %err,
+                    "failed to clean up the local partial after cancellation"
+                );
+            }
             return Err(SftpError::Cancelled);
         }
 
