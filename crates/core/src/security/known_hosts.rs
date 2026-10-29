@@ -3512,12 +3512,14 @@ mod tests {
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
 
+        // Issue #744: the parent directory already existed (tempdir), so its
+        // permissions must not be modified by the save path.
         let parent_mode = fs::metadata(path.parent().unwrap())
             .unwrap()
             .permissions()
             .mode()
             & 0o777;
-        assert_eq!(parent_mode, 0o700);
+        assert_ne!(parent_mode, 0o700);
     }
 
     #[cfg(unix)]
