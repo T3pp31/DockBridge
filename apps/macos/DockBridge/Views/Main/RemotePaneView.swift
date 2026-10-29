@@ -139,6 +139,13 @@ struct RemotePaneView: View {
                         Task { await viewModel.confirmDeleteRemote() }
                     }
                 )
+            } else {
+                // The target was cleared while the sheet was presented (e.g.
+                // by a racing update); close the now-contentless sheet so the
+                // pane stays operable (issue #785).
+                Color.clear.onAppear {
+                    viewModel.showDeleteConfirmation = false
+                }
             }
         }
         .sheet(isPresented: Binding(

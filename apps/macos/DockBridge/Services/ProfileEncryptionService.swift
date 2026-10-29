@@ -42,6 +42,8 @@ final class ProfileEncryptionService: @unchecked Sendable {
     static let masterKeyAccount = "profiles.master-key"
 
     private let keychain: KeychainService
+    // Multiple windows can create services sharing the same Keychain item.
+    private static let masterKeyLock = NSLock()
 
     init(keychain: KeychainService = .shared) {
         self.keychain = keychain
@@ -100,6 +102,9 @@ final class ProfileEncryptionService: @unchecked Sendable {
     }
 
     private func loadOrCreateMasterKey() throws -> SymmetricKey {
+        Self.masterKeyLock.lock()
+        defer { Self.masterKeyLock.unlock() }
+
         if let existing = try keychain.loadKeyData(account: Self.masterKeyAccount) {
             return SymmetricKey(data: existing)
         }

@@ -1,11 +1,40 @@
+import Observation
 import XCTest
 @testable import DockBridge
 
 final class SensitiveStringTests: XCTestCase {
     func testClearRemovesStoredText() {
-        var secret = SensitiveString()
+        let secret = SensitiveString()
         secret.text = "secret-password"
+        let copy = secret
         secret.clear()
+        XCTAssertEqual(secret.text, "")
+        XCTAssertEqual(copy.text, "")
+    }
+
+    func testEqualityComparesStoredContent() {
+        let first = SensitiveString()
+        let second = SensitiveString()
+        first.text = "secret"
+        second.text = "secret"
+        XCTAssertEqual(first, second)
+        second.text = "different"
+        XCTAssertNotEqual(first, second)
+    }
+
+    func testClearingSecretInvalidatesObservedText() {
+        let secret = SensitiveString()
+        secret.text = "secret"
+        let changed = expectation(description: "Observed credential changes")
+        withObservationTracking {
+            _ = secret.text
+        } onChange: {
+            changed.fulfill()
+        }
+
+        secret.clear()
+
+        wait(for: [changed], timeout: 1)
         XCTAssertEqual(secret.text, "")
     }
 

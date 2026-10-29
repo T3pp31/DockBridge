@@ -651,18 +651,30 @@
 		};
 		F237171785F52D87CD46728E /* Generate Dock App Icon icns */ = {
 			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputFileListPaths = (
 			);
 			inputPaths = (
+				"$(SRCROOT)/../../scripts/generate-app-icon-icns.sh",
+				"$(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/Contents.json",
+				"$(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_128x128.png",
+				"$(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_128x128@2x.png",
+				"$(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_16x16.png",
+				"$(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_16x16@2x.png",
+				"$(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_256x256.png",
+				"$(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_256x256@2x.png",
+				"$(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_32x32.png",
+				"$(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_32x32@2x.png",
+				"$(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_512x512.png",
+				"$(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_512x512@2x.png",
 			);
 			name = "Generate Dock App Icon icns";
 			outputFileListPaths = (
 			);
 			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(FULL_PRODUCT_NAME)/Contents/Resources/AppIcon.icns",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
@@ -937,7 +949,7 @@
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_STRICT_CONCURRENCY = complete;
-				SWIFT_VERSION = 5.10;
+				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
 		};
@@ -1002,7 +1014,7 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = complete;
-				SWIFT_VERSION = 5.10;
+				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
 		};

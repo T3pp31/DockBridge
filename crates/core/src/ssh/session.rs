@@ -290,11 +290,7 @@ impl SshSession {
         .map_err(|_| ConnectionError::Timeout {
             timeout_secs: config.connection_timeout_secs,
         })?
-        .map_err(|err| ConnectionError::ConnectFailed {
-            host: host.clone(),
-            port,
-            message: err.to_string(),
-        })?;
+        .map_err(|err| preserve_connection_error(err, &host, port))?;
 
         let authenticated = authenticate(
             &mut handle,
@@ -448,17 +444,62 @@ async fn authenticate(
                 }
             })?;
             let signing_key = PrivateKeyWithHashAlg::new(Arc::new(private_key), rsa_hash.flatten());
-            handle
+            let result = handle
                 .authenticate_publickey(username, signing_key)
                 .await
                 .map_err(|err| ConnectionError::ConnectFailed {
                     host: host.to_string(),
                     port,
                     message: err.to_string(),
-                })
-                .map(|result| result.success())
-                .map_err(Into::into)
+                })?;
+            // Public key accepted but the server still requires an additional
+            // challenge (e.g. TOTP via keyboard-interactive). Fall through to
+            // keyboard-interactive when offered and a prompt handler is wired
+            // up (issue #800).
+            if result.success() {
+                return Ok(true);
+            }
+            match &result {
+                AuthResult::Failure {
+                    remaining_methods, ..
+                } => {
+                    if remaining_methods.contains(&MethodKind::KeyboardInteractive) {
+                        if let Some(handler) = auth_prompt {
+                            return keyboard_interactive_auth(
+                                handle, username, host, port, handler,
+                            )
+                            .await;
+                        }
+                        return Ok(false);
+                    }
+                    if remaining_methods.is_empty() {
+                        return Err(AuthError::MethodUnavailable.into());
+                    }
+                    Ok(false)
+                }
+                _ => Ok(false),
+            }
         }
+    }
+}
+
+/// Keeps structured connection errors intact and only flattens low-level
+/// transport errors into `ConnectFailed`. This preserves host-key rejection and
+/// mismatch details across `client::connect`.
+fn preserve_connection_error(error: ConnectionError, host: &str, port: u16) -> ConnectionError {
+    match error {
+        err if matches!(
+            err,
+            ConnectionError::HostKeyRejected { .. } | ConnectionError::Timeout { .. }
+        ) =>
+        {
+            err
+        }
+        error => ConnectionError::ConnectFailed {
+            host: host.to_string(),
+            port,
+            message: error.to_string(),
+        },
     }
 }
 
@@ -501,12 +542,16 @@ async fn keyboard_interactive_auth(
                 echo: prompt.echo,
             })
             .collect();
-        let answers = auth_prompt.prompt(&name, &instructions, &challenge);
+        let mut answers = auth_prompt.prompt(&name, &instructions, &challenge);
         if answers.len() != challenge.len() || answers.iter().any(Option::is_none) {
             // Cancelled: abandon the round instead of sending partial answers.
+            answers.zeroize();
             return Ok(false);
         }
-        let responses: Vec<String> = answers
+        // russh owns Vec<String> while sending the round. Move the answers
+        // directly rather than retaining an extra plaintext clone. Cancellation
+        // above is zeroized here; russh's internal buffers are outside our control.
+        let responses = answers
             .into_iter()
             .map(|answer| answer.unwrap_or_default())
             .collect();
@@ -514,5 +559,29 @@ async fn keyboard_interactive_auth(
             .authenticate_keyboard_interactive_respond(responses)
             .await
             .map_err(connect_failed)?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserve_connection_error_keeps_host_key_rejection() {
+        // Given: a structured host-key rejection from the SSH handler
+        let original = ConnectionError::HostKeyRejected {
+            host: "example.com".to_string(),
+            port: 2222,
+        };
+
+        // When: the connect future is flattened for reporting
+        let mapped = preserve_connection_error(original, "example.com", 2222);
+
+        // Then: the typed rejection is preserved instead of becoming ConnectFailed
+        assert!(matches!(
+            mapped,
+            ConnectionError::HostKeyRejected { host, port }
+                if host == "example.com" && port == 2222
+        ));
     }
 }

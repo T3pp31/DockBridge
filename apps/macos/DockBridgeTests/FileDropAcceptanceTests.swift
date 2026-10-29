@@ -130,7 +130,7 @@ final class FileDropAcceptanceTests: XCTestCase {
         XCTAssertTrue(movedItems.contains { $0.name == localFile.lastPathComponent })
     }
 
-    func testLocalMoveAcceptsOnSuccess() throws {
+    func testLocalMoveAcceptsOnSuccess() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("local-drop-\(UUID().uuidString)", isDirectory: true)
         let sourceDirectory = root.appendingPathComponent("source", isDirectory: true)
@@ -162,7 +162,7 @@ final class FileDropAcceptanceTests: XCTestCase {
         guard FileDropValidation.canMoveLocalItem(from: sourceFile, to: viewModel.localPath) else {
             return XCTFail("Expected valid local move")
         }
-        try viewModel.moveLocalItem(from: sourceFile, toDirectory: viewModel.localPath)
+        try await viewModel.moveLocalItem(from: sourceFile, toDirectory: viewModel.localPath)
         accepted = true
 
         XCTAssertTrue(accepted)
@@ -174,7 +174,7 @@ final class FileDropAcceptanceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: sourceFile.path))
     }
 
-    func testLocalMoveRejectsExistingDestinationWithoutOverwriting() throws {
+    func testLocalMoveRejectsExistingDestinationWithoutOverwriting() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("local-drop-existing-\(UUID().uuidString)", isDirectory: true)
         let sourceDirectory = root.appendingPathComponent("source", isDirectory: true)
@@ -191,9 +191,13 @@ final class FileDropAcceptanceTests: XCTestCase {
 
         let viewModel = try makeKickoffViewModel()
 
-        XCTAssertThrowsError(
-            try viewModel.moveLocalItem(from: sourceFile, toDirectory: destinationDirectory)
-        )
+        do {
+            try await viewModel.moveLocalItem(from: sourceFile, toDirectory: destinationDirectory)
+            XCTFail("Expected the move to reject an existing destination")
+        } catch let error as NSError {
+            XCTAssertEqual(error.domain, NSCocoaErrorDomain)
+            XCTAssertEqual(error.code, NSFileWriteFileExistsError)
+        }
         XCTAssertEqual(try String(contentsOf: sourceFile, encoding: .utf8), "source")
         XCTAssertEqual(try String(contentsOf: destinationFile, encoding: .utf8), "destination")
     }
@@ -447,9 +451,19 @@ final class FileDropAcceptanceTests: XCTestCase {
             try? await bridge?.getInitialDirectory(),
             "/upload",
         ]
+        // A readable-only directory would fail uploads later; verify writability
+        // by creating and removing a probe directory (issue #787).
         for candidate in candidates.compactMap({ $0 }).filter({ $0 != "/" }) {
-            if (try? await bridge?.listDirectory(path: candidate)) != nil {
+            guard (try? await bridge?.listDirectory(path: candidate)) != nil else {
+                continue
+            }
+            let probe = "\(candidate)/.dockbridge-write-probe-\(UUID().uuidString)"
+            do {
+                try await bridge?.mkdirRemote(path: probe)
+                try await bridge?.deleteRemote(path: probe)
                 return candidate
+            } catch {
+                continue
             }
         }
         throw XCTSkip("No writable remote directory found for Docker E2E")

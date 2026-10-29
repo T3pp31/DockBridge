@@ -11,7 +11,7 @@ name = "dockbridge"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["disable-cli-password"]
 # Remove the insecure --password CLI flag; only --password-stdin remains.
 disable-cli-password = []
 

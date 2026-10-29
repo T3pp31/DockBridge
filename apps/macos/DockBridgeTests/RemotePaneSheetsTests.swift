@@ -43,14 +43,8 @@ final class RemotePaneSheetsTests: XCTestCase {
     }
 
     func testEntryNameSheetShowsValidationMessageForInvalidName() {
-        let sheet = RemoteEntryNameSheet(
-            title: "Rename",
-            fieldLabel: "New name",
-            confirmLabel: "Rename",
-            name: .constant("bad/name"),
-            onCancel: {},
-            onConfirm: {}
-        )
-        XCTAssertNotNil(sheet.body)
+        XCTAssertNotNil(RemoteEntryNameSheet.validationMessage(for: "bad/name"))
+        XCTAssertNil(RemoteEntryNameSheet.validationMessage(for: "valid-name"))
+        XCTAssertNil(RemoteEntryNameSheet.validationMessage(for: "  "))
     }
 }

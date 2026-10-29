@@ -6,6 +6,7 @@
   --text-secondary: #6e6e73;
   --accent: #0071e3;
   --accent-hover: #0077ed;
+  --accent-text: #0067c9;
   --border: rgba(0, 0, 0, 0.08);
   --shadow: 0 12px 40px rgba(0, 0, 0, 0.08);
   --radius: 18px;
@@ -19,6 +20,7 @@
     --bg-elevated: #1c1c1e;
     --text: #f5f5f7;
     --text-secondary: #a1a1a6;
+    --accent-text: #2997ff;
     --border: rgba(255, 255, 255, 0.12);
     --shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
   }
@@ -38,7 +40,7 @@ body {
 }
 
 a {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: none;
 }
 
@@ -54,7 +56,9 @@ a:hover {
 .site-header {
   padding: 1rem 0;
   border-bottom: 1px solid var(--border);
+  background: var(--bg);
   background: color-mix(in srgb, var(--bg) 88%, transparent);
+  -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
   position: sticky;
   top: 0;
@@ -146,7 +150,7 @@ a:hover {
 }
 
 .btn-primary:hover {
-  background: var(--accent-hover);
+  background: #0069cc;
   text-decoration: none;
 }
 
@@ -229,8 +233,9 @@ a:hover {
   width: 1.6rem;
   height: 1.6rem;
   border-radius: 50%;
+  background: var(--bg-elevated);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 0.85rem;
   font-weight: 700;
   display: grid;
@@ -239,12 +244,14 @@ a:hover {
 
 .notice {
   border-left: 4px solid #ff9f0a;
+  background: var(--bg-elevated);
   background: color-mix(in srgb, #ff9f0a 10%, var(--bg-elevated));
 }
 
 code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;
+  background: var(--bg-elevated);
   background: color-mix(in srgb, var(--text) 8%, transparent);
   padding: 0.1rem 0.35rem;
   border-radius: 4px;

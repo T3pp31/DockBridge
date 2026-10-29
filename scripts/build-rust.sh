@@ -19,14 +19,31 @@ PROFILE="${2:-release}"
 
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 
+# Normalize cargo flags and artifact directory: cargo has no --debug flag and
+# dev artifacts live in target/debug (issue #669).
+case "$PROFILE" in
+  release)
+    CARGO_FLAG=(--release)
+    PROFILE_DIR="release"
+    ;;
+  debug|dev|test)
+    CARGO_FLAG=(--profile dev)
+    PROFILE_DIR="debug"
+    ;;
+  *)
+    echo "error: unsupported profile '$PROFILE' (use release or debug)" >&2
+    exit 1
+    ;;
+esac
+
 if [[ -n "$RUST_TARGET" ]]; then
   echo "Building dockbridge-uniffi for ${RUST_TARGET} (${PROFILE})..."
-  cargo build -p dockbridge-uniffi --target "$RUST_TARGET" --"$PROFILE"
-  LIB_PATH="$CARGO_TARGET_DIR/${RUST_TARGET}/${PROFILE}/libdockbridge_uniffi.a"
+  cargo build -p dockbridge-uniffi --target "$RUST_TARGET" "${CARGO_FLAG[@]}"
+  LIB_PATH="$CARGO_TARGET_DIR/${RUST_TARGET}/${PROFILE_DIR}/libdockbridge_uniffi.a"
 else
   echo "Building dockbridge-uniffi for host (${PROFILE})..."
-  cargo build -p dockbridge-uniffi --"$PROFILE"
-  LIB_PATH="$CARGO_TARGET_DIR/${PROFILE}/libdockbridge_uniffi.a"
+  cargo build -p dockbridge-uniffi "${CARGO_FLAG[@]}"
+  LIB_PATH="$CARGO_TARGET_DIR/${PROFILE_DIR}/libdockbridge_uniffi.a"
 fi
 
 if [[ ! -f "$LIB_PATH" ]]; then

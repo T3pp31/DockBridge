@@ -4,6 +4,11 @@ import XCTest
 final class HostKeyPromptVerificationTests: XCTestCase {
     private var tempDirectory: URL?
 
+    private actor BackgroundPromptResult {
+        private(set) var value: Bool?
+        func store(_ value: Bool) { self.value = value }
+    }
+
     override func tearDown() {
         if let tempDirectory {
             try? FileManager.default.removeItem(at: tempDirectory)
@@ -98,12 +103,14 @@ final class HostKeyPromptVerificationTests: XCTestCase {
             expectedFingerprintSha256: nil
         )
 
-        // When: promptUnknownHost is invoked from a background thread (mimicking Rust callback)
-        var promptResult: Bool?
-        let backgroundThread = Thread {
-            promptResult = bridge.promptUnknownHost(challenge: challenge)
+        // When: promptUnknownHost is invoked from a detached task (mimicking a Rust callback)
+        let result = BackgroundPromptResult()
+        let completed = expectation(description: "Background host key prompt completed")
+        Task.detached {
+            let value = bridge.promptUnknownHost(challenge: challenge)
+            await result.store(value)
+            completed.fulfill()
         }
-        backgroundThread.start()
 
         // Then: pendingHostKeyChallenge should appear on the main actor within 2 seconds
         let deadline = ContinuousClock.now + .seconds(2)
@@ -123,11 +130,8 @@ final class HostKeyPromptVerificationTests: XCTestCase {
             bridge.respondToHostKeyChallenge(accepted: true)
         }
 
-        let joinDeadline = ContinuousClock.now + .seconds(5)
-        while backgroundThread.isExecuting, ContinuousClock.now < joinDeadline {
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        XCTAssertFalse(backgroundThread.isExecuting, "promptUnknownHost should complete without hanging")
+        await fulfillment(of: [completed], timeout: 5)
+        let promptResult = await result.value
         XCTAssertEqual(promptResult, true)
     }
 
@@ -167,11 +171,14 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         } catch {
             throw XCTSkip("Security-scoped bookmarks require App Sandbox context: \(error)")
         }
-        config.opensshKnownHostsPath = knownHostsFile.path
+        // Point the stored path elsewhere so the assertion can distinguish
+        // bookmark resolution from a pass-through of opensshKnownHostsPath
+        // (issue #789).
+        config.opensshKnownHostsPath = directory.appendingPathComponent("stale-known_hosts").path
         config.mergeOpensshKnownHostsOnConnect = false
         settings.saveConfig(config)
 
-        let record = settings.buildAppConfigRecord(knownHostsPath: directory.appendingPathComponent("store.json").path)
+        let record = settings.buildAppConfigRecord(knownHostsPath: HostKeyStore(baseDirectory: directory).knownHostsPath.path)
         XCTAssertEqual(
             URL(fileURLWithPath: record.opensshKnownHostsPath).standardizedFileURL.path,
             knownHostsFile.standardizedFileURL.path
@@ -215,7 +222,7 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         tempDirectory = directory
 
-        let knownHostsPath = directory.appendingPathComponent("store.json").path
+        let knownHostsPath = HostKeyStore(baseDirectory: directory).knownHostsPath.path
         let bridge = RustBridgeService(
             settings: settings,
             hostKeyStore: HostKeyStore(baseDirectory: directory)
@@ -225,8 +232,11 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         defaults.set(90, forKey: AppSettingsKeys.connectionTimeoutSecs)
         try bridge.prepareClient()
 
-        let record = settings.buildAppConfigRecord(knownHostsPath: knownHostsPath)
-        XCTAssertEqual(record.connectionTimeoutSecs, 90)
+        XCTAssertEqual(bridge.lastAppConfigRecord?.connectionTimeoutSecs, 90)
+        XCTAssertEqual(
+            bridge.lastAppConfigRecord?.knownHostsPath,
+            knownHostsPath
+        )
     }
 
     @MainActor

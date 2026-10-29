@@ -16,6 +16,7 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-cp -R "$ICONSET_SRC" "$TMP/AppIcon.iconset"
+mkdir -p "$TMP/AppIcon.iconset"
+find "$ICONSET_SRC" -maxdepth 1 -name '*.png' -exec cp {} "$TMP/AppIcon.iconset/" \;
 mkdir -p "$(dirname "$OUT")"
 iconutil -c icns "$TMP/AppIcon.iconset" -o "$OUT"

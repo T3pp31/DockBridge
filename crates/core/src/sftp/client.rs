@@ -21,6 +21,7 @@ use crate::config::{
     DEFAULT_TRANSFER_CHUNK_SIZE_BYTES, DEFAULT_TRANSFER_DOWNLOAD_PIPELINE_DEPTH,
 };
 use crate::error::{RemoteStatusCode, SftpError};
+use crate::ssh::connection_health::is_connection_lost_message;
 use crate::ssh::session::SshSession;
 use crate::transfer::TransferOverwritePolicy;
 
@@ -390,7 +391,7 @@ impl<'a> SftpClient<'a> {
                         remote: remote.clone(),
                         message: format!("failed to seek source file for resume: {err}"),
                     })?;
-                PartialRemoteTransfer::begin_resume(
+                match PartialRemoteTransfer::begin_resume(
                     self,
                     partial_path,
                     offset,
@@ -399,6 +400,27 @@ impl<'a> SftpClient<'a> {
                     overwrite_policy,
                 )
                 .await?
+                {
+                    Some(partial) => partial,
+                    None => {
+                        local_file
+                            .seek(std::io::SeekFrom::Start(0))
+                            .await
+                            .map_err(|err| SftpError::UploadFailed {
+                                local: local.clone(),
+                                remote: remote.clone(),
+                                message: format!("failed to seek source file to start: {err}"),
+                            })?;
+                        PartialRemoteTransfer::begin(
+                            self,
+                            &parent,
+                            &local,
+                            &remote,
+                            overwrite_policy,
+                        )
+                        .await?
+                    }
+                }
             }
             None => {
                 PartialRemoteTransfer::begin(self, &parent, &local, &remote, overwrite_policy)
@@ -521,9 +543,9 @@ impl<'a> SftpClient<'a> {
                 })?;
 
         let local_parent = local_path.parent().unwrap_or_else(|| Path::new("."));
-        // `metadata` follows symlinks, matching `open`: preserve the metadata
-        // of the remote file whose bytes are downloaded.
-        let remote_metadata = match self.sftp().metadata(&remote_path).await {
+        // Read metadata from the same handle as the content, even if another
+        // process replaces the remote pathname after open.
+        let remote_metadata = match remote_file.metadata().await {
             Ok(metadata) => Some(metadata),
             Err(err) => {
                 tracing::warn!(
@@ -541,32 +563,39 @@ impl<'a> SftpClient<'a> {
             let remote_size = remote_metadata.as_ref().and_then(|metadata| metadata.size);
             let resume_offset = match remote_size {
                 Some(size) => {
-                    find_resumable_download_offset(local_parent, size, &local, &remote).await
+                    let offset = tokio::select! {
+                        biased;
+                        () = cancel_watch(&is_cancelled) => return Err(SftpError::Cancelled),
+                        offset = find_resumable_download_offset(&mut remote_file, local_parent, size, &local, &remote) => offset,
+                    };
+                    if is_cancelled() {
+                        return Err(SftpError::Cancelled);
+                    }
+                    offset
                 }
                 None => None,
             };
+            // Verification consumes this handle. Explicitly position both
+            // the successful resume and restart paths before copying bytes.
+            use tokio::io::AsyncSeekExt;
+            remote_file
+                .seek(std::io::SeekFrom::Start(resume_offset.unwrap_or(0)))
+                .await
+                .map_err(|err| SftpError::DownloadFailed {
+                    remote: remote.clone(),
+                    local: local.clone(),
+                    message: format!("failed to seek remote file to the download offset: {err}"),
+                })?;
             match resume_offset {
-                Some(offset) => {
-                    let resumed = PartialLocalTransfer::begin_resume(
+                Some(_) => {
+                    PartialLocalTransfer::begin_resume(
                         local_parent,
                         &remote,
                         &local,
                         overwrite_policy,
                         remote_metadata,
                     )
-                    .await?;
-                    use tokio::io::AsyncSeekExt;
-                    remote_file
-                        .seek(std::io::SeekFrom::Start(offset))
-                        .await
-                        .map_err(|err| SftpError::DownloadFailed {
-                            remote: remote.clone(),
-                            local: local.clone(),
-                            message: format!(
-                                "failed to seek remote file to the resume offset: {err}"
-                            ),
-                        })?;
-                    resumed
+                    .await?
                 }
                 None => {
                     PartialLocalTransfer::begin(
@@ -604,7 +633,12 @@ impl<'a> SftpClient<'a> {
             // Best-effort remote close + local partial delete. `abort(false)`
             // never fails hard on remote shutdown (already closed handles are
             // logged and ignored) so cleanup of the local partial can proceed.
-            let cleanup_err = partial.abort(false, &mut remote_file).await?;
+            // A cleanup failure must not mask the original transfer error
+            // (issue #792); record it and keep the original `err` as primary.
+            let cleanup_err = match partial.abort(false, &mut remote_file).await {
+                Ok(note) => note,
+                Err(e) => Some(e),
+            };
             return Err(match err {
                 DownloadFlowError::Cancelled => SftpError::Cancelled,
                 DownloadFlowError::Write(message) => SftpError::DownloadFailed {
@@ -616,7 +650,14 @@ impl<'a> SftpClient<'a> {
         }
 
         if is_cancelled() {
-            partial.abort(true, &mut remote_file).await?;
+            if let Err(err) = partial.abort(true, &mut remote_file).await {
+                tracing::warn!(
+                    remote = %remote,
+                    local = %local,
+                    error = %err,
+                    "failed to clean up the local partial after cancellation"
+                );
+            }
             return Err(SftpError::Cancelled);
         }
 
@@ -667,6 +708,8 @@ impl<'a> SftpClient<'a> {
         }
 
         let mut count = 0usize;
+        let mut deleted_files = 0u64;
+        let mut deleted_bytes = 0u64;
         let mut stack = vec![Task::VisitDir(remote_path, 0)];
 
         while let Some(task) = stack.pop() {
@@ -691,6 +734,23 @@ impl<'a> SftpClient<'a> {
 
                     // Files, symlinks and special files: remove directly.
                     if !file_type.is_dir() {
+                        if deleted_files >= self.directory_walk_limits.max_files {
+                            return Err(SftpError::DirectoryWalkLimitExceeded {
+                                limit: "max_files".to_string(),
+                                value: deleted_files,
+                                path: path.to_string(),
+                            });
+                        }
+                        let size = metadata.size.unwrap_or(0);
+                        if deleted_bytes.saturating_add(size)
+                            > self.directory_walk_limits.max_total_bytes
+                        {
+                            return Err(SftpError::DirectoryWalkLimitExceeded {
+                                limit: "max_total_bytes".to_string(),
+                                value: deleted_bytes.saturating_add(size),
+                                path: path.to_string(),
+                            });
+                        }
                         self.sftp().remove_file(path).await.map_err(|err| {
                             SftpError::DeleteFailed {
                                 path: path.to_string(),
@@ -698,6 +758,8 @@ impl<'a> SftpClient<'a> {
                             }
                         })?;
                         count += 1;
+                        deleted_files += 1;
+                        deleted_bytes += size;
                         continue;
                     }
 
@@ -834,14 +896,10 @@ impl<'a> SftpClient<'a> {
             }
             let next = join_remote_path(&current, Path::new(segment))?;
 
-            if next != normalized {
-                // The final segment is handled by the caller (a file path or
-                // its own create call); parents only need existing-state.
-                if let Some(created) = created_cache.as_ref() {
-                    if created.contains(&next) {
-                        current = next;
-                        continue;
-                    }
+            if let Some(created) = created_cache.as_ref() {
+                if created.contains(&next) {
+                    current = next;
+                    continue;
                 }
             }
 
@@ -1608,18 +1666,33 @@ impl<'a> PartialRemoteTransfer<'a> {
         local: &str,
         remote: &str,
         overwrite_policy: TransferOverwritePolicy,
-    ) -> Result<Self, SftpError> {
-        let mut remote_file = client
+    ) -> Result<Option<Self>, SftpError> {
+        let mut remote_file = match client
             .sftp()
-            .open_with_flags(&partial_path, OpenFlags::WRITE | OpenFlags::CREATE)
+            .open_with_flags(&partial_path, OpenFlags::WRITE)
             .await
-            .map_err(|err| SftpError::UploadFailed {
-                local: local.to_string(),
-                remote: remote.to_string(),
-                message: format!(
-                    "failed to reopen partial for resume: {err}; restarting from scratch is required"
-                ),
-            })?;
+        {
+            Ok(remote_file) => remote_file,
+            Err(_) => {
+                // The partial disappeared (or cannot be reopened). Restart
+                // from scratch instead of allowing CREATE to synthesize a new
+                // partial and seek to an offset that does not exist.
+                return Ok(None);
+            }
+        };
+        let actual_size = client
+            .sftp()
+            .metadata(&partial_path)
+            .await
+            .ok()
+            .and_then(|metadata| metadata.size)
+            .unwrap_or(0);
+        if actual_size != start_offset {
+            // A truncated or otherwise invalid partial would create a sparse
+            // hole and corrupt the final file. Remove it and restart cleanly.
+            let _ = client.sftp().remove_file(&partial_path).await;
+            return Ok(None);
+        }
         use tokio::io::AsyncSeekExt;
         remote_file
             .seek(std::io::SeekFrom::Start(start_offset))
@@ -1629,7 +1702,7 @@ impl<'a> PartialRemoteTransfer<'a> {
                 remote: remote.to_string(),
                 message: format!("failed to seek partial to the resume offset: {err}"),
             })?;
-        Ok(Self {
+        Ok(Some(Self {
             client,
             partial_path,
             remote_file: Some(remote_file),
@@ -1638,7 +1711,7 @@ impl<'a> PartialRemoteTransfer<'a> {
             remote: remote.to_string(),
             overwrite_policy,
             keep_on_error: true,
-        })
+        }))
     }
 
     fn remote_file_mut(&mut self) -> Result<&mut RemoteFileHandle, SftpError> {
@@ -2238,10 +2311,21 @@ async fn create_exclusive_remote_partial(
     })
 }
 
+/// Maximum buffer size used while comparing the complete saved prefix.
+const RESUME_VERIFICATION_BYTES: u64 = 64 * 1024;
+
 /// Returns the byte offset to continue a previous download attempt from, when
-/// a leftover local partial for this `(local, remote)` pair exists and is a
-/// strict prefix of the remote file (issue #313). `None` starts from scratch.
+/// a leftover local partial for this `(local, remote)` pair exists, is a
+/// strict prefix of the remote file, and all saved bytes match the current
+/// remote content (issue #313, #655). `None` starts from scratch.
+///
+/// Checking S saved bytes reads S remote bytes before downloading R-S remaining
+/// bytes, for R bytes total. This saves local writes rather than bandwidth.
+/// Size/mtime alone cannot prove content identity. Reusing the download handle
+/// prevents mixing files when the remote pathname is replaced; concurrent
+/// in-place writes to that open file still have no snapshot guarantee.
 async fn find_resumable_download_offset(
+    verification_file: &mut RemoteFileHandle,
     local_parent: &Path,
     remote_size: u64,
     local: &str,
@@ -2249,12 +2333,35 @@ async fn find_resumable_download_offset(
 ) -> Option<u64> {
     let partial_path =
         partial_local_path_for_suffix(local_parent, &resume_partial_suffix(local, remote));
-    let Ok(metadata) = tokio::fs::metadata(&partial_path).await else {
-        return None;
-    };
+    let metadata = tokio::fs::metadata(&partial_path).await.ok()?;
     let size = metadata.len();
     if size == 0 || size >= remote_size {
         return None;
+    }
+
+    // Verify the entire saved prefix on the download handle. The caller seeks
+    // to the selected resume offset (or zero on rejection) before copying.
+    let mut partial_file = tokio::fs::File::open(&partial_path).await.ok()?;
+    let mut remote_prefix = vec![0u8; RESUME_VERIFICATION_BYTES as usize];
+    let mut partial_prefix = vec![0u8; RESUME_VERIFICATION_BYTES as usize];
+    let mut remaining = size;
+    use tokio::io::AsyncReadExt;
+    while remaining > 0 {
+        let verify_len = remaining.min(RESUME_VERIFICATION_BYTES) as usize;
+        verification_file
+            .read_exact(&mut remote_prefix[..verify_len])
+            .await
+            .ok()?;
+        partial_file
+            .read_exact(&mut partial_prefix[..verify_len])
+            .await
+            .ok()?;
+        if remote_prefix[..verify_len] != partial_prefix[..verify_len] {
+            drop(partial_file);
+            let _ = tokio::fs::remove_file(&partial_path).await;
+            return None;
+        }
+        remaining -= verify_len as u64;
     }
     Some(size)
 }
@@ -2426,6 +2533,11 @@ async fn prepare_local_finalize_destination(
                 final_path.display()
             ),
         }),
+        Ok(metadata) if metadata.is_dir() => Err(SftpError::DownloadFailed {
+            remote: remote.to_string(),
+            local: local.to_string(),
+            message: format!("destination '{}' is a directory", final_path.display()),
+        }),
         Ok(_) => match overwrite_policy {
             TransferOverwritePolicy::FailIfExists => Err(SftpError::DownloadFailed {
                 remote: remote.to_string(),
@@ -2471,10 +2583,16 @@ fn classify_sftp_client_error(err: SftpClientError, path: &str) -> SftpError {
         // typed as SSH_FX_BAD_MESSAGE rather than a generic error so
         // is_non_retryable_error can classify them as non-retryable without
         // string matching.
-        SftpClientError::UnexpectedBehavior(message) => SftpError::RemoteStatus {
-            code: RemoteStatusCode::BadMessage,
-            path: format!("{path}: {message}"),
-        },
+        SftpClientError::UnexpectedBehavior(message) => {
+            if is_connection_lost_message(&message) {
+                SftpError::Other(anyhow::anyhow!("SFTP error for '{path}': {message}"))
+            } else {
+                SftpError::RemoteStatus {
+                    code: RemoteStatusCode::BadMessage,
+                    path: format!("{path}: {message}"),
+                }
+            }
+        }
         SftpClientError::UnexpectedPacket => SftpError::RemoteStatus {
             code: RemoteStatusCode::BadMessage,
             path: path.to_string(),
@@ -2720,6 +2838,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_permission_denied_returns_permission_denied() {
+        let server = TestSftpServer::start().await;
+        let path = server.root.join("download/secure.txt");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"secret").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let err = client
+            .download("/download/secure.txt", &std::env::temp_dir().join("x"))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, SftpError::DownloadFailed { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
     async fn download_rename_failure_cleans_up_local_partial() {
         let server = TestSftpServer::start().await;
         server
@@ -2954,6 +3094,7 @@ mod tests {
     async fn pipelined_upload_reports_total_progress() {
         // Given: a small local file on the test SFTP server
         let server = TestSftpServer::start().await;
+        server.create_remote_dir("/metadata").await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();
@@ -3008,6 +3149,7 @@ mod tests {
     #[tokio::test]
     async fn upload_local_read_failure_cleans_up_remote_partial() {
         let server = TestSftpServer::start().await;
+        server.create_remote_dir("/metadata").await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();
@@ -3377,11 +3519,11 @@ mod tests {
         let client = SftpClient::new(&session);
 
         let err = client
-            .create_directory_all("/upload/nested/dir")
+            .create_directory_all("/fixture/nested/dir")
             .await
             .unwrap_err();
         assert!(
-            matches!(err, SftpError::MkdirFailed { ref path, .. } if path == "/upload"),
+            matches!(err, SftpError::MkdirFailed { ref path, .. } if path == "/fixture"),
             "unexpected error: {err:?}"
         );
     }
@@ -3467,6 +3609,12 @@ mod tests {
                 code: RemoteStatusCode::BadMessage,
                 path,
             } => assert!(path.contains("/upload/f.txt")),
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        let lost = SftpClientError::UnexpectedBehavior("connection closed: eof".to_string());
+        match classify_sftp_client_error(lost, "/upload/f.txt") {
+            SftpError::Other(_) => {}
             other => panic!("unexpected: {other:?}"),
         }
 
@@ -3624,6 +3772,29 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn finalize_local_destination_rejects_directory_before_download() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let destination = temp_dir.path().join("final-dir");
+        std::fs::create_dir(&destination).unwrap();
+
+        let err = prepare_local_finalize_destination(
+            &destination,
+            TransferOverwritePolicy::Replace,
+            "/remote/file.txt",
+            destination.display().to_string().as_str(),
+        )
+        .await
+        .unwrap_err();
+
+        match err {
+            crate::error::SftpError::DownloadFailed { message, .. } => {
+                assert!(message.contains("is a directory"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
     #[test]
     fn client_path_normalization_rejects_parent_segments() {
         for path in ["/foo/../etc", "../secret"] {
@@ -3660,6 +3831,7 @@ mod tests {
     async fn upload_cancel_before_rename_leaves_no_remote_final_file() {
         // Given: a local file and a test SFTP server
         let server = TestSftpServer::start().await;
+        server.create_remote_dir("/metadata").await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();
@@ -3826,6 +3998,7 @@ mod tests {
     #[tokio::test]
     async fn delete_missing_file_returns_error() {
         let server = TestSftpServer::start().await;
+        server.create_remote_dir("/metadata").await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
 
@@ -3843,6 +4016,20 @@ mod tests {
 
         // remove_file on a directory is an error on the SFTP side.
         let err = client.delete("/delete/dir").await.unwrap_err();
+        assert!(matches!(err, SftpError::DeleteFailed { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn delete_missing_directory_returns_delete_failed() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let err = client
+            .delete_entry("/delete/missing-dir", false)
+            .await
+            .unwrap_err();
+
         assert!(matches!(err, SftpError::DeleteFailed { .. }), "{err:?}");
     }
 
@@ -4151,6 +4338,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_missing_directory_returns_list_failed() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let err = client
+            .list_directory("/download/missing-dir")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, SftpError::ListFailed { .. }), "{err:?}");
+    }
+
+    #[tokio::test]
     async fn upload_writes_remote_file_matching_local_bytes() {
         // Given: a local file with a known payload
         let server = TestSftpServer::start().await;
@@ -4364,6 +4565,27 @@ mod tests {
             "partial remote files must not remain: {:?}",
             server.remote_partial_paths()
         );
+    }
+
+    #[tokio::test]
+    async fn upload_to_missing_parent_fails_without_creating_it() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("missing-parent.txt");
+        tokio::fs::write(&local_path, b"payload").await.unwrap();
+
+        let err = client
+            .upload(&local_path, "/does/not/exist/file.txt")
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, SftpError::UploadFailed { .. }),
+            "unexpected error: {err:?}"
+        );
+        assert!(!server.root.join("does").exists());
     }
 
     #[tokio::test]
@@ -5202,6 +5424,7 @@ mod tests {
         use std::os::unix::fs::{symlink, PermissionsExt};
 
         let server = TestSftpServer::start().await;
+        server.create_remote_dir("/metadata").await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();
@@ -5279,6 +5502,7 @@ mod tests {
     #[tokio::test]
     async fn upload_succeeds_when_metadata_preservation_fails() {
         let server = TestSftpServer::start().await;
+        server.create_remote_dir("/metadata").await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();
@@ -5470,7 +5694,7 @@ mod tests {
 
         let removed = client.delete_entry("/delete/empty", false).await.unwrap();
         assert_eq!(removed, 1);
-        assert!(!server.remote_file_exists("/delete/empty/.keep"));
+        assert!(!server.root.join("delete/empty").exists());
     }
 
     #[tokio::test]
@@ -5756,6 +5980,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_resume_discards_size_mismatched_partial() {
+        // Given: a partial whose size no longer matches the resume offset
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        tokio::fs::write(&local_path, b"AAAA").await.unwrap();
+
+        let remote = "/upload/file.bin";
+        let partial_path = format!(
+            "/upload/.dockbridge-{}.partial",
+            resume_partial_suffix(&local_path.display().to_string(), remote)
+        );
+        server.write_remote_file(&partial_path, b"AAAABBBB").await;
+
+        // When: the client prepares a resume at an offset that does not match
+        // the partial's actual size
+        let resumed = PartialRemoteTransfer::begin_resume(
+            &client,
+            partial_path.clone(),
+            4,
+            &local_path.display().to_string(),
+            remote,
+            TransferOverwritePolicy::default(),
+        )
+        .await
+        .unwrap();
+
+        // Then: the invalid partial is discarded and the caller restarts
+        assert!(resumed.is_none());
+        assert!(!server.remote_file_exists(&partial_path));
+    }
+
+    #[tokio::test]
     async fn download_resumes_from_leftover_local_partial() {
         // Given: a remote file and a leftover local partial with the first
         // bytes already written
@@ -5782,6 +6041,209 @@ mod tests {
 
         // Then: the final file carries the full payload and the partial is gone
         assert_eq!(tokio::fs::read(&local_path).await.unwrap(), b"AAAABBBBCCCC");
+        assert!(list_partial_paths(local_dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn download_cancels_while_resume_verification_is_waiting_for_read() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/file.bin", b"AAAABBBBCCCC")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        let partial_path = local_dir.path().join(format!(
+            ".dockbridge-{}.partial",
+            resume_partial_suffix(&local_path.display().to_string(), "/download/file.bin")
+        ));
+        tokio::fs::write(&partial_path, b"AAAA").await.unwrap();
+        server
+            .failures
+            .read_delay_ms
+            .store(10_000, Ordering::SeqCst);
+        let cancelled = AtomicBool::new(false);
+        let transfer = client.download_cancellable(
+            "/download/file.bin",
+            &local_path,
+            DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
+            1,
+            TransferOverwritePolicy::Replace,
+            || cancelled.load(Ordering::SeqCst),
+            |_| panic!("verification must not write download bytes"),
+        );
+        let cancel_during_read = async {
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                server.failures.read_started.notified(),
+            )
+            .await
+            .expect("verification must reach the server READ handler");
+            cancelled.store(true, Ordering::SeqCst);
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(transfer, cancel_during_read)
+        })
+        .await
+        .expect("cancellation must interrupt the stalled verification READ");
+        assert!(matches!(result, Err(SftpError::Cancelled)));
+        assert!(!local_path.exists());
+        assert_eq!(tokio::fs::read(&partial_path).await.unwrap(), b"AAAA");
+        assert_eq!(list_partial_paths(local_dir.path()), vec![partial_path]);
+    }
+
+    #[tokio::test]
+    async fn download_verifies_the_same_handle_when_remote_path_is_replaced() {
+        let server = TestSftpServer::start().await;
+        let old_content = b"OLD-11112222";
+        let new_content = b"NEW-33334444";
+        server
+            .write_remote_file("/download/file.bin", old_content)
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        let partial_path = local_dir.path().join(format!(
+            ".dockbridge-{}.partial",
+            resume_partial_suffix(&local_path.display().to_string(), "/download/file.bin")
+        ));
+        tokio::fs::write(&partial_path, &new_content[..4])
+            .await
+            .unwrap();
+        server
+            .failures
+            .pause_after_open
+            .store(true, Ordering::SeqCst);
+        let replace_path = async {
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                server.failures.file_opened.notified(),
+            )
+            .await
+            .expect("the original remote handle must open first");
+            let replacement = server.root.join("download/replacement.bin");
+            tokio::fs::write(&replacement, new_content).await.unwrap();
+            tokio::fs::rename(replacement, server.root.join("download/file.bin"))
+                .await
+                .unwrap();
+            server.failures.continue_open.notify_one();
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(
+                client.download("/download/file.bin", &local_path),
+                replace_path
+            )
+        })
+        .await
+        .expect("download must finish after the pathname replacement");
+        result.unwrap();
+        assert_eq!(tokio::fs::read(&local_path).await.unwrap(), old_content);
+        assert_eq!(
+            tokio::fs::read(server.root.join("download/file.bin"))
+                .await
+                .unwrap(),
+            new_content
+        );
+        assert!(list_partial_paths(local_dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn download_resumes_after_matching_multiple_verification_chunks() {
+        let server = TestSftpServer::start().await;
+        let chunk = super::RESUME_VERIFICATION_BYTES as usize;
+        let payload = vec![b'A'; chunk * 3 + 13];
+        let remote = "/download/file.bin";
+        server.write_remote_file(remote, &payload).await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        for saved_size in [chunk, chunk + 1, chunk * 2 + 1] {
+            let local_path = local_dir.path().join(format!("file-{saved_size}.bin"));
+            let local = local_path.display().to_string();
+            let partial_path = local_dir.path().join(format!(
+                ".dockbridge-{}.partial",
+                resume_partial_suffix(&local, remote)
+            ));
+            tokio::fs::write(&partial_path, &payload[..saved_size])
+                .await
+                .unwrap();
+            let mut handle = client.sftp().open(remote).await.unwrap();
+            assert_eq!(
+                super::find_resumable_download_offset(
+                    &mut handle,
+                    local_dir.path(),
+                    payload.len() as u64,
+                    &local,
+                    remote
+                )
+                .await,
+                Some(saved_size as u64)
+            );
+            client.download(remote, &local_path).await.unwrap();
+            assert_eq!(tokio::fs::read(&local_path).await.unwrap(), payload);
+            assert!(list_partial_paths(local_dir.path()).is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn download_restarts_from_zero_when_partial_prefix_mismatches() {
+        // Given: a remote file whose content no longer matches the leftover
+        // partial prefix.
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/file.bin", b"NEW-BYTES")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+
+        let partial_path = local_dir.path().join(format!(
+            ".dockbridge-{}.partial",
+            resume_partial_suffix(&local_path.display().to_string(), "/download/file.bin")
+        ));
+        tokio::fs::write(&partial_path, b"OLD").await.unwrap();
+
+        // When: verification rejects the partial and the download restarts
+        client
+            .download("/download/file.bin", &local_path)
+            .await
+            .unwrap();
+
+        // Then: the fresh download includes the first byte instead of
+        // continuing from the verification handle's advanced cursor.
+        assert_eq!(tokio::fs::read(&local_path).await.unwrap(), b"NEW-BYTES");
+        assert!(list_partial_paths(local_dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn download_restarts_when_partial_differs_after_first_verification_chunk() {
+        let server = TestSftpServer::start().await;
+        let chunk_size = super::RESUME_VERIFICATION_BYTES as usize;
+        let remote_content = vec![b'N'; chunk_size * 2 + 1];
+        server
+            .write_remote_file("/download/file.bin", &remote_content)
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        let partial_path = local_dir.path().join(format!(
+            ".dockbridge-{}.partial",
+            resume_partial_suffix(&local_path.display().to_string(), "/download/file.bin")
+        ));
+        let mut partial = remote_content[..chunk_size + 3].to_vec();
+        partial[chunk_size + 1] = b'O';
+        tokio::fs::write(&partial_path, partial).await.unwrap();
+
+        client
+            .download("/download/file.bin", &local_path)
+            .await
+            .unwrap();
+
+        assert_eq!(tokio::fs::read(&local_path).await.unwrap(), remote_content);
         assert!(list_partial_paths(local_dir.path()).is_empty());
     }
 

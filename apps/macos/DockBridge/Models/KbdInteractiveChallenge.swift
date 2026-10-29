@@ -7,7 +7,8 @@ struct KbdInteractivePromptItem: Equatable, Hashable {
 }
 
 /// A keyboard-interactive challenge awaiting user input.
-struct KbdInteractiveChallenge: Equatable, Hashable {
+struct KbdInteractiveChallenge: Equatable, Hashable, Identifiable {
+    let id = UUID()
     let name: String
     let instructions: String
     let prompts: [KbdInteractivePromptItem]
