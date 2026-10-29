@@ -4,6 +4,11 @@ import XCTest
 final class HostKeyPromptVerificationTests: XCTestCase {
     private var tempDirectory: URL?
 
+    private actor BackgroundPromptResult {
+        private(set) var value: Bool?
+        func store(_ value: Bool) { self.value = value }
+    }
+
     override func tearDown() {
         if let tempDirectory {
             try? FileManager.default.removeItem(at: tempDirectory)
@@ -98,12 +103,14 @@ final class HostKeyPromptVerificationTests: XCTestCase {
             expectedFingerprintSha256: nil
         )
 
-        // When: promptUnknownHost is invoked from a background thread (mimicking Rust callback)
-        var promptResult: Bool?
-        let backgroundThread = Thread {
-            promptResult = bridge.promptUnknownHost(challenge: challenge)
+        // When: promptUnknownHost is invoked from a detached task (mimicking a Rust callback)
+        let result = BackgroundPromptResult()
+        let completed = expectation(description: "Background host key prompt completed")
+        Task.detached {
+            let value = bridge.promptUnknownHost(challenge: challenge)
+            await result.store(value)
+            completed.fulfill()
         }
-        backgroundThread.start()
 
         // Then: pendingHostKeyChallenge should appear on the main actor within 2 seconds
         let deadline = ContinuousClock.now + .seconds(2)
@@ -123,11 +130,8 @@ final class HostKeyPromptVerificationTests: XCTestCase {
             bridge.respondToHostKeyChallenge(accepted: true)
         }
 
-        let joinDeadline = ContinuousClock.now + .seconds(5)
-        while backgroundThread.isExecuting, ContinuousClock.now < joinDeadline {
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        XCTAssertFalse(backgroundThread.isExecuting, "promptUnknownHost should complete without hanging")
+        await fulfillment(of: [completed], timeout: 5)
+        let promptResult = await result.value
         XCTAssertEqual(promptResult, true)
     }
 
