@@ -3936,6 +3936,23 @@
         }
       }
     },
+    "File is too large.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File is too large."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルサイズが上限を超えています。"
+          }
+        }
+      }
+    },
     "File is not owned by the current user.": {
       "extractionState": "manual",
       "localizations": {
