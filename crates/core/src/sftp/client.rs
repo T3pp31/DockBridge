@@ -2245,6 +2245,9 @@ const RESUME_VERIFICATION_BYTES: u64 = 64 * 1024;
 /// a leftover local partial for this `(local, remote)` pair exists, is a
 /// strict prefix of the remote file, and all saved bytes match the current
 /// remote content (issue #313, #655). `None` starts from scratch.
+/// Verification re-reads every saved byte over the network, preserving local
+/// writes rather than network bandwidth. Size/mtime alone cannot establish
+/// content identity when the remote file changes without changing metadata.
 async fn find_resumable_download_offset(
     client: &SftpClient<'_>,
     local_parent: &Path,
@@ -2567,9 +2570,10 @@ mod tests {
 
     use super::{
         append_cleanup_context, apply_downloaded_metadata, classify_sftp_client_error,
-        create_exclusive_local_partial, download_pipelined_to_writer, is_remote_file_exists_error,
-        is_remote_no_such_file_error, normalize_remote_path, open_exclusive_local_file,
-        partial_file_name, partial_local_path_for_suffix, partial_remote_path_for_suffix,
+        create_exclusive_local_partial, download_pipelined_to_writer,
+        find_resumable_download_offset, is_remote_file_exists_error, is_remote_no_such_file_error,
+        normalize_remote_path, open_exclusive_local_file, partial_file_name,
+        partial_local_path_for_suffix, partial_remote_path_for_suffix,
         pipeline_depth_for_chunk_budget, prepare_local_finalize_destination, random_partial_suffix,
         remote_status_code, rename_local_noreplace, resume_partial_suffix, upload_from_reader,
         DownloadFlowError, PartialLocalTransfer, PartialRemoteTransfer, PipelinableTransferWriter,
@@ -5803,6 +5807,20 @@ mod tests {
         ));
         tokio::fs::write(&partial_path, b"AAAA").await.unwrap();
 
+        // Verify the matching partial is accepted at its saved offset, rather
+        // than merely checking output that a full restart could also produce.
+        assert_eq!(
+            find_resumable_download_offset(
+                &client,
+                local_dir.path(),
+                12,
+                &local_path.display().to_string(),
+                "/download/file.bin",
+            )
+            .await,
+            Some(4)
+        );
+
         // When: the download runs to the same paths
         client
             .download("/download/file.bin", &local_path)
@@ -5811,6 +5829,59 @@ mod tests {
 
         // Then: the final file carries the full payload and the partial is gone
         assert_eq!(tokio::fs::read(&local_path).await.unwrap(), b"AAAABBBBCCCC");
+        assert!(list_partial_paths(local_dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn download_preserves_partial_after_verification_read_error_and_resumes_on_retry() {
+        let server = TestSftpServer::start().await;
+        let remote = "/download/file.bin";
+        let payload = b"AAAABBBBCCCC";
+        server.write_remote_file(remote, payload).await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        let local = local_path.display().to_string();
+        let partial_path = local_dir.path().join(format!(
+            ".dockbridge-{}.partial",
+            resume_partial_suffix(&local, remote)
+        ));
+        tokio::fs::write(&partial_path, &payload[..4])
+            .await
+            .unwrap();
+
+        // The one-shot read error rejects verification, then a fresh download
+        // succeeds without truncating the saved deterministic partial.
+        server
+            .failures
+            .fail_remote_read
+            .store(true, Ordering::SeqCst);
+        client.download(remote, &local_path).await.unwrap();
+        assert_eq!(tokio::fs::read(&partial_path).await.unwrap(), &payload[..4]);
+        assert_eq!(tokio::fs::read(&local_path).await.unwrap(), payload);
+        assert_eq!(
+            list_partial_paths(local_dir.path()),
+            vec![partial_path.clone()]
+        );
+
+        server
+            .failures
+            .fail_remote_read
+            .store(false, Ordering::SeqCst);
+        assert_eq!(
+            find_resumable_download_offset(
+                &client,
+                local_dir.path(),
+                payload.len() as u64,
+                &local,
+                remote
+            )
+            .await,
+            Some(4)
+        );
+        client.download(remote, &local_path).await.unwrap();
+        assert_eq!(tokio::fs::read(&local_path).await.unwrap(), payload);
         assert!(list_partial_paths(local_dir.path()).is_empty());
     }
 
