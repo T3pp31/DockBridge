@@ -139,15 +139,14 @@ final class AppUpdateService: @unchecked Sendable {
             throw AppUpdateServiceError.invalidResponse
         }
 
-        // Remember the ETag so the next launch can send If-None-Match and avoid
-        // burning GitHub's unauthenticated rate limit (60 req/h/IP).
-        if let etag = httpResponse.value(forHTTPHeaderField: "ETag") {
+        let release = try JSONDecoder().decode(GitHubReleaseResponse.self, from: data)
+        // Invalidate the old validator before replacing its body. Interruption
+        // or a failed cache write then leaves the next request unconditional.
+        AppUpdateConfig.clearETag()
+        if AppUpdateConfig.persistReleaseBody(data),
+           let etag = httpResponse.value(forHTTPHeaderField: "ETag") {
             AppUpdateConfig.persistETag(etag)
         }
-
-        let release = try JSONDecoder().decode(GitHubReleaseResponse.self, from: data)
-        // Cache the decoded body together with the ETag (issue #573).
-        AppUpdateConfig.persistReleaseBody(data)
         return release
     }
 
