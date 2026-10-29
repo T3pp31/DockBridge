@@ -220,6 +220,52 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         }
     }
 
+    func testStreamingChecksumMatchesOneShotDigestAcrossChunkBoundaries() async throws {
+        let chunkSize = 1024 * 1024
+        let sizes = [0, chunkSize, chunkSize + 1, 2 * chunkSize + chunkSize / 2]
+        let mountPoint = temporaryDirectory.appendingPathComponent("empty-mount", isDirectory: true)
+        try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
+        let update = AppUpdateInfo(
+            version: "0.2.0",
+            downloadURL: URL(string: "https://example.com/update.dmg")!,
+            checksumURL: URL(string: "https://example.com/update.dmg.sha256")!,
+            releasePageURL: URL(string: "https://example.com/release")!
+        )
+
+        for size in sizes {
+            let data = Data((0..<size).map { UInt8(truncatingIfNeeded: $0) })
+            // A one-shot digest is an independent oracle for the streaming loop.
+            let checksum = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            for matches in [true, false] {
+                let dmgURL = temporaryDirectory.appendingPathComponent(UUID().uuidString + ".dmg")
+                var downloadedData = data
+                if !matches, !downloadedData.isEmpty {
+                    // Corrupt the final byte, including the byte beyond a full chunk.
+                    downloadedData[downloadedData.count - 1] ^= 1
+                }
+                try downloadedData.write(to: dmgURL)
+                let expected = !matches && size == 0 ? String(repeating: "0", count: 64) : checksum
+                let service = AppUpdateDownloadService(
+                    downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 200),
+                    dataSession: MockChecksumURLSession(checksumLine: "\(expected) update.dmg", statusCode: 200),
+                    signatureVerifier: MockSignatureVerifier(),
+                    dmgMounter: MockDMGImageMounter(mountPoint: mountPoint),
+                    fileManager: .default
+                )
+
+                do {
+                    try await service.downloadVerifyAndReveal(update: update)
+                    XCTFail("Expected verification to stop before revealing the update")
+                } catch let error as AppUpdateDownloadError {
+                    // A valid checksum must reach bundle validation. Using an
+                    // empty mock mount avoids opening Finder or mounting a DMG.
+                    XCTAssertEqual(error, matches ? .appBundleNotFound : .checksumMismatch,
+                                   "size=\(size), matches=\(matches)")
+                }
+            }
+        }
+    }
+
     private func makeTestBundle(
         bundleIdentifier: String,
         bundleName: String = "DockBridge.app",

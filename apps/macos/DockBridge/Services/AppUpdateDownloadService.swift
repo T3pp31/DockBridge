@@ -227,8 +227,16 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
             throw AppUpdateDownloadError.checksumFetchFailed
         }
 
-        let fileData = try Data(contentsOf: fileURL)
-        let digest = SHA256.hash(data: fileData)
+        let fileHandle = try FileHandle(forReadingFrom: fileURL)
+        defer {
+            try? fileHandle.close()
+        }
+
+        var hasher = SHA256()
+        while let chunk = try fileHandle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        let digest = hasher.finalize()
         let actualChecksum = digest.map { String(format: "%02x", $0) }.joined()
         guard actualChecksum == expectedChecksum.lowercased() else {
             throw AppUpdateDownloadError.checksumMismatch
