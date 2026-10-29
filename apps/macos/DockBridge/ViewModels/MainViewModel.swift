@@ -1615,6 +1615,17 @@ final class MainViewModel: ObservableObject {
         let destination = RemotePath.join(directory, name)
 
         do {
+            // Refuse to silently replace an existing item at the destination
+            // (issue #694). The rename must be re-issued by the user after
+            // resolving the conflict.
+            guard let destinationExists = await remoteDestinationExists(path: destination) else {
+                errorMessage = String(localized: "Unable to check the remote destination. Try again.")
+                return false
+            }
+            if destinationExists {
+                errorMessage = String(localized: "A file already exists at the destination.")
+                return false
+            }
             try await bridge.renameRemote(from: source, to: destination)
             await reloadRemote()
             return true
@@ -1668,6 +1679,15 @@ final class MainViewModel: ObservableObject {
         let newPath = RemotePath.join(parent, name)
 
         do {
+            // Refuse to silently replace an existing item (issue #694).
+            guard let destinationExists = await remoteDestinationExists(path: newPath) else {
+                errorMessage = String(localized: "Unable to check the remote destination. Try again.")
+                return
+            }
+            if destinationExists {
+                errorMessage = String(localized: "A file already exists at the destination.")
+                return
+            }
             try await bridge.renameRemote(from: target.path, to: newPath)
             renameTarget = nil
             renameText = ""
