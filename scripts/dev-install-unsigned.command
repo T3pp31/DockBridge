@@ -25,14 +25,28 @@ if [[ ! -d "$SOURCE_PATH" ]]; then
   exit 1
 fi
 
+if [[ ! -w "/Applications" ]] || [[ -d "$INSTALL_PATH" && ! -w "$INSTALL_PATH" ]]; then
+  alert "インストールできません。\\n\\n/Applications または既存の DockBridge.app に書き込み権限がありません。"
+  exit 1
+fi
+
 echo "DockBridge を Applications にインストールしています..."
-ditto "$SOURCE_PATH" "$INSTALL_PATH"
+if ! ditto "$SOURCE_PATH" "$INSTALL_PATH"; then
+  alert "DockBridge.app のインストールに失敗しました。"
+  exit 1
+fi
 
 echo "macOS のセキュリティ制限を解除しています..."
-xattr -cr "$INSTALL_PATH"
+if ! xattr -cr "$INSTALL_PATH"; then
+  alert "DockBridge.app のセキュリティ属性の更新に失敗しました。"
+  exit 1
+fi
 
 echo "DockBridge を起動しています..."
-open "$INSTALL_PATH"
+if ! open "$INSTALL_PATH"; then
+  alert "DockBridge.app の起動に失敗しました。"
+  exit 1
+fi
 
 notify "インストールが完了しました"
 
