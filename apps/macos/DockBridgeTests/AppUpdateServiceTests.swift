@@ -400,7 +400,7 @@ extension AppUpdateServiceTests {
     func testFailedBodyWriteDoesNotPersistETagOrFailUpdateCheck() async throws {
         AppUpdateConfig.clearReleaseBody()
         defer { AppUpdateConfig.clearReleaseBody() }
-        let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let cacheURL = Self.testCacheDirectory
             .appendingPathComponent(AppUpdateConfig.releaseBodyCacheFileName)
         // A directory at the file path reliably rejects the atomic file write.
         try FileManager.default.createDirectory(at: cacheURL, withIntermediateDirectories: true)

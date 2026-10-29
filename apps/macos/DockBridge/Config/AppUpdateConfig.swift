@@ -32,7 +32,7 @@ enum AppUpdateConfig {
     }
 
     static func clearETag() {
-        UserDefaults.standard.removeObject(forKey: etagDefaultsKey)
+        etagDefaults.removeObject(forKey: etagDefaultsKey)
     }
 
     /// Cached, decoded release body from the last successful 200 response.
