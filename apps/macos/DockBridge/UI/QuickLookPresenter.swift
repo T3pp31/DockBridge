@@ -50,6 +50,11 @@ final class QuickLookPresenter: NSResponder, QLPreviewPanelDataSource, QLPreview
             hostContentView = contentView
         }
 
+        // The panel does not observe dataSource changes; refresh the visible
+        // state so a new preview replaces the current one (issue #776).
+        panel.currentPreviewItemIndex = 0
+        panel.reloadData()
+
         panel.makeKeyAndOrderFront(nil)
     }
 
@@ -82,6 +87,8 @@ final class QuickLookPresenter: NSResponder, QLPreviewPanelDataSource, QLPreview
     }
 
     func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
-        previewURLs[index] as QLPreviewItem
+        // Guard against stale indices when the URL list shrinks (issue #776).
+        guard previewURLs.indices.contains(index) else { return nil }
+        return previewURLs[index] as QLPreviewItem
     }
 }
