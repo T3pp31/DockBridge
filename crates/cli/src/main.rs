@@ -320,12 +320,12 @@ impl HostKeyPrompt for CliHostKeyPrompt {
 fn print_to_tty_or_stderr(text: &str) {
     if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
         use std::io::Write;
-        if tty.write_all(text.as_bytes()).is_ok() {
+        if writeln!(tty, "{text}").is_ok() {
             let _ = tty.flush();
             return;
         }
     }
-    eprint!("{text}");
+    eprintln!("{text}");
     let _ = std::io::stderr().flush();
 }
 
