@@ -1172,28 +1172,6 @@ fn is_transient_accept_error(err: &std::io::Error) -> bool {
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn transient_accept_errors_are_classified() {
-        // Given: a connection aborted before accept
-        let aborted = std::io::Error::from(std::io::ErrorKind::ConnectionAborted);
-
-        // Then: it is retried rather than silently stopping the server task
-        assert!(is_transient_accept_error(&aborted));
-        for code in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM] {
-            assert!(is_transient_accept_error(
-                &std::io::Error::from_raw_os_error(code)
-            ));
-        }
-        assert!(!is_transient_accept_error(&std::io::Error::from(
-            std::io::ErrorKind::PermissionDenied
-        )));
-    }
-}
-
 #[cfg(unix)]
 fn set_file_times_by_path(
     path: &Path,
@@ -1221,5 +1199,27 @@ fn set_file_times_by_path(
         Ok(())
     } else {
         Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transient_accept_errors_are_classified() {
+        // Given: a connection aborted before accept
+        let aborted = std::io::Error::from(std::io::ErrorKind::ConnectionAborted);
+
+        // Then: it is retried rather than silently stopping the server task
+        assert!(is_transient_accept_error(&aborted));
+        for code in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM] {
+            assert!(is_transient_accept_error(
+                &std::io::Error::from_raw_os_error(code)
+            ));
+        }
+        assert!(!is_transient_accept_error(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied
+        )));
     }
 }
