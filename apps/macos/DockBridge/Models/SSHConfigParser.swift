@@ -19,93 +19,49 @@ struct SSHConfigHost: Equatable, Sendable {
 /// ignored; wildcard and negated Host patterns are not importable profiles.
 enum SSHConfigParser {
     static func parse(_ contents: String) -> [SSHConfigHost] {
-        var hosts: [SSHConfigHost] = []
-        var currentHosts: [SSHConfigHost] = []
-        var currentBlockIsValid = true
-        // Values set before any Host line and inside wildcard-only blocks
-        // behave as defaults in OpenSSH (issue #688).
-        var globalDefaults = SSHConfigHost(alias: "*")
-
-        func finishCurrentBlock() {
-            defer {
-                currentHosts.removeAll(keepingCapacity: true)
-                currentBlockIsValid = true
-            }
-            guard currentBlockIsValid else { return }
-
-            for candidate in currentHosts {
-                if let index = hosts.firstIndex(where: {
-                    normalizedAlias($0.alias) == normalizedAlias(candidate.alias)
-                }) {
-                    // OpenSSH uses the first obtained value for a parameter.
-                    // Repeated exact Host blocks can therefore fill values that
-                    // were absent in an earlier block, but cannot replace them.
-                    if hosts[index].hostName == nil {
-                        hosts[index].hostName = candidate.hostName
-                    }
-                    if hosts[index].user == nil {
-                        hosts[index].user = candidate.user
-                    }
-                    if hosts[index].port == nil {
-                        hosts[index].port = candidate.port
-                    }
-                    hosts[index].identityFiles += candidate.identityFiles
-                } else {
-                    hosts.append(candidate)
-                }
-            }
+        // Gather importable aliases, then evaluate applicable blocks in file
+        // order for each alias, just as OpenSSH does for a selected host.
+        struct Block {
+            var aliases: [String]
+            var appliesToAll: Bool
+            var directives: [Directive] = []
         }
-
+        var blocks = [Block(aliases: [], appliesToAll: true)]
+        var aliases: [String] = []
         for rawLine in contents.components(separatedBy: .newlines) {
             guard let directive = parseDirective(rawLine) else { continue }
-
             switch directive.key {
             case "host":
-                finishCurrentBlock()
-                let aliases = directive.arguments.filter(isImportableAlias)
-                if aliases.isEmpty {
-                    // Wildcard-only blocks act as defaults (issue #688).
-                    currentHosts = [globalDefaults]
-                } else {
-                    currentHosts = aliases.map { SSHConfigHost(alias: $0) }
+                let exactAliases = directive.arguments.filter(isImportableAlias)
+                for alias in exactAliases where !aliases.contains(where: {
+                    normalizedAlias($0) == normalizedAlias(alias)
+                }) {
+                    aliases.append(alias)
                 }
-
+                // Only an unconditional Host * is supported as a default;
+                // other patterns keep the parser's existing import policy.
+                blocks.append(Block(aliases: exactAliases, appliesToAll: directive.arguments == ["*"]))
             case "match":
-                // A Match section has different conditional semantics. Finish
-                // the preceding Host block and ignore directives until the next
-                // Host line rather than applying Match values to that profile.
-                finishCurrentBlock()
-
+                blocks.append(Block(aliases: [], appliesToAll: false))
             default:
-                guard currentBlockIsValid else { continue }
-                if currentHosts.isEmpty {
-                    var targets = [globalDefaults]
-                    apply(
-                        directive: directive,
-                        to: &targets,
-                        currentBlockIsValid: &currentBlockIsValid
-                    )
-                    if let updated = targets.first {
-                        globalDefaults = updated
-                    }
-                } else {
-                    apply(
-                        directive: directive,
-                        to: &currentHosts,
-                        currentBlockIsValid: &currentBlockIsValid
-                    )
+                blocks[blocks.count - 1].directives.append(directive)
+            }
+        }
+
+        return aliases.compactMap { alias in
+            var candidates = [SSHConfigHost(alias: alias)]
+            for block in blocks where block.appliesToAll || block.aliases.contains(where: {
+                normalizedAlias($0) == normalizedAlias(alias)
+            }) {
+                var valid = true
+                for directive in block.directives {
+                    apply(directive: directive, to: &candidates, currentBlockIsValid: &valid)
+                    if !valid { return nil }
                 }
             }
+            guard let host = candidates.first, host.hostName != nil else { return nil }
+            return host
         }
-        finishCurrentBlock()
-        for index in hosts.indices {
-            if hosts[index].user == nil { hosts[index].user = globalDefaults.user }
-            if hosts[index].port == nil { hosts[index].port = globalDefaults.port }
-            if hosts[index].identityFiles.isEmpty {
-                hosts[index].identityFiles = globalDefaults.identityFiles
-            }
-        }
-        return hosts.filter { $0.hostName != nil }
     }
 
     static func toProfiles(_ hosts: [SSHConfigHost]) -> [ConnectionProfile] {
