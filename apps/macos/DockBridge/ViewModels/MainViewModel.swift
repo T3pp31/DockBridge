@@ -294,6 +294,9 @@ final class MainViewModel: ObservableObject {
     private let settings: AppSettingsService
     private let bookmarkService: SecurityScopedBookmarkService
     @Published private(set) var remoteEditSessions: [RemoteEditSession] = []
+    /// Tracks downloads in flight keyed by connection+path so a double open
+    /// cannot spawn duplicate sessions (issue #780).
+    private var remoteEditOpenInFlight = Set<String>()
     private var editMonitorTask: Task<Void, Never>?
     private let remoteEditTempRoot: URL
     private let openFileOperation: (URL) -> Bool
@@ -923,6 +926,15 @@ final class MainViewModel: ObservableObject {
             startRemoteEditMonitoring()
             return
         }
+
+        let inFlightKey = connectionIdentity + "\u{0}" + item.path
+        guard !remoteEditOpenInFlight.contains(inFlightKey) else {
+            // A download for this path is already running; reuse its result
+            // when the session is tracked instead of creating a duplicate.
+            return
+        }
+        remoteEditOpenInFlight.insert(inFlightKey)
+        defer { remoteEditOpenInFlight.remove(inFlightKey) }
 
         let sessionDirectory = remoteEditTempRoot
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
