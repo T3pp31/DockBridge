@@ -23,14 +23,28 @@ log() {
 ensure_container() {
   if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
     log "Docker SFTP container $CONTAINER_NAME is already running"
-    return 0
+  else
+    log "Starting Docker SFTP container $CONTAINER_NAME on port $PORT ..."
+    docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    docker run -d --name "$CONTAINER_NAME" -p "${PORT}:22" -e SFTP_USER="$USER" \
+      atmoz/sftp "${USER}:${PASSWORD}:::upload" >/dev/null
   fi
+  wait_for_sftp_readiness
+}
 
-  log "Starting Docker SFTP container $CONTAINER_NAME on port $PORT ..."
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  docker run -d --name "$CONTAINER_NAME" -p "${PORT}:22" -e SFTP_USER="$USER" \
-    atmoz/sftp "${USER}:${PASSWORD}:::upload" >/dev/null
-  sleep 3
+wait_for_sftp_readiness() {
+  local attempts=30
+  for _ in $(seq 1 "$attempts"); do
+    if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" == "true" ]] \
+      && docker exec "$CONTAINER_NAME" pgrep -x sshd >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "Docker SFTP container $CONTAINER_NAME did not become ready" >&2
+  docker logs "$CONTAINER_NAME" >&2 || true
+  return 1
 }
 
 main() {
