@@ -68,7 +68,8 @@ impl Default for DirectoryWalkLimits {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
-    /// SSH connection timeout in seconds.
+    /// Timeout in seconds for each of two connection phases: TCP/SSH handshake,
+    /// then a shared budget for authentication and SFTP session initialization.
     pub connection_timeout_secs: u64,
     /// Interval between background SFTP health checks for active sessions.
     pub session_health_check_interval_secs: u64,

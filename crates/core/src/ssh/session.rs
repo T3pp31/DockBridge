@@ -292,45 +292,66 @@ impl SshSession {
         })?
         .map_err(|err| preserve_connection_error(err, &host, port))?;
 
-        let authenticated = authenticate(
-            &mut handle,
-            &username,
-            &profile.auth,
-            &host,
-            port,
-            auth_prompt.as_ref(),
+        // TCP/SSH handshake and post-handshake startup have separate budgets.
+        // Authentication, channel open, subsystem request and SFTP INIT share
+        // this second deadline, so no server-response wait is unbounded (#663).
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(config.connection_timeout_secs);
+
+        let authenticated = tokio::time::timeout_at(
+            deadline,
+            authenticate(
+                &mut handle,
+                &username,
+                &profile.auth,
+                &host,
+                port,
+                auth_prompt.as_ref(),
+            ),
         )
-        .await?;
+        .await
+        .map_err(|_| ConnectionError::Timeout {
+            timeout_secs: config.connection_timeout_secs,
+        })??;
 
         if !authenticated {
             return Err(AuthError::Failed { username }.into());
         }
 
-        let channel =
-            handle
-                .channel_open_session()
-                .await
-                .map_err(|err| ConnectionError::ConnectFailed {
-                    host: host.clone(),
-                    port,
-                    message: err.to_string(),
-                })?;
-
-        channel
-            .request_subsystem(true, "sftp")
+        let channel = tokio::time::timeout_at(deadline, handle.channel_open_session())
             .await
+            .map_err(|_| ConnectionError::Timeout {
+                timeout_secs: config.connection_timeout_secs,
+            })?
+            .map_err(|err| ConnectionError::ConnectFailed {
+                host: host.clone(),
+                port,
+                message: err.to_string(),
+            })?;
+
+        tokio::time::timeout_at(deadline, channel.request_subsystem(true, "sftp"))
+            .await
+            .map_err(|_| ConnectionError::Timeout {
+                timeout_secs: config.connection_timeout_secs,
+            })?
             .map_err(|err| SftpError::SubsystemFailed {
                 message: err.to_string(),
             })?;
 
-        let sftp = SftpSession::new_with_config(
-            channel.into_stream(),
-            SftpConfig {
-                max_concurrent_writes: config.transfer_upload_pipeline_depth,
-                ..SftpConfig::default()
-            },
+        let sftp = tokio::time::timeout_at(
+            deadline,
+            SftpSession::new_with_config(
+                channel.into_stream(),
+                SftpConfig {
+                    max_concurrent_writes: config.transfer_upload_pipeline_depth,
+                    ..SftpConfig::default()
+                },
+            ),
         )
         .await
+        .map_err(|_| ConnectionError::Timeout {
+            timeout_secs: config.connection_timeout_secs,
+        })?
         .map_err(|err| SftpError::SubsystemFailed {
             message: err.to_string(),
         })?;
@@ -583,5 +604,82 @@ mod tests {
             ConnectionError::HostKeyRejected { host, port }
                 if host == "example.com" && port == 2222
         ));
+    }
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use crate::sftp::test_server::{FailureConfig, TestSftpServer};
+
+    struct TrustTestHost;
+
+    impl HostKeyPrompt for TrustTestHost {
+        fn prompt_unknown_host(&self, _: &str, _: u16, _: &str) -> bool {
+            true
+        }
+    }
+
+    async fn assert_stalled_phase_times_out(
+        stage: &str,
+        select_flag: fn(&FailureConfig) -> &AtomicBool,
+    ) {
+        let server = TestSftpServer::start().await;
+        select_flag(&server.failures).store(true, Ordering::SeqCst);
+        let directory = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            connection_timeout_secs: 1,
+            known_hosts_path: directory.path().join("known_hosts.json"),
+            merge_openssh_known_hosts_on_connect: false,
+            ..AppConfig::default()
+        };
+        let known_hosts = Arc::new(Mutex::new(
+            KnownHostsManager::load(&config.known_hosts_path).unwrap(),
+        ));
+        let profile =
+            ConnectionProfile::with_password("127.0.0.1", server.addr.port(), "test", "test");
+        let connection =
+            SshSession::connect(profile, &config, known_hosts, Arc::new(TrustTestHost), None);
+        // The server must reach the selected phase; a handshake timeout alone
+        // must not make this regression test pass.
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::join!(
+                connection,
+                server.failures.connection_phase_started.notified()
+            )
+        })
+        .await
+        .unwrap_or_else(|_| panic!("stalled {stage} exceeded the configured timeout"));
+        assert!(
+            matches!(
+                result,
+                Err(crate::error::AppError::Connection(
+                    ConnectionError::Timeout { timeout_secs: 1 }
+                ))
+            ),
+            "stalled {stage} must return a connection timeout"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_times_out_when_authentication_stalls() {
+        assert_stalled_phase_times_out("authentication", |failures| &failures.hang_auth).await;
+    }
+
+    #[tokio::test]
+    async fn connect_times_out_when_channel_open_stalls() {
+        assert_stalled_phase_times_out("channel open", |failures| &failures.hang_channel_open)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn connect_times_out_when_subsystem_request_stalls() {
+        assert_stalled_phase_times_out("subsystem request", |failures| {
+            &failures.hang_subsystem_request
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn connect_times_out_when_sftp_init_stalls() {
+        assert_stalled_phase_times_out("SFTP INIT", |failures| &failures.hang_sftp_init).await;
     }
 }
