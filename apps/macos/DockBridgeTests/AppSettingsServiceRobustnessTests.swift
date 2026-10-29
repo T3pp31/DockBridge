@@ -44,6 +44,40 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config)), config)
     }
 
+    func testEncodedConfigRoundTripPreservesEveryNonDefaultField() throws {
+        var config = AppConfig.default
+        config.connectionTimeoutSecs = 5
+        config.sessionHealthCheckIntervalSecs = 7
+        config.transferRetryCount = 1
+        config.transferChunkSizeBytes = 65_536
+        config.transferDownloadPipelineDepth = 8
+        config.transferUploadPipelineDepth = 16
+        config.sshInactivityTimeoutSecs = 90
+        config.sshKeepaliveIntervalSecs = 15
+        config.defaultLocalPath = "/tmp/custom-local-directory"
+        config.defaultLocalBookmark = Data([1, 2, 3])
+        config.confirmBeforeDelete = false
+        config.showHiddenFiles = true
+        config.mergeOpensshKnownHostsOnConnect = false
+        config.opensshKnownHostsPath = "/tmp/custom-known-hosts"
+        config.opensshKnownHostsBookmark = Data([4, 5, 6])
+        config.knownHostsStrictMode = false
+        config.failConnectOnOpensshMergeError = false
+        config.directoryWalkMaxFiles = 200
+        config.directoryWalkMaxDepth = 4
+        config.directoryWalkMaxTotalBytes = 1_024
+        config.transferOverwritePolicy = .ask
+        config.notifyWhenTransfersFinish = false
+        config.playTransferNotificationSound = false
+
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        XCTAssertEqual(try decoder.decode(AppConfig.self, from: encoder.encode(config)), config)
+
+        config.sshInactivityTimeoutSecs = nil
+        XCTAssertEqual(try decoder.decode(AppConfig.self, from: encoder.encode(config)), config)
+    }
+
     func testInvalidConfigFieldTypeStillFailsDecoding() {
         XCTAssertThrowsError(try JSONDecoder().decode(
             AppConfig.self,
