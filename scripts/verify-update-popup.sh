@@ -31,21 +31,23 @@ wait_for_update_sheet() {
   local timeout="${1:-20}"
   local elapsed=0
   while (( elapsed < timeout )); do
-    if osascript <<'APPLESCRIPT' >/dev/null 2>&1
+    local result
+    result=$(osascript <<'APPLESCRIPT' 2>/dev/null
 tell application "System Events"
   if exists process "DockBridge" then
     tell process "DockBridge"
       if exists (sheet 1 of window 1) then
         if exists static text "Update Available" of sheet 1 of window 1 then
-          return true
+          return "true"
         end if
       end if
     end tell
   end if
 end tell
-return false
+return "false"
 APPLESCRIPT
-    then
+    ) || result=""
+    if [[ "$result" == "true" ]]; then
       return 0
     fi
     sleep 1
@@ -60,12 +62,20 @@ tell application "System Events"
   if not (exists process "DockBridge") then return true
   tell process "DockBridge"
     if not (exists window 1) then return true
-    if not (exists sheet 1 of window 1) then return true
-    try
-      if exists static text "Update Available" of sheet 1 of window 1 then
-        return false
-      end if
-    end try
+    return not (exists sheet 1 of window 1)
+  end tell
+end tell
+return true
+APPLESCRIPT
+}
+
+modals_absent() {
+  osascript <<'APPLESCRIPT'
+tell application "System Events"
+  if not (exists process "DockBridge") then return true
+  tell process "DockBridge"
+    if not (exists window 1) then return true
+    return not ((exists sheet 1 of window 1) or (exists alert 1))
   end tell
 end tell
 return true
@@ -103,22 +113,46 @@ else
   exit 1
 fi
 
-echo "== Test 2: Download opens DMG URL =="
+echo "== Test 2: Download opens release page =="
+LOG_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 click_sheet_button 2
 sleep 2
-expected_url=$(curl -s -H "Accept: application/vnd.github+json" https://api.github.com/repos/T3pp31/DockBridge/releases/latest \
-  | python3 -c "import sys,json; r=json.load(sys.stdin); print(next(a['browser_download_url'] for a in r['assets'] if a['name'].endswith('.dmg')))")
-if [[ "$expected_url" == *"DockBridge-0.1.2-macOS.dmg" ]]; then
+api_json=$(curl -fsS --max-time 30 -H "Accept: application/vnd.github+json" https://api.github.com/repos/T3pp31/DockBridge/releases/latest) \
+  || { echo "FAIL: GitHub API request failed" >&2; exit 1; }
+expected_asset_url=$(printf '%s' "$api_json" | python3 -c "import sys,json; r=json.load(sys.stdin); print(next((a['browser_download_url'] for a in r.get('assets', []) if a['name'].endswith('.dmg')), ''))")
+if [[ -z "$expected_asset_url" ]]; then
+  echo "FAIL: no DMG asset in latest release" >&2
+  exit 1
+fi
+expected_asset_name=$(awk -F'"' '/^asset_name_template / { print $2; exit }' config/release.toml)
+release_version=$(awk -F'"' '/^version / { print $2; exit }' config/release.toml)
+release_app_name=$(awk -F'"' '/^app_name / { print $2; exit }' config/release.toml)
+if [[ -z "$expected_asset_name" || -z "$release_version" || -z "$release_app_name" ]]; then
+  echo "FAIL: Required release asset configuration is missing" >&2
+  exit 1
+fi
+expected_dmg_name="${expected_asset_name//\{app_name\}/${release_app_name}}"
+expected_dmg_name="${expected_dmg_name//\{version\}/${release_version}}"
+if [[ "$expected_asset_url" != *"$expected_dmg_name" ]]; then
+  echo "FAIL: Unexpected DMG URL: $expected_asset_url" >&2
+  exit 1
+fi
+
+expected_url=$(printf '%s' "$api_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['html_url'])")
+observed_url=$(log show --info --start "$LOG_START" --style compact \
+  --predicate 'process == "DockBridge" AND eventMessage CONTAINS "opening update release page:"' 2>/dev/null \
+  | sed -n 's/.*opening update release page: \(https:\/\/[^ ]*\).*/\1/p' | tail -1)
+if [[ -n "$observed_url" && "$observed_url" == "$expected_url" ]]; then
   echo "PASS: Download button clicked; target URL is $expected_url"
 else
-  echo "FAIL: Unexpected DMG URL: $expected_url"
+  echo "FAIL: Expected $expected_url, observed ${observed_url:-<none>}"
   exit 1
 fi
 
 echo "== Test 3: Later suppresses same version on relaunch =="
 if xcodebuild -project apps/macos/DockBridge.xcodeproj -scheme DockBridge -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO \
   -only-testing:DockBridgeTests/UpdateCheckViewModelTests/testSkipUpdatePersistsSkippedVersionAndSuppressesRelaunch test 2>&1 | tail -8 | grep -q "TEST SUCCEEDED"; then
-  echo "PASS: Later saves skipped version and suppresses relaunch"
+  echo "PASS: Later saves skipped version and suppresses relaunch in unit tests"
 else
   echo "FAIL: Skip persistence test failed"
   exit 1
@@ -134,18 +168,89 @@ else
   echo "FAIL: Offline/network failure handling test failed"
   exit 1
 fi
-HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 open "$APP"
-sleep 6
-if pgrep -x DockBridge >/dev/null; then
-  echo "PASS: App launched while GitHub API unreachable"
+# LaunchServices does not pass proxy environment variables through to the
+# app. Use a referenced system anchor and verify that it actually blocks I/O.
+if ! sudo -n true 2>/dev/null; then
+  echo "SKIP: offline-launch check requires passwordless sudo for pf rules"
+elif ! sudo -n pfctl -sr 2>/dev/null | grep -Fq 'anchor "com.apple/*"'; then
+  echo "SKIP: offline-launch check requires the standard com.apple anchor"
 else
-  echo "FAIL: App did not stay running offline"
-  exit 1
+  offline_api_host=$(awk -F'"' '/^offline_api_host / { print $2; exit }' config/release.toml)
+  offline_probe_timeout_secs=$(awk '/^offline_probe_timeout_secs / { print $3; exit }' config/release.toml)
+  offline_observation_secs=$(awk '/^offline_observation_secs / { print $3; exit }' config/release.toml)
+  offline_poll_interval_secs=$(awk '/^offline_poll_interval_secs / { print $3; exit }' config/release.toml)
+  if [[ ! "$offline_observation_secs" =~ ^[1-9][0-9]*$ || ! "$offline_poll_interval_secs" =~ ^[1-9][0-9]*$ ]] ||
+     (( offline_poll_interval_secs > offline_observation_secs )); then
+    echo "FAIL: Invalid offline observation settings" >&2
+    exit 1
+  fi
+  if [[ ! "$offline_api_host" =~ ^[a-zA-Z0-9.-]+$ || ! "$offline_probe_timeout_secs" =~ ^[1-9][0-9]*$ ]]; then
+    echo "FAIL: Invalid offline verification configuration" >&2
+    exit 1
+  fi
+  if ! curl --silent --show-error --noproxy '*' --max-time "$offline_probe_timeout_secs" \
+    --output /dev/null "https://$offline_api_host/"; then
+    echo "SKIP: offline-launch check requires initial connectivity to $offline_api_host"
+  else
+    BLOCK_ANCHOR="com.apple/dockbridge_offline_check_$$"
+    PF_TOKEN=""
+    restore_pf() {
+      sudo -n pfctl -a "$BLOCK_ANCHOR" -F rules >/dev/null 2>&1 || true
+      if [[ -n "$PF_TOKEN" ]]; then
+        sudo -n pfctl -X "$PF_TOKEN" >/dev/null 2>&1 || true
+        PF_TOKEN=""
+      fi
+    }
+    trap restore_pf EXIT
+    pf_enable_output=$(sudo -n pfctl -E 2>&1)
+    PF_TOKEN=$(printf '%s\n' "$pf_enable_output" | awk '/Token[[:space:]]*:/ { print $3; exit }')
+    if [[ ! "$PF_TOKEN" =~ ^[0-9]+$ ]]; then
+      PF_TOKEN=""
+      echo "FAIL: PF did not return an enable-reference token" >&2
+      exit 1
+    fi
+    printf 'block drop out quick proto tcp to %s port {80, 443}\n' "$offline_api_host" \
+      | sudo -n pfctl -a "$BLOCK_ANCHOR" -f - >/dev/null
+    if curl --silent --noproxy '*' --max-time "$offline_probe_timeout_secs" \
+      --output /dev/null "https://$offline_api_host/"; then
+      echo "FAIL: Offline rule did not block $offline_api_host" >&2
+      exit 1
+    fi
+
+    open "$APP"
+    offline_check_deadline=$((SECONDS + offline_observation_secs))
+    # LaunchServices may return before the process appears. Wait for startup
+    # within the same deadline before treating process absence as a crash.
+    while ! pgrep -x DockBridge >/dev/null; do
+      if (( SECONDS >= offline_check_deadline )); then
+        echo "FAIL: App did not launch offline"
+        exit 1
+      fi
+      sleep "$offline_poll_interval_secs"
+    done
+    while (( SECONDS < offline_check_deadline )); do
+      if ! pgrep -x DockBridge >/dev/null; then
+        echo "FAIL: App did not stay running offline"
+        exit 1
+      fi
+      if [[ "$(sheet_absent)" != "true" ]]; then
+        echo "FAIL: Unexpected sheet while offline"
+        exit 1
+      fi
+      sleep "$offline_poll_interval_secs"
+    done
+    if pgrep -x DockBridge >/dev/null && [[ "$(sheet_absent)" == "true" ]]; then
+      echo "PASS: App stayed running without a sheet while GitHub API was unreachable"
+    else
+      echo "FAIL: App or sheet state changed during offline launch"
+      exit 1
+    fi
+    restore_pf
+    trap - EXIT
+  fi
 fi
-if [[ "$(sheet_absent)" == "true" ]]; then
-  echo "PASS: No update sheet when offline"
-else
-  echo "FAIL: Unexpected sheet while offline"
+if [[ "$(modals_absent)" != "true" ]]; then
+  echo "FAIL: Blocking modal or alert appeared while offline"
   exit 1
 fi
 
@@ -153,7 +258,7 @@ echo "== Test 5: HostKey deferral =="
 kill_dockbridge
 if xcodebuild -project apps/macos/DockBridge.xcodeproj -scheme DockBridge -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO \
   -only-testing:DockBridgeTests/UpdateCheckViewModelTests/testCheckOnLaunchDefersSheetWhileHostKeyBlocking test 2>&1 | tail -8 | grep -q "TEST SUCCEEDED"; then
-  echo "PASS: HostKey blocking defers update sheet until dismissal"
+  echo "PASS: HostKey blocking defers update sheet until dismissal in unit tests"
 else
   echo "FAIL: HostKey deferral test failed"
   exit 1

@@ -290,51 +290,68 @@ impl SshSession {
         .map_err(|_| ConnectionError::Timeout {
             timeout_secs: config.connection_timeout_secs,
         })?
-        .map_err(|err| ConnectionError::ConnectFailed {
-            host: host.clone(),
-            port,
-            message: err.to_string(),
-        })?;
+        .map_err(|err| preserve_connection_error(err, &host, port))?;
 
-        let authenticated = authenticate(
-            &mut handle,
-            &username,
-            &profile.auth,
-            &host,
-            port,
-            auth_prompt.as_ref(),
+        // TCP/SSH handshake and post-handshake startup have separate budgets.
+        // Authentication, channel open, subsystem request and SFTP INIT share
+        // this second deadline, so no server-response wait is unbounded (#663).
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(config.connection_timeout_secs);
+
+        let authenticated = tokio::time::timeout_at(
+            deadline,
+            authenticate(
+                &mut handle,
+                &username,
+                &profile.auth,
+                &host,
+                port,
+                auth_prompt.as_ref(),
+            ),
         )
-        .await?;
+        .await
+        .map_err(|_| ConnectionError::Timeout {
+            timeout_secs: config.connection_timeout_secs,
+        })??;
 
         if !authenticated {
             return Err(AuthError::Failed { username }.into());
         }
 
-        let channel =
-            handle
-                .channel_open_session()
-                .await
-                .map_err(|err| ConnectionError::ConnectFailed {
-                    host: host.clone(),
-                    port,
-                    message: err.to_string(),
-                })?;
-
-        channel
-            .request_subsystem(true, "sftp")
+        let channel = tokio::time::timeout_at(deadline, handle.channel_open_session())
             .await
+            .map_err(|_| ConnectionError::Timeout {
+                timeout_secs: config.connection_timeout_secs,
+            })?
+            .map_err(|err| ConnectionError::ConnectFailed {
+                host: host.clone(),
+                port,
+                message: err.to_string(),
+            })?;
+
+        tokio::time::timeout_at(deadline, channel.request_subsystem(true, "sftp"))
+            .await
+            .map_err(|_| ConnectionError::Timeout {
+                timeout_secs: config.connection_timeout_secs,
+            })?
             .map_err(|err| SftpError::SubsystemFailed {
                 message: err.to_string(),
             })?;
 
-        let sftp = SftpSession::new_with_config(
-            channel.into_stream(),
-            SftpConfig {
-                max_concurrent_writes: config.transfer_upload_pipeline_depth,
-                ..SftpConfig::default()
-            },
+        let sftp = tokio::time::timeout_at(
+            deadline,
+            SftpSession::new_with_config(
+                channel.into_stream(),
+                SftpConfig {
+                    max_concurrent_writes: config.transfer_upload_pipeline_depth,
+                    ..SftpConfig::default()
+                },
+            ),
         )
         .await
+        .map_err(|_| ConnectionError::Timeout {
+            timeout_secs: config.connection_timeout_secs,
+        })?
         .map_err(|err| SftpError::SubsystemFailed {
             message: err.to_string(),
         })?;
@@ -448,17 +465,72 @@ async fn authenticate(
                 }
             })?;
             let signing_key = PrivateKeyWithHashAlg::new(Arc::new(private_key), rsa_hash.flatten());
-            handle
+            let result = handle
                 .authenticate_publickey(username, signing_key)
                 .await
                 .map_err(|err| ConnectionError::ConnectFailed {
                     host: host.to_string(),
                     port,
                     message: err.to_string(),
-                })
-                .map(|result| result.success())
-                .map_err(Into::into)
+                })?;
+            // Public key accepted but the server still requires an additional
+            // challenge (e.g. TOTP via keyboard-interactive). Fall through to
+            // keyboard-interactive when offered and a prompt handler is wired
+            // up (issue #800).
+            if result.success() {
+                return Ok(true);
+            }
+            match &result {
+                AuthResult::Failure {
+                    remaining_methods, ..
+                } => {
+                    if remaining_methods.contains(&MethodKind::KeyboardInteractive) {
+                        if let Some(handler) = auth_prompt {
+                            return keyboard_interactive_auth(
+                                handle, username, host, port, handler,
+                            )
+                            .await;
+                        }
+                        return Ok(false);
+                    }
+                    if remaining_methods.is_empty() {
+                        return Err(AuthError::MethodUnavailable.into());
+                    }
+                    Ok(false)
+                }
+                _ => Ok(false),
+            }
         }
+    }
+}
+
+/// Keeps structured connection errors intact and only flattens low-level
+/// transport errors into `ConnectFailed`. This preserves host-key rejection and
+/// mismatch details across `client::connect`.
+fn preserve_connection_error(
+    error: ConnectionError,
+    host: &str,
+    port: u16,
+) -> crate::error::AppError {
+    match error {
+        err @ (ConnectionError::HostKeyRejected { .. } | ConnectionError::Timeout { .. }) => {
+            err.into()
+        }
+        ConnectionError::Other(source) => match source.downcast::<SecurityError>() {
+            Ok(security) => security.into(),
+            Err(source) => ConnectionError::ConnectFailed {
+                host: host.to_string(),
+                port,
+                message: source.to_string(),
+            }
+            .into(),
+        },
+        error => ConnectionError::ConnectFailed {
+            host: host.to_string(),
+            port,
+            message: error.to_string(),
+        }
+        .into(),
     }
 }
 
@@ -501,12 +573,16 @@ async fn keyboard_interactive_auth(
                 echo: prompt.echo,
             })
             .collect();
-        let answers = auth_prompt.prompt(&name, &instructions, &challenge);
+        let mut answers = auth_prompt.prompt(&name, &instructions, &challenge);
         if answers.len() != challenge.len() || answers.iter().any(Option::is_none) {
             // Cancelled: abandon the round instead of sending partial answers.
+            answers.zeroize();
             return Ok(false);
         }
-        let responses: Vec<String> = answers
+        // russh owns Vec<String> while sending the round. Move the answers
+        // directly rather than retaining an extra plaintext clone. Cancellation
+        // above is zeroized here; russh's internal buffers are outside our control.
+        let responses = answers
             .into_iter()
             .map(|answer| answer.unwrap_or_default())
             .collect();
@@ -514,5 +590,127 @@ async fn keyboard_interactive_auth(
             .authenticate_keyboard_interactive_respond(responses)
             .await
             .map_err(connect_failed)?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserve_connection_error_keeps_host_key_rejection() {
+        // Given: a structured host-key rejection from the SSH handler
+        let original = ConnectionError::HostKeyRejected {
+            host: "example.com".to_string(),
+            port: 2222,
+        };
+
+        // When: the connect future is flattened for reporting
+        let mapped = preserve_connection_error(original, "example.com", 2222);
+
+        // Then: the typed rejection is preserved instead of becoming ConnectFailed
+        assert!(matches!(
+            mapped,
+            crate::error::AppError::Connection(ConnectionError::HostKeyRejected { host, port })
+                if host == "example.com" && port == 2222
+        ));
+    }
+
+    #[test]
+    fn preserve_connection_error_keeps_handler_security_errors() {
+        for security in [
+            SecurityError::HostKeyRejected {
+                host: "example.com".into(),
+                port: 2222,
+            },
+            SecurityError::HostKeyMismatch {
+                host: "example.com".into(),
+                port: 2222,
+                expected: "old".into(),
+                actual: "new".into(),
+            },
+        ] {
+            let expected = security.to_string();
+            let mapped = preserve_connection_error(security.into(), "example.com", 2222);
+            assert!(matches!(mapped, crate::error::AppError::Security(_)));
+            assert_eq!(mapped.to_string(), expected);
+        }
+    }
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use crate::sftp::test_server::{FailureConfig, TestSftpServer};
+
+    struct TrustTestHost;
+
+    impl HostKeyPrompt for TrustTestHost {
+        fn prompt_unknown_host(&self, _: &str, _: u16, _: &str) -> bool {
+            true
+        }
+    }
+
+    async fn assert_stalled_phase_times_out(
+        stage: &str,
+        select_flag: fn(&FailureConfig) -> &AtomicBool,
+    ) {
+        let server = TestSftpServer::start().await;
+        select_flag(&server.failures).store(true, Ordering::SeqCst);
+        let directory = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            connection_timeout_secs: 1,
+            known_hosts_path: directory.path().join("known_hosts.json"),
+            merge_openssh_known_hosts_on_connect: false,
+            ..AppConfig::default()
+        };
+        let known_hosts = Arc::new(Mutex::new(
+            KnownHostsManager::load(&config.known_hosts_path).unwrap(),
+        ));
+        let profile =
+            ConnectionProfile::with_password("127.0.0.1", server.addr.port(), "test", "test");
+        let connection =
+            SshSession::connect(profile, &config, known_hosts, Arc::new(TrustTestHost), None);
+        // The server must reach the selected phase; a handshake timeout alone
+        // must not make this regression test pass.
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::join!(
+                connection,
+                server.failures.connection_phase_started.notified()
+            )
+        })
+        .await
+        .unwrap_or_else(|_| panic!("stalled {stage} exceeded the configured timeout"));
+        assert!(
+            matches!(
+                result,
+                Err(crate::error::AppError::Connection(
+                    ConnectionError::Timeout { timeout_secs: 1 }
+                ))
+            ),
+            "stalled {stage} must return a connection timeout"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_times_out_when_authentication_stalls() {
+        assert_stalled_phase_times_out("authentication", |failures| &failures.hang_auth).await;
+    }
+
+    #[tokio::test]
+    async fn connect_times_out_when_channel_open_stalls() {
+        assert_stalled_phase_times_out("channel open", |failures| &failures.hang_channel_open)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn connect_times_out_when_subsystem_request_stalls() {
+        assert_stalled_phase_times_out("subsystem request", |failures| {
+            &failures.hang_subsystem_request
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn connect_times_out_when_sftp_init_stalls() {
+        assert_stalled_phase_times_out("SFTP INIT", |failures| &failures.hang_sftp_init).await;
     }
 }

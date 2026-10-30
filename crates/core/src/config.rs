@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use dirs::home_dir as system_home_dir;
 use serde::Deserialize;
 
 use crate::error::{ConfigError, SecurityError};
@@ -68,7 +69,8 @@ impl Default for DirectoryWalkLimits {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
-    /// SSH connection timeout in seconds.
+    /// Timeout in seconds for each of two connection phases: TCP/SSH handshake,
+    /// then a shared budget for authentication and SFTP session initialization.
     pub connection_timeout_secs: u64,
     /// Interval between background SFTP health checks for active sessions.
     pub session_health_check_interval_secs: u64,
@@ -160,8 +162,8 @@ impl AppConfig {
                 message: err.to_string(),
             })?;
 
-        config.known_hosts_path = expand_tilde(&config.known_hosts_path);
-        config.openssh_known_hosts_path = expand_tilde(&config.openssh_known_hosts_path);
+        config.known_hosts_path = expand_tilde(&config.known_hosts_path)?;
+        config.openssh_known_hosts_path = expand_tilde(&config.openssh_known_hosts_path)?;
         // Single source of truth for validation: validate() normalizes and
         // checks chunk size / pipeline depth / retry count / timeouts here too.
         config = config.validate()?;
@@ -341,13 +343,13 @@ pub fn clamp_transfer_upload_pipeline_depth(depth: usize) -> usize {
 /// redirecting config paths (e.g. `known_hosts`) to unexpected locations.
 /// The `~/` remainder is rejected if it contains `..` segments to prevent
 /// traversal outside the home directory.
-pub fn expand_tilde(path: &Path) -> PathBuf {
+pub fn expand_tilde(path: &Path) -> Result<PathBuf, ConfigError> {
     expand_tilde_with_home(path, home_dir().as_deref())
 }
 
-fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBuf {
+fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> Result<PathBuf, ConfigError> {
     let Some(path_str) = path.to_str() else {
-        return path.to_path_buf();
+        return Ok(path.to_path_buf());
     };
 
     // Only accept absolute home directories; a relative HOME could redirect
@@ -357,37 +359,40 @@ fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> PathBuf {
     if let Some(rest) = path_str.strip_prefix("~/") {
         if let Some(home) = home {
             if rest.split('/').any(|segment| segment == "..") {
-                return path.to_path_buf();
+                return Err(ConfigError::InvalidPath {
+                    path: path.display().to_string(),
+                    reason: "`~/` paths cannot contain `..` segments".to_string(),
+                });
             }
-            return home.join(rest);
+            return Ok(home.join(rest));
         }
     }
 
     if path_str == "~" {
         if let Some(home) = home {
-            return home.to_path_buf();
+            return Ok(home.to_path_buf());
         }
     }
 
-    path.to_path_buf()
+    Ok(path.to_path_buf())
+}
+
+fn normalize_home(home: Option<PathBuf>) -> Option<PathBuf> {
+    home.filter(|path| path.is_absolute())
 }
 
 fn home_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    let path = PathBuf::from(home);
-    if path.is_absolute() {
-        Some(path)
-    } else {
-        None
-    }
+    normalize_home(system_home_dir())
 }
 
 fn default_known_hosts_path() -> PathBuf {
     expand_tilde(Path::new("~/.dockbridge/known_hosts.json"))
+        .expect("the default known hosts path is a safe tilde path")
 }
 
 fn default_openssh_known_hosts_path() -> PathBuf {
     expand_tilde(Path::new("~/.ssh/known_hosts"))
+        .expect("the default OpenSSH known hosts path is a safe tilde path")
 }
 
 fn default_ssh_inactivity_timeout_secs() -> Option<u64> {
@@ -414,19 +419,19 @@ pub fn ensure_known_hosts_parent(path: &Path) -> Result<(), SecurityError> {
 
 #[cfg(unix)]
 fn create_known_hosts_parent_dir(parent: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    use std::os::unix::fs::DirBuilderExt;
 
+    // Only apply 0o700 when we actually create the directory. Chmod-ing an
+    // existing directory would silently change permissions of a shared or
+    // pre-existing path chosen by the user (issue #744).
     match std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(parent)
     {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(err) => return Err(err),
+        Ok(()) => Ok(()),
+        Err(err) => Err(err),
     }
-    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
-    Ok(())
 }
 
 #[cfg(not(unix))]
@@ -461,7 +466,8 @@ mod tests {
     fn expand_tilde_replaces_home_prefix() {
         let home = PathBuf::from("/tmp/home");
         let expanded =
-            expand_tilde_with_home(Path::new("~/.dockbridge/known_hosts.json"), Some(&home));
+            expand_tilde_with_home(Path::new("~/.dockbridge/known_hosts.json"), Some(&home))
+                .unwrap();
         assert_eq!(
             expanded,
             PathBuf::from("/tmp/home/.dockbridge/known_hosts.json")
@@ -469,11 +475,40 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn normalize_home_accepts_absolute_home() {
+        let home = PathBuf::from("/home/user");
+        assert_eq!(normalize_home(Some(home.clone())), Some(home));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalize_home_accepts_absolute_home() {
+        let home = PathBuf::from(r"C:\Users\user");
+        assert_eq!(normalize_home(Some(home.clone())), Some(home));
+    }
+
+    #[test]
+    fn normalize_home_rejects_relative_home() {
+        assert_eq!(normalize_home(Some(PathBuf::from("relative/home"))), None);
+    }
+
+    #[test]
+    fn normalize_home_rejects_empty_home() {
+        assert_eq!(normalize_home(Some(PathBuf::new())), None);
+    }
+
+    #[test]
+    fn normalize_home_returns_none_when_home_is_unresolved() {
+        assert_eq!(normalize_home(None), None);
+    }
+
+    #[test]
     fn expand_tilde_ignores_relative_home() {
         // A relative HOME should not be used to expand ~.
         let relative = PathBuf::from("relative/path");
         assert_eq!(
-            expand_tilde_with_home(Path::new("~/known_hosts.json"), Some(&relative)),
+            expand_tilde_with_home(Path::new("~/known_hosts.json"), Some(&relative)).unwrap(),
             PathBuf::from("~/known_hosts.json")
         );
     }
@@ -481,10 +516,27 @@ mod tests {
     #[test]
     fn expand_tilde_rejects_parent_dir_in_remainder() {
         let home = PathBuf::from("/tmp/home");
-        assert_eq!(
-            expand_tilde_with_home(Path::new("~/../etc/passwd"), Some(&home)),
-            PathBuf::from("~/../etc/passwd")
-        );
+        let err = expand_tilde_with_home(Path::new("~/../etc/passwd"), Some(&home)).unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidPath { .. }));
+    }
+
+    #[test]
+    fn from_toml_file_rejects_tilde_traversal() {
+        // Given: a tilde path whose remainder escapes the home directory
+        // When: loading an AppConfig that uses the path
+        // Then: loading fails instead of treating `~` as a relative directory
+        let dir =
+            std::env::temp_dir().join(format!("dockbridge-config-tilde-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tilde-traversal.toml");
+        std::fs::write(
+            &path,
+            "known_hosts_path = \"~/../Documents/known_hosts.json\"\n",
+        )
+        .unwrap();
+
+        let err = AppConfig::from_toml_file(&path).unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidPath { .. }));
     }
 
     #[test]
@@ -630,12 +682,12 @@ mod tests {
     #[test]
     fn all_repo_config_toml_files_parse() {
         // Given: the repository's AppConfig-format config files
-        // (release.toml uses a separate `[release]` schema and is excluded)
+        // (release.toml and test-server.toml have separate schemas)
         // When: every one is loaded as an AppConfig
         // Then: every file parses successfully (regression for duplicate-key
         // files like the old config/test.toml)
         //
-        // NOTE: every `.toml` file in this directory other than release.toml
+        // NOTE: every `.toml` file in this directory other than release.toml and test-server.toml
         // must use the AppConfig schema - this test fails (loudly) when a
         // different schema is added so the exclusion list is kept in sync.
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -662,7 +714,7 @@ mod tests {
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if name.ends_with(".toml") && name != "release.toml" {
+            if name.ends_with(".toml") && !matches!(name, "release.toml" | "test-server.toml") {
                 found_any = true;
                 AppConfig::from_toml_file(&path).unwrap_or_else(|err| {
                     panic!(
@@ -705,12 +757,12 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn ensure_known_hosts_parent_tightens_existing_parent_permissions() {
+    fn ensure_known_hosts_parent_preserves_existing_parent_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
         // Given: an existing parent directory with permissive mode 0755
         let dir = std::env::temp_dir().join(format!(
-            "dockbridge-known-hosts-tighten-{}",
+            "dockbridge-known-hosts-preserve-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -721,9 +773,9 @@ mod tests {
         // When: ensure_known_hosts_parent is called
         ensure_known_hosts_parent(&path).unwrap();
 
-        // Then: the parent directory mode is tightened to 0700
+        // Then: the parent directory mode is NOT changed (issue #744)
         let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700);
+        assert_eq!(mode, 0o755);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

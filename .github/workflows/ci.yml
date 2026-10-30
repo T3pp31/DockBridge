@@ -51,7 +51,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache Rust
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
           shared-key: ci-rust
           # Keep ~/.cargo/bin out of rust-cache so the dedicated cargo-cyclonedx
@@ -64,11 +64,11 @@ jobs:
       - name: Shellcheck scripts
         run: |
           if command -v shellcheck >/dev/null 2>&1; then
-            shellcheck scripts/*.sh
+            shellcheck -x scripts/*.sh
           else
             echo 'shellcheck not installed; installing...'
             sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck >/dev/null
-            shellcheck scripts/*.sh
+            shellcheck -x scripts/*.sh
           fi
 
       - name: Check version consistency (Cargo.toml == release.toml)
@@ -89,6 +89,9 @@ jobs:
 
       - name: Build workspace
         run: cargo build --workspace
+
+      - name: Check UniFFI bindgen CLI feature
+        run: cargo check -p dockbridge-uniffi --features cli --bin uniffi-bindgen
 
       - name: Build hardened CLI (release configuration)
         run: cargo build -p dockbridge-cli --release --features disable-cli-password
@@ -138,6 +141,8 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # 1.91.0
+        with:
+          toolchain: 1.91.0
 
       # --all-targets also compiles unit tests and build scripts, so a dep that
       # only fails to link/codegen at 1.91 is caught here rather than at merge.
@@ -172,7 +177,7 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable (tag via rust-toolchain.toml)
 
       - name: Cache Rust
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6  # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
         with:
           shared-key: ci-macos
           # Keep ~/.cargo/bin out of rust-cache; macOS does not build cargo-cyclonedx,

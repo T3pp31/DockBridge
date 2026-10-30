@@ -37,7 +37,7 @@ final class FakeBridge: RemoteBridging {
     private(set) var renamed: [(from: String, to: String)] = []
     /// mkdir paths recorded during `mkdirRemote`.
     private(set) var createdDirectories: [String] = []
-    /// Set to fake a remote failure; `true` makes transfer calls throw.
+    /// Set to fake a remote mutation failure for rename and mkdir calls.
     var failTransfers = false
     /// Set to fake a connection failure; `true` makes `connect` throw.
     var failConnect = false
@@ -53,6 +53,8 @@ final class FakeBridge: RemoteBridging {
         connectedUsername = profile.username
         if failConnect {
             connectionStatus = .disconnected
+            connectedProfileID = nil
+            connectedUsername = nil
             throw DockBridgeError.Other(message: "simulated connect failure")
         }
         connectionStatus = .connected(endpoint: profile.endpointLabel)
@@ -89,7 +91,7 @@ final class FakeBridge: RemoteBridging {
         overwritePolicy: TransferOverwritePolicy
     ) async throws {
         uploaded.append((localPath, remoteDirectory, overwritePolicy))
-        if uploadFails {
+        if failTransfers || uploadFails {
             throw DockBridgeError.Other(message: "simulated upload failure")
         }
     }
@@ -100,14 +102,14 @@ final class FakeBridge: RemoteBridging {
         overwritePolicy: TransferOverwritePolicy
     ) async throws {
         downloaded.append((remotePath, localDirectory, overwritePolicy))
-        if downloadFails {
+        if failTransfers || downloadFails {
             throw DockBridgeError.Other(message: "simulated download failure")
         }
     }
 
     func deleteRemote(path: String) async throws {
         deleted.append(path)
-        if deleteFails {
+        if failTransfers || deleteFails {
             throw DockBridgeError.Other(message: "simulated delete failure")
         }
     }
@@ -131,7 +133,17 @@ final class FakeBridge: RemoteBridging {
     }
 
     func cancelTransfer(taskId: UInt64) async throws {
-        transferTasks.removeAll { $0.id == taskId }
+        guard let index = transferTasks.firstIndex(where: { $0.id == taskId }) else { return }
+        transferTasks[index] = TransferTaskRecord(
+            id: transferTasks[index].id,
+            sessionId: transferTasks[index].sessionId,
+            direction: transferTasks[index].direction,
+            localPath: transferTasks[index].localPath,
+            remotePath: transferTasks[index].remotePath,
+            status: .cancelled,
+            bytesTransferred: transferTasks[index].bytesTransferred,
+            totalBytes: transferTasks[index].totalBytes
+        )
     }
 
     func clearCompletedTransfers() async throws {
@@ -147,9 +159,19 @@ final class FakeBridge: RemoteBridging {
         transferTasks = []
     }
 
-    func retryTransfer(taskId: UInt64) async throws {}
+    /// Task ids recorded during  (issue #786).
+    private(set) var retriedTaskIDs: [UInt64] = []
+
+    func retryTransfer(taskId: UInt64) async throws {
+        retriedTaskIDs.append(taskId)
+    }
+    /// Records the last host key response so tests can assert it reached the
+    /// bridge (issue #643).
+    private(set) var lastHostKeyAnswer: Bool?
+
 
     func respondToHostKeyChallenge(accepted: Bool) {
+        lastHostKeyAnswer = accepted
         pendingHostKeyChallenge = nil
     }
 

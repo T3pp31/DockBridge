@@ -3,6 +3,12 @@ import Foundation
 
 @MainActor
 final class TransferQueueViewModel: ObservableObject {
+    /// Per-view active transfer counts. Dock badge is a single global state, so
+    /// each window/tab reports through this coordinator instead of overwriting
+    /// the badge directly.
+    private static var activeTransferIDs: [UUID: Set<UInt64>] = [:]
+    private let badgeOwnerID = UUID()
+
     @Published private(set) var tasks: [TransferTaskRecord] = []
     @Published var errorMessage: String?
 
@@ -112,7 +118,10 @@ final class TransferQueueViewModel: ObservableObject {
 
         do {
             let fetched = try await bridge.fetchTransferTasks()
-            guard generation == refreshGeneration, bridge.isConnected else {
+            // A stale refresh must not wipe state that a newer refresh already
+            // applied (issue #781).
+            guard generation == refreshGeneration else { return }
+            guard bridge.isConnected else {
                 progressSamples.removeAll()
                 transferSpeeds.removeAll()
                 updateDockBadge(tasks: [])
@@ -120,6 +129,7 @@ final class TransferQueueViewModel: ObservableObject {
             }
             let sessionTasks = filteredTasks(from: fetched)
             updateProgressSamples(for: sessionTasks)
+            markActiveTasksNotifiable(for: sessionTasks)
             let finished = finishedTransitions(from: previousTasks, to: sessionTasks)
             // Remember terminal tasks so a later reappearance is not treated
             // as a brand-new fast transfer.
@@ -224,6 +234,21 @@ final class TransferQueueViewModel: ObservableObject {
         notifiedTaskIDs.formUnion(finished.map { $0.id })
     }
 
+    /// Allows a reactivated task to notify its next terminal transition.
+    func markActiveTasksNotifiable(for tasks: [TransferTaskRecord]) {
+        let activeIDs = Set(
+            tasks
+                .filter { task in
+                    switch task.status {
+                    case .pending, .inProgress: return true
+                    case .completed, .failed, .cancelled: return false
+                    }
+                }
+                .map(\.id)
+        )
+        notifiedTaskIDs.subtract(activeIDs)
+    }
+
     private func notifyFinishedTransitions(_ finished: [TransferTaskRecord]) {
         let config = settings.loadConfig()
         guard config.notifyWhenTransfersFinish, !NSApp.isActive else { return }
@@ -264,11 +289,26 @@ final class TransferQueueViewModel: ObservableObject {
     }
 
     /// Shows the number of active transfers on the Dock tile; clears it at zero.
+    deinit {
+        let ownerID = badgeOwnerID
+        Task { @MainActor in
+            Self.activeTransferIDs.removeValue(forKey: ownerID)
+            Self.refreshDockBadge()
+        }
+    }
+
     private func updateDockBadge(tasks: [TransferTaskRecord]) {
-        let active = tasks.filter {
+        Self.activeTransferIDs[badgeOwnerID] = Set(tasks.filter {
             $0.status == .inProgress || $0.status == .pending
+        }.map(\.id))
+        Self.refreshDockBadge()
+    }
+
+    private static func refreshDockBadge() {
+        let total = activeTransferIDs.values.reduce(into: Set<UInt64>()) {
+            $0.formUnion($1)
         }.count
-        NSApp.dockTile.badgeLabel = active > 0 ? "\(active)" : nil
+        NSApp.dockTile.badgeLabel = total > 0 ? "\(total)" : nil
     }
 
     private func updateProgressSamples(for fetched: [TransferTaskRecord]) {

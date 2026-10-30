@@ -12,11 +12,11 @@ struct ConnectionFormView: View {
     @State private var pickerErrorMessage: String?
 
     private let isEditing: Bool
-    let onSave: (ConnectionProfile, String?, String?) -> Void
+    let onSave: (ConnectionProfile, String?, String?, Bool) -> Void
 
     init(
         profile: ConnectionProfile? = nil,
-        onSave: @escaping (ConnectionProfile, String?, String?) -> Void
+        onSave: @escaping (ConnectionProfile, String?, String?, Bool) -> Void
     ) {
         _profile = State(initialValue: profile ?? ConnectionProfile(
             name: "",
@@ -123,25 +123,31 @@ struct ConnectionFormView: View {
     }
 
     private func save() {
+        // When Keychain storage is disabled, still hand the typed values to the
+        // caller so the session can authenticate without persisting them
+        // (issue #782). Empty input remains nil so an existing stored value is
+        // untouched when saving is enabled.
         let savedPassword: String?
-        if !saveSecrets {
-            savedPassword = ""
-        } else if profile.authType == .password {
+        switch (saveSecrets, profile.authType) {
+        case (true, .password):
             savedPassword = password.text.isEmpty ? nil : password.text
-        } else {
+        case (false, .password):
+            savedPassword = password.text.isEmpty ? nil : password.text
+        default:
             savedPassword = nil
         }
 
         let savedPassphrase: String?
-        if !saveSecrets {
-            savedPassphrase = ""
-        } else if profile.authType == .privateKey {
+        switch (saveSecrets, profile.authType) {
+        case (true, .privateKey):
             savedPassphrase = passphrase.text.isEmpty ? nil : passphrase.text
-        } else {
+        case (false, .privateKey):
+            savedPassphrase = passphrase.text.isEmpty ? nil : passphrase.text
+        default:
             savedPassphrase = nil
         }
 
-        onSave(profile, savedPassword, savedPassphrase)
+        onSave(profile, savedPassword, savedPassphrase, saveSecrets)
         closeForm()
     }
 

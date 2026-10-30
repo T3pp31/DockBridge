@@ -243,7 +243,10 @@ struct ConnectionListView: View {
                 Button(String(localized: "Connect")) {
                     viewModel.requestConnect(profile: profile)
                 }
-                .disabled(viewModel.connectionStatus.isConnecting)
+                .disabled(
+                    viewModel.connectionStatus.isConnected
+                        || viewModel.connectionStatus.isConnecting
+                )
             }
 
             Button(String(localized: "Edit")) {
@@ -283,7 +286,10 @@ struct ConnectionListView: View {
     }
 
     private func isConnectedProfile(_ profile: ConnectionProfile) -> Bool {
-        viewModel.connectedProfileID == profile.id && viewModel.connectionStatus.isConnected
+        // Treat a pending connection as active so Delete cannot remove a
+        // profile whose session is still being established (issue #783).
+        viewModel.connectedProfileID == profile.id
+            && (viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting)
     }
 
     private func isRowActive(_ profile: ConnectionProfile) -> Bool {

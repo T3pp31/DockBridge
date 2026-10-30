@@ -1,4 +1,5 @@
 import XCTest
+import Security
 @testable import DockBridge
 
 final class KeychainServiceTests: XCTestCase {
@@ -38,5 +39,51 @@ final class KeychainServiceTests: XCTestCase {
         try keychain.deletePassword(account: account)
         try keychain.savePassword("replacement", account: account)
         XCTAssertEqual(try keychain.loadPassword(account: account), "replacement")
+    }
+}
+
+// These tests exercise status transitions without accessing the user's Keychain.
+final class KeychainSaveRaceTests: XCTestCase {
+    func testSaveRaceRecoveryAndErrorPropagation() {
+        let cases: [(adds: [OSStatus], updates: [OSStatus], error: OSStatus?)] = [
+            ([errSecSuccess], [], nil),
+            ([errSecDuplicateItem], [errSecSuccess], nil),
+            ([errSecDuplicateItem, errSecSuccess], [errSecItemNotFound], nil),
+            ([errSecDuplicateItem, errSecDuplicateItem], [errSecItemNotFound, errSecSuccess], nil),
+            ([errSecAuthFailed], [], errSecAuthFailed),
+            ([errSecDuplicateItem], [errSecAuthFailed], errSecAuthFailed),
+            ([errSecDuplicateItem, errSecAuthFailed], [errSecItemNotFound], errSecAuthFailed),
+            ([errSecDuplicateItem, errSecDuplicateItem], [errSecItemNotFound, errSecAuthFailed], errSecAuthFailed),
+            ([errSecDuplicateItem, errSecDuplicateItem], [errSecItemNotFound, errSecItemNotFound], errSecItemNotFound),
+        ]
+        for scenario in cases {
+            var adds = scenario.adds
+            var updates = scenario.updates
+            do {
+                try KeychainService.addOrUpdateItem(
+                    add: {
+                        guard !adds.isEmpty else {
+                            XCTFail("Unexpected extra add")
+                            return errSecParam
+                        }
+                        return adds.removeFirst()
+                    },
+                    update: {
+                        guard !updates.isEmpty else {
+                            XCTFail("Unexpected extra update")
+                            return errSecParam
+                        }
+                        return updates.removeFirst()
+                    }
+                )
+                XCTAssertNil(scenario.error)
+            } catch KeychainServiceError.unexpectedStatus(let status) {
+                XCTAssertEqual(status, scenario.error)
+            } catch {
+                XCTFail("Unexpected error: \(error)")
+            }
+            XCTAssertTrue(adds.isEmpty)
+            XCTAssertTrue(updates.isEmpty)
+        }
     }
 }

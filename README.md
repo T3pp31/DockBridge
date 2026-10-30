@@ -58,7 +58,7 @@ printf '%s\n' "$KEY_PASSPHRASE" | cargo run -q -p dockbridge-cli -- list \
 
 `--identity` is mutually exclusive with `--password-stdin`. Keys whose algorithm is outside the supported set (ed25519, ec/ecdsa, rsa) are rejected with a clear error before any connection is attempted.
 
-**Development builds** (`cargo build` / `cargo run` without extra features) include `--password` for local testing. Passwords on the command line may appear in shell history and process listings (CWE-214). In CI and release builds, the CLI prints a warning when `--password` is used.
+**Development builds** (`cargo build` / `cargo run` without extra features) include `--password` for local testing. Passwords on the command line may appear in shell history and process listings (CWE-214), so use `--password-stdin` in CI and production. Builds that retain `--password` print a warning when it is used in CI or in a local `--release` build, unless `DOCKBRIDGE_SUPPRESS_PASSWORD_WARNING` is enabled.
 
 **Release builds** (`.github/workflows/release.yml`) compile the CLI with `--features disable-cli-password`, which removes `--password` at compile time. Release artifacts accept only `--password-stdin`. To reproduce a release build locally:
 

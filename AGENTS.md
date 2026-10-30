@@ -30,11 +30,20 @@ this VM run a local OpenSSH server instead:
 ```bash
 sudo apt-get update -qq && sudo apt-get install -y openssh-server
 sudo mkdir -p /run/sshd
+mkdir -p /tmp/sftpdemo
 ssh-keygen -t ed25519 -f /tmp/sftpdemo/ssh_host_ed25519_key -N ""
-echo "ubuntu:password" | sudo chpasswd        # gives the ubuntu user a known password
-printf 'Port 2222\nListenAddress 127.0.0.1\nHostKey /tmp/sftpdemo/ssh_host_ed25519_key\nUsePAM yes\nPasswordAuthentication yes\nSubsystem sftp internal-sftp\n' > /tmp/sftpdemo/sshd_config
+sudo chown root:root /tmp/sftpdemo/ssh_host_ed25519_key
+sudo useradd --create-home --shell /bin/bash dockbridge-demo
+sudo install -d -o dockbridge-demo -g dockbridge-demo /home/dockbridge-demo/upload
+DEMO_PASS="$(openssl rand -base64 24)"
+echo "dockbridge-demo:$DEMO_PASS" | sudo chpasswd
+printf 'Port 2222\nListenAddress 127.0.0.1\nHostKey /tmp/sftpdemo/ssh_host_ed25519_key\nPidFile /tmp/sftpdemo/sshd.pid\nAllowUsers dockbridge-demo\nUsePAM yes\nPasswordAuthentication yes\nSubsystem sftp internal-sftp\n' > /tmp/sftpdemo/sshd_config
 sudo /usr/sbin/sshd -f /tmp/sftpdemo/sshd_config
 ```
+
+Use a disposable environment; stop the demo daemon after testing with
+`sudo kill "$(cat /tmp/sftpdemo/sshd.pid)"`, then remove the dedicated account
+with `sudo userdel --remove dockbridge-demo` and delete `/tmp/sftpdemo`.
 
 Then drive the CLI. Host-key prompts are read from `/dev/tty` (never stdin), so use
 `--host-key-policy accept-new` to make the first connection non-interactive and keep
@@ -42,17 +51,17 @@ stdin exclusively for the password:
 
 ```bash
 # First connect: trust the new host key automatically; stdin carries only the password
-printf '%s\n' password | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
-  upload --host 127.0.0.1 --port 2222 --user ubuntu --password-stdin \
+printf '%s\n' "$DEMO_PASS" | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
+  upload --host 127.0.0.1 --port 2222 --user dockbridge-demo --password-stdin \
   --host-key-policy accept-new \
-  --local ./file.txt --remote /home/ubuntu/upload/hello.txt
+  --local ./file.txt --remote /home/dockbridge-demo/upload/hello.txt
 
 # private-key auth (key-only servers): --identity expands ~; --passphrase-stdin unlocks encrypted keys
 printf '%s\n' "$KEY_PASSPHRASE" | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
-  list --host 127.0.0.1 --port 2222 --user ubuntu \
+  list --host 127.0.0.1 --port 2222 --user dockbridge-demo \
   --identity ~/.ssh/id_ed25519 --passphrase-stdin \
   --host-key-policy accept-new \
-  --path /home/ubuntu
+  --path /home/dockbridge-demo
 ```
 
 Non-obvious gotchas discovered during setup:
@@ -65,7 +74,7 @@ Non-obvious gotchas discovered during setup:
   Point `known_hosts_path` at a writable temp file and set
   `merge_openssh_known_hosts_on_connect = false` to avoid touching `~/.ssh/known_hosts`.
 - Remote paths resolve **absolute from `/`**, not the login home. Use full paths like
-  `/home/ubuntu/upload/hello.txt` (a bare `upload/hello.txt` becomes `/upload/...` and fails).
+  `/home/dockbridge-demo/upload/hello.txt` (a bare `upload/hello.txt` becomes `/upload/...` and fails).
 - Uploads are atomic: the CLI writes a random `.dockbridge-<hex>.partial` file with exclusive
   create (`create_new` + `O_NOFOLLOW` on Unix) and renames it onto the target on success.
   The default overwrite policy is `Replace`, which deletes an existing remote destination before

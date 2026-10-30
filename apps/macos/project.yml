@@ -8,7 +8,7 @@ options:
   groupSortPosition: top
 settings:
   base:
-    SWIFT_VERSION: "5.10"
+    SWIFT_VERSION: "5.0"
     # DEVELOPMENT_TEAM is intentionally NOT hardcoded here; supply it per-developer
     # via Local.xcconfig or -allowProvisioningUpdates. CI uses CODE_SIGNING_ALLOWED=NO.
     MACOSX_DEPLOYMENT_TARGET: "15.0"
@@ -46,7 +46,21 @@ targets:
     preBuildScripts:
       - name: Generate UniFFI Bindings
         shell: /bin/bash
+        # Cargo tracks nested Rust/build dependencies; directory mtimes cannot.
+        # Always invoke Cargo, which performs its own incremental build check.
         basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(PROJECT_DIR)/../../Cargo.lock
+          - $(PROJECT_DIR)/../../Cargo.toml
+          - $(PROJECT_DIR)/../../crates
+          - $(PROJECT_DIR)/../../scripts/build-rust.sh
+          - $(PROJECT_DIR)/../../scripts/generate-uniffi.sh
+          - $(PROJECT_DIR)/../../vendor
+        outputFiles:
+          - $(PROJECT_DIR)/../../target/release/libdockbridge_uniffi.a
+          - $(SRCROOT)/DockBridge/Generated/DockBridgeUniffi.swift
+          - $(SRCROOT)/DockBridge/Generated/Headers/dockbridge_uniffiFFI.h
+          - $(SRCROOT)/DockBridge/Generated/Headers/module.modulemap
         script: |
           set -euo pipefail
           export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -56,7 +70,22 @@ targets:
     postBuildScripts:
       - name: Generate Dock App Icon icns
         shell: /bin/bash
-        basedOnDependencyAnalysis: false
+        basedOnDependencyAnalysis: true
+        inputFiles:
+          - $(SRCROOT)/../../scripts/generate-app-icon-icns.sh
+          - $(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/Contents.json
+          - $(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_128x128.png
+          - $(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_128x128@2x.png
+          - $(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_16x16.png
+          - $(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_16x16@2x.png
+          - $(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_256x256.png
+          - $(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_256x256@2x.png
+          - $(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_32x32.png
+          - $(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_32x32@2x.png
+          - $(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_512x512.png
+          - $(SRCROOT)/DockBridge/Resources/Assets.xcassets/AppIcon.appiconset/icon_512x512@2x.png
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(FULL_PRODUCT_NAME)/Contents/Resources/AppIcon.icns
         script: |
           set -euo pipefail
           OUT="$BUILT_PRODUCTS_DIR/$FULL_PRODUCT_NAME/Contents/Resources/AppIcon.icns"

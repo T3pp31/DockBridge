@@ -26,8 +26,8 @@ struct HostKeyConfirmView: View {
                 Button(String(localized: "Accept"), role: .destructive, action: onAccept)
             } else {
                 Button(String(localized: "Reject"), role: .cancel, action: onReject)
-                Button(String(localized: "Accept"), action: onAccept)
                     .keyboardShortcut(.defaultAction)
+                Button(String(localized: "Accept"), action: onAccept)
             }
         }
     }

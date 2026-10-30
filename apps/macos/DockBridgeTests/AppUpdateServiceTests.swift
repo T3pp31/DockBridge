@@ -21,7 +21,37 @@ private struct MockURLSession: URLSessionDataProviding {
     }
 }
 
+private actor SequenceURLSession: URLSessionDataProviding {
+    private var responses: [(status: Int, data: Data, etag: String?)]
+    private(set) var requestETags: [String?] = []
+
+    init(responses: [(status: Int, data: Data, etag: String?)]) {
+        self.responses = responses
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        requestETags.append(request.value(forHTTPHeaderField: "If-None-Match"))
+        guard !responses.isEmpty else { throw URLError(.badServerResponse) }
+        let next = responses.removeFirst()
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: next.status, httpVersion: nil,
+            headerFields: next.etag.map { ["ETag": $0] }
+        )!
+        return (next.data, response)
+    }
+}
+
 final class AppUpdateServiceTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        Self.installTestState()
+    }
+
+    override func tearDown() {
+        Self.resetTestState()
+        super.tearDown()
+    }
+
     private let validDownloadURL =
         "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg"
     private let releasePageURL = "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0"
@@ -276,12 +306,42 @@ final class AppUpdateServiceTests: XCTestCase {
 }
 
 extension AppUpdateServiceTests {
+    private static let testDefaultsSuiteName = "AppUpdateServiceTests-\(UUID().uuidString)"
+    private static var testDefaults: UserDefaults {
+        UserDefaults(suiteName: testDefaultsSuiteName)!
+    }
+    private static var testCacheDirectory: URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppUpdateServiceTests-\(testDefaultsSuiteName)", isDirectory: true)
+    }
+
+    private static func installTestState() {
+        UserDefaults().removePersistentDomain(forName: testDefaultsSuiteName)
+        try? FileManager.default.createDirectory(
+            at: testCacheDirectory,
+            withIntermediateDirectories: true
+        )
+        try? FileManager.default.removeItem(
+            at: testCacheDirectory.appendingPathComponent(AppUpdateConfig.releaseBodyCacheFileName)
+        )
+        AppUpdateConfig.etagDefaults = testDefaults
+        AppUpdateConfig.releaseBodyCacheDirectory = testCacheDirectory
+    }
+
+    private static func resetTestState() {
+        UserDefaults().removePersistentDomain(forName: testDefaultsSuiteName)
+        AppUpdateConfig.clearReleaseBody()
+        try? FileManager.default.removeItem(at: testCacheDirectory)
+        AppUpdateConfig.etagDefaults = .standard
+        AppUpdateConfig.releaseBodyCacheDirectory = nil
+    }
+
     func testCheckForUpdateTreats304AsNoUpdate() async throws {
         // Given: the server returns 304 (If-None-Match matched)
-        UserDefaults.standard.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
+        AppUpdateConfig.etagDefaults.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
         AppUpdateConfig.clearReleaseBody()
         defer {
-            UserDefaults.standard.removeObject(forKey: AppUpdateConfig.etagDefaultsKey)
+            AppUpdateConfig.etagDefaults.removeObject(forKey: AppUpdateConfig.etagDefaultsKey)
             AppUpdateConfig.clearReleaseBody()
         }
 
@@ -292,10 +352,10 @@ extension AppUpdateServiceTests {
 
     func testCheckForUpdateClearsCorruptCacheOn304() async throws {
         // Given: a cached release body is corrupted and the server answers 304
-        UserDefaults.standard.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
+        AppUpdateConfig.etagDefaults.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
         AppUpdateConfig.persistReleaseBody(Data("not json".utf8))
         defer {
-            UserDefaults.standard.removeObject(forKey: AppUpdateConfig.etagDefaultsKey)
+            AppUpdateConfig.etagDefaults.removeObject(forKey: AppUpdateConfig.etagDefaultsKey)
             AppUpdateConfig.clearReleaseBody()
         }
 
@@ -306,11 +366,61 @@ extension AppUpdateServiceTests {
         XCTAssertNil(AppUpdateConfig.showCachedReleaseBody(), "corrupt cache must be cleared")
     }
 
+    func testClearReleaseBodyRemovesBothBodyAndETag() {
+        AppUpdateConfig.clearReleaseBody()
+        defer { AppUpdateConfig.clearReleaseBody() }
+        let body = Data("cached release".utf8)
+        XCTAssertTrue(AppUpdateConfig.persistReleaseBody(body))
+        AppUpdateConfig.persistETag("old-etag")
+        XCTAssertEqual(AppUpdateConfig.showCachedReleaseBody(), body)
+
+        AppUpdateConfig.clearReleaseBody()
+
+        XCTAssertNil(AppUpdateConfig.showCachedReleaseBody())
+        XCTAssertNil(AppUpdateConfig.showExistingETag())
+    }
+
+    func testMissingBodyOn304RetriesWithoutETagAndCachesFullResponse() async throws {
+        AppUpdateConfig.clearReleaseBody()
+        defer { AppUpdateConfig.clearReleaseBody() }
+        AppUpdateConfig.persistETag("old-etag")
+        let body = Data("{\"tag_name\":\"v0.2.0\",\"html_url\":\"\(releasePageURL)\",\"assets\":[]}".utf8)
+        let session = SequenceURLSession(responses: [(304, Data(), nil), (200, body, "new-etag")])
+        let service = AppUpdateService(session: session)
+
+        let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+
+        XCTAssertEqual(update?.version, "0.2.0")
+        let requestETags = await session.requestETags
+        XCTAssertEqual(requestETags, ["old-etag", nil])
+        XCTAssertEqual(AppUpdateConfig.showCachedReleaseBody(), body)
+        XCTAssertEqual(AppUpdateConfig.showExistingETag(), "new-etag")
+    }
+
+    func testFailedBodyWriteDoesNotPersistETagOrFailUpdateCheck() async throws {
+        AppUpdateConfig.clearReleaseBody()
+        defer { AppUpdateConfig.clearReleaseBody() }
+        let cacheURL = Self.testCacheDirectory
+            .appendingPathComponent(AppUpdateConfig.releaseBodyCacheFileName)
+        // A directory at the file path reliably rejects the atomic file write.
+        try FileManager.default.createDirectory(at: cacheURL, withIntermediateDirectories: true)
+        AppUpdateConfig.persistETag("old-etag")
+        let body = Data("{\"tag_name\":\"v0.2.0\",\"html_url\":\"\(releasePageURL)\",\"assets\":[]}".utf8)
+        let session = SequenceURLSession(responses: [(200, body, "new-etag")])
+        let service = AppUpdateService(session: session)
+
+        let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+
+        XCTAssertEqual(update?.version, "0.2.0")
+        XCTAssertNil(AppUpdateConfig.showCachedReleaseBody())
+        XCTAssertNil(AppUpdateConfig.showExistingETag())
+    }
+
     func testCachedReleaseBodyExpires() async throws {
         // Given: a cache entry that is older than the maximum age
         AppUpdateConfig.clearReleaseBody()
         defer { AppUpdateConfig.clearReleaseBody() }
-        let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let cacheURL = Self.testCacheDirectory
             .appendingPathComponent(AppUpdateConfig.releaseBodyCacheFileName)
         let stale = ReleaseBodyCacheEntry(
             storedAt: Date().addingTimeInterval(-25 * 60 * 60),

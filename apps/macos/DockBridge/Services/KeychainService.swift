@@ -4,11 +4,20 @@ import Security
 enum KeychainServiceError: LocalizedError {
     case encodingFailed
     case unexpectedStatus(OSStatus)
+    /// Key read failure that must not prompt the user to delete items,
+    /// because deleting the master key would orphan encrypted profiles
+    /// (issue #773).
+    case keyReadDenied(OSStatus)
 
     var errorDescription: String? {
         switch self {
         case .encodingFailed:
             return String(localized: "Failed to encode secret for Keychain storage.")
+        case .keyReadDenied(let status):
+            if status == errSecMissingEntitlement {
+                return String(localized: "Keychain is not available in the current app context. Rebuild from Xcode with your Development Team selected. Do not delete DockBridge keychain items; existing encrypted connections would become unrecoverable.")
+            }
+            return String(localized: "Keychain access was denied while reading the encryption key. Unlock the Keychain and allow access, or restore the same code signature. Do not delete the connection or its keychain entries; encrypted profiles would become unrecoverable.")
         case .unexpectedStatus(let status):
             if status == errSecAuthFailed {
                 return String(localized: "Keychain access was denied. This often happens after rebuilding with a different code signature. Delete the connection and save credentials again, or remove stale DockBridge entries in Keychain Access.")
@@ -104,6 +113,12 @@ final class KeychainService: @unchecked Sendable {
             if updateStatus == errSecSuccess {
                 return
             }
+            // The item can be deleted by a concurrent save/delete operation
+            // between the existence check and update. Re-add it in that case.
+            if updateStatus == errSecItemNotFound {
+                try addItem(account: account, kind: kind, attributes: attributes)
+                return
+            }
             throw KeychainServiceError.unexpectedStatus(updateStatus)
 
         case errSecItemNotFound:
@@ -141,9 +156,15 @@ final class KeychainService: @unchecked Sendable {
             // item or report it as missing: callers such as
             // loadOrCreateMasterKey would otherwise generate a replacement
             // key and make existing encrypted profiles unrecoverable.
+            if kind == "encryption-key" {
+                throw KeychainServiceError.keyReadDenied(status)
+            }
             throw KeychainServiceError.unexpectedStatus(status)
 
         default:
+            if kind == "encryption-key" {
+                throw KeychainServiceError.keyReadDenied(status)
+            }
             throw KeychainServiceError.unexpectedStatus(status)
         }
     }
@@ -167,23 +188,41 @@ final class KeychainService: @unchecked Sendable {
     ) throws {
         var addQuery = makeQuery(account: account, kind: kind)
         addQuery.merge(attributes) { _, new in new }
-        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-        if addStatus == errSecSuccess {
-            return
-        }
-        // A concurrent save may have created the item between our
-        // copy-matching check and this add. Treat duplicate as an update.
-        if addStatus == errSecDuplicateItem {
-            let updateStatus = SecItemUpdate(
-                makeQuery(account: account, kind: kind) as CFDictionary,
-                attributes as CFDictionary
-            )
-            if updateStatus == errSecSuccess {
-                return
+        try Self.addOrUpdateItem(
+            add: { SecItemAdd(addQuery as CFDictionary, nil) },
+            update: {
+                SecItemUpdate(
+                    self.makeQuery(account: account, kind: kind) as CFDictionary,
+                    attributes as CFDictionary
+                )
             }
+        )
+    }
+
+    /// Handles a save/delete race and a competing save during recovery.
+    /// Continued external contention is reported rather than retried indefinitely.
+    static func addOrUpdateItem(add: () -> OSStatus, update: () -> OSStatus) throws {
+        let addStatus = add()
+        if addStatus == errSecSuccess { return }
+        guard addStatus == errSecDuplicateItem else {
+            throw KeychainServiceError.unexpectedStatus(addStatus)
+        }
+        let updateStatus = update()
+        if updateStatus == errSecSuccess { return }
+        guard updateStatus == errSecItemNotFound else {
             throw KeychainServiceError.unexpectedStatus(updateStatus)
         }
-        throw KeychainServiceError.unexpectedStatus(addStatus)
+        let recoveryStatus = add()
+        if recoveryStatus == errSecSuccess { return }
+        guard recoveryStatus == errSecDuplicateItem else {
+            throw KeychainServiceError.unexpectedStatus(recoveryStatus)
+        }
+        // Another writer recreated the item after the failed update. Preserve
+        // this save's value by updating that item instead of failing as duplicate.
+        let recoveryUpdateStatus = update()
+        guard recoveryUpdateStatus == errSecSuccess else {
+            throw KeychainServiceError.unexpectedStatus(recoveryUpdateStatus)
+        }
     }
 
     private func makeQuery(account: String, kind: String) -> [String: Any] {

@@ -61,7 +61,7 @@ extension ConnectionProfile {
             options: .withSecurityScope,
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
-        ), !isStale else {
+        ) else {
             return
         }
 

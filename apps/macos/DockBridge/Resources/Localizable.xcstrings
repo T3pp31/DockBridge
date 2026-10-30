@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Unable to check the remote destination. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to check the remote destination. Try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモートの宛先を確認できません。もう一度お試しください。"
+          }
+        }
+      }
+    },
     "A file already exists at the destination.": {
       "extractionState": "manual",
       "localizations": {
@@ -1612,6 +1629,23 @@
         }
       }
     },
+    "This server does not accept password authentication. Use public key authentication or another supported method.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server does not accept password authentication. Use public key authentication or another supported method."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このサーバーはパスワード認証に対応していません。公開鍵認証または対応する別の方法を使用してください。"
+          }
+        }
+      }
+    },
     "Timeout: %@": {
       "localizations": {
         "en": {
@@ -1691,6 +1725,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "エンドポイントを信頼"
+          }
+        }
+      }
+    },
+    "Unable to load the private key. Check the key file path, permissions, and passphrase.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unable to load the private key. Check the key file path, permissions, and passphrase."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "秘密鍵を読み込めません。鍵ファイルのパス、権限、パスフレーズを確認してください。"
           }
         }
       }
@@ -3936,6 +3987,23 @@
         }
       }
     },
+    "File is too large.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File is too large."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ファイルサイズが上限を超えています。"
+          }
+        }
+      }
+    },
     "File is not owned by the current user.": {
       "extractionState": "manual",
       "localizations": {
@@ -4157,6 +4225,23 @@
         }
       }
     },
+    "Keychain access was denied while reading the encryption key. Unlock the Keychain and allow access, or restore the same code signature. Do not delete the connection or its keychain entries; encrypted profiles would become unrecoverable.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keychain access was denied while reading the encryption key. Unlock the Keychain and allow access, or restore the same code signature. Do not delete the connection or its keychain entries; encrypted profiles would become unrecoverable."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暗号化キーの読み込み時にキーチェーンへのアクセスが拒否されました。キーチェーンのロックを解除してアクセスを許可するか、以前と同じコード署名を復元してください。接続情報や対応するキーチェーン項目は削除しないでください。暗号化されたプロファイルを復元できなくなります。"
+          }
+        }
+      }
+    },
     "Keychain access was denied. This often happens after rebuilding with a different code signature. Delete the connection and save credentials again, or remove stale DockBridge entries in Keychain Access.": {
       "extractionState": "manual",
       "localizations": {
@@ -4187,6 +4272,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "現在のアプリ環境では Keychain を利用できません。Xcode で Development Team を選択して再ビルドするか、Keychain Access で古い DockBridge 項目を削除して認証情報を保存し直してください。"
+          }
+        }
+      }
+    },
+    "Keychain is not available in the current app context. Rebuild from Xcode with your Development Team selected. Do not delete DockBridge keychain items; existing encrypted connections would become unrecoverable.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keychain is not available in the current app context. Rebuild from Xcode with your Development Team selected. Do not delete DockBridge keychain items; existing encrypted connections would become unrecoverable."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現在のアプリの実行環境ではキーチェーンを利用できません。XcodeでDevelopment Teamを選択して再ビルドしてください。DockBridgeのキーチェーン項目は削除しないでください。既存の暗号化された接続情報を復元できなくなります。"
           }
         }
       }
@@ -5316,9 +5418,21 @@
     "%lld active transfers": {
       "localizations": {
         "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld active transfers"
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld active transfer"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld active transfers"
+                }
+              }
+            }
           }
         },
         "ja": {

@@ -113,6 +113,50 @@ final class MainViewModelTestabilityTests: XCTestCase {
         )
     }
 
+    func testRemoteMoveRequiresKnownAbsentDestination() async {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        bridge.directoryListings["/"] = []
+
+        let unknownResult = await viewModel.moveRemoteItem(from: "/source/file.txt", toDirectory: "/target")
+        XCTAssertFalse(unknownResult)
+        XCTAssertTrue(bridge.renamed.isEmpty)
+        XCTAssertEqual(viewModel.errorMessage, String(localized: "Unable to check the remote destination. Try again."))
+
+        bridge.directoryListings["/target"] = [makeRemoteItem(name: "file.txt", path: "/target/file.txt")]
+        let collisionResult = await viewModel.moveRemoteItem(from: "/source/file.txt", toDirectory: "/target")
+        XCTAssertFalse(collisionResult)
+        XCTAssertTrue(bridge.renamed.isEmpty)
+
+        bridge.directoryListings["/target"] = []
+        let absentResult = await viewModel.moveRemoteItem(from: "/source/file.txt", toDirectory: "/target")
+        XCTAssertTrue(absentResult)
+        XCTAssertEqual(bridge.renamed.count, 1)
+        XCTAssertEqual(bridge.renamed.first?.to, "/target/file.txt")
+    }
+
+    func testRemoteRenameRequiresKnownAbsentDestination() async {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        bridge.directoryListings["/"] = []
+        viewModel.beginRename(item: makeRemoteItem(name: "old.txt", path: "/target/old.txt"))
+        viewModel.renameText = "new.txt"
+
+        await viewModel.commitRename()
+        XCTAssertTrue(bridge.renamed.isEmpty)
+        XCTAssertNotNil(viewModel.renameTarget)
+        XCTAssertEqual(viewModel.errorMessage, String(localized: "Unable to check the remote destination. Try again."))
+
+        bridge.directoryListings["/target"] = [makeRemoteItem(name: "new.txt", path: "/target/new.txt")]
+        await viewModel.commitRename()
+        XCTAssertTrue(bridge.renamed.isEmpty)
+        XCTAssertNotNil(viewModel.renameTarget)
+
+        bridge.directoryListings["/target"] = []
+        await viewModel.commitRename()
+        XCTAssertEqual(bridge.renamed.count, 1)
+        XCTAssertEqual(bridge.renamed.first?.to, "/target/new.txt")
+        XCTAssertNil(viewModel.renameTarget)
+    }
+
     private func makeTrackedRemoteEditFile(
         contents: String = "original",
         remotePath: String = "/srv/config.txt"
@@ -259,6 +303,24 @@ final class MainViewModelTestabilityTests: XCTestCase {
             )
         )
         XCTAssertNotNil(viewModel.localRenameTarget)
+    }
+
+    func testCommitLocalRenameAllowsCaseOnlyChange() async throws {
+        // Given: an existing item that differs from the new name only by case
+        let sourceURL = baseDirectory.appendingPathComponent("before.txt")
+        let destinationURL = baseDirectory.appendingPathComponent("Before.txt")
+        try "contents".write(to: sourceURL, atomically: true, encoding: .utf8)
+        viewModel.beginLocalRename(item: LocalFileItem(url: sourceURL))
+        viewModel.localRenameText = destinationURL.lastPathComponent
+
+        await viewModel.commitLocalRename()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.localRenameTarget)
+        let names = try FileManager.default.contentsOfDirectory(atPath: baseDirectory.path)
+        XCTAssertTrue(names.contains("Before.txt"))
+        XCTAssertFalse(names.contains("before.txt"))
+        XCTAssertEqual(try String(contentsOf: destinationURL, encoding: .utf8), "contents")
     }
 
     func testBeginLocalRenameUsesIndependentTextState() throws {
@@ -515,6 +577,35 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertEqual(bridge.uploaded.last?.overwritePolicy.rawValue, "failIfExists")
     }
 
+    func testFailIfExistsShowsAskWhenDestinationCheckIsIndeterminate() async throws {
+        // Given: failIfExists is configured and the parent directory cannot
+        //        be listed, so destination existence is unknown
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        viewModel.remotePath = "/srv/files"
+        var config = settings.loadConfig()
+        config.transferOverwritePolicy = .failIfExists
+        settings.saveConfig(config)
+
+        let localFile = baseDirectory.appendingPathComponent("new.txt")
+        try "data".write(to: localFile, atomically: true, encoding: .utf8)
+
+        let uploadTask = Task { @MainActor in
+            await viewModel.upload(localURL: localFile, toRemoteDirectory: nil)
+        }
+        await Task.yield()
+
+        // Then: the user is asked instead of silently failing with an
+        //       ambiguous destination conflict.
+        XCTAssertTrue(viewModel.showOverwriteAsk)
+        XCTAssertEqual(viewModel.overwriteAskDestination, "/srv/files/new.txt")
+        XCTAssertTrue(bridge.uploaded.isEmpty)
+
+        viewModel.confirmOverwriteAsk()
+        let accepted = await uploadTask.value
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(bridge.uploaded.last?.overwritePolicy.rawValue, "replace")
+    }
+
     // MARK: - External edit monitoring
 
     func testRemoteEditChangeUploadsWithReplaceAndReturnsToWatching() async throws {
@@ -531,6 +622,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertFalse(
             FileManager.default.fileExists(
                 atPath: tracked.file.deletingLastPathComponent()
+                    .deletingLastPathComponent()
                     .appendingPathComponent(".dockbridge-unsynced").path
             )
         )

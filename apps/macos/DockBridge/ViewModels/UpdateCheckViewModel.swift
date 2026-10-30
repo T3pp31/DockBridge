@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import os
 
 @MainActor
 final class UpdateCheckViewModel: ObservableObject {
@@ -11,6 +12,9 @@ final class UpdateCheckViewModel: ObservableObject {
     private let updateService: AppUpdateService
     private let downloadService: AppUpdateDownloading
     private let settingsService: AppSettingsService
+    /// Tracks whether the startup host-key prompt has been resolved, so a
+    /// slow update check can still present after dismissal (issue #636).
+    private var isHostKeyResolved = false
 
     init(
         updateService: AppUpdateService = AppUpdateService(),
@@ -23,20 +27,25 @@ final class UpdateCheckViewModel: ObservableObject {
     }
 
     func checkOnLaunch(isHostKeyBlocking: Bool) async {
+        isHostKeyResolved = !isHostKeyBlocking
         do {
             let update = try await updateService.checkForUpdate(
                 skippedVersion: settingsService.loadSkippedUpdateVersion()
             )
-            guard let update else { return }
+            guard let update else {
+                pendingUpdate = nil
+                return
+            }
             pendingUpdate = update
-            presentIfAllowed(isHostKeyBlocking: isHostKeyBlocking)
+            presentPendingUpdateIfAllowed()
         } catch {
             AppLogging.update.error("update check failed on launch: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     func onHostKeyDismissed() {
-        presentIfAllowed(isHostKeyBlocking: false)
+        isHostKeyResolved = true
+        presentPendingUpdateIfAllowed()
     }
 
     var inAppUpdateInstallationEnabled: Bool {
@@ -48,6 +57,9 @@ final class UpdateCheckViewModel: ObservableObject {
 
         if !inAppUpdateInstallationEnabled
             || pendingUpdate.downloadURL == pendingUpdate.releasePageURL {
+            AppLogging.update.info(
+                "opening update release page: \(pendingUpdate.releasePageURL.absoluteString, privacy: .public)"
+            )
             NSWorkspace.shared.open(pendingUpdate.releasePageURL)
             if !inAppUpdateInstallationEnabled {
                 downloadErrorMessage = """
@@ -84,12 +96,13 @@ final class UpdateCheckViewModel: ObservableObject {
     }
 
     func dismissSheet() {
+        pendingUpdate = nil
         showUpdateSheet = false
         downloadErrorMessage = nil
     }
 
-    private func presentIfAllowed(isHostKeyBlocking: Bool) {
-        guard pendingUpdate != nil, !isHostKeyBlocking else { return }
+    private func presentPendingUpdateIfAllowed() {
+        guard pendingUpdate != nil, isHostKeyResolved else { return }
         showUpdateSheet = true
     }
 }

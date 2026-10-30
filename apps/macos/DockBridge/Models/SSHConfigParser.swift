@@ -6,7 +6,12 @@ struct SSHConfigHost: Equatable, Sendable {
     var hostName: String?
     var user: String?
     var port: UInt16?
-    var identityFile: String?
+    /// All IdentityFile values in order. OpenSSH applies IdentityFile
+    /// cumulatively (unlike other parameters) (issue #771).
+    var identityFiles: [String] = []
+
+    /// Kept as the first value for the single-key profile model.
+    var identityFile: String? { identityFiles.first }
 }
 
 /// Minimal parser for the subset of OpenSSH `~/.ssh/config` that DockBridge
@@ -14,69 +19,57 @@ struct SSHConfigHost: Equatable, Sendable {
 /// ignored; wildcard and negated Host patterns are not importable profiles.
 enum SSHConfigParser {
     static func parse(_ contents: String) -> [SSHConfigHost] {
-        var hosts: [SSHConfigHost] = []
-        var currentHosts: [SSHConfigHost] = []
-        var currentBlockIsValid = true
-
-        func finishCurrentBlock() {
-            defer {
-                currentHosts.removeAll(keepingCapacity: true)
-                currentBlockIsValid = true
-            }
-            guard currentBlockIsValid else { return }
-
-            for candidate in currentHosts {
-                if let index = hosts.firstIndex(where: {
-                    normalizedAlias($0.alias) == normalizedAlias(candidate.alias)
-                }) {
-                    // OpenSSH uses the first obtained value for a parameter.
-                    // Repeated exact Host blocks can therefore fill values that
-                    // were absent in an earlier block, but cannot replace them.
-                    if hosts[index].hostName == nil {
-                        hosts[index].hostName = candidate.hostName
-                    }
-                    if hosts[index].user == nil {
-                        hosts[index].user = candidate.user
-                    }
-                    if hosts[index].port == nil {
-                        hosts[index].port = candidate.port
-                    }
-                    if hosts[index].identityFile == nil {
-                        hosts[index].identityFile = candidate.identityFile
-                    }
-                } else {
-                    hosts.append(candidate)
-                }
-            }
+        // Gather importable aliases, then evaluate applicable blocks in file
+        // order for each alias, just as OpenSSH does for a selected host.
+        struct Block {
+            var aliases: [String]
+            var appliesToAll: Bool
+            var directives: [Directive] = []
         }
-
+        var blocks = [Block(aliases: [], appliesToAll: true)]
+        var aliases: [String] = []
         for rawLine in contents.components(separatedBy: .newlines) {
-            guard let directive = parseDirective(rawLine) else { continue }
-
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard let directive = parseDirective(rawLine) else {
+                if trimmed.hasPrefix("host") || trimmed.hasPrefix("match") {
+                    blocks.append(Block(aliases: [], appliesToAll: false))
+                }
+                continue
+            }
             switch directive.key {
             case "host":
-                finishCurrentBlock()
-                currentHosts = directive.arguments
-                    .filter(isImportableAlias)
-                    .map { SSHConfigHost(alias: $0) }
-
+                let exactAliases = directive.arguments.filter(isImportableAlias)
+                for alias in exactAliases where !aliases.contains(where: {
+                    normalizedAlias($0) == normalizedAlias(alias)
+                }) {
+                    aliases.append(alias)
+                }
+                // Only an unconditional Host * is supported as a default;
+                // other patterns keep the parser's existing import policy.
+                blocks.append(Block(aliases: exactAliases, appliesToAll: directive.arguments == ["*"]))
             case "match":
-                // A Match section has different conditional semantics. Finish
-                // the preceding Host block and ignore directives until the next
-                // Host line rather than applying Match values to that profile.
-                finishCurrentBlock()
-
+                blocks.append(Block(aliases: [], appliesToAll: false))
             default:
-                guard !currentHosts.isEmpty, currentBlockIsValid else { continue }
-                apply(
-                    directive: directive,
-                    to: &currentHosts,
-                    currentBlockIsValid: &currentBlockIsValid
-                )
+                blocks[blocks.count - 1].directives.append(directive)
             }
         }
-        finishCurrentBlock()
-        return hosts.filter { $0.hostName != nil }
+
+        return aliases.compactMap { alias in
+            var candidates = [SSHConfigHost(alias: alias)]
+            for block in blocks where block.appliesToAll || block.aliases.contains(where: {
+                normalizedAlias($0) == normalizedAlias(alias)
+            }) {
+                var valid = true
+                for directive in block.directives {
+                    apply(directive: directive, to: &candidates, currentBlockIsValid: &valid)
+                    if !valid { return nil }
+                }
+            }
+            guard let host = candidates.first,
+                  host.hostName != nil || host.user != nil || host.port != nil || host.identityFile != nil
+            else { return nil }
+            return host
+        }
     }
 
     static func toProfiles(_ hosts: [SSHConfigHost]) -> [ConnectionProfile] {
@@ -104,10 +97,14 @@ enum SSHConfigParser {
     ) {
         switch directive.key {
         case "hostname":
+            if directive.arguments.count == 1,
+               directive.arguments[0].trimmingCharacters(in: .whitespaces).isEmpty { return }
             guard directive.arguments.count == 1,
                   let value = directive.arguments.first,
                   !containsUnsupportedExpansion(value) else {
-                currentBlockIsValid = false
+                if hosts.contains(where: { $0.hostName == nil }) {
+                    currentBlockIsValid = false
+                }
                 return
             }
             for index in hosts.indices where hosts[index].hostName == nil {
@@ -117,6 +114,7 @@ enum SSHConfigParser {
         case "user":
             guard directive.arguments.count == 1,
                   let value = directive.arguments.first,
+                  !value.trimmingCharacters(in: .whitespaces).isEmpty,
                   !containsUnsupportedExpansion(value) else { return }
             for index in hosts.indices where hosts[index].user == nil {
                 hosts[index].user = value
@@ -127,8 +125,9 @@ enum SSHConfigParser {
                   let rawPort = directive.arguments.first,
                   let port = UInt16(rawPort),
                   port > 0 else {
-                // An explicit invalid port must not silently become port 22.
-                currentBlockIsValid = false
+                if hosts.contains(where: { $0.port == nil }) {
+                    currentBlockIsValid = false
+                }
                 return
             }
             for index in hosts.indices where hosts[index].port == nil {
@@ -138,11 +137,12 @@ enum SSHConfigParser {
         case "identityfile":
             guard directive.arguments.count == 1,
                   let rawPath = directive.arguments.first,
+                  !rawPath.trimmingCharacters(in: .whitespaces).isEmpty,
                   rawPath.lowercased() != "none",
                   !containsUnsupportedExpansion(rawPath),
                   let expandedPath = expandTilde(rawPath) else { return }
-            for index in hosts.indices where hosts[index].identityFile == nil {
-                hosts[index].identityFile = expandedPath
+            for index in hosts.indices {
+                hosts[index].identityFiles.append(expandedPath)
             }
 
         default:

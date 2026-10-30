@@ -18,6 +18,73 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
         super.tearDown()
     }
 
+    func testEmptyEncodedConfigUsesAllDefaults() throws {
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data("{}".utf8))
+        XCTAssertEqual(config, .default)
+    }
+
+    func testEachMissingConfigKeyUsesItsDefault() throws {
+        let encoded = try JSONEncoder().encode(AppConfig.default)
+        let full = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        for key in full.keys {
+            var partial = full
+            partial.removeValue(forKey: key)
+            let data = try JSONSerialization.data(withJSONObject: partial)
+            XCTAssertEqual(try JSONDecoder().decode(AppConfig.self, from: data), .default, key)
+        }
+    }
+
+    func testExplicitNullInactivityTimeoutRemainsDisabled() throws {
+        let config = try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data("{\"sshInactivityTimeoutSecs\":null}".utf8)
+        )
+        XCTAssertNil(config.sshInactivityTimeoutSecs)
+        XCTAssertEqual(config.connectionTimeoutSecs, AppConfig.default.connectionTimeoutSecs)
+        XCTAssertEqual(try JSONDecoder().decode(AppConfig.self, from: JSONEncoder().encode(config)), config)
+    }
+
+    func testEncodedConfigRoundTripPreservesEveryNonDefaultField() throws {
+        var config = AppConfig.default
+        config.connectionTimeoutSecs = 5
+        config.sessionHealthCheckIntervalSecs = 7
+        config.transferRetryCount = 1
+        config.transferChunkSizeBytes = 65_536
+        config.transferDownloadPipelineDepth = 8
+        config.transferUploadPipelineDepth = 16
+        config.sshInactivityTimeoutSecs = 90
+        config.sshKeepaliveIntervalSecs = 15
+        config.defaultLocalPath = "/tmp/custom-local-directory"
+        config.defaultLocalBookmark = Data([1, 2, 3])
+        config.confirmBeforeDelete = false
+        config.showHiddenFiles = true
+        config.mergeOpensshKnownHostsOnConnect = false
+        config.opensshKnownHostsPath = "/tmp/custom-known-hosts"
+        config.opensshKnownHostsBookmark = Data([4, 5, 6])
+        config.knownHostsStrictMode = false
+        config.failConnectOnOpensshMergeError = false
+        config.directoryWalkMaxFiles = 200
+        config.directoryWalkMaxDepth = 4
+        config.directoryWalkMaxTotalBytes = 1_024
+        config.transferOverwritePolicy = .ask
+        config.notifyWhenTransfersFinish = false
+        config.playTransferNotificationSound = false
+
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        XCTAssertEqual(try decoder.decode(AppConfig.self, from: encoder.encode(config)), config)
+
+        config.sshInactivityTimeoutSecs = nil
+        XCTAssertEqual(try decoder.decode(AppConfig.self, from: encoder.encode(config)), config)
+    }
+
+    func testInvalidConfigFieldTypeStillFailsDecoding() {
+        XCTAssertThrowsError(try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data("{\"connectionTimeoutSecs\":\"invalid\"}".utf8)
+        ))
+    }
+
     private func defaults() -> UserDefaults {
         UserDefaults(suiteName: suiteName)!
     }
@@ -40,8 +107,8 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
         // When: loadConfig is called
         let config = service.loadConfig()
 
-        // Then: it does not crash and clamps to the default
-        XCTAssertLessThanOrEqual(config.transferRetryCount, UInt32.max)
+        // Then: it does not crash and clamps to 0
+        XCTAssertEqual(config.transferRetryCount, 0)
     }
 
     func testLoadConfigClampsOversizedChunkToMaximum() {
@@ -82,6 +149,36 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
 
         // Then: it is clamped to the maximum
         XCTAssertEqual(highConfig.transferUploadPipelineDepth, 256)
+    }
+
+    func testLoadConfigClampsDownloadPipelineDepthToSupportedRange() {
+        // Given: corrupted download pipeline depths outside the supported range
+        defaults().set(-1, forKey: AppSettingsKeys.transferDownloadPipelineDepth)
+
+        // When: the low value is loaded
+        let lowConfig = service.loadConfig()
+
+        // Then: it is clamped to the minimum
+        XCTAssertEqual(lowConfig.transferDownloadPipelineDepth, 1)
+
+        // When: an oversized value is loaded
+        defaults().set(Int.max, forKey: AppSettingsKeys.transferDownloadPipelineDepth)
+        let highConfig = service.loadConfig()
+
+        // Then: it is clamped to the maximum
+        XCTAssertEqual(highConfig.transferDownloadPipelineDepth, 256)
+    }
+
+    func testSaveConfigClampsOversizedPipelineDepths() {
+        var config = service.loadConfig()
+        config.transferDownloadPipelineDepth = UInt64.max
+        config.transferUploadPipelineDepth = UInt64.max
+
+        service.saveConfig(config)
+        let reloaded = service.loadConfig()
+
+        XCTAssertEqual(reloaded.transferDownloadPipelineDepth, 256)
+        XCTAssertEqual(reloaded.transferUploadPipelineDepth, 256)
     }
 
     func testSaveConfigPreservesUploadPipelineDepth() {

@@ -42,6 +42,7 @@ final class ProfileTrustStore: @unchecked Sendable {
     private let baseDirectory: URL
     private let fileName = "trusted_endpoints.json"
     private let signingKeyStore: ProfileTrustSigningKeyStore
+    private let trustLock = NSLock()
 
     init(
         baseDirectory: URL,
@@ -157,19 +158,18 @@ final class ProfileTrustStore: @unchecked Sendable {
     }
 
     func seedInitialTrust(from profiles: [ConnectionProfile]) throws {
-        let trusted = Dictionary(
-            uniqueKeysWithValues: profiles.map { ($0.id, TrustedProfileEndpoint(profile: $0)) }
-        )
-        try saveTrustedEndpoints(trusted)
+        try replaceTrustedEndpoints(for: profiles)
     }
 
     func updateTrust(for profile: ConnectionProfile) throws {
-        var trusted = try loadTrustedEndpoints()
-        trusted[profile.id] = TrustedProfileEndpoint(profile: profile)
-        try saveTrustedEndpoints(trusted)
+        try mutateTrustedEndpoints { trusted in
+            trusted[profile.id] = TrustedProfileEndpoint(profile: profile)
+        }
     }
 
     func replaceTrustedEndpoints(for profiles: [ConnectionProfile]) throws {
+        trustLock.lock()
+        defer { trustLock.unlock() }
         let trusted = Dictionary(
             uniqueKeysWithValues: profiles.map { ($0.id, TrustedProfileEndpoint(profile: $0)) }
         )
@@ -177,14 +177,24 @@ final class ProfileTrustStore: @unchecked Sendable {
     }
 
     func acceptChange(_ change: ProfileEndpointChange) throws {
-        var trusted = try loadTrustedEndpoints()
-        trusted[change.profileID] = change.current
-        try saveTrustedEndpoints(trusted)
+        try mutateTrustedEndpoints { trusted in
+            trusted[change.profileID] = change.current
+        }
     }
 
     func removeTrust(for profileID: UUID) throws {
+        try mutateTrustedEndpoints { trusted in
+            trusted.removeValue(forKey: profileID)
+        }
+    }
+
+    private func mutateTrustedEndpoints(
+        _ mutate: (inout [UUID: TrustedProfileEndpoint]) throws -> Void
+    ) throws {
+        trustLock.lock()
+        defer { trustLock.unlock() }
         var trusted = try loadTrustedEndpoints()
-        guard trusted.removeValue(forKey: profileID) != nil else { return }
+        try mutate(&trusted)
         try saveTrustedEndpoints(trusted)
     }
 
@@ -197,13 +207,10 @@ final class ProfileTrustStore: @unchecked Sendable {
         }
 
         if let records = try? decoder.decode([String: TrustedProfileEndpoint].self, from: data) {
-            if signingKeyStore.hasExistingKey {
-                throw ProfileTrustStoreError.verificationFailed
-            }
-
-            let endpoints = parseEndpointRecords(records)
-            try saveTrustedEndpoints(endpoints)
-            return endpoints
+            // Legacy unsigned files are not authenticated. Route them through
+            // the explicit initial-trust confirmation flow instead of silently
+            // accepting and re-signing an attacker-controlled payload.
+            throw ProfileTrustStoreError.verificationFailed
         }
 
         throw ProfileTrustStoreError.readFailed(

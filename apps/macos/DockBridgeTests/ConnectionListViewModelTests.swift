@@ -538,25 +538,57 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
     }
 
     func testRequestConnectDoesNotShowRsaKeyWarningForEd25519PrivateKey() async throws {
-        let profile = try makeGeneratedPrivateKeyProfile(keyFilename: "id_ed25519", keyType: "ed25519")
+        var profile = try makeGeneratedPrivateKeyProfile(
+            keyFilename: "id_ed25519",
+            keyType: "ed25519"
+        )
+        // Avoid the root-user warning so the RSA branch is exercised.
+        profile.username = "testuser"
 
-        viewModel.requestConnect(profile: profile)
-        for _ in 0..<50 where viewModel.pendingConnectProfile != nil {
+        let inspectionCompleted = DispatchSemaphore(value: 0)
+        let localViewModel = makeViewModel { profile, _, bookmarkService in
+            defer { inspectionCompleted.signal() }
+            do {
+                guard let bookmark = profile.privateKeyBookmark else {
+                    XCTFail("Expected generated key bookmark")
+                    return nil
+                }
+                let algorithm = try bookmarkService.withAccess(to: bookmark) { keyURL in
+                    try inspectPrivateKeyAlgorithm(keyPath: keyURL.path, passphrase: nil)
+                }
+                XCTAssertEqual(algorithm, .ed25519)
+                return algorithm == .rsa
+            } catch {
+                XCTFail("Generated Ed25519 key inspection failed: \(error)")
+                return nil
+            }
+        }
+
+        localViewModel.requestConnect(profile: profile)
+        let didCompleteInspection = await waitForSignal(inspectionCompleted)
+        XCTAssertTrue(didCompleteInspection)
+        for _ in 0..<50 where localViewModel.pendingConnectProfile != nil {
             try await Task.sleep(for: .milliseconds(20))
         }
 
-        XCTAssertFalse(viewModel.showRsaKeyWarning)
-        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertFalse(localViewModel.showRsaKeyWarning)
+        XCTAssertNil(localViewModel.pendingConnectProfile)
     }
 
     func testCancelPendingConnectDiscardsInFlightRsaInspectionResult() async {
         let inspectionStarted = DispatchSemaphore(value: 0)
         let finishInspection = DispatchSemaphore(value: 0)
-        let viewModel = makeViewModel { _, _, _ in
-            inspectionStarted.signal()
-            finishInspection.wait()
-            return true
-        }
+        let inspectionCompleted = DispatchSemaphore(value: 0)
+        let viewModel = makeViewModel(
+            rsaKeyInspector: { _, _, _ in
+                inspectionStarted.signal()
+                finishInspection.wait()
+                return true
+            },
+            onRsaInspectionCompleted: { _ in
+                inspectionCompleted.signal()
+            }
+        )
         let profile = ConnectionProfile(
             name: "RSA",
             host: "example.com",
@@ -569,9 +601,8 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertTrue(didStartInspection)
         viewModel.cancelPendingConnect()
         finishInspection.signal()
-        for _ in 0..<20 {
-            await Task.yield()
-        }
+        let didCompleteInspection = await waitForSignal(inspectionCompleted)
+        XCTAssertTrue(didCompleteInspection)
 
         XCTAssertNil(viewModel.pendingConnectProfile)
         XCTAssertFalse(viewModel.showRsaKeyWarning)
@@ -580,11 +611,17 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
     func testNewConnectRequestDiscardsPreviousRsaInspectionResult() async {
         let inspectionStarted = DispatchSemaphore(value: 0)
         let finishInspection = DispatchSemaphore(value: 0)
-        let viewModel = makeViewModel { _, _, _ in
-            inspectionStarted.signal()
-            finishInspection.wait()
-            return true
-        }
+        let inspectionCompleted = DispatchSemaphore(value: 0)
+        let viewModel = makeViewModel(
+            rsaKeyInspector: { _, _, _ in
+                inspectionStarted.signal()
+                finishInspection.wait()
+                return true
+            },
+            onRsaInspectionCompleted: { _ in
+                inspectionCompleted.signal()
+            }
+        )
         let firstProfile = ConnectionProfile(
             name: "RSA",
             host: "first.example.com",
@@ -605,9 +642,8 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
             await Task.yield()
         }
         finishInspection.signal()
-        for _ in 0..<20 {
-            await Task.yield()
-        }
+        let didCompleteInspection = await waitForSignal(inspectionCompleted)
+        XCTAssertTrue(didCompleteInspection)
 
         XCTAssertTrue(viewModel.showRootWarning)
         XCTAssertFalse(viewModel.showRsaKeyWarning)
@@ -688,6 +724,41 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         )
     }
 
+    func testUnsavedFormPasswordOverridesStoredSecretWithoutChangingKeychain() throws {
+        let profile = ConnectionProfile(name: "Temporary", host: "example.com", username: "user")
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        try keychain.savePassword("previous", account: account)
+
+        viewModel.save(profile, password: "typed", passphrase: nil, saveSecrets: false)
+
+        XCTAssertEqual(try viewModel.credentialsForConnection(profile: profile).password, "typed")
+        XCTAssertEqual(try keychain.loadPassword(account: account), "previous")
+        viewModel.save(profile, password: "persisted", passphrase: nil, saveSecrets: true)
+        XCTAssertEqual(try viewModel.credentialsForConnection(profile: profile).password, "persisted")
+    }
+
+    func testUnsavedEmptyPasswordDoesNotFallBackToStoredSecret() throws {
+        let profile = ConnectionProfile(name: "Temporary", host: "example.com", username: "user")
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        try keychain.savePassword("previous", account: account)
+
+        viewModel.save(profile, password: nil, passphrase: nil, saveSecrets: false)
+
+        XCTAssertNil(try viewModel.credentialsForConnection(profile: profile).password)
+        XCTAssertEqual(try keychain.loadPassword(account: account), "previous")
+    }
+
+    func testUnsavedPassphraseOverridesStoredSecretWithoutChangingKeychain() throws {
+        let profile = try makeGeneratedPrivateKeyProfile(keyFilename: "id_ed25519", keyType: "ed25519")
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        try keychain.savePassphrase("previous", account: account)
+
+        viewModel.save(profile, password: nil, passphrase: "typed", saveSecrets: false)
+
+        XCTAssertEqual(try viewModel.credentialsForConnection(profile: profile).passphrase, "typed")
+        XCTAssertEqual(try keychain.loadPassphrase(account: account), "previous")
+    }
+
     private func makeGeneratedPrivateKeyProfile(
         id: UUID = UUID(),
         keyFilename: String,
@@ -728,14 +799,16 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
             ConnectionProfile,
             KeychainService,
             SecurityScopedBookmarkService
-        ) -> Bool?
+        ) -> Bool?,
+        onRsaInspectionCompleted: ((Bool?) -> Void)? = nil
     ) -> ConnectionListViewModel {
         ConnectionListViewModel(
             store: store,
             keychain: keychain,
             bookmarkService: .shared,
             bridge: RustBridgeService(),
-            rsaKeyInspector: rsaKeyInspector
+            rsaKeyInspector: rsaKeyInspector,
+            onRsaInspectionCompleted: onRsaInspectionCompleted
         )
     }
 

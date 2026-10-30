@@ -17,7 +17,14 @@ struct RemoteEntryNameSheet: View {
     }
 
     private var validationMessage: String? {
-        guard !trimmedName.isEmpty, !isValid else { return nil }
+        Self.validationMessage(for: name)
+    }
+
+    /// Exposed for tests so message rendering is assertable without inspecting
+    /// the View body (issue #699).
+    static func validationMessage(for rawName: String) -> String? {
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !RemotePath.isValidEntryName(trimmed) else { return nil }
         return RemoteEntryNameError.invalidCharacters.localizedDescription
     }
 
@@ -116,8 +123,8 @@ struct RemoteDeleteConfirmSheet: View {
             HStack {
                 Spacer()
                 Button(String(localized: "Cancel"), role: .cancel, action: onCancel)
-                Button(String(localized: "Delete"), role: .destructive, action: onDelete)
                     .keyboardShortcut(.defaultAction)
+                Button(String(localized: "Delete"), role: .destructive, action: onDelete)
             }
         }
         .padding(24)

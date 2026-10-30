@@ -7,10 +7,15 @@ struct ExpandingFrame<Content: View>: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            if size.width > 0, size.height > 0 {
-                content(size)
-                    .frame(width: size.width, height: size.height, alignment: .topLeading)
-            }
+            // Draw content even before a size is measured so a parent that
+            // proposes no explicit size (e.g. vertical ScrollView) can derive
+            // a nonzero frame from the content itself (issue #775).
+            content(size)
+                .frame(
+                    width: size.width > 0 ? size.width : nil,
+                    height: size.height > 0 ? size.height : nil,
+                    alignment: .topLeading
+                )
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .clipped()

@@ -168,7 +168,7 @@ struct ConnectionArgs {
     user: String,
     /// Password for local development and testing only (insecure: visible in argv, history, and ps).
     #[cfg(not(feature = "disable-cli-password"))]
-    #[arg(long, conflicts_with = "password_stdin")]
+    #[arg(long, conflicts_with_all = ["identity", "password_stdin"])]
     password: Option<String>,
     /// Read password from standard input (recommended for scripts, CI, and production).
     #[arg(long, conflicts_with_all = ["identity", "passphrase_stdin"])]
@@ -193,7 +193,7 @@ impl ConnectionArgs {
             // later, unlocked by the core authenticator.
             let passphrase = password::resolve_passphrase(self.passphrase_stdin)?
                 .map(|value| SecretPassword::new(value.as_str()));
-            let key_path = expand_tilde(&key_path);
+            let key_path = expand_tilde(&key_path)?;
             let algorithm =
                 inspect_private_key_algorithm(&key_path, passphrase.as_ref().map(|p| p.expose()))?;
             if !is_supported_key_algorithm(&algorithm) {
@@ -260,14 +260,26 @@ fn is_supported_key_algorithm(algorithm: &PrivateKeyAlgorithm) -> bool {
     matches!(algorithm, Ed25519 | Ecdsa | Rsa)
 }
 
+impl CliHostKeyPrompt {
+    fn print_message(&self, text: &str) {
+        if self.policy == HostKeyPolicy::Ask {
+            print_to_tty_or_stderr(text);
+        } else {
+            eprintln!("{text}");
+        }
+    }
+}
+
 impl HostKeyPrompt for CliHostKeyPrompt {
     fn prompt_unknown_host(&self, host: &str, port: u16, fingerprint_sha256: &str) -> bool {
-        eprintln!("The authenticity of host '{host}:{port}' can't be established.");
-        eprintln!("Host key fingerprint is {fingerprint_sha256}.");
+        self.print_message(&format!(
+            "The authenticity of host '{host}:{port}' can't be established."
+        ));
+        self.print_message(&format!("Host key fingerprint is {fingerprint_sha256}."));
         match self.policy {
             HostKeyPolicy::AcceptNew => true,
             HostKeyPolicy::Strict => {
-                eprintln!("Host key verification failed (--host-key-policy strict).");
+                self.print_message("Host key verification failed (--host-key-policy strict).");
                 false
             }
             HostKeyPolicy::Ask => {
@@ -283,29 +295,48 @@ impl HostKeyPrompt for CliHostKeyPrompt {
         expected_fingerprint_sha256: &str,
         actual_fingerprint_sha256: &str,
     ) -> bool {
-        eprintln!("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
-        eprintln!("@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @");
-        eprintln!("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
-        eprintln!("Host key for '{host}:{port}' has changed.");
-        eprintln!("Expected fingerprint: {expected_fingerprint_sha256}");
-        eprintln!("Received fingerprint: {actual_fingerprint_sha256}");
+        self.print_message("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+        self.print_message("@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @");
+        self.print_message("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+        self.print_message(&format!("Host key for '{host}:{port}' has changed."));
+        self.print_message(&format!(
+            "Expected fingerprint: {expected_fingerprint_sha256}"
+        ));
+        self.print_message(&format!(
+            "Received fingerprint: {actual_fingerprint_sha256}"
+        ));
         match self.policy {
             HostKeyPolicy::Ask => {
                 prompt_yes_no_tty("Are you sure you want to continue connecting (yes/no)? ")
             }
             HostKeyPolicy::AcceptNew | HostKeyPolicy::Strict => {
-                eprintln!(
+                self.print_message(&format!(
                     "Host key verification failed (--host-key-policy {}).",
                     match self.policy {
                         HostKeyPolicy::AcceptNew => "accept-new",
                         HostKeyPolicy::Strict => "strict",
                         HostKeyPolicy::Ask => unreachable!(),
                     }
-                );
+                ));
                 false
             }
         }
     }
+}
+
+/// Writes prompt text to the controlling terminal when available, falling
+/// back to stderr so redirected diagnostics never hide an interactive prompt
+/// (issue #648).
+fn print_to_tty_or_stderr(text: &str) {
+    if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+        use std::io::Write;
+        if writeln!(tty, "{text}").is_ok() {
+            let _ = tty.flush();
+            return;
+        }
+    }
+    eprintln!("{text}");
+    let _ = std::io::stderr().flush();
 }
 
 /// Prompts on the controlling terminal so that `--password-stdin` /
@@ -328,8 +359,11 @@ fn prompt_yes_no_tty(prompt: &str) -> bool {
             return false;
         }
     };
-    eprint!("{prompt}");
-    let _ = std::io::stderr().flush();
+    use std::io::Write;
+    if let Err(err) = tty.write_all(prompt.as_bytes()).and_then(|_| tty.flush()) {
+        eprintln!("cannot write host key prompt to controlling terminal: {err}; refusing to accept host key");
+        return false;
+    }
 
     let mut input = String::new();
     let mut reader = std::io::BufReader::new(&mut tty);
@@ -348,6 +382,7 @@ async fn main() -> ExitCode {
 async fn run() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
         .with_target(false)
         .init();
 
@@ -381,7 +416,11 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
                 OutputFormat::Text => {
                     for entry in entries {
                         let kind = if entry.is_directory { "dir" } else { "file" };
-                        println!("{kind}\t{}\t{}", entry.size, entry.path);
+                        println!(
+                            "{kind}\t{}\t{}",
+                            entry.size,
+                            terminal_safe_text(&entry.path)
+                        );
                     }
                 }
                 OutputFormat::Json => print_json_listing(entries)?,
@@ -413,10 +452,12 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
                     batch.skipped
                 );
                 if batch.failed > 0 {
-                    anyhow::bail!(
-                        "upload batch completed with {} failed entries",
-                        batch.failed
-                    );
+                    return Err(anyhow::anyhow!(AppError::Transfer(
+                        TransferError::RetriesExhausted {
+                            attempts: batch.failed as u32,
+                            message: format!("{} failed upload entries", batch.failed),
+                        }
+                    )));
                 }
             } else {
                 let task = manager.enqueue_upload(&session, &local, remote).await?;
@@ -453,10 +494,12 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
                     batch.skipped
                 );
                 if batch.failed > 0 {
-                    anyhow::bail!(
-                        "download batch completed with {} failed entries",
-                        batch.failed
-                    );
+                    return Err(anyhow::anyhow!(AppError::Transfer(
+                        TransferError::RetriesExhausted {
+                            attempts: batch.failed as u32,
+                            message: format!("{} failed download entries", batch.failed),
+                        }
+                    )));
                 }
             } else {
                 let task = manager.enqueue_download(&session, remote, &local).await?;
@@ -489,15 +532,44 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
             let session = connect(&connection, &config, known_hosts).await?;
 
             let directory = SftpClient::new(&session).initial_directory().await?;
-            println!("{directory}");
+            println!("{}", terminal_safe_text(&directory));
         }
     }
 
     Ok(())
 }
 
+/// Makes server-provided text safe for line-oriented terminal output.
+///
+/// Control characters can change cursor position or emit terminal escape
+/// sequences, so they are rendered as visible Unicode escapes. This preserves
+/// normal UTF-8 paths while keeping text output structurally stable.
+fn terminal_safe_text(value: &str) -> String {
+    if !value.chars().any(char::is_control) {
+        return value.to_string();
+    }
+
+    let mut sanitized = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control() {
+            use std::fmt::Write;
+            let _ = write!(sanitized, "\\u{{{:04x}}}", character as u32);
+        } else {
+            sanitized.push(character);
+        }
+    }
+    sanitized
+}
+
 fn print_json_listing(entries: Vec<dockbridge_core::RemoteFile>) -> anyhow::Result<()> {
-    println!("{}", json_listing(&entries)?);
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    // BrokenPipe (e.g. `list | head -1`) must exit quietly instead of
+    // panicking (issue #791).
+    if writeln!(out, "{}", json_listing(&entries)?).is_err() {
+        return Ok(());
+    }
+    let _ = out.flush();
     Ok(())
 }
 
@@ -669,6 +741,18 @@ mod tests {
     use super::*;
     use dockbridge_core::AuthError;
     use serial_test::serial;
+
+    #[test]
+    fn terminal_safe_text_escapes_control_characters() {
+        // Given: server-derived text containing terminal control sequences
+        // When: rendering for the text output mode
+        // Then: escape and line-structure control characters are visible
+        assert_eq!(terminal_safe_text("/safe/path"), "/safe/path");
+        assert_eq!(
+            terminal_safe_text("\u{1b}[31m/path\u{a}\t"),
+            "\\u{001b}[31m/path\\u{000a}\\u{0009}"
+        );
+    }
 
     #[test]
     fn exit_code_mapping_covers_categories() {

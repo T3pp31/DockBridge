@@ -4,6 +4,8 @@ import XCTest
 final class SecurityScopedBookmarkServiceTests: XCTestCase {
     private var service: SecurityScopedBookmarkService!
     private var tempDir: URL!
+    /// Track the ephemeral defaults suite for cleanup (issue #645).
+    private var testUserDefaultsSuite: String?
 
     override func setUp() {
         super.setUp()
@@ -16,8 +18,63 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
 
     override func tearDown() {
         service.stopAllAccess()
+        if let suiteName = testUserDefaultsSuite {
+            UserDefaults.standard.removePersistentDomain(forName: suiteName)
+        }
+        testUserDefaultsSuite = nil
         try? FileManager.default.removeItem(at: tempDir)
         super.tearDown()
+    }
+
+    func testOnlyLastHolderReleasesSystemAccess() {
+        let calls = SecurityScopeCallRecorder()
+        let scoped = SecurityScopedBookmarkService(
+            startAccess: { _ in calls.recordStart(); return true },
+            stopAccess: { _ in calls.recordStop() }
+        )
+        XCTAssertTrue(scoped.beginAccessing(tempDir))
+        XCTAssertTrue(scoped.beginAccessing(tempDir))
+        XCTAssertEqual(calls.starts, 1)
+        scoped.stopAccessing(tempDir)
+        XCTAssertTrue(scoped.isAccessActive(for: tempDir))
+        XCTAssertEqual(calls.stops, 0)
+        scoped.stopAccessing(tempDir)
+        XCTAssertFalse(scoped.isAccessActive(for: tempDir))
+        XCTAssertEqual(calls.stops, 1)
+        scoped.stopAccessing(tempDir)
+        XCTAssertEqual(calls.stops, 1)
+    }
+
+    func testStopAllReleasesEachSystemAccessOnce() {
+        let calls = SecurityScopeCallRecorder()
+        let scoped = SecurityScopedBookmarkService(
+            startAccess: { _ in calls.recordStart(); return true },
+            stopAccess: { _ in calls.recordStop() }
+        )
+        let other = tempDir.appendingPathComponent("other")
+        XCTAssertTrue(scoped.beginAccessing(tempDir))
+        XCTAssertTrue(scoped.beginAccessing(tempDir))
+        XCTAssertTrue(scoped.beginAccessing(other))
+        scoped.stopAllAccess()
+        XCTAssertEqual(calls.stops, 2)
+        XCTAssertFalse(scoped.isAccessActive(for: tempDir))
+        XCTAssertFalse(scoped.isAccessActive(for: other))
+        scoped.stopAllAccess()
+        XCTAssertEqual(calls.stops, 2)
+    }
+
+    func testFailedStartDoesNotAcquireOrReleaseAccess() {
+        let calls = SecurityScopeCallRecorder()
+        let scoped = SecurityScopedBookmarkService(
+            startAccess: { _ in calls.recordStart(); return false },
+            stopAccess: { _ in calls.recordStop() }
+        )
+        XCTAssertFalse(scoped.beginAccessing(tempDir))
+        XCTAssertFalse(scoped.isAccessActive(for: tempDir))
+        scoped.stopAccessing(tempDir)
+        scoped.stopAllAccess()
+        XCTAssertEqual(calls.starts, 1)
+        XCTAssertEqual(calls.stops, 0)
     }
 
     func testBookmarkRoundTrip() throws {
@@ -109,7 +166,9 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
             throw XCTSkip("Security-scoped bookmarks require App Sandbox context: \(error)")
         }
 
-        let defaults = UserDefaults(suiteName: "SecurityScopedBookmarkServiceTests.\(UUID().uuidString)")!
+        let suiteName = "SecurityScopedBookmarkServiceTests.\(UUID().uuidString)"
+        testUserDefaultsSuite = suiteName
+        let defaults = UserDefaults(suiteName: suiteName)!
         let settings = AppSettingsService(defaults: defaults, bookmarkService: service)
 
         var config = AppConfig.default
@@ -199,4 +258,16 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
             """
         )
     }
+}
+
+private final class SecurityScopeCallRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var startCount = 0
+    private var stopCount = 0
+
+    var starts: Int { lock.withLock { startCount } }
+    var stops: Int { lock.withLock { stopCount } }
+
+    func recordStart() { lock.withLock { startCount += 1 } }
+    func recordStop() { lock.withLock { stopCount += 1 } }
 }

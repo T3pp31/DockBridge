@@ -49,7 +49,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 swift-format lint -r apps/macos/DockBridge apps/macos/DockBridgeTests  # if maintained
-xcodebuild -scheme DockBridge -destination 'platform=macOS' build test  # macOS
+(cd apps/macos && xcodebuild -scheme DockBridge -destination 'platform=macOS' build test)  # macOS
 ```
 
 If your change touches Rust internals or transfer behavior, also run

@@ -65,16 +65,26 @@ enum PathBreadcrumb {
     }
 
     static func segments(forRemotePath path: String) -> [Segment] {
-        let normalized = path.hasSuffix("/") && path != "/"
-            ? String(path.dropLast())
-            : path
-        guard normalized != "/" else {
+        // Lexically resolve "."/".." so breadcrumbs do not show meaningless
+        // segments (issue #687).
+        var components: [String] = []
+        for raw in path.split(separator: "/").map(String.init) {
+            switch raw {
+            case ".", "":
+                continue
+            case "..":
+                if !components.isEmpty { components.removeLast() }
+            default:
+                components.append(raw)
+            }
+        }
+        guard !components.isEmpty else {
             return [Segment(path: "/", title: "/")]
         }
 
         var segments: [Segment] = [Segment(path: "/", title: "/")]
         var accumulated = ""
-        for component in normalized.split(separator: "/").map(String.init) where !component.isEmpty {
+        for component in components {
             accumulated += "/\(component)"
             segments.append(Segment(path: accumulated, title: component))
         }

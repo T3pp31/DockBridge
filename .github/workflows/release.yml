@@ -11,7 +11,7 @@ on:
         required: true
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
   cancel-in-progress: false
 
 permissions: {}
@@ -57,7 +57,17 @@ jobs:
             echo "error: release version must be a SemVer value" >&2
             exit 1
           fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # A hyphen in build metadata does not make a release a prerelease.
+          VERSION_WITHOUT_BUILD="${VERSION%%+*}"
+          if [[ "$VERSION_WITHOUT_BUILD" == *-* ]]; then
+            PRERELEASE=true
+          else
+            PRERELEASE=false
+          fi
+          {
+            echo "version=${VERSION}"
+            echo "prerelease=${PRERELEASE}"
+          } >> "$GITHUB_OUTPUT"
           echo "Release version: ${VERSION}"
 
       - name: Verify release.toml / Cargo.toml match the tag version
@@ -81,12 +91,12 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           NOTES_FILE="${RUNNER_TEMP}/release-notes.md"
           if awk -v ver="${VERSION}" '
-            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            index($0, "## [" ver "]") == 1 { found=1; next }
             found && /^## \[/ { exit }
             found { print }
           ' CHANGELOG.md | grep -q .; then
             awk -v ver="${VERSION}" '
-              $0 ~ "^## \\[" ver "\\]" { found=1; next }
+              index($0, "## [" ver "]") == 1 { found=1; next }
               found && /^## \[/ { exit }
               found { print }
             ' CHANGELOG.md > "$NOTES_FILE"
@@ -162,10 +172,11 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # v3.0.3
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', steps.version.outputs.version) || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           name: DockBridge ${{ steps.version.outputs.version }}
           body_path: ${{ steps.notes.outputs.path }}
           draft: ${{ github.event_name == 'workflow_dispatch' }}
-          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
           files: |
             ${{ steps.assets.outputs.dmg }}
             ${{ steps.assets.outputs.sha256 }}

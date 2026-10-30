@@ -16,10 +16,11 @@ struct OverwriteAskSheet: View {
                     .truncationMode(.middle)
             }
         } footer: {
+            // The destructive action must not be the Return default (issue #637).
             Button(String(localized: "Keep Existing"), role: .cancel, action: onKeep)
-                .keyboardShortcut(.cancelAction)
-            Button(String(localized: "Replace"), role: .destructive, action: onReplace)
                 .keyboardShortcut(.defaultAction)
+            Button(String(localized: "Replace"), role: .destructive, action: onReplace)
         }
+        .onExitCommand(perform: onKeep)
     }
 }

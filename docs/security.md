@@ -22,6 +22,15 @@
 - Warning when connecting as root
 - **FileVault (or equivalent full-disk encryption) recommended** on the boot volume — see [Connection profiles](#connection-profiles-profilesjson)
 
+## Home directory resolution
+
+Tilde paths and default security-file locations resolve the home directory with
+the platform-standard `dirs` API. On Unix and macOS, an explicit non-empty
+`HOME` takes precedence; if it is unset or empty, the real user's home is
+resolved from the system database. On Windows, the user profile known folder
+is used. DockBridge only accepts an absolute home path and does not honor a
+relative or empty value.
+
 ## CLI password authentication
 
 Password-based CLI connections support two mechanisms:
@@ -173,7 +182,7 @@ The macOS app runs in App Sandbox and cannot read `~/.ssh/known_hosts` without e
 
 1. Enable **Merge OpenSSH known_hosts on connect** in Settings.
 2. Use **Choose…** to select your `known_hosts` file (security-scoped bookmark is saved).
-3. If no file is selected or the path is unreadable, merge is skipped silently and connections continue.
+3. If no file is selected, merge is skipped and connections continue. If a selected file is unreadable or invalid, it is treated as a merge failure and the connection is aborted by default (`fail_connect_on_openssh_merge_error = false` continues with a logged warning).
 
 The CLI and non-sandboxed environments use `openssh_known_hosts_path` from `config/default.toml` (default: `~/.ssh/known_hosts`).
 
@@ -214,7 +223,7 @@ Uploads and downloads write to temporary partial files before renaming to the fi
 
 | Policy | Behavior |
 |--------|----------|
-| `Replace` (default) | Replace an existing destination after the transfer completes successfully. Remote uploads delete the existing file before rename when the server does not overwrite via rename alone. |
+| `Replace` (default) | Replace an existing destination after the transfer completes successfully. Remote uploads rely on `posix-rename@openssh.com`; when a server lacks it, no delete-then-rename fallback is issued, so an existing destination is preserved and the transferred partial is kept for recovery. |
 | `FailIfExists` | Fail without modifying the destination when it already exists. |
 
 Local finalize rejects symlink destinations without following them. Partial files are never opened through symlinks on Unix.
@@ -337,6 +346,8 @@ gh attestation verify DockBridge-<version>.cdx.json --repo T3pp31/DockBridge
 |----------|-------|----------|------------|
 | RUSTSEC-2026-0153 | russh-cryptovec | High (7.5) | Fixed in `russh 0.61.2` / `russh-cryptovec 0.61.0` (patched `>=0.60.3`) |
 | RUSTSEC-2026-0154 | russh | High (7.5) | Same as above |
+| RUSTSEC-2026-0385 | ctutils | Timing side channel | Fixed in `ctutils 0.4.6` via the `crypto-bigint 0.7.6` update |
+| RUSTSEC-2026-0387 | crypto-bigint | Timing side channel | Fixed in `crypto-bigint 0.7.6` |
 
 ### RSA Marvin Attack (RUSTSEC-2023-0071)
 

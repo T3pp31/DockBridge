@@ -97,8 +97,8 @@ enum VersionComparator {
     /// so malformed tags (e.g. `v999.0.bad`) are rejected rather than
     /// silently treated as `0`.
     private static func versionComponents(_ version: String) -> [Int]? {
-        let parts = version.split(separator: ".")
-        if parts.isEmpty {
+        let parts = version.split(separator: ".", omittingEmptySubsequences: false)
+        if parts.isEmpty || parts.contains(where: \.isEmpty) {
             return nil
         }
         var components: [Int] = []

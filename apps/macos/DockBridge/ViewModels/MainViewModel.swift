@@ -294,6 +294,9 @@ final class MainViewModel: ObservableObject {
     private let settings: AppSettingsService
     private let bookmarkService: SecurityScopedBookmarkService
     @Published private(set) var remoteEditSessions: [RemoteEditSession] = []
+    /// Tracks downloads in flight keyed by connection+path so a double open
+    /// cannot spawn duplicate sessions (issue #780).
+    private var remoteEditOpenInFlight = Set<String>()
     private var editMonitorTask: Task<Void, Never>?
     private let remoteEditTempRoot: URL
     private let openFileOperation: (URL) -> Bool
@@ -305,6 +308,7 @@ final class MainViewModel: ObservableObject {
     private var lastAppliedDefaultLocalBookmark: Data?
     private var pathBookmarkAccessURL: URL?
     private var localLoadGeneration = 0
+    private var connectionGeneration = 0
     @Published private(set) var isLoadingRemote = false
     private var remoteLoadGeneration = 0
     private var localHistory: PathNavigationHistory
@@ -400,7 +404,21 @@ final class MainViewModel: ObservableObject {
     func onAppear() {
         connectionList.load()
         transferQueue.startPolling()
+        // Reacquire access to the default local folder if the view was
+        // previously removed and onDisappear released it.
+        if defaultLocalAccessURL == nil {
+            let config = settings.loadConfig()
+            let resolution = DefaultLocalPathResolver.resolve(
+                config: config,
+                bookmarkService: bookmarkService
+            )
+            defaultLocalAccessURL = resolution.accessURL
+            if case .bookmarkFailed(_, let error) = resolution {
+                errorMessage = DefaultLocalPathResolver.userMessage(for: error)
+            }
+        }
         refreshPathBookmarks()
+        restorePathBookmarkAccess()
         cleanupRemoteOpenTemp()
         startRemoteEditMonitoring()
     }
@@ -475,6 +493,8 @@ final class MainViewModel: ObservableObject {
     }
 
     func onConnectionChanged(isConnected: Bool) async {
+        connectionGeneration &+= 1
+        let generation = connectionGeneration
         if isConnected {
             // Remember which profile established this connection. The bridge
             // clears `connectedProfileID` before the disconnect callback fires.
@@ -502,7 +522,8 @@ final class MainViewModel: ObservableObject {
         }
 
         do {
-            try await prepareRemoteWorkingDirectory()
+            try await prepareRemoteWorkingDirectory(connectionGeneration: generation)
+            guard generation == connectionGeneration, bridge.isConnected else { return }
             if let profileID = lastConnectedProfileID ?? bridge.connectedProfileID,
                let profile = connectionList.profiles.first(where: { $0.id == profileID }) {
                 // A configured initial path takes priority; the last visited
@@ -510,12 +531,14 @@ final class MainViewModel: ObservableObject {
                 let targetRemote = profile.initialRemotePath ?? profile.lastRemotePath
                 if let savedRemotePath = targetRemote, !savedRemotePath.isEmpty {
                     if await remoteDirectoryExists(savedRemotePath) {
+                        guard generation == connectionGeneration, bridge.isConnected else { return }
                         applyRemotePath(savedRemotePath, recordHistory: false)
                         remoteHistory.reset(to: savedRemotePath)
                     }
                 }
             }
             await reloadRemote()
+            guard generation == connectionGeneration, bridge.isConnected else { return }
             if let profileID = lastConnectedProfileID ?? bridge.connectedProfileID,
                let profile = connectionList.profiles.first(where: { $0.id == profileID }) {
                 let targetLocal = profile.initialLocalPath ?? profile.lastLocalPath
@@ -525,12 +548,14 @@ final class MainViewModel: ObservableObject {
                     // path (deleted folder, renamed volume) must not break
                     // the freshly established connection.
                     if FileManager.default.fileExists(atPath: localURL.path) {
+                        guard generation == connectionGeneration, bridge.isConnected else { return }
                         applyLocalPath(localURL, recordHistory: false)
                         reloadLocal()
                     }
                 }
             }
             refreshPathBookmarks()
+            guard generation == connectionGeneration, bridge.isConnected else { return }
             startRemoteEditMonitoring()
         } catch {
             errorMessage = error.dockBridgeUserMessage
@@ -620,6 +645,20 @@ final class MainViewModel: ObservableObject {
         pathBookmarkAccessURL = nil
     }
 
+    private func restorePathBookmarkAccess() {
+        guard pathBookmarkAccessURL == nil, let bookmark = localPathBookmarks.first(where: {
+            $0.securityScopedBookmark != nil
+                && $0.path == localPath.path
+        }) else { return }
+
+        do {
+            let url = try bookmarkService.resolveBookmark(bookmark.securityScopedBookmark!)
+            pathBookmarkAccessURL = url
+        } catch {
+            errorMessage = error.dockBridgeUserMessage
+        }
+    }
+
     private func remoteDirectoryExists(_ path: String) async -> Bool {
         do {
             _ = try await bridge.listDirectory(path: path)
@@ -629,8 +668,8 @@ final class MainViewModel: ObservableObject {
         }
     }
 
-    func prepareRemoteWorkingDirectory() async throws {
-        guard bridge.isConnected else { return }
+    func prepareRemoteWorkingDirectory(connectionGeneration generation: Int) async throws {
+        guard bridge.isConnected, generation == connectionGeneration else { return }
         guard remotePath == "/" else { return }
 
         if let initialDirectory = bridge.initialRemoteDirectory {
@@ -639,8 +678,10 @@ final class MainViewModel: ObservableObject {
             return
         }
 
+        guard bridge.isConnected, generation == connectionGeneration else { return }
         do {
             let directory = try await bridge.getInitialDirectory()
+            guard bridge.isConnected, generation == connectionGeneration else { return }
             applyRemotePath(directory, recordHistory: false)
             remoteHistory.reset(to: directory)
         } catch {
@@ -652,7 +693,9 @@ final class MainViewModel: ObservableObject {
             }
         }
 
+        guard bridge.isConnected, generation == connectionGeneration else { return }
         if remotePath == "/", let fallback = await verifiedFallbackHomePath() {
+            guard bridge.isConnected, generation == connectionGeneration else { return }
             applyRemotePath(fallback, recordHistory: false)
             remoteHistory.reset(to: fallback)
         }
@@ -708,17 +751,12 @@ final class MainViewModel: ObservableObject {
                 }
                 return showHiddenFiles || !item.name.hasPrefix(".")
             }
-            guard generation == remoteLoadGeneration, path == remotePath else {
-                isLoadingRemote = false
-                return
-            }
+            // A stale load must not clear the flag of the newer request.
+            guard generation == remoteLoadGeneration, path == remotePath else { return }
             remoteItems = filtered
             isLoadingRemote = false
         } catch {
-            guard generation == remoteLoadGeneration else {
-                isLoadingRemote = false
-                return
-            }
+            guard generation == remoteLoadGeneration else { return }
             isLoadingRemote = false
             errorMessage = error.dockBridgeUserMessage
             if error.isConnectionLost {
@@ -888,6 +926,15 @@ final class MainViewModel: ObservableObject {
             startRemoteEditMonitoring()
             return
         }
+
+        let inFlightKey = connectionIdentity + "\u{0}" + item.path
+        guard !remoteEditOpenInFlight.contains(inFlightKey) else {
+            // A download for this path is already running; reuse its result
+            // when the session is tracked instead of creating a duplicate.
+            return
+        }
+        remoteEditOpenInFlight.insert(inFlightKey)
+        defer { remoteEditOpenInFlight.remove(inFlightKey) }
 
         let sessionDirectory = remoteEditTempRoot
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1493,15 +1540,27 @@ final class MainViewModel: ObservableObject {
             return await perform(.replace)
 
         case .failIfExists:
-            if await destinationExists(at: destinationPath, side: destinationSide) {
+            let destinationState = await destinationExists(
+                at: destinationPath,
+                side: destinationSide
+            )
+            if destinationState == true {
                 errorMessage = String(localized: "A file already exists at the destination.")
                 return false
+            }
+            if destinationState == nil {
+                overwriteAskDestination = destinationPath
+                showOverwriteAsk = true
+                let replace = await withCheckedContinuation { continuation in
+                    overwriteAskContinuation = continuation
+                }
+                return replace ? await perform(.replace) : false
             }
             errorMessage = nil
             return await perform(.failIfExists)
 
         case .ask:
-            if await destinationExists(at: destinationPath, side: destinationSide) {
+            if await destinationExists(at: destinationPath, side: destinationSide) != false {
                 overwriteAskDestination = destinationPath
                 showOverwriteAsk = true
                 let replace = await withCheckedContinuation { continuation in
@@ -1516,7 +1575,10 @@ final class MainViewModel: ObservableObject {
         }
     }
 
-    private func destinationExists(at path: String, side: TransferDestinationSide) async -> Bool {
+    private func destinationExists(
+        at path: String,
+        side: TransferDestinationSide
+    ) async -> Bool? {
         switch side {
         case .remote:
             return await remoteDestinationExists(path: path)
@@ -1525,25 +1587,27 @@ final class MainViewModel: ObservableObject {
         }
     }
 
-    private func remoteDestinationExists(path: String) async -> Bool {
-        guard let parent = try? RemotePath.parent(of: path) else { return false }
+    /// `true` and `false` are conclusive; `nil` means the check could not run.
+    private func remoteDestinationExists(path: String) async -> Bool? {
+        guard let parent = try? RemotePath.parent(of: path) else { return nil }
         let name = (path as NSString).lastPathComponent
-        guard let items = try? await bridge.listDirectory(path: parent) else { return false }
+        guard let items = try? await bridge.listDirectory(path: parent) else { return nil }
         return items.contains { $0.name == name && !$0.isParentDirectory }
     }
 
-    func moveLocalItem(from source: URL, toDirectory directory: URL) throws {
+    func moveLocalItem(from source: URL, toDirectory directory: URL) async throws {
         guard FileDropValidation.canMoveLocalItem(from: source, to: directory) else {
             throw FileDropError.invalidMove
         }
 
         let destination = directory.appendingPathComponent(source.lastPathComponent)
-        // Re-validate immediately before the move to narrow the TOCTOU
-        // window between symlink resolution and the actual file operation.
-        guard FileDropValidation.canMoveLocalItem(from: source, to: directory) else {
-            throw FileDropError.invalidMove
-        }
-        try FileManager.default.moveItem(at: source, to: destination)
+        try await Task.detached(priority: .userInitiated) {
+            // Re-validate on the worker immediately before the file operation.
+            guard FileDropValidation.canMoveLocalItem(from: source, to: directory) else {
+                throw FileDropError.invalidMove
+            }
+            try FileManager.default.moveItem(at: source, to: destination)
+        }.value
         reloadLocal()
     }
 
@@ -1563,6 +1627,17 @@ final class MainViewModel: ObservableObject {
         let destination = RemotePath.join(directory, name)
 
         do {
+            // Refuse to silently replace an existing item at the destination
+            // (issue #694). The rename must be re-issued by the user after
+            // resolving the conflict.
+            guard let destinationExists = await remoteDestinationExists(path: destination) else {
+                errorMessage = String(localized: "Unable to check the remote destination. Try again.")
+                return false
+            }
+            if destinationExists {
+                errorMessage = String(localized: "A file already exists at the destination.")
+                return false
+            }
             try await bridge.renameRemote(from: source, to: destination)
             await reloadRemote()
             return true
@@ -1616,6 +1691,15 @@ final class MainViewModel: ObservableObject {
         let newPath = RemotePath.join(parent, name)
 
         do {
+            // Refuse to silently replace an existing item (issue #694).
+            guard let destinationExists = await remoteDestinationExists(path: newPath) else {
+                errorMessage = String(localized: "Unable to check the remote destination. Try again.")
+                return
+            }
+            if destinationExists {
+                errorMessage = String(localized: "A file already exists at the destination.")
+                return
+            }
             try await bridge.renameRemote(from: target.path, to: newPath)
             renameTarget = nil
             renameText = ""
@@ -1732,7 +1816,8 @@ final class MainViewModel: ObservableObject {
         // Guard against overwriting an existing item before the move. A
         // destination collision would otherwise surface only as a generic
         // move error.
-        if FileManager.default.fileExists(atPath: newURL.path) {
+        if name.caseInsensitiveCompare(target.name) != .orderedSame,
+           FileManager.default.fileExists(atPath: newURL.path) {
             errorMessage = String(
                 format: String(localized: "A file or folder named '%@' already exists."),
                 name

@@ -1,3 +1,54 @@
+/// Strips quoted path-like segments before disconnect heuristics so a path
+/// containing a phrase cannot falsely indicate connection loss (issue #662).
+fn strip_quoted_paths(message: &str) -> String {
+    // First expose Debug error payloads, then remove paths nested inside them.
+    // Two bounded passes avoid recursively parsing server-controlled text.
+    strip_quoted_segments(&strip_quoted_segments(message, true), false)
+}
+
+fn strip_quoted_segments(message: &str, preserve_error_text: bool) -> String {
+    let mut result = String::with_capacity(message.len());
+    let mut rest = message;
+    while let Some(start) = rest.find(['\'', '"']) {
+        let quote = rest[start..].chars().next().unwrap();
+        let after_open = &rest[start + quote.len_utf8()..];
+        let mut escaped = false;
+        let end = after_open.char_indices().find_map(|(index, character)| {
+            if escaped {
+                escaped = false;
+                None
+            } else if character == '\\' {
+                escaped = true;
+                None
+            } else {
+                (character == quote).then_some(index)
+            }
+        });
+        if let Some(end) = end {
+            result.push_str(&rest[..start]);
+            // Debug formatting quotes error text as well as paths. Keep
+            // error fields and the SFTP IO wrapper visible to the classifier.
+            let prefix = rest[..start].trim_end().to_lowercase();
+            if preserve_error_text
+                && (prefix.ends_with("message:")
+                    || prefix.ends_with("error:")
+                    || prefix.ends_with("io("))
+            {
+                // Debug escapes nested double quotes. Expose them to the
+                // second pass so quoted filenames are still removed.
+                result.push_str(&after_open[..end].replace("\\\"", "\""));
+            } else {
+                result.push_str(" \"path\" ");
+            }
+            rest = &after_open[end + quote.len_utf8()..];
+        } else {
+            break;
+        }
+    }
+    result.push_str(rest);
+    result
+}
+
 /// Returns `true` when an error message indicates the SSH/SFTP session is no longer usable.
 ///
 /// Matching is deliberately *not* a raw substring scan for `"eof"`, because
@@ -7,7 +58,11 @@
 /// underlying libraries actually produce when a channel/session dies are
 /// covered as well.
 pub fn is_connection_lost_message(message: &str) -> bool {
-    let lower = message.to_lowercase();
+    // User-controlled paths may contain disconnect phrases (e.g. a file named
+    // "eof.txt" or "session closed"). Remove quoted paths before matching
+    // (issue #662).
+    let stripped = strip_quoted_paths(connection_error_detail(message));
+    let lower = stripped.to_lowercase();
     if lower.contains("session closed")
         || lower.contains("connection reset")
         || lower.contains("broken pipe")
@@ -15,17 +70,30 @@ pub fn is_connection_lost_message(message: &str) -> bool {
         || lower.contains("sender dropped")
         || lower.contains("channel closed")
         || lower.contains("recv error")
+        || lower.contains("connection closed by the remote side")
     {
         return true;
     }
-    // "eof" only as its own word, not inside a user-controlled path segment
-    // (e.g. "unexpected eof", "eof, ..."), so `geoffrey` / `thereof` are safe.
+    // Quoted paths have been removed. Keep path separators and extensions
+    // inside tokens so unquoted `/eof` and `eof.txt` are not bare EOF errors.
     lower
-        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
-        .any(|token| token == "eof" || token == "eof,")
+        .split(|character: char| {
+            !character.is_alphanumeric() && !matches!(character, '.' | '/' | '\\' | '_' | '-')
+        })
+        .any(|token| matches!(token, "eof" | "disconnected"))
         && !lower.contains("permission denied")
         && !lower.contains("no such file")
         && !lower.contains("not found")
+}
+
+/// SFTP display errors separate their quoted paths from the underlying
+/// error using `': `. Use the final separator so apostrophes (including
+/// separators embedded in a path) cannot hide the actual error detail.
+/// Unstructured messages are preserved, including ordinary contractions.
+fn connection_error_detail(message: &str) -> &str {
+    message
+        .rsplit_once("': ")
+        .map_or(message, |(_, detail)| detail)
 }
 
 #[cfg(test)]
@@ -48,6 +116,19 @@ mod tests {
     }
 
     #[test]
+    fn ignores_non_connection_error_with_path_containing_closed() {
+        // Given: a permission error whose path contains a disconnect phrase
+        // When: checked for connection loss
+        // Then: it is NOT treated as disconnected (issue #798)
+        assert!(!is_connection_lost_message(
+            "failed to delete '/home/user/session closed.txt': Permission denied"
+        ));
+        assert!(!is_connection_lost_message(
+            "failed to delete '/srv/channel closed/x.txt': No such file"
+        ));
+    }
+
+    #[test]
     fn ignores_unrelated_errors() {
         assert!(!is_connection_lost_message("permission denied"));
         assert!(!is_connection_lost_message("no such file"));
@@ -63,6 +144,37 @@ mod tests {
         ));
         assert!(!is_connection_lost_message(
             "failed to upload 'geoff.txt': no such file"
+        ));
+    }
+
+    #[test]
+    fn detects_eof_with_path_containing_not_found() {
+        // Given: a real EOF and a user-controlled path containing a suppressive phrase
+        // When: checked for connection loss
+        // Then: quoted paths are removed before applying the suppression
+        assert!(is_connection_lost_message(
+            "failed to upload '/home/u/not found.txt': unexpected eof"
+        ));
+    }
+
+    #[test]
+    fn apostrophes_do_not_hide_connection_failure() {
+        assert!(is_connection_lost_message("can't read: unexpected eof"));
+        assert!(is_connection_lost_message(
+            "failed to upload '/home/user's/not found.txt': unexpected eof"
+        ));
+        assert!(is_connection_lost_message(
+            "unmatched ' quote: connection reset"
+        ));
+    }
+
+    #[test]
+    fn connection_words_inside_paths_do_not_drop_live_session() {
+        assert!(!is_connection_lost_message(
+            "failed to delete '/broken pipe': permission denied"
+        ));
+        assert!(!is_connection_lost_message(
+            "failed to upload '/eof': unexpected eof' to '/target': permission denied"
         ));
     }
 
@@ -83,6 +195,75 @@ mod tests {
         assert!(is_connection_lost_message("sender dropped"));
         assert!(is_connection_lost_message("write channel closed"));
         assert!(is_connection_lost_message("RecvError: channel closed"));
+    }
+
+    #[test]
+    fn detects_bare_and_io_eof_messages() {
+        for message in ["EOF", "read: EOF", "I/O: EOF", "early eof"] {
+            assert!(is_connection_lost_message(message), "{message}");
+        }
+    }
+
+    #[test]
+    fn detects_debug_formatted_error_messages() {
+        let error = std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "Connection reset by peer",
+        );
+        assert!(is_connection_lost_message(&format!("{error:?}")));
+        let sftp_error = russh_sftp::client::error::Error::IO("Connection reset by peer".into());
+        assert!(is_connection_lost_message(&format!("{sftp_error:?}")));
+        assert!(is_connection_lost_message(
+            "failed to download '/tmp/file': IO { message: \"unexpected eof\" }"
+        ));
+    }
+
+    #[test]
+    fn detects_russh_disconnect_displays() {
+        for error in [russh::Error::Disconnect, russh::Error::HUP] {
+            assert!(is_connection_lost_message(&error.to_string()), "{error}");
+        }
+    }
+
+    #[test]
+    fn ignores_disconnect_phrases_in_quoted_basenames_and_paths() {
+        for path in [
+            "eof",
+            "eof.txt",
+            "EOF.bin",
+            "session closed",
+            "broken pipe",
+            "/download/connection reset",
+            "/download/unexpected eof",
+        ] {
+            for quote in ['\'', '"'] {
+                let message = format!("failed to delete {quote}{path}{quote}: failure");
+                assert!(!is_connection_lost_message(&message), "{message}");
+            }
+        }
+    }
+
+    #[test]
+    fn ignores_paths_inside_debug_formatted_error_messages() {
+        for path in ["session closed", "broken pipe", "unexpected eof"] {
+            for quote in ['\'', '"'] {
+                let error = russh_sftp::client::error::Error::IO(format!(
+                    "failed to delete {quote}{path}{quote}: failure"
+                ));
+                assert!(
+                    !is_connection_lost_message(&format!("{error:?}")),
+                    "{error:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ignores_unquoted_eof_paths() {
+        for path in ["eof.txt", "/eof", "eof/file", "eof.bin"] {
+            let message = format!("failed to delete {path}: failure");
+            assert!(!is_connection_lost_message(&message), "{message}");
+        }
     }
 
     #[test]

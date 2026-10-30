@@ -149,25 +149,26 @@ pub enum SftpError {
 /// These are protocol-defined numeric codes, unlike `error_message` which is
 /// a free-form, server-localized string. Judging errors by these codes works
 /// with OpenSSH and any standards-conforming server regardless of locale.
+/// Convert wire values with [`Self::from_raw`]; Rust enum discriminants and
+/// memory layout do not represent the protocol codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
 pub enum RemoteStatusCode {
     /// End-of-file condition.
-    Eof = 1,
+    Eof,
     /// The referenced file or directory should exist but does not.
-    NoSuchFile = 2,
+    NoSuchFile,
     /// The authenticated user lacks sufficient permissions.
-    PermissionDenied = 3,
+    PermissionDenied,
     /// Generic catch-all failure.
-    Failure = 4,
+    Failure,
     /// Badly formatted packet or protocol incompatibility.
-    BadMessage = 5,
+    BadMessage,
     /// No connection to the server (generated locally).
-    NoConnection = 6,
+    NoConnection,
     /// The connection to the server has been lost (generated locally).
-    ConnectionLost = 7,
+    ConnectionLost,
     /// The server does not implement the requested operation.
-    OpUnsupported = 8,
+    OpUnsupported,
     /// Any other status code.
     Other(u32),
 }
@@ -293,6 +294,9 @@ pub enum ConfigError {
         value: u64,
         reason: &'static str,
     },
+
+    #[error("invalid path {path}: {reason}")]
+    InvalidPath { path: String, reason: String },
 }
 
 impl AppError {
@@ -302,5 +306,33 @@ impl AppError {
             self,
             AppError::Security(SecurityError::HostKeyMismatch { .. })
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RemoteStatusCode;
+
+    #[test]
+    fn remote_status_wire_codes_are_stable() {
+        let cases = [
+            (1, RemoteStatusCode::Eof),
+            (2, RemoteStatusCode::NoSuchFile),
+            (3, RemoteStatusCode::PermissionDenied),
+            (4, RemoteStatusCode::Failure),
+            (5, RemoteStatusCode::BadMessage),
+            (6, RemoteStatusCode::NoConnection),
+            (7, RemoteStatusCode::ConnectionLost),
+            (8, RemoteStatusCode::OpUnsupported),
+        ];
+        for (wire_code, expected) in cases {
+            assert_eq!(RemoteStatusCode::from_raw(wire_code), expected);
+        }
+        for wire_code in [0, 9, 42, u32::MAX] {
+            assert_eq!(
+                RemoteStatusCode::from_raw(wire_code),
+                RemoteStatusCode::Other(wire_code)
+            );
+        }
     }
 }

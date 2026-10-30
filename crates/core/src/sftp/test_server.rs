@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::sftp::tree::normalize_remote_path;
 use russh::keys::{Algorithm, PrivateKey};
 use russh::server::{Auth, Msg, Server as _, Session};
 use russh::{Channel, ChannelId};
@@ -25,6 +26,12 @@ use crate::ssh::{ConnectionProfile, HostKeyPrompt, SshSession};
 
 #[derive(Default)]
 pub struct FailureConfig {
+    /// Post-handshake connection phases that can stop replying in timeout tests.
+    pub hang_auth: AtomicBool,
+    pub hang_channel_open: AtomicBool,
+    pub hang_subsystem_request: AtomicBool,
+    pub hang_sftp_init: AtomicBool,
+    pub connection_phase_started: tokio::sync::Notify,
     pub fail_remote_write: AtomicBool,
     pub fail_remote_read: AtomicBool,
     pub fail_remote_close: AtomicBool,
@@ -42,6 +49,12 @@ pub struct FailureConfig {
     /// Artificial delay applied to every SSH_FXP_READ reply, used by benchmarks
     /// to emulate a high-latency link (milliseconds).
     pub read_delay_ms: AtomicU64,
+    /// Signals that a READ handler has started, before its optional delay.
+    pub read_started: tokio::sync::Notify,
+    /// Pauses a single opened file so tests can replace its pathname.
+    pub pause_after_open: AtomicBool,
+    pub file_opened: tokio::sync::Notify,
+    pub continue_open: tokio::sync::Notify,
     /// When `true`, `open` with `SSH_FX_EXCLUDE` reports `SSH_FX_PERMISSION_DENIED`
     /// for an already-existing exclusive path (some servers' EEXIST).
     pub exclude_exists_permission_denied: AtomicBool,
@@ -71,6 +84,11 @@ pub struct FailureConfig {
 
 /// Secret required by the test server's keyboard-interactive challenge.
 pub const KEYBOARD_INTERACTIVE_SECRET: &str = "kbd-interactive-secret";
+
+#[derive(serde::Deserialize)]
+struct TestServerSettings {
+    accept_retry_delay_ms: u64,
+}
 
 struct AcceptAllPrompt;
 impl HostKeyPrompt for AcceptAllPrompt {
@@ -118,6 +136,10 @@ impl russh::server::Handler for ServerImpl {
     type Error = anyhow::Error;
 
     async fn auth_password(&mut self, _user: &str, _password: &str) -> Result<Auth, Self::Error> {
+        if self.failures.hang_auth.load(Ordering::SeqCst) {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         if self.failures.reject_all_auth.load(Ordering::SeqCst) {
             // An explicit empty set: no method is offered afterwards, which
             // the client must map to AuthError::MethodUnavailable.
@@ -181,6 +203,10 @@ impl russh::server::Handler for ServerImpl {
         channel: Channel<Msg>,
         _session: &mut Session,
     ) -> Result<bool, Self::Error> {
+        if self.failures.hang_channel_open.load(Ordering::SeqCst) {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         self.clients.lock().unwrap().insert(channel.id(), channel);
         Ok(true)
     }
@@ -191,6 +217,10 @@ impl russh::server::Handler for ServerImpl {
         name: &str,
         session: &mut Session,
     ) -> Result<(), Self::Error> {
+        if self.failures.hang_subsystem_request.load(Ordering::SeqCst) {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         if name != "sftp" {
             session.channel_failure(channel_id)?;
             return Ok(());
@@ -228,24 +258,27 @@ struct SftpHandler {
 }
 
 impl SftpHandler {
+    /// Resolves a remote path inside the sandbox, rejecting paths that escape
+    /// via lexical components (issue #657).
     fn resolve(&self, path: &str) -> PathBuf {
-        let trimmed = path.trim_start_matches('/');
-        if trimmed.is_empty() {
-            self.root.clone()
-        } else {
-            self.root.join(trimmed)
+        let mut components: Vec<String> = vec![];
+        for raw in path.split('/') {
+            match raw {
+                "" | "." => continue,
+                ".." => {
+                    components.pop();
+                }
+                other => components.push(other.to_string()),
+            }
         }
+        components
+            .iter()
+            .fold(self.root.clone(), |acc, component| acc.join(component))
     }
 
-    fn canonical(&self, path: &str) -> String {
-        if path == "." || path.is_empty() {
-            return "/".to_string();
-        }
-        if path.starts_with('/') {
-            path.to_string()
-        } else {
-            format!("/{path}")
-        }
+    /// Returns whether the resolved path is still inside the sandbox root.
+    fn is_within_root(&self, path: &Path) -> bool {
+        path.starts_with(&self.root)
     }
 
     fn attrs_for(path: &Path) -> FileAttributes {
@@ -307,6 +340,9 @@ impl SftpHandler {
 
     async fn read_directory_entries(&self, path: &str) -> Result<Vec<File>, StatusCode> {
         let local = self.resolve(path);
+        if !local.exists() {
+            return Err(StatusCode::NoSuchFile);
+        }
         if !local.is_dir() {
             return Err(StatusCode::Failure);
         }
@@ -367,6 +403,10 @@ impl russh_sftp::server::Handler for SftpHandler {
         _version: u32,
         _extensions: HashMap<String, String>,
     ) -> Result<Version, Self::Error> {
+        if self.failures.hang_sftp_init.load(Ordering::SeqCst) {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         let mut version = Version::new();
         if self.failures.advertise_posix_rename.load(Ordering::SeqCst) {
             version
@@ -377,9 +417,17 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
+        // Match real servers: the resolved path must exist and the returned
+        // remote path must be a normalized absolute form (issue #795).
+        let local = self.resolve(&path);
+        if !local.exists() {
+            return Err(StatusCode::NoSuchFile);
+        }
         Ok(Name {
             id,
-            files: vec![File::dummy(self.canonical(&path))],
+            files: vec![File::dummy(
+                normalize_remote_path(&path).unwrap_or_else(|_| format!("/{path}")),
+            )],
         })
     }
 
@@ -405,6 +453,31 @@ impl russh_sftp::server::Handler for SftpHandler {
         })
     }
 
+    async fn fstat(&mut self, id: u32, handle: String) -> Result<Attrs, Self::Error> {
+        let open = self.handles.get(&handle).ok_or(StatusCode::Failure)?;
+        let metadata = open
+            .file
+            .metadata()
+            .await
+            .map_err(|_| StatusCode::Failure)?;
+        let mut attrs = FileAttributes::empty();
+        if metadata.is_file() {
+            attrs.set_regular(true);
+            attrs.size = Some(metadata.len());
+        } else if metadata.is_dir() {
+            attrs.set_dir(true);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            attrs.uid = Some(metadata.uid());
+            attrs.gid = Some(metadata.gid());
+            attrs.permissions = Some(metadata.mode());
+            attrs.mtime = metadata.mtime().try_into().ok();
+        }
+        Ok(Attrs { id, attrs })
+    }
+
     async fn open(
         &mut self,
         id: u32,
@@ -413,12 +486,15 @@ impl russh_sftp::server::Handler for SftpHandler {
         _attrs: FileAttributes,
     ) -> Result<Handle, Self::Error> {
         let local = self.resolve(&filename);
-        if let Some(parent) = local.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|_| StatusCode::Failure)?;
+        if !self.is_within_root(&local) {
+            return Err(StatusCode::PermissionDenied);
         }
-
+        // Missing parents must fail instead of being created by OPEN.
+        if let Some(parent) = local.parent() {
+            if !parent.is_dir() {
+                return Err(StatusCode::NoSuchFile);
+            }
+        }
         let mut options = OpenOptions::new();
         if pflags.contains(OpenFlags::READ) {
             options.read(true);
@@ -435,6 +511,9 @@ impl russh_sftp::server::Handler for SftpHandler {
         if pflags.contains(OpenFlags::TRUNCATE) {
             options.truncate(true);
         }
+        if pflags.contains(OpenFlags::APPEND) {
+            options.append(true);
+        }
 
         let file = options.open(&local).await.map_err(|err| {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -450,10 +529,17 @@ impl russh_sftp::server::Handler for SftpHandler {
                 }
             } else if err.kind() == std::io::ErrorKind::NotFound {
                 StatusCode::NoSuchFile
+            } else if err.kind() == std::io::ErrorKind::PermissionDenied {
+                StatusCode::PermissionDenied
             } else {
                 StatusCode::Failure
             }
         })?;
+
+        if self.failures.pause_after_open.swap(false, Ordering::SeqCst) {
+            self.failures.file_opened.notify_one();
+            self.failures.continue_open.notified().await;
+        }
 
         let handle_id = self.next_handle;
         self.next_handle += 1;
@@ -474,11 +560,10 @@ impl russh_sftp::server::Handler for SftpHandler {
         }
 
         #[cfg(test)]
-        {
-            let delay = self.failures.read_delay_ms.load(Ordering::Relaxed);
-            if delay > 0 {
-                tokio::time::sleep(Duration::from_millis(delay)).await;
-            }
+        self.failures.read_started.notify_one();
+        let delay = self.failures.read_delay_ms.load(Ordering::Relaxed);
+        if delay > 0 {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
         }
 
         let open = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;
@@ -515,7 +600,13 @@ impl russh_sftp::server::Handler for SftpHandler {
         // this handler until `write_unhang` is notified. The client must time
         // out or cancel out of the write rather than hang forever.
         if self.failures.hang_write.load(Ordering::Relaxed) {
-            self.failures.write_unhang.notified().await;
+            // Register the waiter before yielding; notify_waiters would
+            // otherwise lose the wakeup if it fires before the first poll
+            // (issue #659).
+            let unhang = self.failures.write_unhang.notified();
+            tokio::pin!(unhang);
+            unhang.as_mut().enable();
+            unhang.await;
         }
 
         let open = self.handles.get_mut(&handle).ok_or(StatusCode::Failure)?;
@@ -611,16 +702,28 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn remove(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
         let local = self.resolve(&path);
-        if fs::remove_file(&local).await.is_err() {
-            return Ok(Self::err_status(id, StatusCode::NoSuchFile, "no such file"));
+        if let Err(err) = fs::remove_file(&local).await {
+            // Match real servers: only a missing target is NoSuchFile; other
+            // failures (EISDIR/EPERM/I/O) map to their own statuses (issue #794).
+            let code = match err.kind() {
+                std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+                std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+                _ => StatusCode::Failure,
+            };
+            return Ok(Self::err_status(id, code, "remove failed"));
         }
         Ok(Self::ok_status(id))
     }
 
     async fn rmdir(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
         let local = self.resolve(&path);
-        if fs::remove_dir(&local).await.is_err() {
-            return Ok(Self::err_status(id, StatusCode::Failure, "rmdir failed"));
+        if let Err(err) = fs::remove_dir(&local).await {
+            let status = match err.kind() {
+                std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+                std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+                _ => StatusCode::Failure,
+            };
+            return Ok(Self::err_status(id, status, "rmdir failed"));
         }
         Ok(Self::ok_status(id))
     }
@@ -689,9 +792,13 @@ impl russh_sftp::server::Handler for SftpHandler {
             }
         }
         if let Some(parent) = to.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|_| StatusCode::Failure)?;
+            if !parent.is_dir() {
+                return Ok(Self::err_status(
+                    id,
+                    StatusCode::NoSuchFile,
+                    "rename parent does not exist",
+                ));
+            }
         }
         fs::rename(&from, &to)
             .await
@@ -726,9 +833,13 @@ impl russh_sftp::server::Handler for SftpHandler {
                 let from = self.resolve(&parsed.oldpath);
                 let to = self.resolve(&parsed.newpath);
                 if let Some(parent) = to.parent() {
-                    fs::create_dir_all(parent)
-                        .await
-                        .map_err(|_| StatusCode::Failure)?;
+                    if !parent.is_dir() {
+                        return Ok(Packet::Status(Self::err_status(
+                            id,
+                            StatusCode::NoSuchFile,
+                            "rename parent does not exist",
+                        )));
+                    }
                 }
                 // posix-rename replaces an existing destination atomically.
                 fs::rename(&from, &to)
@@ -751,21 +862,42 @@ impl russh_sftp::server::Handler for SftpHandler {
             return Err(StatusCode::Failure);
         }
 
-        if attrs.atime.is_some() || attrs.mtime.is_some() {
-            let mut times = std::fs::FileTimes::new();
-            if let Some(atime) = attrs.atime {
-                times = times.set_accessed(
-                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(atime as u64),
-                );
-            }
-            if let Some(mtime) = attrs.mtime {
-                times = times.set_modified(
-                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64),
-                );
-            }
-            std::fs::File::open(&local)
-                .and_then(|file| file.set_times(times))
+        if let Some(size) = attrs.size {
+            // Match real servers: SETSTAT with size truncates/extends the file
+            // (issue #793).
+            let file = fs::OpenOptions::new()
+                .write(true)
+                .open(&local)
+                .await
                 .map_err(|_| StatusCode::Failure)?;
+            file.set_len(size).await.map_err(|_| StatusCode::Failure)?;
+        }
+
+        if attrs.atime.is_some() || attrs.mtime.is_some() {
+            #[cfg(unix)]
+            {
+                set_file_times_by_path(&local, attrs.atime, attrs.mtime)
+                    .map_err(|_| StatusCode::Failure)?;
+            }
+            #[cfg(not(unix))]
+            {
+                let mut times = std::fs::FileTimes::new();
+                if let Some(atime) = attrs.atime {
+                    times = times.set_accessed(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(atime as u64),
+                    );
+                }
+                if let Some(mtime) = attrs.mtime {
+                    times = times.set_modified(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64),
+                    );
+                }
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&local)
+                    .and_then(|file| file.set_times(times))
+                    .map_err(|_| StatusCode::Failure)?;
+            }
         }
 
         if let Some(mode) = attrs.permissions {
@@ -812,6 +944,10 @@ impl TestSftpServer {
         let root_dir = tempfile::tempdir().unwrap();
         let root = root_dir.path().to_path_buf();
         fs::create_dir_all(&root).await.unwrap();
+        // Tests commonly upload into /upload; create the standard sandbox
+        // directories up front (issue #658).
+        fs::create_dir_all(root.join("upload")).await.unwrap();
+        fs::create_dir_all(root.join("download")).await.unwrap();
 
         let failures = Arc::new(FailureConfig::default());
         // Advertise posix-rename@openssh.com by default (OpenSSH-compatible);
@@ -825,6 +961,11 @@ impl TestSftpServer {
 
         let server_root = root.clone();
         let server_failures = Arc::clone(&failures);
+        let settings: TestServerSettings =
+            toml::from_str(include_str!("../../../../config/test-server.toml"))
+                .expect("valid test server settings");
+        assert!(settings.accept_retry_delay_ms > 0);
+        let accept_retry_delay = Duration::from_millis(settings.accept_retry_delay_ms);
         let server_task = tokio::spawn(async move {
             let config = Arc::new(russh::server::Config {
                 auth_rejection_time: Duration::from_secs(1),
@@ -836,7 +977,15 @@ impl TestSftpServer {
             loop {
                 let (socket, _) = match listener.accept().await {
                     Ok(connection) => connection,
-                    Err(_) => break,
+                    Err(err) => {
+                        if !is_transient_accept_error(&err) {
+                            tracing::error!(error = %err, "test SFTP server accept failed");
+                            panic!("test SFTP server accept failed: {err}");
+                        }
+                        tracing::warn!(error = %err, "test SFTP server accept retrying");
+                        tokio::time::sleep(accept_retry_delay).await;
+                        continue;
+                    }
                 };
                 let mut factory = ServerFactory {
                     clients: Arc::clone(&clients),
@@ -952,6 +1101,10 @@ impl TestSftpServer {
         fs::write(local, contents).await.unwrap();
     }
 
+    pub async fn create_remote_dir(&self, remote_path: &str) {
+        fs::create_dir_all(self.resolve(remote_path)).await.unwrap();
+    }
+
     pub fn remote_file_exists(&self, remote_path: &str) -> bool {
         self.resolve(remote_path).is_file()
     }
@@ -1003,4 +1156,96 @@ pub fn list_partial_paths(dir: &Path) -> Vec<PathBuf> {
 
 pub fn is_partial_file_name(name: &str) -> bool {
     name.starts_with(".dockbridge-") && name.ends_with(".partial")
+}
+
+fn is_transient_accept_error(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ResourceBusy
+            | std::io::ErrorKind::TimedOut
+    ) || matches!(
+        err.raw_os_error(),
+        Some(libc::EMFILE) | Some(libc::ENFILE) | Some(libc::ENOBUFS) | Some(libc::ENOMEM)
+    )
+}
+
+#[cfg(unix)]
+fn set_file_times_by_path(
+    path: &Path,
+    atime: Option<u32>,
+    mtime: Option<u32>,
+) -> Result<(), std::io::Error> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+    let to_timespec = |secs: Option<u32>| libc::timespec {
+        tv_sec: secs.unwrap_or_default() as libc::time_t,
+        tv_nsec: if secs.is_some() { 0 } else { libc::UTIME_OMIT },
+    };
+    let times = [to_timespec(atime), to_timespec(mtime)];
+
+    let result = unsafe { libc::utimensat(libc::AT_FDCWD, path.as_ptr(), times.as_ptr(), 0) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn path_timestamp_updates_preserve_omitted_times_and_follow_symlinks() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        let link = directory.path().join("link");
+        std::fs::write(&target, b"data").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        set_file_times_by_path(&target, Some(123), Some(456)).unwrap();
+
+        set_file_times_by_path(&link, None, Some(789)).unwrap();
+
+        let metadata = std::fs::metadata(&target).unwrap();
+        assert_eq!(
+            metadata.accessed().unwrap(),
+            std::time::UNIX_EPOCH + Duration::from_secs(123)
+        );
+        assert_eq!(
+            metadata.modified().unwrap(),
+            std::time::UNIX_EPOCH + Duration::from_secs(789)
+        );
+        set_file_times_by_path(&link, Some(321), None).unwrap();
+        let metadata = std::fs::metadata(&target).unwrap();
+        assert_eq!(
+            metadata.accessed().unwrap(),
+            std::time::UNIX_EPOCH + Duration::from_secs(321)
+        );
+        assert_eq!(
+            metadata.modified().unwrap(),
+            std::time::UNIX_EPOCH + Duration::from_secs(789)
+        );
+    }
+
+    #[test]
+    fn transient_accept_errors_are_classified() {
+        // Given: a connection aborted before accept
+        let aborted = std::io::Error::from(std::io::ErrorKind::ConnectionAborted);
+
+        // Then: it is retried rather than silently stopping the server task
+        assert!(is_transient_accept_error(&aborted));
+        for code in [libc::EMFILE, libc::ENFILE, libc::ENOBUFS, libc::ENOMEM] {
+            assert!(is_transient_accept_error(
+                &std::io::Error::from_raw_os_error(code)
+            ));
+        }
+        assert!(!is_transient_accept_error(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied
+        )));
+    }
 }

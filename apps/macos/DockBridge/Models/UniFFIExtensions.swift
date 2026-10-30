@@ -35,10 +35,14 @@ extension TransferTaskRecord: Identifiable {}
 extension DockBridgeError {
     var userFriendlyMessage: String {
         switch self {
-        case .HostKeyMismatch, .HostKeyRejected:
+        case .HostKeyMismatch:
             return String(localized: "The server's identity has changed. Disconnect and verify with your server administrator.")
-        case .AuthFailed, .PrivateKeyLoadFailed:
+        case .HostKeyRejected:
+            return String(localized: "Connection aborted because the host key was not approved.")
+        case .AuthFailed:
             return String(localized: "Check the username and password.")
+        case .PrivateKeyLoadFailed:
+            return String(localized: "Unable to load the private key. Check the key file path, permissions, and passphrase.")
         case .ConnectionLost(let message), .Other(let message), .Config(let message):
             return Self.friendlyMessage(for: message)
         case .Cancelled:
@@ -57,12 +61,12 @@ extension DockBridgeError {
             || lowercased.contains("recv error") {
             return true
         }
-        // "eof" only as its own token (not inside user-controlled path segments)
-        // so geoffrey / thereof.txt do not tear down a live session.
-        let tokens = lowercased.split {
-            !$0.isLetter && !$0.isNumber && $0 != "_"
-        }
-        return tokens.contains(where: { $0 == "eof" || $0 == "eof," })
+        // Match disconnect phrases rather than a bare token so a path
+        // segment like "eof.txt" does not tear down a live session (issue #689).
+        return lowercased.contains("unexpected eof")
+            || lowercased.contains("eof while reading")
+            || lowercased.contains("connection closed: eof")
+            || lowercased.contains("eof from server")
     }
 
     /// Detects SSH authentication / private-key unlock failures from raw bridge messages.
@@ -89,6 +93,10 @@ extension DockBridgeError {
     static func friendlyMessage(for message: String) -> String {
         let lowercased = message.lowercased()
 
+        if lowercased.contains("password authentication is not supported") {
+            return String(localized: "This server does not accept password authentication. Use public key authentication or another supported method.")
+        }
+
         if lowercased.contains("known hosts") || lowercased.contains("known_hosts") {
             return String(localized: "Unable to load the host key store. Quit the app, back up or remove known_hosts.json, then reconnect.")
         }
@@ -103,6 +111,13 @@ extension DockBridgeError {
 
         if lowercased.contains("authentication") || lowercased.contains("auth failed") {
             return String(localized: "Check the username and password.")
+        }
+
+        if lowercased.contains("failed to load private key")
+            || lowercased.contains("incorrect passphrase") {
+            return String(
+                localized: "Unable to load the private key. Check the key file path, permissions, and passphrase."
+            )
         }
 
         if lowercased.contains("timed out") || lowercased.contains("timeout") {

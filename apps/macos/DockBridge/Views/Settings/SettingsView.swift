@@ -171,7 +171,14 @@ struct SettingsView: View {
 
         HStack(spacing: 12) {
             Button(String(localized: "Reset to Defaults")) {
-                config = AppConfig.default
+                var defaults = AppConfig.default
+                // User-created security-scoped bookmarks are not part of the
+                // static default config and must survive a reset (issue #638).
+                defaults.defaultLocalBookmark = config.defaultLocalBookmark
+                defaults.defaultLocalPath = config.defaultLocalPath
+                defaults.opensshKnownHostsBookmark = config.opensshKnownHostsBookmark
+                defaults.opensshKnownHostsPath = config.opensshKnownHostsPath
+                config = defaults
             }
             .help(String(localized: "Restore all settings to their defaults (bookmarks are kept)."))
             Spacer()

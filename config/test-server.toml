@@ -1,0 +1,3 @@
+# Compiled into the test SFTP server; required positive delay between transient
+# accept failures, including temporary file-descriptor or memory exhaustion.
+accept_retry_delay_ms = 10
