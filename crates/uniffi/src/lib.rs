@@ -971,9 +971,7 @@ impl DockBridgeClient {
                     let message = error.to_string();
                     if is_connection_lost_message(&message) {
                         transfer_manager.cancel_session_transfers(session_id);
-                        if let Some(handle) = monitors_in_task.lock().await.remove(&session_id) {
-                            handle.abort();
-                        }
+                        monitors_in_task.lock().await.remove(&session_id);
                         sessions.lock().await.remove(&session_id);
                         connection_event_handler.on_session_disconnected(session_id, message);
                         break;
