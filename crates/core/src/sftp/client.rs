@@ -2030,9 +2030,7 @@ impl PartialLocalTransfer {
     ) -> Result<Self, SftpError> {
         let partial_path =
             partial_local_path_for_suffix(local_parent, &resume_partial_suffix(local, remote));
-        let local_file = tokio::fs::OpenOptions::new()
-            .append(true)
-            .open(&partial_path)
+        let local_file = Self::open_local_partial_for_append(&partial_path)
             .await
             .map_err(|err| SftpError::DownloadFailed {
                 remote: remote.to_string(),
@@ -2049,6 +2047,24 @@ impl PartialLocalTransfer {
             remote_metadata,
             keep_on_error: true,
         })
+    }
+
+    async fn open_local_partial_for_append(path: &Path) -> std::io::Result<tokio::fs::File> {
+        let mut options = tokio::fs::OpenOptions::new();
+        options.append(true);
+        #[cfg(unix)]
+        {
+            options.custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options.open(path).await?;
+        let metadata = file.metadata().await?;
+        if !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "partial is not a regular file",
+            ));
+        }
+        Ok(file)
     }
 
     /// Applies the captured remote mtime (and Unix permission bits) to the
@@ -2404,9 +2420,9 @@ async fn find_resumable_download_offset(
 ) -> Option<u64> {
     let partial_path =
         partial_local_path_for_suffix(local_parent, &resume_partial_suffix(local, remote));
-    let metadata = tokio::fs::metadata(&partial_path).await.ok()?;
+    let metadata = tokio::fs::symlink_metadata(&partial_path).await.ok()?;
     let size = metadata.len();
-    if size == 0 || size >= remote_size {
+    if !metadata.is_file() || size == 0 || size >= remote_size {
         return None;
     }
 
@@ -3755,6 +3771,25 @@ mod tests {
 
         let err = open_exclusive_local_file(&link).await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_local_partial_for_append_rejects_symlink_path() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let target = temp_dir.path().join("target.txt");
+        std::fs::write(&target, b"secret").unwrap();
+        let link = temp_dir.path().join(".dockbridge-link.partial");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = PartialLocalTransfer::open_local_partial_for_append(&link)
+            .await
+            .unwrap_err();
+        let message = err.to_string().to_lowercase();
+        assert!(
+            message.contains("symbolic") || message.contains("not a regular file"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[tokio::test]
