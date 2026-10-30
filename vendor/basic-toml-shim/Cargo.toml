@@ -1,0 +1,9 @@
+[package]
+name = "basic-toml"
+version = "0.1.10"
+edition = "2021"
+license = "MIT"
+description = "Minimal basic-toml API backed by the maintained toml crate"
+
+[dependencies]
+toml = "1.1"
