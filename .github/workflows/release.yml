@@ -124,11 +124,53 @@ jobs:
             -output "dist/${CLI_NAME}"
           (cd dist && shasum -a 256 "${CLI_NAME}" > "${CLI_NAME}.sha256")
 
+      - name: Import signing certificate and notary profile
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for required in APPLE_CERTIFICATE_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!required}" ]]; then
+              echo "error: missing release secret: ${required}" >&2
+              exit 1
+            fi
+          done
+
+          KEYCHAIN_PATH="${RUNNER_TEMP}/dockbridge-signing.keychain-db"
+          CERT_PATH="${RUNNER_TEMP}/certificate.p12"
+          KEYCHAIN_PASSWORD_PATH="${RUNNER_TEMP}/dockbridge-keychain-password"
+          echo -n "$APPLE_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
+
+          openssl rand -hex 32 > "$KEYCHAIN_PASSWORD_PATH"
+          KEYCHAIN_PASSWORD="$(cat "$KEYCHAIN_PASSWORD_PATH")"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+          xcrun notarytool store-credentials AC_NOTARY \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID"
+
+          rm -f "$CERT_PATH" "$KEYCHAIN_PASSWORD_PATH"
+
       - name: Package macOS app
         env:
           VERSION: ${{ steps.version.outputs.version }}
           BUILD_NUMBER: ${{ github.run_number }}
-          SIGN_AND_NOTARIZE: "false"
+          SIGN_AND_NOTARIZE: "true"
         run: ./scripts/package-macos-release.sh
 
       - name: Install cargo-cyclonedx
