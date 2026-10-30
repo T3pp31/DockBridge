@@ -362,10 +362,10 @@ impl SshSession {
 
         let mut handle = PromptAwareTimeout::new(connect_future, prompt_deadline)
             .await
-        .map_err(|_| ConnectionError::Timeout {
-            timeout_secs: config.connection_timeout_secs,
-        })?
-        .map_err(|err| preserve_connection_error(err, &host, port))?;
+            .map_err(|_| ConnectionError::Timeout {
+                timeout_secs: config.connection_timeout_secs,
+            })?
+            .map_err(|err| preserve_connection_error(err, &host, port))?;
 
         // TCP/SSH handshake and post-handshake startup have separate budgets.
         // Authentication, channel open, subsystem request and SFTP INIT share
