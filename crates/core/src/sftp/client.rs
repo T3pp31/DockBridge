@@ -627,6 +627,7 @@ impl<'a> SftpClient<'a> {
                         remote_metadata,
                     )
                     .await?
+                    .with_request_timeout(self.upload_request_timeout)
                 }
                 None => {
                     PartialLocalTransfer::begin(
@@ -637,6 +638,7 @@ impl<'a> SftpClient<'a> {
                         remote_metadata,
                     )
                     .await?
+                    .with_request_timeout(self.upload_request_timeout)
                 }
             }
         };
@@ -1987,6 +1989,7 @@ struct PartialLocalTransfer {
     partial_path: PathBuf,
     local_file: Option<tokio::fs::File>,
     committed: bool,
+    request_timeout: Duration,
     remote: String,
     local: String,
     overwrite_policy: TransferOverwritePolicy,
@@ -2010,6 +2013,7 @@ impl PartialLocalTransfer {
             partial_path,
             local_file: Some(local_file),
             committed: false,
+            request_timeout: UPLOAD_REQUEST_TIMEOUT,
             remote: remote.to_string(),
             local: local.to_string(),
             overwrite_policy,
@@ -2043,12 +2047,18 @@ impl PartialLocalTransfer {
             partial_path,
             local_file: Some(local_file),
             committed: false,
+            request_timeout: UPLOAD_REQUEST_TIMEOUT,
             remote: remote.to_string(),
             local: local.to_string(),
             overwrite_policy,
             remote_metadata,
             keep_on_error: true,
         })
+    }
+
+    fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = timeout;
+        self
     }
 
     /// Applies the captured remote mtime (and Unix permission bits) to the
@@ -2187,12 +2197,24 @@ impl PartialLocalTransfer {
 
         // Best-effort only: the SFTP session may already have torn down the
         // remote handle when `read_to_writer_pipelined` returned an error.
-        if let Err(err) = remote_file.shutdown().await {
-            tracing::warn!(
-                local = %self.partial_path.display(),
-                error = %err,
-                "failed to close remote file during download cleanup (continuing local cleanup)"
-            );
+        let shutdown = async move { remote_file.shutdown().await };
+        // Bound the close too: a hung CLOSE ack would otherwise block the
+        // cleanup path forever after a timeout/cancel.
+        match tokio::time::timeout(self.request_timeout, shutdown).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                tracing::warn!(
+                    local = %self.partial_path.display(),
+                    error = %err,
+                    "failed to close remote file during download cleanup (continuing local cleanup)"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    local = %self.partial_path.display(),
+                    "closing the remote file timed out during download cleanup"
+                );
+            }
         }
 
         if self.keep_on_error && !strict {
