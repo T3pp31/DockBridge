@@ -618,28 +618,24 @@ impl<'a> SftpClient<'a> {
                     message: format!("failed to seek remote file to the download offset: {err}"),
                 })?;
             match resume_offset {
-                Some(_) => {
-                    PartialLocalTransfer::begin_resume(
-                        local_parent,
-                        &remote,
-                        &local,
-                        overwrite_policy,
-                        remote_metadata,
-                    )
-                    .await?
-                    .with_request_timeout(self.upload_request_timeout)
-                }
-                None => {
-                    PartialLocalTransfer::begin(
-                        local_parent,
-                        &remote,
-                        &local,
-                        overwrite_policy,
-                        remote_metadata,
-                    )
-                    .await?
-                    .with_request_timeout(self.upload_request_timeout)
-                }
+                Some(_) => PartialLocalTransfer::begin_resume(
+                    local_parent,
+                    &remote,
+                    &local,
+                    overwrite_policy,
+                    remote_metadata,
+                )
+                .await?
+                .with_request_timeout(self.upload_request_timeout),
+                None => PartialLocalTransfer::begin(
+                    local_parent,
+                    &remote,
+                    &local,
+                    overwrite_policy,
+                    remote_metadata,
+                )
+                .await?
+                .with_request_timeout(self.upload_request_timeout),
             }
         };
 
