@@ -52,7 +52,7 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
     var hasExistingKey: Bool {
         Self.keychainLock.lock()
         defer { Self.keychainLock.unlock() }
-        return (try? loadKeyData()) != nil
+        return keyExists(usingDataProtection: true) || keyExists(usingDataProtection: false)
     }
 
     func loadOrCreateKey() throws -> SymmetricKey {
@@ -92,6 +92,7 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
 
     private func loadKeyData() throws -> Data? {
         if let data = try loadKeyData(usingDataProtection: true) {
+            cleanupLegacyKeyIfMatching(data)
             return data
         }
         guard let legacyData = try loadKeyData(usingDataProtection: false) else {
@@ -106,6 +107,24 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
         }
         try deleteKey(usingDataProtection: false)
         return migratedData
+    }
+
+    private func cleanupLegacyKeyIfMatching(_ protectedData: Data) {
+        // Best-effort recovery from a migration that was interrupted after the
+        // protected item was created. Never migrate or replace keys here.
+        guard let legacyData = try? loadKeyData(usingDataProtection: false),
+              legacyData == protectedData else {
+            return
+        }
+        try? deleteKey(usingDataProtection: false)
+    }
+
+    private func keyExists(usingDataProtection: Bool) -> Bool {
+        var query = makeQuery(usingDataProtection: usingDataProtection)
+        query[kSecReturnData as String] = false
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        let (status, _) = operations.copyMatching(query as CFDictionary)
+        return status == errSecSuccess
     }
 
     private func loadKeyData(usingDataProtection: Bool) throws -> Data? {

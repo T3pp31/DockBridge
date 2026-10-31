@@ -87,6 +87,28 @@ final class ProfileTrustStoreTests: XCTestCase {
         XCTAssertEqual(backend.protectedKey, backend.competingKey)
     }
 
+    func testHasExistingKeyDoesNotMigrateSigningKey() {
+        let backend = InMemoryProfileTrustKeychain()
+        let legacyKey = Data(repeating: 42, count: 32)
+        backend.legacyKey = legacyKey
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+        XCTAssertTrue(store.hasExistingKey)
+        XCTAssertEqual(backend.legacyKey, legacyKey)
+        XCTAssertNil(backend.protectedKey)
+    }
+
+    func testExistingProtectedKeyCleansUpMatchingLegacyKey() {
+        let backend = InMemoryProfileTrustKeychain()
+        let key = Data(repeating: 42, count: 32)
+        backend.legacyKey = key
+        backend.protectedKey = key
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+        XCTAssertTrue(store.hasExistingKey)
+        XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        XCTAssertNil(backend.legacyKey)
+        XCTAssertEqual(backend.protectedKey, key)
+    }
+
     func testDataProtectionKeychainIntegrationWhenEntitled() throws {
         let store = ProfileTrustSigningKeyStore(serviceName: "com.dockbridge.tests.\(UUID().uuidString)")
         defer { try? store.deleteKey() }
@@ -108,6 +130,7 @@ final class ProfileTrustStoreTests: XCTestCase {
         XCTAssertNil(backend.legacyKey)
         XCTAssertNil(backend.protectedKey)
         XCTAssertFalse(store.hasExistingKey)
+    }
 
     func testDecodedLegacyEndpointComparesCanonicalHostsWithoutRewritingData() throws {
         let input = Data(#"{"host":" EXAMPLE.COM. ","port":22,"username":"user"}"#.utf8)
