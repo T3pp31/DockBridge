@@ -618,26 +618,24 @@ impl<'a> SftpClient<'a> {
                     message: format!("failed to seek remote file to the download offset: {err}"),
                 })?;
             match resume_offset {
-                Some(_) => {
-                    PartialLocalTransfer::begin_resume(
-                        local_parent,
-                        &remote,
-                        &local,
-                        overwrite_policy,
-                        remote_metadata,
-                    )
-                    .await?
-                }
-                None => {
-                    PartialLocalTransfer::begin(
-                        local_parent,
-                        &remote,
-                        &local,
-                        overwrite_policy,
-                        remote_metadata,
-                    )
-                    .await?
-                }
+                Some(_) => PartialLocalTransfer::begin_resume(
+                    local_parent,
+                    &remote,
+                    &local,
+                    overwrite_policy,
+                    remote_metadata,
+                )
+                .await?
+                .with_request_timeout(self.upload_request_timeout),
+                None => PartialLocalTransfer::begin(
+                    local_parent,
+                    &remote,
+                    &local,
+                    overwrite_policy,
+                    remote_metadata,
+                )
+                .await?
+                .with_request_timeout(self.upload_request_timeout),
             }
         };
 
@@ -1604,8 +1602,8 @@ where
 const PARTIAL_SUFFIX_BYTES: usize = 16;
 const MAX_PARTIAL_CREATE_ATTEMPTS: usize = 5;
 
-/// Timeout applied to each SFTP WRITE acknowledgement and to the `shutdown`
-/// (drain pending acks) during uploads.
+/// Timeout applied to each SFTP WRITE acknowledgement and to `shutdown`
+/// (drain pending acks) during uploads and download cleanup.
 ///
 /// The fork's `File::write_all` waits for the WRITE ack without a timeout,
 /// so a server that stops responding would hang the upload forever. This
@@ -1987,6 +1985,7 @@ struct PartialLocalTransfer {
     partial_path: PathBuf,
     local_file: Option<tokio::fs::File>,
     committed: bool,
+    request_timeout: Duration,
     remote: String,
     local: String,
     overwrite_policy: TransferOverwritePolicy,
@@ -2010,6 +2009,7 @@ impl PartialLocalTransfer {
             partial_path,
             local_file: Some(local_file),
             committed: false,
+            request_timeout: UPLOAD_REQUEST_TIMEOUT,
             remote: remote.to_string(),
             local: local.to_string(),
             overwrite_policy,
@@ -2043,12 +2043,18 @@ impl PartialLocalTransfer {
             partial_path,
             local_file: Some(local_file),
             committed: false,
+            request_timeout: UPLOAD_REQUEST_TIMEOUT,
             remote: remote.to_string(),
             local: local.to_string(),
             overwrite_policy,
             remote_metadata,
             keep_on_error: true,
         })
+    }
+
+    fn with_request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = timeout;
+        self
     }
 
     /// Applies the captured remote mtime (and Unix permission bits) to the
@@ -2187,12 +2193,24 @@ impl PartialLocalTransfer {
 
         // Best-effort only: the SFTP session may already have torn down the
         // remote handle when `read_to_writer_pipelined` returned an error.
-        if let Err(err) = remote_file.shutdown().await {
-            tracing::warn!(
-                local = %self.partial_path.display(),
-                error = %err,
-                "failed to close remote file during download cleanup (continuing local cleanup)"
-            );
+        let shutdown = async move { remote_file.shutdown().await };
+        // Bound the close too: a hung CLOSE ack would otherwise block the
+        // cleanup path forever after a timeout/cancel.
+        match tokio::time::timeout(self.request_timeout, shutdown).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                tracing::warn!(
+                    local = %self.partial_path.display(),
+                    error = %err,
+                    "failed to close remote file during download cleanup (continuing local cleanup)"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    local = %self.partial_path.display(),
+                    "closing the remote file timed out during download cleanup"
+                );
+            }
         }
 
         if self.keep_on_error && !strict {
@@ -2795,8 +2813,9 @@ mod tests {
     #[tokio::test]
     async fn download_local_write_failure_cleans_up_local_partial() {
         let server = TestSftpServer::start().await;
+        let payload = vec![0x41u8; 1024];
         server
-            .write_remote_file("/download/file.txt", b"payload")
+            .write_remote_file("/download/file.txt", &payload)
             .await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
@@ -3298,6 +3317,10 @@ mod tests {
 
         server
             .failures
+            .fail_remote_read
+            .store(true, Ordering::SeqCst);
+        server
+            .failures
             .fail_remote_close
             .store(true, Ordering::SeqCst);
         let err = client
@@ -3414,6 +3437,40 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, SftpError::DownloadFailed { .. }));
+        assert!(list_partial_paths(local_dir.path()).is_empty(), "{err:?}");
+        assert!(!local_path.exists());
+    }
+
+    #[tokio::test]
+    async fn download_remote_close_failure_still_cleans_up_local_partial() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/file.txt", b"payload")
+            .await;
+        let session = server.connect_session().await;
+        let client =
+            SftpClient::new(&session).with_upload_request_timeout(Duration::from_millis(120));
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.txt");
+
+        server
+            .failures
+            .fail_remote_read
+            .store(true, Ordering::SeqCst);
+        server
+            .failures
+            .fail_remote_close
+            .store(true, Ordering::SeqCst);
+        let started = std::time::Instant::now();
+        let err = client
+            .download("/download/file.txt", &local_path)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SftpError::DownloadFailed { .. }), "{err:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "download cleanup must be bounded when the remote close fails"
+        );
         assert!(list_partial_paths(local_dir.path()).is_empty(), "{err:?}");
         assert!(!local_path.exists());
     }
