@@ -944,6 +944,11 @@ impl DockBridgeClient {
     }
 
     fn spawn_health_monitor(&self, session_id: u64) -> Result<(), DockBridgeError> {
+        let _ = block_on(self.spawn_health_monitor_inner(session_id))?;
+        Ok(())
+    }
+
+    async fn spawn_health_monitor_inner(&self, session_id: u64) -> Result<(), DockBridgeError> {
         let interval_secs = self.config.session_health_check_interval_secs.max(1);
         let sessions = Arc::clone(&self.sessions);
         let monitors = Arc::clone(&self.monitors);
@@ -980,9 +985,7 @@ impl DockBridgeClient {
             }
         });
 
-        block_on(async {
-            monitors.lock().await.insert(session_id, monitor_task);
-        })?;
+        monitors.lock().await.insert(session_id, monitor_task);
         Ok(())
     }
 }
@@ -1151,6 +1154,106 @@ fn inspect_private_key_algorithm(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dockbridge_core::sftp::test_server::TestSftpServer;
+
+    struct RecordingDisconnectHandler {
+        session_id: std::sync::Mutex<Option<u64>>,
+        reason: std::sync::Mutex<Option<String>>,
+    }
+
+    impl ConnectionEventHandler for RecordingDisconnectHandler {
+        fn on_session_disconnected(&self, session_id: u64, reason: String) {
+            *self.session_id.lock().unwrap() = Some(session_id);
+            *self.reason.lock().unwrap() = Some(reason);
+        }
+    }
+
+    struct NoopHostKeyHandler;
+
+    impl HostKeyHandler for NoopHostKeyHandler {
+        fn prompt_unknown_host(&self, _: HostKeyChallenge) -> bool {
+            false
+        }
+    }
+
+    struct NoopAuthPromptHandler;
+
+    impl KeyboardInteractivePromptHandler for NoopAuthPromptHandler {
+        fn prompt(
+            &self,
+            _: String,
+            _: String,
+            _: Vec<KbdInteractivePromptRecord>,
+        ) -> Vec<Option<String>> {
+            Vec::new()
+        }
+    }
+
+    #[tokio::test]
+    async fn health_monitor_removes_session_and_emits_one_disconnect_event() {
+        // Given: a monitor watching a session and a server that reports the
+        // connection as lost on its next health check.
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let handler = Arc::new(RecordingDisconnectHandler {
+            session_id: std::sync::Mutex::new(None),
+            reason: std::sync::Mutex::new(None),
+        });
+        let client = DockBridgeClient {
+            config: AppConfig {
+                session_health_check_interval_secs: 1,
+                ..AppConfig::default()
+            },
+            known_hosts: Arc::new(AsyncMutex::new(KnownHostsManager::load_or_empty(
+                std::path::PathBuf::from("/tmp/nonexistent"),
+            ))),
+            host_key_handler: Arc::new(NoopHostKeyHandler),
+            auth_prompt_handler: Arc::new(NoopAuthPromptHandler),
+            connection_event_handler: handler.clone(),
+            sessions: Arc::new(AsyncMutex::new(HashMap::from([(1u64, Arc::new(session))]))),
+            monitors: Arc::new(AsyncMutex::new(HashMap::new())),
+            next_session_id: AtomicU64::new(2),
+            transfer_manager: Arc::new(TransferManager::new(&AppConfig {
+                session_health_check_interval_secs: 1,
+                ..AppConfig::default()
+            })),
+        };
+        server
+            .failures
+            .fail_realpath_connection_lost
+            .store(true, Ordering::SeqCst);
+        client.spawn_health_monitor_inner(1).await.unwrap();
+
+        // When: the monitor observes the connection loss and runs cleanup.
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while client.sessions.lock().await.contains_key(&1) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        // Then: the session is removed, the callback fired exactly once, and
+        // the monitor completed rather than being aborted before cleanup.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while handler.reason.lock().unwrap().is_none() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(*handler.session_id.lock().unwrap(), Some(1));
+        assert!(handler
+            .reason
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap()
+            .to_lowercase()
+            .contains("connection lost"));
+        assert!(!client.sessions.lock().await.contains_key(&1));
+        assert!(!client.monitors.lock().await.contains_key(&1));
+    }
 
     fn task(status: TransferStatus) -> TransferTask {
         TransferTask {
