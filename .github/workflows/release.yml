@@ -128,7 +128,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
           BUILD_NUMBER: ${{ github.run_number }}
-          SIGN_AND_NOTARIZE: "false"
+          SIGN_AND_NOTARIZE: "true"
         run: ./scripts/package-macos-release.sh
 
       - name: Install cargo-cyclonedx
