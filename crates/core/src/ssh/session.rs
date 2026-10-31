@@ -8,6 +8,7 @@ use russh::keys::{decode_secret_key, PrivateKeyWithHashAlg};
 use russh::MethodKind;
 use russh_sftp::client::{Config as SftpConfig, SftpSession};
 use tokio::sync::Mutex;
+use tokio::time::{Instant as TokioInstant, Sleep};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use super::algorithm_policy::build_client_config;
@@ -16,6 +17,10 @@ use crate::error::{AuthError, ConnectionError, SecurityError, SftpError};
 use crate::security::{fingerprint_sha256, HostKeyCheckResult, KnownHostsManager};
 
 /// Callback invoked when a host key is not yet trusted.
+///
+/// Implementations are synchronous and may block until the user responds.
+/// The connection deadline is extended only after the prompt returns, so the
+/// prompt itself must not yield to the Tokio runtime.
 pub trait HostKeyPrompt: Send + Sync {
     /// Prompts the user to accept or reject an unknown host key.
     fn prompt_unknown_host(&self, host: &str, port: u16, fingerprint_sha256: &str) -> bool;
@@ -168,6 +173,7 @@ struct SshClientHandler {
     port: u16,
     known_hosts: Arc<Mutex<KnownHostsManager>>,
     prompt: Arc<dyn HostKeyPrompt>,
+    prompt_deadline: Arc<PromptAwareDeadline>,
     known_hosts_strict_mode: bool,
 }
 
@@ -199,12 +205,14 @@ impl client::Handler for SshClientHandler {
                 expected_fingerprint,
                 actual_fingerprint,
             } => {
+                let prompt_started_at = TokioInstant::now();
                 let accept = self.prompt.prompt_mismatch_host(
                     &self.host,
                     self.port,
                     &expected_fingerprint,
                     &actual_fingerprint,
                 );
+                self.prompt_deadline.extend_by(prompt_started_at.elapsed());
 
                 if !accept {
                     return Err(SecurityError::HostKeyMismatch {
@@ -223,9 +231,11 @@ impl client::Handler for SshClientHandler {
                 Ok(true)
             }
             HostKeyCheckResult::Unknown => {
+                let prompt_started_at = TokioInstant::now();
                 let accept = self
                     .prompt
                     .prompt_unknown_host(&self.host, self.port, &fingerprint);
+                self.prompt_deadline.extend_by(prompt_started_at.elapsed());
 
                 if !accept {
                     return Err(SecurityError::HostKeyRejected {
@@ -251,6 +261,77 @@ impl From<SecurityError> for ConnectionError {
     }
 }
 
+/// A deadline that can be extended after interactive host-key prompts.
+#[derive(Debug)]
+struct PromptAwareDeadline {
+    deadline: std::sync::Mutex<TokioInstant>,
+}
+
+impl PromptAwareDeadline {
+    fn from_duration(duration: Duration) -> Self {
+        Self {
+            deadline: std::sync::Mutex::new(TokioInstant::now() + duration),
+        }
+    }
+
+    fn from_secs(secs: u64) -> Self {
+        Self::from_duration(Duration::from_secs(secs))
+    }
+
+    fn extend_by(&self, elapsed: Duration) {
+        let mut deadline = self.deadline.lock().expect("prompt deadline lock poisoned");
+        *deadline += elapsed;
+    }
+}
+
+/// Applies a timeout whose deadline can be extended while a prompt blocks the future.
+struct PromptAwareTimeout<F> {
+    future: std::pin::Pin<Box<F>>,
+    deadline: Arc<PromptAwareDeadline>,
+    sleep: std::pin::Pin<Box<Sleep>>,
+}
+
+impl<F: std::future::Future> PromptAwareTimeout<F> {
+    fn new(future: F, deadline: Arc<PromptAwareDeadline>) -> Self {
+        let initial_deadline = *deadline
+            .deadline
+            .lock()
+            .expect("prompt deadline lock poisoned");
+        Self {
+            future: Box::pin(future),
+            deadline,
+            sleep: Box::pin(tokio::time::sleep_until(initial_deadline)),
+        }
+    }
+}
+
+impl<F: std::future::Future> std::future::Future for PromptAwareTimeout<F> {
+    type Output = Result<F::Output, ()>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        if let std::task::Poll::Ready(output) = self.future.as_mut().poll(cx) {
+            return std::task::Poll::Ready(Ok(output));
+        }
+
+        let current_deadline = *self
+            .deadline
+            .deadline
+            .lock()
+            .expect("prompt deadline lock poisoned");
+        if self.sleep.as_ref().get_ref().deadline() != current_deadline {
+            self.sleep = Box::pin(tokio::time::sleep_until(current_deadline));
+        }
+        if self.sleep.as_mut().poll(cx).is_ready() {
+            return std::task::Poll::Ready(Err(()));
+        }
+
+        std::task::Poll::Pending
+    }
+}
+
 impl SshSession {
     /// Connects to a remote host and opens an SFTP subsystem.
     pub async fn connect(
@@ -271,26 +352,28 @@ impl SshSession {
 
         let russh_config = build_client_config(config);
 
+        let prompt_deadline = Arc::new(PromptAwareDeadline::from_secs(
+            config.connection_timeout_secs,
+        ));
+
         let handler = SshClientHandler {
             host: host.clone(),
             port,
             known_hosts,
             prompt,
+            prompt_deadline: prompt_deadline.clone(),
             known_hosts_strict_mode: config.known_hosts_strict_mode,
         };
 
         let connect_future =
             client::connect(Arc::new(russh_config), (host.as_str(), port), handler);
 
-        let mut handle = tokio::time::timeout(
-            Duration::from_secs(config.connection_timeout_secs),
-            connect_future,
-        )
-        .await
-        .map_err(|_| ConnectionError::Timeout {
-            timeout_secs: config.connection_timeout_secs,
-        })?
-        .map_err(|err| preserve_connection_error(err, &host, port))?;
+        let mut handle = PromptAwareTimeout::new(connect_future, prompt_deadline)
+            .await
+            .map_err(|_| ConnectionError::Timeout {
+                timeout_secs: config.connection_timeout_secs,
+            })?
+            .map_err(|err| preserve_connection_error(err, &host, port))?;
 
         // TCP/SSH handshake and post-handshake startup have separate budgets.
         // Authentication, channel open, subsystem request and SFTP INIT share
@@ -635,6 +718,42 @@ mod tests {
             assert!(matches!(mapped, crate::error::AppError::Security(_)));
             assert_eq!(mapped.to_string(), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn prompt_time_extends_connect_timeout() {
+        let deadline = Arc::new(PromptAwareDeadline::from_secs(1));
+        let future = {
+            let deadline = deadline.clone();
+            async move {
+                deadline.extend_by(Duration::from_secs(1));
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+            }
+        };
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            PromptAwareTimeout::new(future, deadline),
+        )
+        .await;
+
+        assert!(matches!(result, Ok(Ok(()))));
+    }
+
+    #[tokio::test]
+    async fn prompt_timeout_applies_initial_deadline_without_extension() {
+        let deadline = Arc::new(PromptAwareDeadline::from_duration(Duration::from_millis(
+            50,
+        )));
+        let future = tokio::time::sleep(Duration::from_millis(100));
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            PromptAwareTimeout::new(future, deadline),
+        )
+        .await;
+
+        assert!(matches!(result, Ok(Err(()))));
     }
 
     use std::sync::atomic::{AtomicBool, Ordering};
