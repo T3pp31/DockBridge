@@ -14,7 +14,8 @@ final class ConnectionStoreTests: XCTestCase {
         baseDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         signingKeyStore = ProfileTrustSigningKeyStore(
-            serviceName: "com.dockbridge.tests.\(UUID().uuidString)"
+            serviceName: "com.dockbridge.tests.\(UUID().uuidString)",
+            operations: InMemoryProfileTrustKeychain().operations
         )
         trustStore = ProfileTrustStore(
             baseDirectory: baseDirectory,
