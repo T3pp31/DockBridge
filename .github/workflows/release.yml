@@ -142,6 +142,16 @@ jobs:
           KEYCHAIN_PATH="${RUNNER_TEMP}/dockbridge-signing.keychain-db"
           CERT_PATH="${RUNNER_TEMP}/certificate.p12"
           KEYCHAIN_PASSWORD_PATH="${RUNNER_TEMP}/dockbridge-keychain-password"
+          IMPORT_COMPLETED=false
+
+          cleanup() {
+            rm -f "$CERT_PATH" "$KEYCHAIN_PASSWORD_PATH"
+            if [[ "$IMPORT_COMPLETED" != "true" ]]; then
+              security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
           echo -n "$APPLE_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
 
           openssl rand -hex 32 > "$KEYCHAIN_PASSWORD_PATH"
@@ -165,6 +175,7 @@ jobs:
             --team-id "$APPLE_TEAM_ID"
 
           rm -f "$CERT_PATH" "$KEYCHAIN_PASSWORD_PATH"
+          IMPORT_COMPLETED=true
 
       - name: Package macOS app
         env:

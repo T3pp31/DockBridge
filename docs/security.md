@@ -245,7 +245,7 @@ Entitlements not granted include `network.server`, `temporary-exception.files.ab
 - Developer ID signing, Apple Notarization, and Gatekeeper verification run for public releases; release secrets must be configured before a release can publish
 - **In-app update installation** (`Download update` in the app) is gated at runtime by `AppUpdateConfig.swift` (`requireSignedUpdates` / `requireNotarizedUpdates`). Keep those flags in sync with `config/release.toml`. Until either flag is enabled, the app opens the GitHub release page only (intentional short-term killswitch). When verification is disabled, `ReleaseCodeSignatureVerifier` checks only `CFBundleIdentifier`, which is **not** sufficient to prove authenticity — an attacker could ship a DMG with a matching bundle ID. Enabling `requireSignedUpdates` without a non-empty `expectedTeamIdentifier` and `signingCertificateFingerprintSHA256` is rejected as a misconfigured policy (those checks are not silently skipped).
 
-#### Release signing pipeline (not currently enabled)
+#### Release signing pipeline
 
 When signing is enabled, the release workflow will require these repository secrets:
 
@@ -267,7 +267,7 @@ With `SIGN_AND_NOTARIZE=true`, release packaging runs `scripts/sign-and-notarize
 
 If signing or notarization fails, the release workflow must stop before publishing assets.
 
-Local unsigned builds for development and current public releases:
+Local unsigned builds for development only:
 
 ```bash
 SIGN_AND_NOTARIZE=false ./scripts/package-macos-release.sh
