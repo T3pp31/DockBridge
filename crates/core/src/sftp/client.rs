@@ -2052,9 +2052,13 @@ impl PartialLocalTransfer {
     async fn open_local_partial_for_append(path: &Path) -> std::io::Result<tokio::fs::File> {
         let mut options = tokio::fs::OpenOptions::new();
         options.append(true);
+        // Fresh downloads use create_new + O_NOFOLLOW, so an attacker cannot
+        // seed a symlink before the first attempt. Resume must protect the
+        // reopen path too; O_NOFOLLOW is Unix-only, and this client is only
+        // built for Unix/macOS targets.
         #[cfg(unix)]
         {
-            options.custom_flags(libc::O_NOFOLLOW);
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
         let file = options.open(path).await?;
         let metadata = file.metadata().await?;
@@ -3785,11 +3789,60 @@ mod tests {
         let err = PartialLocalTransfer::open_local_partial_for_append(&link)
             .await
             .unwrap_err();
-        let message = err.to_string().to_lowercase();
-        assert!(
-            message.contains("symbolic") || message.contains("not a regular file"),
+        assert_eq!(
+            err.raw_os_error(),
+            Some(libc::ELOOP),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_local_partial_for_append_rejects_fifo_without_blocking() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let fifo = temp_dir.path().join(".dockbridge-fifo.partial");
+        let fifo_path = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_path.as_ptr(), 0o600) }, 0);
+
+        let err = PartialLocalTransfer::open_local_partial_for_append(&fifo)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.raw_os_error(),
+            Some(libc::ENXIO),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn find_resumable_download_offset_ignores_symlinked_partial() {
+        let server = TestSftpServer::start().await;
+        let payload = b"payload";
+        server
+            .write_remote_file("/download/file.txt", payload)
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let mut remote_file = client.sftp().open("/download/file.txt").await.unwrap();
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let target = temp_dir.path().join("target.txt");
+        std::fs::write(&target, b"secret").unwrap();
+        let link = temp_dir.path().join(format!(
+            ".dockbridge-{}.partial",
+            resume_partial_suffix("/local/file.txt", "/download/file.txt")
+        ));
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let offset = find_resumable_download_offset(
+            &mut remote_file,
+            temp_dir.path(),
+            payload.len() as u64,
+            "/local/file.txt",
+            "/download/file.txt",
+        );
+        assert_eq!(offset.await, None);
     }
 
     #[tokio::test]
