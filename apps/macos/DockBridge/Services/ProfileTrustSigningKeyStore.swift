@@ -5,6 +5,7 @@ import Security
 enum ProfileTrustSigningKeyStoreError: LocalizedError {
     case randomGenerationFailed(OSStatus)
     case unexpectedStatus(OSStatus)
+    case keyMismatchDuringMigration
 
     var errorDescription: String? {
         switch self {
@@ -14,6 +15,8 @@ enum ProfileTrustSigningKeyStoreError: LocalizedError {
         case .unexpectedStatus(let status):
             let format = String(localized: "Profile trust signing key Keychain operation failed with status %lld.")
             return String(format: format, Int64(status))
+        case .keyMismatchDuringMigration:
+            return String(localized: "Profile trust signing key migration found a conflicting protected key.")
         }
     }
 }
@@ -77,7 +80,9 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
         Self.keychainLock.lock()
         defer { Self.keychainLock.unlock() }
 
-        // Delete the legacy item first so it cannot be migrated back after deletion.
+        // Delete the legacy item first so it cannot migrate back after
+        // deletion. If legacy deletion fails, fail closed: deleting the
+        // protected item first would let a later `loadOrCreateKey` resurrect it.
         try deleteKey(usingDataProtection: false)
         try deleteKey(usingDataProtection: true)
     }
@@ -103,7 +108,7 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
         // migration must leave the legacy key intact and must not create a new key.
         let migratedData = try addKeyDataUnlessAlreadyCreated(legacyData)
         guard migratedData == legacyData else {
-            throw ProfileTrustSigningKeyStoreError.unexpectedStatus(errSecDuplicateItem)
+            throw ProfileTrustSigningKeyStoreError.keyMismatchDuringMigration
         }
         try deleteKey(usingDataProtection: false)
         return migratedData
