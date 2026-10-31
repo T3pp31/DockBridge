@@ -28,6 +28,10 @@ tokio = { workspace = true, features = ["fs", "io-util", "sync", "time"] }
 toml.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
+tempfile = { version = "3", optional = true }
+
+[features]
+test-support = ["dep:tempfile"]
 
 [dev-dependencies]
 base64.workspace = true

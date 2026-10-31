@@ -64,6 +64,7 @@ pub fn is_connection_lost_message(message: &str) -> bool {
     let stripped = strip_quoted_paths(connection_error_detail(message));
     let lower = stripped.to_lowercase();
     if lower.contains("session closed")
+        || lower.contains("connection lost")
         || lower.contains("connection reset")
         || lower.contains("broken pipe")
         || lower.contains("connection refused")

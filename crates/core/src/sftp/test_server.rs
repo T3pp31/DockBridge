@@ -36,6 +36,9 @@ pub struct FailureConfig {
     pub fail_remote_read: AtomicBool,
     pub fail_remote_close: AtomicBool,
     pub fail_remote_rename: AtomicBool,
+    /// When set, `realpath` reports a connection-lost style failure so tests
+    /// can exercise health-monitor cleanup.
+    pub fail_realpath_connection_lost: AtomicBool,
     pub fail_setstat: AtomicBool,
     pub fail_mkdir: AtomicBool,
     pub opendir_count: AtomicU64,
@@ -417,6 +420,13 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn realpath(&mut self, id: u32, path: String) -> Result<Name, Self::Error> {
+        if self
+            .failures
+            .fail_realpath_connection_lost
+            .load(Ordering::SeqCst)
+        {
+            return Err(StatusCode::ConnectionLost);
+        }
         // Match real servers: the resolved path must exist and the returned
         // remote path must be a normalized absolute form (issue #795).
         let local = self.resolve(&path);
