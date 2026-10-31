@@ -44,3 +44,4 @@ uniffi = { version = "0.32", features = ["cli"] }
 # Keep in sync with the pinned =2.4.0 registry sources; see vendor/README.md.
 [patch.crates-io]
 bssh-russh-sftp = { path = "vendor/bssh-russh-sftp" }
+basic-toml = { path = "vendor/basic-toml-shim" }
