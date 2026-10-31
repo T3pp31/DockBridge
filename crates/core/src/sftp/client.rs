@@ -1602,8 +1602,8 @@ where
 const PARTIAL_SUFFIX_BYTES: usize = 16;
 const MAX_PARTIAL_CREATE_ATTEMPTS: usize = 5;
 
-/// Timeout applied to each SFTP WRITE acknowledgement and to the `shutdown`
-/// (drain pending acks) during uploads.
+/// Timeout applied to each SFTP WRITE acknowledgement and to `shutdown`
+/// (drain pending acks) during uploads and download cleanup.
 ///
 /// The fork's `File::write_all` waits for the WRITE ack without a timeout,
 /// so a server that stops responding would hang the upload forever. This
@@ -2813,8 +2813,9 @@ mod tests {
     #[tokio::test]
     async fn download_local_write_failure_cleans_up_local_partial() {
         let server = TestSftpServer::start().await;
+        let payload = vec![0x41u8; 1024];
         server
-            .write_remote_file("/download/file.txt", b"payload")
+            .write_remote_file("/download/file.txt", &payload)
             .await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
@@ -3316,6 +3317,10 @@ mod tests {
 
         server
             .failures
+            .fail_remote_read
+            .store(true, Ordering::SeqCst);
+        server
+            .failures
             .fail_remote_close
             .store(true, Ordering::SeqCst);
         let err = client
@@ -3432,6 +3437,40 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, SftpError::DownloadFailed { .. }));
+        assert!(list_partial_paths(local_dir.path()).is_empty(), "{err:?}");
+        assert!(!local_path.exists());
+    }
+
+    #[tokio::test]
+    async fn download_remote_close_failure_still_cleans_up_local_partial() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/file.txt", b"payload")
+            .await;
+        let session = server.connect_session().await;
+        let client =
+            SftpClient::new(&session).with_upload_request_timeout(Duration::from_millis(120));
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.txt");
+
+        server
+            .failures
+            .fail_remote_read
+            .store(true, Ordering::SeqCst);
+        server
+            .failures
+            .fail_remote_close
+            .store(true, Ordering::SeqCst);
+        let started = std::time::Instant::now();
+        let err = client
+            .download("/download/file.txt", &local_path)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SftpError::DownloadFailed { .. }), "{err:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "download cleanup must be bounded when the remote close fails"
+        );
         assert!(list_partial_paths(local_dir.path()).is_empty(), "{err:?}");
         assert!(!local_path.exists());
     }
