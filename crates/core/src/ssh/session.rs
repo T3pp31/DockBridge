@@ -17,6 +17,10 @@ use crate::error::{AuthError, ConnectionError, SecurityError, SftpError};
 use crate::security::{fingerprint_sha256, HostKeyCheckResult, KnownHostsManager};
 
 /// Callback invoked when a host key is not yet trusted.
+///
+/// Implementations are synchronous and may block until the user responds.
+/// The connection deadline is extended only after the prompt returns, so the
+/// prompt itself must not yield to the Tokio runtime.
 pub trait HostKeyPrompt: Send + Sync {
     /// Prompts the user to accept or reject an unknown host key.
     fn prompt_unknown_host(&self, host: &str, port: u16, fingerprint_sha256: &str) -> bool;
@@ -264,10 +268,14 @@ struct PromptAwareDeadline {
 }
 
 impl PromptAwareDeadline {
-    fn from_secs(secs: u64) -> Self {
+    fn from_duration(duration: Duration) -> Self {
         Self {
-            deadline: std::sync::Mutex::new(TokioInstant::now() + Duration::from_secs(secs)),
+            deadline: std::sync::Mutex::new(TokioInstant::now() + duration),
         }
+    }
+
+    fn from_secs(secs: u64) -> Self {
+        Self::from_duration(Duration::from_secs(secs))
     }
 
     fn extend_by(&self, elapsed: Duration) {
@@ -730,6 +738,22 @@ mod tests {
         .await;
 
         assert!(matches!(result, Ok(Ok(()))));
+    }
+
+    #[tokio::test]
+    async fn prompt_timeout_applies_initial_deadline_without_extension() {
+        let deadline = Arc::new(PromptAwareDeadline::from_duration(Duration::from_millis(
+            50,
+        )));
+        let future = tokio::time::sleep(Duration::from_millis(100));
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            PromptAwareTimeout::new(future, deadline),
+        )
+        .await;
+
+        assert!(matches!(result, Ok(Err(()))));
     }
 
     use std::sync::atomic::{AtomicBool, Ordering};
