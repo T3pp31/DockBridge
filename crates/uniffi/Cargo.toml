@@ -26,3 +26,6 @@ zeroize.workspace = true
 
 [build-dependencies]
 uniffi = { workspace = true, features = ["build"] }
+
+[dev-dependencies]
+dockbridge-core = { path = "../core", features = ["test-support"] }
