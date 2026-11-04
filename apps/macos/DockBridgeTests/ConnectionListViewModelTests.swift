@@ -18,7 +18,8 @@ final class ConnectionListViewModelTests: XCTestCase {
         keychain = KeychainService(serviceName: "com.dockbridge.tests.\(UUID().uuidString)")
         let encryptionService = ProfileEncryptionService(keychain: keychain)
         signingKeyStore = ProfileTrustSigningKeyStore(
-            serviceName: "com.dockbridge.tests.\(UUID().uuidString)"
+            serviceName: "com.dockbridge.tests.\(UUID().uuidString)",
+            operations: InMemoryProfileTrustKeychain().operations
         )
         trustStore = ProfileTrustStore(
             baseDirectory: baseDirectory,
