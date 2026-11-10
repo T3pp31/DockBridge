@@ -18,10 +18,10 @@ final class ReleaseCodeSignatureVerifierTests: XCTestCase {
     }
 
     func testValidityCheckFlagsRequireCertificateExpirationAndRevocationChecks() {
-        let flags = ReleaseCodeSignatureVerifier.validityCheckFlags.rawValue
+        let flags = ReleaseCodeSignatureVerifier.validityCheckFlags
 
-        XCTAssertEqual(flags & kSecCSConsiderExpiration, kSecCSConsiderExpiration)
-        XCTAssertEqual(flags & kSecCSEnforceRevocationChecks, kSecCSEnforceRevocationChecks)
+        XCTAssertTrue(flags.contains(.considerExpiration))
+        XCTAssertTrue(flags.contains(.enforceRevocationChecks))
     }
 
     func testValidityCheckFlagsPreserveStrictValidationOfAllArchitecturesAndNestedCode() {

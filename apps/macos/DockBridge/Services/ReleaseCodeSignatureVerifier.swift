@@ -41,9 +41,7 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
         rawValue: kSecCSCheckAllArchitectures
             | kSecCSStrictValidate
             | kSecCSCheckNestedCode
-            | kSecCSConsiderExpiration
-            | kSecCSEnforceRevocationChecks
-    )
+    ).union([.considerExpiration, .enforceRevocationChecks])
 
     private let policy: ReleaseVerificationPolicy
     private let fileManager: FileManager
