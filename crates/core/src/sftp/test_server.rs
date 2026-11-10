@@ -930,7 +930,11 @@ impl russh_sftp::server::Handler for SftpHandler {
         #[cfg(unix)]
         {
             let local = self.resolve(&path);
-            let target = std::fs::read_link(&local).map_err(|_| StatusCode::Failure)?;
+            let target = std::fs::read_link(&local).map_err(|err| match err.kind() {
+                std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+                std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+                _ => StatusCode::Failure,
+            })?;
             // Return the link target as the remote-relative path.
             let remote_target = target
                 .strip_prefix(&self.root)
@@ -1208,6 +1212,63 @@ fn set_file_times_by_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn readlink_missing_paths_return_no_such_file() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+
+        for path in ["/missing-link", "/missing-parent/link"] {
+            let err = session.sftp().read_link(path).await.unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    russh_sftp::client::error::Error::Status(ref status)
+                        if status.status_code == StatusCode::NoSuchFile
+                ),
+                "READLINK {path}: {err:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn readlink_non_symlink_paths_return_failure() {
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/download/file.txt", b"data").await;
+        let session = server.connect_session().await;
+
+        for path in ["/download/file.txt", "/download"] {
+            let err = session.sftp().read_link(path).await.unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    russh_sftp::client::error::Error::Status(ref status)
+                        if status.status_code == StatusCode::Failure
+                ),
+                "READLINK {path}: {err:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn readlink_returns_stored_targets_including_dangling_links() {
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/download/target.txt", b"data").await;
+        let session = server.connect_session().await;
+
+        for (link, target) in [
+            ("/download/absolute-link", "/download/target.txt"),
+            ("/download/relative-link", "target.txt"),
+            ("/download/dangling-absolute-link", "/download/missing.txt"),
+            ("/download/dangling-relative-link", "missing.txt"),
+        ] {
+            session.sftp().symlink(link, target).await.unwrap();
+            assert_eq!(session.sftp().read_link(link).await.unwrap(), target);
+        }
+    }
 
     #[cfg(unix)]
     #[test]
