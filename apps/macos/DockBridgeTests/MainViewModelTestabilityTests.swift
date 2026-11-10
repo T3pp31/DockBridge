@@ -189,6 +189,11 @@ final class MainViewModelTestabilityTests: XCTestCase {
         subscription.cancel()
 
         XCTAssertEqual(viewModel.localItems.map(\.name), ["folder", "a.txt", "b.txt"])
+        // Selection IDs must come from the listing, not fixture URL strings:
+        // macOS can resolve temporary-directory aliases when enumerating URLs.
+        let folderItem = try XCTUnwrap(viewModel.localItems.first { $0.name == "folder" })
+        let firstFileItem = try XCTUnwrap(viewModel.localItems.first { $0.name == "a.txt" })
+        let secondFileItem = try XCTUnwrap(viewModel.localItems.first { $0.name == "b.txt" })
         let parent = try XCTUnwrap(viewModel.localTableItems.first)
         XCTAssertTrue(parent.isParentDirectory)
         let unknownID = directory.appendingPathComponent("missing.txt").path
@@ -197,13 +202,13 @@ final class MainViewModelTestabilityTests: XCTestCase {
             ("empty", [], nil),
             ("unknown", [unknownID], nil),
             ("parent only", [parent.id], parent.id),
-            ("folder only", [folder.path], folder.path),
-            ("file only", [firstFile.path], firstFile.path),
-            ("parent and folder", [parent.id, folder.path], folder.path),
-            ("parent and file", [parent.id, firstFile.path], firstFile.path),
-            ("multiple files", [secondFile.path, firstFile.path], firstFile.path),
-            ("parent and multiple files", [parent.id, secondFile.path, firstFile.path], firstFile.path),
-            ("all rows", Set(viewModel.localTableItems.map(\.id)), folder.path),
+            ("folder only", [folderItem.id], folderItem.id),
+            ("file only", [firstFileItem.id], firstFileItem.id),
+            ("parent and folder", [parent.id, folderItem.id], folderItem.id),
+            ("parent and file", [parent.id, firstFileItem.id], firstFileItem.id),
+            ("multiple files", [secondFileItem.id, firstFileItem.id], firstFileItem.id),
+            ("parent and multiple files", [parent.id, secondFileItem.id, firstFileItem.id], firstFileItem.id),
+            ("all rows", Set(viewModel.localTableItems.map(\.id)), folderItem.id),
             ("parent and unknown", [parent.id, unknownID], nil),
         ]
         for testCase in cases {
@@ -219,7 +224,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         viewModel.selectedLocalItemIDs = Set(viewModel.localTableItems.map(\.id))
         let target = try XCTUnwrap(pane.primaryActionLocalItem(from: viewModel.selectedLocalItemIDs))
         viewModel.openLocalTableItem(target)
-        XCTAssertEqual(viewModel.localPath.path, folder.path)
+        XCTAssertEqual(viewModel.localPath.path, folderItem.url.path)
         viewModel.navigateLocalBack()
         XCTAssertEqual(viewModel.localPath.path, directory.path)
     }
