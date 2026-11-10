@@ -1,3 +1,4 @@
+import Security
 import XCTest
 @testable import DockBridge
 
@@ -97,21 +98,108 @@ final class ReleaseCodeSignatureVerifierTests: XCTestCase {
         }
     }
 
-    func testVerifyAppBundleRejectsMissingNotarizationWhenRequired() throws {
+    func testVerifyAppBundleRejectsUnsignedBundleWhenOnlyNotarizationRequired() throws {
         let bundleURL = try makeTestBundle(bundleIdentifier: "com.dockbridge.app")
-        let verifier = ReleaseCodeSignatureVerifier(
+        let verifier = makeNotarizationOnlyVerifier()
+
+        XCTAssertThrowsError(try verifier.verifyAppBundle(at: bundleURL)) { error in
+            XCTAssertEqual(error as? ReleaseCodeSignatureVerifierError, .unsignedBundle)
+        }
+    }
+
+    func testVerifyAppBundleRejectsNotarizationOnlyPolicyWithoutExpectedTeam() throws {
+        let bundleURL = try makeTestBundle(bundleIdentifier: "com.dockbridge.app")
+        for fingerprint in ["", "abc123"] {
+            let verifier = ReleaseCodeSignatureVerifier(
+                policy: ReleaseVerificationPolicy(
+                    expectedBundleIdentifier: "com.dockbridge.app",
+                    expectedTeamIdentifier: "",
+                    signingCertificateFingerprintSHA256: fingerprint,
+                    requireSignedUpdates: false,
+                    requireNotarizedUpdates: true
+                )
+            )
+
+            XCTAssertThrowsError(try verifier.verifyAppBundle(at: bundleURL)) { error in
+                XCTAssertEqual(error as? ReleaseCodeSignatureVerifierError, .misconfiguredSignaturePolicy)
+            }
+        }
+    }
+
+    func testNotarizationOnlyPolicyRejectsUnexpectedOrMissingSignerTeam() {
+        let verifier = makeNotarizationOnlyVerifier()
+        let cases: [(team: String?, actual: String)] = [
+            ("OTHERTEAM1", "OTHERTEAM1"),
+            ("", ""),
+            (nil, ""),
+        ]
+
+        for values in cases {
+            var info: [String: Any] = ["NotarizationDate": Date()]
+            if let team = values.team {
+                info[kSecCodeInfoTeamIdentifier as String] = team
+            }
+
+            XCTAssertThrowsError(try verifier.verifySigningInformation(info as NSDictionary)) { error in
+                XCTAssertEqual(
+                    error as? ReleaseCodeSignatureVerifierError,
+                    .teamIdentifierMismatch(expected: "TEAMID1234", actual: values.actual)
+                )
+            }
+        }
+    }
+
+    func testNotarizationOnlyPolicyAcceptsExpectedTeamWithoutCertificatePin() {
+        let verifier = makeNotarizationOnlyVerifier()
+        let info: NSDictionary = [
+            kSecCodeInfoTeamIdentifier as String: "TEAMID1234",
+            "NotarizationDate": Date(),
+        ]
+
+        XCTAssertNoThrow(try verifier.verifySigningInformation(info))
+    }
+
+    func testNotarizationOnlyPolicyStillRejectsMissingNotarizationForExpectedTeam() {
+        let verifier = makeNotarizationOnlyVerifier()
+        let info: NSDictionary = [kSecCodeInfoTeamIdentifier as String: "TEAMID1234"]
+
+        XCTAssertThrowsError(try verifier.verifySigningInformation(info)) { error in
+            XCTAssertEqual(error as? ReleaseCodeSignatureVerifierError, .notarizationMissing)
+        }
+    }
+
+    func testSignedUpdatePoliciesStillRequireDeveloperIDSignature() {
+        for requireNotarizedUpdates in [false, true] {
+            let verifier = ReleaseCodeSignatureVerifier(
+                policy: ReleaseVerificationPolicy(
+                    expectedBundleIdentifier: "com.dockbridge.app",
+                    expectedTeamIdentifier: "TEAMID1234",
+                    signingCertificateFingerprintSHA256: "abc123",
+                    requireSignedUpdates: true,
+                    requireNotarizedUpdates: requireNotarizedUpdates
+                )
+            )
+            let info: NSDictionary = [
+                kSecCodeInfoTeamIdentifier as String: "TEAMID1234",
+                "NotarizationDate": Date(),
+            ]
+
+            XCTAssertThrowsError(try verifier.verifySigningInformation(info)) { error in
+                XCTAssertEqual(error as? ReleaseCodeSignatureVerifierError, .missingDeveloperIDSignature)
+            }
+        }
+    }
+
+    private func makeNotarizationOnlyVerifier() -> ReleaseCodeSignatureVerifier {
+        ReleaseCodeSignatureVerifier(
             policy: ReleaseVerificationPolicy(
                 expectedBundleIdentifier: "com.dockbridge.app",
-                expectedTeamIdentifier: "",
+                expectedTeamIdentifier: "TEAMID1234",
                 signingCertificateFingerprintSHA256: "",
                 requireSignedUpdates: false,
                 requireNotarizedUpdates: true
             )
         )
-
-        XCTAssertThrowsError(try verifier.verifyAppBundle(at: bundleURL)) { error in
-            XCTAssertEqual(error as? ReleaseCodeSignatureVerifierError, .unsignedBundle)
-        }
     }
 
     private func makeTestBundle(bundleIdentifier: String) throws -> URL {

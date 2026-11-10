@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Update signature policy is misconfigured. Expected team identifier must be set for signed or notarized updates; certificate fingerprint is also required for signed updates.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update signature policy is misconfigured. Expected team identifier must be set for signed or notarized updates; certificate fingerprint is also required for signed updates."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更新の署名ポリシーが正しく設定されていません。署名または公証を必須にする場合は、期待するチーム識別子の設定が必要です。署名を必須にする場合は、証明書のフィンガープリントも必要です。"
+          }
+        }
+      }
+    },
     "Unable to check the remote destination. Try again.": {
       "extractionState": "manual",
       "localizations": {
