@@ -71,6 +71,9 @@ jobs:
             shellcheck -x scripts/*.sh
           fi
 
+      - name: Test transfer-cancel verification diagnostics
+        run: python3 scripts/test-verify-transfer-cancel.py
+
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
           cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
