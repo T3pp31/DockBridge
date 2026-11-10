@@ -898,13 +898,27 @@ impl KnownHostsManager {
             marker,
         } = imported;
 
-        if marker == Some(KnownHostMarker::Revoked) {
-            if self.entries.values().any(|entry| {
-                entry.marker == Some(KnownHostMarker::Revoked)
+        if entry_has_non_trusting_marker(marker) {
+            if let Some(entry) = self.entries.values_mut().find(|entry| {
+                entry.marker == marker
                     && entry_matches_host(entry, &host, port)
                     && fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256)
             }) {
-                return Ok(MergeOutcome::default());
+                // A duplicate marked key may still extend the source file's
+                // scope. Merge it just as for a plain import into a marked row.
+                let mut changed = false;
+                for alias in aliases {
+                    changed |= merge_trusted_alias(entry, &alias.host, alias.port);
+                }
+                changed |= merge_excluded_aliases(entry, &excluded_aliases);
+                if entry.public_key_openssh.is_none() && public_key_openssh.is_some() {
+                    entry.public_key_openssh = public_key_openssh;
+                    changed = true;
+                }
+                return Ok(MergeOutcome {
+                    added: false,
+                    changed,
+                });
             }
 
             let insert_key = marked_entry_key(&host, port, marker, &fingerprint_sha256);
@@ -919,37 +933,7 @@ impl KnownHostsManager {
                     aliases,
                     excluded_aliases,
                     public_key_openssh,
-                    marker: Some(KnownHostMarker::Revoked),
-                },
-            );
-            return Ok(MergeOutcome {
-                added: true,
-                changed: false,
-            });
-        }
-
-        if marker == Some(KnownHostMarker::CertAuthority) {
-            if self.entries.values().any(|entry| {
-                entry.marker == Some(KnownHostMarker::CertAuthority)
-                    && entry_matches_host(entry, &host, port)
-                    && fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256)
-            }) {
-                return Ok(MergeOutcome::default());
-            }
-
-            let insert_key = marked_entry_key(&host, port, marker, &fingerprint_sha256);
-
-            self.entries.insert(
-                insert_key,
-                KnownHostEntry {
-                    host,
-                    port,
-                    fingerprint_sha256,
-                    algorithm,
-                    aliases,
-                    excluded_aliases,
-                    public_key_openssh,
-                    marker: Some(KnownHostMarker::CertAuthority),
+                    marker,
                 },
             );
             return Ok(MergeOutcome {
@@ -2614,6 +2598,183 @@ mod tests {
             .find_entry("revoked-alias.example.com", 22)
             .unwrap();
         assert_eq!(entry.marker, Some(KnownHostMarker::Revoked));
+    }
+
+    #[test]
+    fn repeated_marked_import_persists_extended_scope() {
+        for (marker_text, marker, expected) in [
+            ("@revoked", KnownHostMarker::Revoked, HostKeyCheckResult::Reject),
+            (
+                "@cert-authority",
+                KnownHostMarker::CertAuthority,
+                HostKeyCheckResult::Unknown,
+            ),
+        ] {
+            for port in [22, 2222] {
+                for primary in ["example.com", "alias.example.com"] {
+                    let dir = tempdir().unwrap();
+                    let path = dir.path().join("known_hosts.json");
+                    let source = dir.path().join("known_hosts");
+                    let key = test_public_key();
+                    let openssh_key = key.to_openssh().unwrap();
+                    let pattern = |host| openssh_host_pattern(host, port);
+                    write_test_file_mode_0600(
+                        &source,
+                        format!(
+                            "{marker_text} {},{},!{} {openssh_key}\n",
+                            pattern("example.com"),
+                            pattern("alias.example.com"),
+                            pattern("old-excluded.example.com"),
+                        ),
+                    );
+                    let mut manager = KnownHostsManager::load(&path).unwrap();
+                    assert_eq!(manager.import_openssh(&source).unwrap().merged, 1);
+                    assert_eq!(
+                        manager.check_host_key("new.example.com", port, &key, true),
+                        HostKeyCheckResult::Unknown
+                    );
+
+                    // The primary host may match an existing alias. Conflicting
+                    // positives/exclusions must keep the existing precedence.
+                    write_test_file_mode_0600(
+                        &source,
+                        format!(
+                            "{marker_text} {},{},{},!{},!{} {openssh_key}\n",
+                            pattern(primary),
+                            pattern("new.example.com"),
+                            pattern("old-excluded.example.com"),
+                            pattern("new-excluded.example.com"),
+                            pattern("example.com"),
+                        ),
+                    );
+                    let summary = manager.import_openssh(&source).unwrap();
+                    assert_eq!(summary, ImportSummary::default());
+
+                    // Alias-only changes must be saved even with merged == 0.
+                    let mut reloaded = KnownHostsManager::load(&path).unwrap();
+                    let entries = reloaded.entries();
+                    assert_eq!(entries.len(), 1);
+                    let entry = &entries[0];
+                    assert_eq!(entry.host, "example.com");
+                    assert_eq!(entry.port, port);
+                    assert_eq!(entry.marker, Some(marker));
+                    assert_eq!(entry.aliases.len(), 2);
+                    assert_eq!(entry.excluded_aliases.len(), 2);
+                    assert!(entry_matches_host(entry, "new.example.com", port));
+                    assert!(entry_matches_host(entry, "example.com", port));
+                    for excluded in ["old-excluded.example.com", "new-excluded.example.com"] {
+                        assert!(entry_is_excluded_for_host(entry, excluded, port));
+                        assert!(!entry_matches_host(entry, excluded, port));
+                    }
+                    for strict in [false, true] {
+                        assert_eq!(
+                            reloaded.check_host_key("new.example.com", port, &key, strict),
+                            expected
+                        );
+                        assert_eq!(
+                            reloaded.check_host_key("unrelated.example.com", port, &key, strict),
+                            HostKeyCheckResult::Unknown
+                        );
+                        assert_eq!(
+                            reloaded.check_host_key("new.example.com", 2223, &key, strict),
+                            HostKeyCheckResult::Unknown
+                        );
+                    }
+                    let saved = fs::read(&path).unwrap();
+                    assert_eq!(reloaded.import_openssh(&source).unwrap(), summary);
+                    assert_eq!(reloaded.entries(), entries);
+                    assert_eq!(fs::read(&path).unwrap(), saved);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn marked_merge_reports_changes_and_only_updates_matching_marker_and_key() {
+        for marker in [KnownHostMarker::Revoked, KnownHostMarker::CertAuthority] {
+            let dir = tempdir().unwrap();
+            let mut manager = KnownHostsManager::load(dir.path().join("known_hosts.json")).unwrap();
+            let key = test_public_key();
+            let other_key = test_other_public_key();
+            let other_marker = match marker {
+                KnownHostMarker::Revoked => KnownHostMarker::CertAuthority,
+                KnownHostMarker::CertAuthority => KnownHostMarker::Revoked,
+            };
+            let imported = |marker, key: &PublicKey| ImportedPlainEntry {
+                host: "example.com".to_string(),
+                port: 22,
+                fingerprint_sha256: fingerprint_sha256(key),
+                algorithm: format!("{:?}", key.algorithm()),
+                public_key_openssh: None,
+                aliases: Vec::new(),
+                excluded_aliases: Vec::new(),
+                marker,
+            };
+            for (seed_marker, seed_key) in [
+                (None, &key),
+                (Some(other_marker), &key),
+                (Some(marker), &other_key),
+                (Some(marker), &key),
+            ] {
+                assert_eq!(
+                    manager
+                        .merge_imported_entry(imported(seed_marker, seed_key))
+                        .unwrap(),
+                    MergeOutcome {
+                        added: true,
+                        changed: false,
+                    }
+                );
+            }
+            assert_eq!(
+                manager
+                    .merge_imported_entry(imported(Some(marker), &key))
+                    .unwrap(),
+                MergeOutcome::default()
+            );
+
+            let mut backfill = imported(Some(marker), &key);
+            backfill.public_key_openssh = Some(key.to_openssh().unwrap());
+            assert_eq!(
+                manager.merge_imported_entry(backfill).unwrap(),
+                MergeOutcome {
+                    added: false,
+                    changed: true,
+                }
+            );
+            let alias = HostAlias {
+                host: "new.example.com".to_string(),
+                port: 22,
+            };
+            let excluded = HostAlias {
+                host: "excluded.example.com".to_string(),
+                port: 22,
+            };
+            for (aliases, excluded_aliases, changed) in [
+                (vec![alias.clone()], Vec::new(), true),
+                (Vec::new(), vec![excluded.clone()], true),
+                (vec![alias], vec![excluded], false),
+            ] {
+                let mut update = imported(Some(marker), &key);
+                update.aliases = aliases;
+                update.excluded_aliases = excluded_aliases;
+                assert_eq!(
+                    manager.merge_imported_entry(update).unwrap(),
+                    MergeOutcome {
+                        added: false,
+                        changed,
+                    }
+                );
+            }
+            assert_eq!(manager.entries().len(), 4);
+            for entry in manager.entries() {
+                let is_target = entry.marker == Some(marker)
+                    && entry.fingerprint_sha256 == fingerprint_sha256(&key);
+                assert_eq!(entry.public_key_openssh.is_some(), is_target);
+                assert_eq!(entry.aliases.len(), usize::from(is_target));
+                assert_eq!(entry.excluded_aliases.len(), usize::from(is_target));
+            }
+        }
     }
 
     #[test]
