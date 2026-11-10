@@ -36,6 +36,8 @@ pub struct FailureConfig {
     pub fail_remote_read: AtomicBool,
     pub fail_remote_close: AtomicBool,
     pub fail_remote_rename: AtomicBool,
+    /// Fails a single REMOVE request so tests can exercise partial cleanup errors.
+    pub fail_remote_remove: AtomicBool,
     /// When set, `realpath` reports a connection-lost style failure so tests
     /// can exercise health-monitor cleanup.
     pub fail_realpath_connection_lost: AtomicBool,
@@ -711,6 +713,13 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn remove(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
+        if self.failures.fail_remote_remove.swap(false, Ordering::SeqCst) {
+            return Ok(Self::err_status(
+                id,
+                StatusCode::PermissionDenied,
+                "simulated remove failure",
+            ));
+        }
         let local = self.resolve(&path);
         if let Err(err) = fs::remove_file(&local).await {
             // Match real servers: only a missing target is NoSuchFile; other
