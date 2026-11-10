@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Avoid retaining stdin passwords and passphrases in an unzeroized read-ahead buffer (#1194)
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
 - Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
 

@@ -1,4 +1,4 @@
-use std::io::{self, BufRead};
+use std::io::{self, Read};
 
 use zeroize::Zeroizing;
 
@@ -72,22 +72,35 @@ fn trim_trailing_line_endings(value: &mut String) {
     }
 }
 
-/// Reads a single secret line (password or passphrase) from a buffered reader
-/// into a zeroized buffer, trimming trailing line endings.
-///
-/// Shared by `--password-stdin` and `--passphrase-stdin` so both credentials
-/// are handled with the same zeroize discipline.
-fn read_secret_line<R: io::BufRead>(reader: R, label: &str) -> anyhow::Result<Zeroizing<String>> {
+/// Reads one secret line without requesting bytes beyond its newline.
+/// The caller must supply an unbuffered reader so it cannot retain secret copies.
+/// Shared by `--password-stdin` and `--passphrase-stdin`.
+fn read_secret_line<R: Read>(mut reader: R, label: &str) -> anyhow::Result<Zeroizing<String>> {
     // Allow CRLF plus one excess-byte probe, reserving the entire read limit
     // so even rejected input cannot reallocate and leave unzeroed copies on
-    // the heap (issue #649).
+    // the heap (issue #649). Guard raw bytes as well, including on I/O errors
+    // and invalid UTF-8; converting an owned Vec with String::from_utf8 would
+    // otherwise leave rejected bytes in an unzeroized error value.
     let max_secret_len = max_secret_len()?;
     let read_limit = max_secret_len + 3;
-    let mut buffer = Zeroizing::new(String::with_capacity(read_limit));
-    reader
-        .take(read_limit as u64)
-        .read_line(&mut buffer)
-        .map_err(|err| anyhow::anyhow!("failed to read {label} from stdin: {err}"))?;
+    let mut bytes = Zeroizing::new(Vec::with_capacity(read_limit));
+    let mut byte = Zeroizing::new([0u8; 1]);
+    while bytes.len() < read_limit {
+        match reader.read(&mut *byte) {
+            Ok(0) => break,
+            Ok(_) => {
+                bytes.push(byte[0]);
+                if byte[0] == b'\n' {
+                    break;
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => anyhow::bail!("failed to read {label} from stdin: {err}"),
+        }
+    }
+    let value = std::str::from_utf8(&bytes)
+        .map_err(|err| anyhow::anyhow!("failed to read {label} from stdin: invalid UTF-8: {err}"))?;
+    let mut buffer = Zeroizing::new(value.to_owned());
     let reached_read_limit = buffer.len() == read_limit;
     trim_trailing_line_endings(&mut buffer);
     if reached_read_limit || buffer.len() > max_secret_len {
@@ -99,9 +112,27 @@ fn read_secret_line<R: io::BufRead>(reader: R, label: &str) -> anyhow::Result<Ze
     Ok(buffer)
 }
 
-/// Reads a secret from standard input into a zeroized buffer.
+fn unbuffered_stdin() -> io::Result<std::fs::File> {
+    // Duplicate the OS descriptor/handle, not Stdin's process-global BufReader.
+    // Dropping the File only closes the duplicate, leaving stdin usable.
+    #[cfg(unix)]
+    let handle = {
+        use std::os::fd::AsFd;
+        io::stdin().as_fd().try_clone_to_owned()?
+    };
+    #[cfg(windows)]
+    let handle = {
+        use std::os::windows::io::AsHandle;
+        io::stdin().as_handle().try_clone_to_owned()?
+    };
+    Ok(std::fs::File::from(handle))
+}
+
+/// Reads a secret from standard input without retaining an unzeroized read buffer.
 pub fn read_secret_from_stdin(label: &str) -> anyhow::Result<Zeroizing<String>> {
-    read_secret_line(io::stdin().lock(), label)
+    let stdin = unbuffered_stdin()
+        .map_err(|err| anyhow::anyhow!("failed to read {label} from stdin: {err}"))?;
+    read_secret_line(stdin, label)
 }
 
 pub fn resolve_password(
@@ -139,7 +170,138 @@ pub fn resolve_passphrase(passphrase_stdin: bool) -> anyhow::Result<Option<Zeroi
 
 #[cfg(test)]
 mod tests {
-    use super::{io, max_secret_len, read_secret_line, trim_trailing_line_endings};
+    use super::{
+        io, max_secret_len, read_secret_from_stdin, read_secret_line, trim_trailing_line_endings,
+        unbuffered_stdin,
+    };
+    use std::io::{Read, Seek, Write};
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn read_secret_from_stdin_does_not_prefetch_or_close_stdin() {
+        const CHILD_ENV: &str = "DOCKBRIDGE_TEST_UNBUFFERED_SECRET_STDIN";
+        const CHILD_SUCCESS: &str = "unbuffered stdin assertions passed";
+        const INPUT: &[u8] = b"first\nsecond\nthird";
+        if std::env::var_os(CHILD_ENV).is_some() {
+            assert_eq!(read_secret_from_stdin("password").unwrap().as_str(), "first");
+
+            // Read directly from the OS after the secret read. StdinLock would
+            // prefetch this line into its unzeroized global buffer instead.
+            let mut raw_stdin = unbuffered_stdin().unwrap();
+            let mut next_line = [0u8; 7];
+            raw_stdin.read_exact(&mut next_line).unwrap();
+            assert_eq!(&next_line, b"second\n");
+            drop(raw_stdin);
+
+            assert_eq!(
+                read_secret_from_stdin("passphrase").unwrap().as_str(),
+                "third"
+            );
+            assert!(read_secret_from_stdin("password").is_err());
+            println!("{CHILD_SUCCESS}");
+            return;
+        }
+
+        // Isolate process-global stdin from the parallel test harness, and
+        // exercise both redirection sources without replacing the parent's fd.
+        for use_file in [false, true] {
+            let stdin = if use_file {
+                let mut file = tempfile::tempfile().unwrap();
+                file.write_all(INPUT).unwrap();
+                file.rewind().unwrap();
+                Stdio::from(file)
+            } else {
+                Stdio::piped()
+            };
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "password::tests::read_secret_from_stdin_does_not_prefetch_or_close_stdin",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .stdin(stdin)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            if let Some(mut pipe) = child.stdin.take() {
+                pipe.write_all(INPUT).unwrap();
+            }
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "child failed (file stdin: {use_file}): {}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains(CHILD_SUCCESS));
+        }
+    }
+
+    #[test]
+    fn read_secret_line_leaves_following_secret_unread() {
+        let mut reader = io::Cursor::new(b"password\npassphrase\r\n".as_slice());
+        assert_eq!(
+            read_secret_line(&mut reader, "password").unwrap().as_str(),
+            "password"
+        );
+        assert_eq!(reader.position(), 9);
+        assert_eq!(
+            read_secret_line(&mut reader, "passphrase").unwrap().as_str(),
+            "passphrase"
+        );
+    }
+
+    struct ErrorAfterPrefix {
+        input: io::Cursor<Vec<u8>>,
+        error: Option<io::ErrorKind>,
+    }
+
+    impl Read for ErrorAfterPrefix {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            // The production reader must never request read-ahead bytes.
+            assert_eq!(buffer.len(), 1);
+            if self.input.position() == 3 {
+                if let Some(kind) = self.error.take() {
+                    return Err(io::Error::from(kind));
+                }
+            }
+            self.input.read(buffer)
+        }
+    }
+
+    #[test]
+    fn read_secret_line_retries_interrupted_reads() {
+        let reader = ErrorAfterPrefix {
+            input: io::Cursor::new(b"secret\n".to_vec()),
+            error: Some(io::ErrorKind::Interrupted),
+        };
+        assert_eq!(read_secret_line(reader, "password").unwrap().as_str(), "secret");
+    }
+
+    #[test]
+    fn read_secret_line_reports_io_error_after_partial_input() {
+        let reader = ErrorAfterPrefix {
+            input: io::Cursor::new(b"secret\n".to_vec()),
+            error: Some(io::ErrorKind::PermissionDenied),
+        };
+        let err = read_secret_line(reader, "passphrase").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("failed to read passphrase from stdin"));
+        assert!(!err.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn read_secret_line_rejects_invalid_utf8_without_exposing_input() {
+        let mut reader = io::Cursor::new(b"secret\xff\nnext\n".as_slice());
+        let err = read_secret_line(&mut reader, "password").unwrap_err();
+        assert!(err.to_string().contains("invalid UTF-8"));
+        assert!(!err.to_string().contains("secret"));
+        assert_eq!(reader.position(), 8);
+        assert_eq!(read_secret_line(&mut reader, "password").unwrap().as_str(), "next");
+    }
 
     #[test]
     fn trim_trailing_line_endings_removes_unix_newline() {
@@ -217,9 +379,9 @@ mod tests {
         for length in [max_secret_len - 1, max_secret_len, max_secret_len + 1] {
             for ending in ["", "\n", "\r\n"] {
                 let input = format!("{}{ending}", "x".repeat(length));
-                // Small chunks exercise reads across the allocation boundary.
-                let reader = io::BufReader::with_capacity(1024, io::Cursor::new(input));
-                let result = read_secret_line(reader, "password");
+                let mut reader = io::Cursor::new(input);
+                let result = read_secret_line(&mut reader, "password");
+                assert!(reader.position() <= (max_secret_len + 3) as u64);
                 if length <= max_secret_len {
                     assert_eq!(result.unwrap().as_str(), "x".repeat(length));
                 } else {
@@ -245,19 +407,18 @@ mod tests {
         let mut reader = io::Cursor::new(input);
         let err = read_secret_line(&mut reader, "password").unwrap_err();
         assert!(err.to_string().contains("exceeded"));
-        assert!(reader.position() < reader.get_ref().len() as u64);
+        assert_eq!(reader.position(), (max_secret_len + 3) as u64);
     }
 
     #[test]
     fn read_secret_line_rejects_empty_input() {
-        // Given: only a line ending on stdin
-        let mut cursor = io::Cursor::new(String::from("\n"));
-        // When: the line is read
-        let err = read_secret_line(&mut cursor, "password").expect_err("expected error");
-        // Then: an explanatory error is returned
-        assert!(err
-            .to_string()
-            .contains("password read from stdin was empty"));
+        for input in ["", "\n", "\r\n"] {
+            let mut cursor = io::Cursor::new(input);
+            let err = read_secret_line(&mut cursor, "password").expect_err("expected error");
+            assert!(err
+                .to_string()
+                .contains("password read from stdin was empty"));
+        }
     }
 }
 
