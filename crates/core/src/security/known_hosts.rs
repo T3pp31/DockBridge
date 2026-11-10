@@ -2603,7 +2603,11 @@ mod tests {
     #[test]
     fn repeated_marked_import_persists_extended_scope() {
         for (marker_text, marker, expected) in [
-            ("@revoked", KnownHostMarker::Revoked, HostKeyCheckResult::Reject),
+            (
+                "@revoked",
+                KnownHostMarker::Revoked,
+                HostKeyCheckResult::Reject,
+            ),
             (
                 "@cert-authority",
                 KnownHostMarker::CertAuthority,
