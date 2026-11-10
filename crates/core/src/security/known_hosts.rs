@@ -995,7 +995,8 @@ impl KnownHostsManager {
 
         if let Some(existing) = self.find_trusted_entry(&host, port).or_else(|| {
             self.entries.values().find(|entry| {
-                entry_matches_host(entry, &host, port)
+                entry.marker == Some(KnownHostMarker::Revoked)
+                    && entry_matches_host(entry, &host, port)
                     && fingerprints_match(&entry.fingerprint_sha256, &fingerprint_sha256)
             })
         }) {
@@ -1013,10 +1014,9 @@ impl KnownHostsManager {
                 return Ok(MergeOutcome::default());
             }
 
-            // Marked (revoked / cert-authority) entries keep their marker — it
-            // is never changed by an import — but aliases, exclusions, and a
-            // missing OpenSSH public key are still merged so revocation scope
-            // and export completeness stay in sync with the source file.
+            // Only revoked entries can be marked merge targets here: preserve
+            // revocation and merge its scope. CA records must remain separate
+            // so importing ordinary host trust never changes the CA's scope.
             if entry_has_non_trusting_marker(entry.marker) {
                 let mut changed = false;
                 for alias in aliases {
@@ -2529,15 +2529,23 @@ mod tests {
         let mut manager = KnownHostsManager::load(&path).unwrap();
         write_test_file_mode_0600(&source, format!("@revoked example.com {openssh_key}\n"));
         manager.import_openssh(&source).unwrap();
-        write_test_file_mode_0600(&source, format!("example.com {openssh_key}\n"));
-        manager.import_openssh(&source).unwrap();
+        write_test_file_mode_0600(
+            &source,
+            format!("example.com,revoked-alias.example.com {openssh_key}\n"),
+        );
+        assert_eq!(
+            manager.import_openssh(&source).unwrap(),
+            ImportSummary::default()
+        );
         let reloaded = KnownHostsManager::load(&path).unwrap();
         assert_eq!(reloaded.entries().len(), 1);
         assert_eq!(reloaded.entries()[0].marker, Some(KnownHostMarker::Revoked));
-        assert_eq!(
-            reloaded.check_host_key("example.com", 22, &key, true),
-            HostKeyCheckResult::Reject
-        );
+        for host in ["example.com", "revoked-alias.example.com"] {
+            assert_eq!(
+                reloaded.check_host_key(host, 22, &key, true),
+                HostKeyCheckResult::Reject
+            );
+        }
     }
 
     #[test]
@@ -2970,6 +2978,107 @@ mod tests {
             manager.check_host_key("server.example.com", 22, &key, false),
             HostKeyCheckResult::Unknown
         );
+    }
+
+    #[test]
+    fn import_openssh_same_host_and_key_keeps_ca_and_plain_trust_separate() {
+        for port in [22, 2222] {
+            for ca_first in [true, false] {
+                let dir = tempdir().unwrap();
+                let path = dir.path().join("known_hosts.json");
+                let source = dir.path().join("known_hosts");
+                let key = test_public_key();
+                let openssh_key = key.to_openssh().unwrap();
+                let host = openssh_host_pattern("example.com", port);
+                let ca_alias = openssh_host_pattern("ca-only.example.com", port);
+                let ca_excluded = openssh_host_pattern("ca-excluded.example.com", port);
+                let plain_alias = openssh_host_pattern("plain-alias.example.com", port);
+                let plain_excluded = openssh_host_pattern("plain-excluded.example.com", port);
+                let ca_patterns = format!("{host},{ca_alias},!{ca_excluded}");
+                let plain_patterns = format!("{host},{plain_alias},!{plain_excluded}");
+                let ca_line = format!("@cert-authority {ca_patterns} {openssh_key}\n");
+                let plain_line = format!("{plain_patterns} {openssh_key}\n");
+                let lines = if ca_first {
+                    [&ca_line, &plain_line]
+                } else {
+                    [&plain_line, &ca_line]
+                };
+                let mut manager = KnownHostsManager::load(&path).unwrap();
+                for line in lines {
+                    write_test_file_mode_0600(&source, line);
+                    assert_eq!(
+                        manager.import_openssh(&source).unwrap(),
+                        ImportSummary {
+                            merged: 1,
+                            skipped: 0,
+                        }
+                    );
+                    manager = KnownHostsManager::load(&path).unwrap();
+                }
+
+                assert_eq!(manager.entries.len(), 2);
+                let ca_key = marked_entry_key(
+                    "example.com",
+                    port,
+                    Some(KnownHostMarker::CertAuthority),
+                    &fingerprint_sha256(&key),
+                );
+                let ca = manager.entries.get(&ca_key).unwrap();
+                assert_eq!(ca.marker, Some(KnownHostMarker::CertAuthority));
+                assert_eq!(
+                    ca.aliases,
+                    vec![HostAlias {
+                        host: "ca-only.example.com".to_string(),
+                        port,
+                    }]
+                );
+                assert_eq!(
+                    ca.excluded_aliases,
+                    vec![HostAlias {
+                        host: "ca-excluded.example.com".to_string(),
+                        port,
+                    }]
+                );
+                let plain = manager.entries.get(&entry_key("example.com", port)).unwrap();
+                assert_eq!(plain.marker, None);
+                assert_eq!(
+                    plain.excluded_aliases,
+                    vec![HostAlias {
+                        host: "plain-excluded.example.com".to_string(),
+                        port,
+                    }]
+                );
+                for strict in [true, false] {
+                    for host in ["example.com", "plain-alias.example.com"] {
+                        assert_eq!(
+                            manager.check_host_key(host, port, &key, strict),
+                            HostKeyCheckResult::Trust
+                        );
+                    }
+                    assert_eq!(
+                        manager.check_host_key("plain-excluded.example.com", port, &key, strict),
+                        HostKeyCheckResult::Unknown
+                    );
+                }
+                assert_eq!(
+                    manager.check_host_key("ca-only.example.com", port, &key, true),
+                    HostKeyCheckResult::Unknown
+                );
+                assert!(matches!(
+                    manager.check_host_key("example.com", port, &test_other_public_key(), true),
+                    HostKeyCheckResult::Mismatch { .. }
+                ));
+
+                // Reimporting both records must not change either trust scope.
+                let before = manager.entries.clone();
+                write_test_file_mode_0600(&source, format!("{ca_line}{plain_line}"));
+                assert_eq!(
+                    manager.import_openssh(&source).unwrap(),
+                    ImportSummary::default()
+                );
+                assert_eq!(KnownHostsManager::load(&path).unwrap().entries, before);
+            }
+        }
     }
 
     #[test]
