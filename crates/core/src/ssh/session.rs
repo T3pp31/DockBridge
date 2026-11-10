@@ -383,7 +383,9 @@ impl SshSession {
         // Authentication, channel open, subsystem request and SFTP INIT share
         // this second deadline, so no server-response wait is unbounded (#663).
         // Only synchronous user-prompt time is excluded from this budget.
-        let deadline = Arc::new(PromptAwareDeadline::from_secs(config.connection_timeout_secs));
+        let deadline = Arc::new(PromptAwareDeadline::from_secs(
+            config.connection_timeout_secs,
+        ));
 
         let authenticated = PromptAwareTimeout::new(
             authenticate(
