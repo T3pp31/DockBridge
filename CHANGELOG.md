@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Update code signature validation now explicitly checks certificate expiration and enforces revocation checks when signature or notarization verification is required (#1183)
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
 - Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
 

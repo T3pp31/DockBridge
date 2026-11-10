@@ -36,6 +36,15 @@ protocol AppBundleSignatureVerifying: Sendable {
 }
 
 struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
+    // Pinning the signing identity does not replace certificate lifetime and revocation checks.
+    static let validityCheckFlags = SecCSFlags(
+        rawValue: kSecCSCheckAllArchitectures
+            | kSecCSStrictValidate
+            | kSecCSCheckNestedCode
+            | kSecCSConsiderExpiration
+            | kSecCSEnforceRevocationChecks
+    )
+
     private let policy: ReleaseVerificationPolicy
     private let fileManager: FileManager
 
@@ -76,11 +85,7 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
 
         let validityStatus = SecStaticCodeCheckValidity(
             staticCode,
-            SecCSFlags(
-                rawValue: kSecCSCheckAllArchitectures
-                    | kSecCSStrictValidate
-                    | kSecCSCheckNestedCode
-            ),
+            Self.validityCheckFlags,
             nil
         )
         guard validityStatus == errSecSuccess else {
