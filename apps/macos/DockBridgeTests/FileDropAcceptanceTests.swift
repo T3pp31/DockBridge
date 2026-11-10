@@ -244,13 +244,21 @@ final class FileDropAcceptanceTests: XCTestCase {
         try "outside".write(to: outsideFile, atomically: true, encoding: .utf8)
         let link = directory.appendingPathComponent("link.txt")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outsideFile)
-        viewModel.localPath = alias
+        // Load the fixture through the real directory. This test exercises drop
+        // path equivalence, not directory enumeration through a symlink URL.
+        viewModel.localPath = directory
         await reloadLocalItems(in: viewModel)
+        let displayedLink = try XCTUnwrap(viewModel.localItems.first { $0.name == "link.txt" })
+        XCTAssertFalse(displayedLink.isDirectory)
+        XCTAssertNil(viewModel.errorMessage)
 
         let modifier = LocalPaneDropModifier(viewModel: viewModel, isTargeted: .constant(false), dropKind: .constant(.none))
-        for url in [link, alias.appendingPathComponent("link.txt")] {
-            XCTAssertTrue(modifier.acceptLocalMoves([LocalFileDragPayload(url: url, isDirectory: false)]))
-            XCTAssertNil(viewModel.errorMessage)
+        for destination in [directory, alias] {
+            viewModel.localPath = destination
+            for url in [link, alias.appendingPathComponent("link.txt")] {
+                XCTAssertTrue(modifier.acceptLocalMoves([LocalFileDragPayload(url: url, isDirectory: false)]))
+                XCTAssertNil(viewModel.errorMessage)
+            }
         }
         XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), outsideFile.path)
         XCTAssertEqual(try String(contentsOf: outsideFile, encoding: .utf8), "outside")
