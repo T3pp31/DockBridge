@@ -225,7 +225,11 @@ mod tests {
 
     #[test]
     fn detects_nested_debug_formatted_error_messages() {
-        for detail in ["Connection reset by peer", "channel closed", "unexpected eof"] {
+        for detail in [
+            "Connection reset by peer",
+            "channel closed",
+            "unexpected eof",
+        ] {
             // The IO wrapper adds a second Debug layer around io::Error's
             // quoted `error:` field.
             let error = std::io::Error::other(detail);
@@ -236,9 +240,8 @@ mod tests {
             assert!(is_connection_lost_message(&message), "{message}");
 
             // Also cover the nested `message:` fields used by Os errors.
-            let message = format!(
-                r#"IO {{ message: "read failed: Os {{ message: \"{detail}\" }}" }}"#
-            );
+            let message =
+                format!(r#"IO {{ message: "read failed: Os {{ message: \"{detail}\" }}" }}"#);
             assert!(is_connection_lost_message(&message), "{message}");
         }
     }
@@ -263,7 +266,10 @@ mod tests {
                     "read of {quote}{path}{quote} failed with unexpected eof"
                 ));
                 let error = russh_sftp::client::error::Error::IO(format!("{error:?}"));
-                assert!(is_connection_lost_message(&format!("{error:?}")), "{error:?}");
+                assert!(
+                    is_connection_lost_message(&format!("{error:?}")),
+                    "{error:?}"
+                );
             }
         }
     }
