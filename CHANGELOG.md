@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Zeroize private key file buffers on read/UTF-8 errors and buffer growth during
+  algorithm inspection and authentication (#1199)
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
 - Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
 
