@@ -3039,7 +3039,10 @@ mod tests {
                         port,
                     }]
                 );
-                let plain = manager.entries.get(&entry_key("example.com", port)).unwrap();
+                let plain = manager
+                    .entries
+                    .get(&entry_key("example.com", port))
+                    .unwrap();
                 assert_eq!(plain.marker, None);
                 assert_eq!(
                     plain.excluded_aliases,
