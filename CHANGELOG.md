@@ -16,7 +16,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
-- Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
 
 ## [v1.1.1] - 2026-07-24
 
