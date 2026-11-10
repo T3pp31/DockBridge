@@ -38,13 +38,18 @@ protocol AppBundleSignatureVerifying: Sendable {
 struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
     private let policy: ReleaseVerificationPolicy
     private let fileManager: FileManager
+    private let checkValidity: @Sendable (SecStaticCode, SecCSFlags, SecRequirement?) -> OSStatus
 
     init(
         policy: ReleaseVerificationPolicy = .current,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        checkValidity: @escaping @Sendable (SecStaticCode, SecCSFlags, SecRequirement?) -> OSStatus = {
+            SecStaticCodeCheckValidity($0, $1, $2)
+        }
     ) {
         self.policy = policy
         self.fileManager = fileManager
+        self.checkValidity = checkValidity
     }
 
     func verifyAppBundle(at url: URL) throws {
@@ -74,15 +79,12 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
             throw ReleaseCodeSignatureVerifierError.unsignedBundle
         }
 
-        let validityStatus = SecStaticCodeCheckValidity(
-            staticCode,
-            SecCSFlags(
-                rawValue: kSecCSCheckAllArchitectures
-                    | kSecCSStrictValidate
-                    | kSecCSCheckNestedCode
-            ),
-            nil
+        let validationFlags = SecCSFlags(
+            rawValue: kSecCSCheckAllArchitectures
+                | kSecCSStrictValidate
+                | kSecCSCheckNestedCode
         )
+        let validityStatus = checkValidity(staticCode, validationFlags, nil)
         guard validityStatus == errSecSuccess else {
             throw ReleaseCodeSignatureVerifierError.unsignedBundle
         }
@@ -106,7 +108,17 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
         }
 
         if policy.requireNotarizedUpdates {
-            guard info["NotarizationDate"] != nil else {
+            // Apple's requirement language checks notarization tickets; signing
+            // information (including a trusted timestamp) does not prove notarization.
+            var requirement: SecRequirement?
+            let requirementStatus = SecRequirementCreateWithString(
+                "notarized" as CFString,
+                [],
+                &requirement
+            )
+            guard requirementStatus == errSecSuccess,
+                  let requirement,
+                  checkValidity(staticCode, validationFlags, requirement) == errSecSuccess else {
                 throw ReleaseCodeSignatureVerifierError.notarizationMissing
             }
         }
