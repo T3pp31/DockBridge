@@ -686,7 +686,11 @@ impl russh_sftp::server::Handler for SftpHandler {
             return Err(StatusCode::Eof);
         }
         let mut files = dir.entries[dir.read_offset..].to_vec();
-        if self.failures.duplicate_readdir_entries.load(Ordering::Relaxed) {
+        if self
+            .failures
+            .duplicate_readdir_entries
+            .load(Ordering::Relaxed)
+        {
             files.extend_from_within(..);
         }
         dir.read_offset = dir.entries.len();
