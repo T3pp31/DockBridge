@@ -1236,7 +1236,9 @@ mod tests {
     #[tokio::test]
     async fn readlink_non_symlink_paths_return_failure() {
         let server = TestSftpServer::start().await;
-        server.write_remote_file("/download/file.txt", b"data").await;
+        server
+            .write_remote_file("/download/file.txt", b"data")
+            .await;
         let session = server.connect_session().await;
 
         for path in ["/download/file.txt", "/download"] {
@@ -1256,7 +1258,9 @@ mod tests {
     #[tokio::test]
     async fn readlink_returns_stored_targets_including_dangling_links() {
         let server = TestSftpServer::start().await;
-        server.write_remote_file("/download/target.txt", b"data").await;
+        server
+            .write_remote_file("/download/target.txt", b"data")
+            .await;
         let session = server.connect_session().await;
 
         for (link, target) in [
