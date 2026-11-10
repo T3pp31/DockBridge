@@ -98,8 +98,9 @@ fn read_secret_line<R: Read>(mut reader: R, label: &str) -> anyhow::Result<Zeroi
             Err(err) => anyhow::bail!("failed to read {label} from stdin: {err}"),
         }
     }
-    let value = std::str::from_utf8(&bytes)
-        .map_err(|err| anyhow::anyhow!("failed to read {label} from stdin: invalid UTF-8: {err}"))?;
+    let value = std::str::from_utf8(&bytes).map_err(|err| {
+        anyhow::anyhow!("failed to read {label} from stdin: invalid UTF-8: {err}")
+    })?;
     let mut buffer = Zeroizing::new(value.to_owned());
     let reached_read_limit = buffer.len() == read_limit;
     trim_trailing_line_endings(&mut buffer);
@@ -183,7 +184,10 @@ mod tests {
         const CHILD_SUCCESS: &str = "unbuffered stdin assertions passed";
         const INPUT: &[u8] = b"first\nsecond\nthird";
         if std::env::var_os(CHILD_ENV).is_some() {
-            assert_eq!(read_secret_from_stdin("password").unwrap().as_str(), "first");
+            assert_eq!(
+                read_secret_from_stdin("password").unwrap().as_str(),
+                "first"
+            );
 
             // Read directly from the OS after the secret read. StdinLock would
             // prefetch this line into its unzeroized global buffer instead.
@@ -248,7 +252,9 @@ mod tests {
         );
         assert_eq!(reader.position(), 9);
         assert_eq!(
-            read_secret_line(&mut reader, "passphrase").unwrap().as_str(),
+            read_secret_line(&mut reader, "passphrase")
+                .unwrap()
+                .as_str(),
             "passphrase"
         );
     }
@@ -277,7 +283,10 @@ mod tests {
             input: io::Cursor::new(b"secret\n".to_vec()),
             error: Some(io::ErrorKind::Interrupted),
         };
-        assert_eq!(read_secret_line(reader, "password").unwrap().as_str(), "secret");
+        assert_eq!(
+            read_secret_line(reader, "password").unwrap().as_str(),
+            "secret"
+        );
     }
 
     #[test]
@@ -300,7 +309,10 @@ mod tests {
         assert!(err.to_string().contains("invalid UTF-8"));
         assert!(!err.to_string().contains("secret"));
         assert_eq!(reader.position(), 8);
-        assert_eq!(read_secret_line(&mut reader, "password").unwrap().as_str(), "next");
+        assert_eq!(
+            read_secret_line(&mut reader, "password").unwrap().as_str(),
+            "next"
+        );
     }
 
     #[test]
