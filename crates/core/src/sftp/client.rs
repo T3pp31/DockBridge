@@ -3004,7 +3004,9 @@ mod tests {
                     &resume_partial_suffix(&local_path.display().to_string(), remote),
                 );
                 if resumed {
-                    tokio::fs::write(&partial_path, &payload[..4]).await.unwrap();
+                    tokio::fs::write(&partial_path, &payload[..4])
+                        .await
+                        .unwrap();
                 }
                 match policy {
                     TransferOverwritePolicy::Replace => {
@@ -3131,10 +3133,8 @@ mod tests {
         let local_dir = tempfile::tempdir().unwrap();
         let local_path = local_dir.path().join("file.bin");
         let local = local_path.display().to_string();
-        let partial_path = partial_local_path_for_suffix(
-            local_dir.path(),
-            &resume_partial_suffix(&local, remote),
-        );
+        let partial_path =
+            partial_local_path_for_suffix(local_dir.path(), &resume_partial_suffix(&local, remote));
         tokio::fs::write(&partial_path, b"AAAA").await.unwrap();
         let mut partial = PartialLocalTransfer::begin_resume(
             local_dir.path(),
@@ -3147,7 +3147,11 @@ mod tests {
         .unwrap();
         let mut remote_file = client.open_remote_for_test(remote).await.unwrap();
 
-        assert!(partial.abort(true, &mut remote_file).await.unwrap().is_none());
+        assert!(partial
+            .abort(true, &mut remote_file)
+            .await
+            .unwrap()
+            .is_none());
         assert!(!partial_path.exists());
         assert!(list_partial_paths(local_dir.path()).is_empty());
         assert!(!local_path.exists());
