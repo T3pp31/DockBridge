@@ -713,7 +713,11 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn remove(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
-        if self.failures.fail_remote_remove.swap(false, Ordering::SeqCst) {
+        if self
+            .failures
+            .fail_remote_remove
+            .swap(false, Ordering::SeqCst)
+        {
             return Ok(Self::err_status(
                 id,
                 StatusCode::PermissionDenied,
