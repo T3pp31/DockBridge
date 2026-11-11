@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Report keychain signing identity query failures separately from missing certificates and preserve `security` diagnostics (#1173)
 - Clarify that the security baseline trusts stored hostname/IP aliases in default strict mode; fingerprint-only alias trust requires `known_hosts_strict_mode = false` (#1205).
 - Stop AppIcon.icns generation when copying PNGs into staging fails (#1207)
+- Development installer preflight checks only the parent directory and reports actual move failures (#1206)
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
 - 外部ドロップで一部ファイルのセキュリティスコープを取得できなかった場合に、転送後も対象ファイル名を通知するよう修正 (#1189)
 - Allow ExpandingFrame content to grow and shrink after measurement in scroll containers (#1185)
