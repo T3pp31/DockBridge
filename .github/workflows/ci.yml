@@ -71,6 +71,9 @@ jobs:
             shellcheck -x scripts/*.sh
           fi
 
+      - name: Test UniFFI generation scripts (mocked tools)
+        run: python3 scripts/test-generate-uniffi.py
+
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
           cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
