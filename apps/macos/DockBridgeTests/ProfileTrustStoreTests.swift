@@ -1,4 +1,5 @@
 import XCTest
+import Security
 @testable import DockBridge
 
 final class ProfileTrustStoreTests: XCTestCase {
@@ -52,6 +53,18 @@ final class ProfileTrustStoreTests: XCTestCase {
         XCTAssertTrue(detection.endpointChanges.isEmpty)
         XCTAssertTrue(detection.pendingInitialTrust.isEmpty)
         XCTAssertTrue(detection.pendingNewProfileTrust.isEmpty)
+    }
+
+    func testHasExistingKeyTracksKeyCreationAndDeletion() throws {
+        XCTAssertFalse(try signingKeyStore.hasExistingKey)
+
+        let key = try signingKeyStore.loadOrCreateKey()
+        XCTAssertTrue(try signingKeyStore.hasExistingKey)
+        let reloadedKey = try signingKeyStore.loadOrCreateKey()
+        XCTAssertEqual(key.withUnsafeBytes { Data($0) }, reloadedKey.withUnsafeBytes { Data($0) })
+
+        try signingKeyStore.deleteKey()
+        XCTAssertFalse(try signingKeyStore.hasExistingKey)
     }
 
     func testConcurrentKeyCreationReturnsSameKey() async throws {
@@ -235,7 +248,7 @@ final class ProfileTrustStoreTests: XCTestCase {
         XCTAssertThrowsError(try trustStore.loadTrustedEndpoints()) { error in
             XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
         }
-        XCTAssertFalse(signingKeyStore.hasExistingKey)
+        XCTAssertFalse(try signingKeyStore.hasExistingKey)
 
         let detection = try trustStore.detectEndpointChanges(in: [profile])
         XCTAssertEqual(detection.pendingInitialTrust, [profile])
@@ -259,6 +272,40 @@ final class ProfileTrustStoreTests: XCTestCase {
                 return XCTFail("Expected readFailed, got \(error)")
             }
             XCTAssertEqual(message, String(localized: "Refusing to follow symbolic link."))
+        }
+    }
+}
+
+// Exercise Keychain read outcomes without locking or changing the user's Keychain.
+final class ProfileTrustSigningKeyStoreTests: XCTestCase {
+    func testHasExistingKeyReturnsTrueForReadableKey() throws {
+        let data = Data(repeating: 0x42, count: 32)
+        let keyStore = ProfileTrustSigningKeyStore(copyMatching: { _, item in
+            item?.pointee = data as CFData
+            return errSecSuccess
+        })
+
+        XCTAssertTrue(try keyStore.hasExistingKey)
+    }
+
+    func testHasExistingKeyReturnsFalseForItemNotFound() throws {
+        let keyStore = ProfileTrustSigningKeyStore(copyMatching: { _, _ in
+            errSecItemNotFound
+        })
+
+        XCTAssertFalse(try keyStore.hasExistingKey)
+    }
+
+    func testHasExistingKeyPropagatesKeychainErrors() {
+        for status in [errSecInteractionNotAllowed, errSecAuthFailed, errSecNotAvailable, errSecParam] {
+            let keyStore = ProfileTrustSigningKeyStore(copyMatching: { _, _ in status })
+
+            XCTAssertThrowsError(try keyStore.hasExistingKey) { error in
+                guard case ProfileTrustSigningKeyStoreError.unexpectedStatus(let actualStatus) = error else {
+                    return XCTFail("Expected unexpectedStatus(\(status)), got \(error)")
+                }
+                XCTAssertEqual(actualStatus, status)
+            }
         }
     }
 }

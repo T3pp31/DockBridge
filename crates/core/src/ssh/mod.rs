@@ -1,5 +1,6 @@
 mod algorithm_policy;
 pub mod connection_health;
+mod key_file;
 mod key_inspection;
 pub mod session;
 
