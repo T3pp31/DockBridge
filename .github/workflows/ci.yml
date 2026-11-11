@@ -85,6 +85,8 @@ jobs:
         run: python3 scripts/test-generate-app-icon-icns.py -v
       - name: Test development installer
         run: python3 scripts/test-dev-install-unsigned.py -v
+      - name: Test UniFFI generation scripts (mocked tools)
+        run: python3 scripts/test-generate-uniffi.py
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
