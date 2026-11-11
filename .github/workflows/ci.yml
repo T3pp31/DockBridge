@@ -79,6 +79,8 @@ jobs:
         run: python3 scripts/test-generate-sbom.py
       - name: Test signing identity resolution (mocked macOS commands)
         run: python3 scripts/test-sign-and-notarize-macos.py
+      - name: Test transfer-cancel verification diagnostics
+        run: python3 scripts/test-verify-transfer-cancel.py
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
