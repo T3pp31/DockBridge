@@ -1248,7 +1248,9 @@ mod tests {
         assert!(list_partial_paths(directory.path()).is_empty());
         assert!(list_partial_paths(&directory.path().join("missing")).is_empty());
 
-        let nested = directory.path().join("nested/.dockbridge-directory.partial");
+        let nested = directory
+            .path()
+            .join("nested/.dockbridge-directory.partial");
         std::fs::create_dir_all(&nested).unwrap();
         let mut expected = vec![
             directory.path().join(".dockbridge-root.partial"),
@@ -1257,7 +1259,11 @@ mod tests {
         for path in &expected {
             std::fs::write(path, b"partial").unwrap();
         }
-        for name in ["ordinary.txt", ".dockbridge-no-extension", "unrelated.partial"] {
+        for name in [
+            "ordinary.txt",
+            ".dockbridge-no-extension",
+            "unrelated.partial",
+        ] {
             std::fs::write(nested.join(name), b"not a partial").unwrap();
         }
 
@@ -1278,7 +1284,11 @@ mod tests {
         std::fs::create_dir(&nested).unwrap();
         let partial = nested.join(".dockbridge-inside.partial");
         std::fs::write(&partial, b"inside").unwrap();
-        std::fs::write(outside.path().join(".dockbridge-outside.partial"), b"outside").unwrap();
+        std::fs::write(
+            outside.path().join(".dockbridge-outside.partial"),
+            b"outside",
+        )
+        .unwrap();
 
         // Isolate the links so a regression cannot expand multiple cycles exponentially.
         for (link, target) in [
@@ -1286,7 +1296,10 @@ mod tests {
             (nested.join("self"), PathBuf::from(".")),
             (nested.join("parent"), PathBuf::from("..")),
             (directory.path().join("alias"), nested.clone()),
-            (directory.path().join("outside"), outside.path().to_path_buf()),
+            (
+                directory.path().join("outside"),
+                outside.path().to_path_buf(),
+            ),
         ] {
             symlink(target, &link).unwrap();
             assert_eq!(
