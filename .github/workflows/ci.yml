@@ -90,6 +90,8 @@ jobs:
         run: python3 scripts/test-e2e-verify.py
       - name: Test SBOM publication
         run: python3 scripts/test-generate-sbom.py
+      - name: Test release notes extraction
+        run: python3 scripts/test-release-notes.py
       - name: Test signing identity resolution (mocked macOS commands)
         run: python3 scripts/test-sign-and-notarize-macos.py
       - name: Test transfer-cancel verification diagnostics
