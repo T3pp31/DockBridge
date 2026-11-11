@@ -31,7 +31,14 @@ class DevInstallTests(unittest.TestCase):
         # Only redirect the fixed destination in a temporary copy. Production
         # settings and the permission/replacement logic remain unchanged.
         self.script = self.root / SCRIPT.name
-        self.script.write_text(SCRIPT.read_text().replace("/Applications", str(self.applications)))
+        source = SCRIPT.read_text()
+        self.assertEqual(source.count("/Applications"), 4,
+                         "Installer destinations changed; review sandbox redirection")
+        for destination in ('INSTALL_PATH="/Applications/', '[[ ! -w "/Applications" ]]',
+                            'mktemp -d "/Applications/'):
+            self.assertIn(destination, source)
+        self.assertNotIn("/Applications", SETTINGS.read_text())
+        self.script.write_text(source.replace("/Applications", str(self.applications)))
         shutil.copyfile(SETTINGS, self.root / SETTINGS.name)
         # Shell functions also work when the temporary filesystem is noexec.
         self.env = dict(os.environ, BASH_ENV=str(self.stubs),
@@ -101,6 +108,72 @@ fi
         self.assertNotIn("open", self.log.read_text().splitlines())
         self.assertEqual((self.installed / "old.txt").read_text(), "old build")
         self.assert_no_staging()
+
+    def test_read_only_contents_are_replaced_with_cleanup_warning(self):
+        # Keep the bundle root writable so real cross-parent rename succeeds.
+        # A readonly child then makes the real recursive cleanup fail on both
+        # Linux and macOS. Do not change permissions or mock mv/rm here.
+        contents = self.installed / "Contents"
+        contents.mkdir()
+        (contents / "old.txt").write_text("old build")
+        contents.chmod(0o555)
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.installed / "new.txt").read_text(), "new build")
+        self.assertFalse((self.installed / "Contents").exists())
+        self.assertIn("open", self.log.read_text().splitlines())
+        self.assertIn("インストールが完了しました", self.log.read_text())
+        backups = list(self.applications.glob(".DockBridge-install.*/previous.app"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual((backups[0] / "Contents" / "old.txt").read_text(), "old build")
+        self.assertEqual((backups[0] / "Contents").stat().st_mode & 0o777, 0o555)
+        self.assertIn("後片付けに失敗しました", result.stderr)
+        self.assertIn(str(backups[0]), result.stderr)
+
+    def test_read_only_bundle_root_fails_backup_safely(self):
+        (self.installed / "old.txt").write_text("old build")
+        self.installed.chmod(0o555)
+        result = self.install()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual((self.installed / "old.txt").read_text(), "old build")
+        self.assertEqual(self.installed.stat().st_mode & 0o777, 0o555)
+        self.assertFalse((self.installed / "new.txt").exists())
+        self.assertIn("既存の DockBridge.app を移動できませんでした", self.log.read_text())
+        self.assertNotIn("open", self.log.read_text().splitlines())
+        self.assertNotIn("インストールが完了しました", self.log.read_text())
+        self.assert_no_staging()
+
+    def test_cleanup_failure_preserves_install_failure_and_rollback(self):
+        (self.installed / "old.txt").write_text("old build")
+        self.env["INSTALL_TEST_FAILURE"] = "placement"
+        self.stub("rm", "return 42")
+        result = self.install()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual((self.installed / "old.txt").read_text(), "old build")
+        self.assertFalse((self.installed / "new.txt").exists())
+        self.assertNotIn("open", self.log.read_text().splitlines())
+        self.assertNotIn("インストールが完了しました", self.log.read_text())
+        self.assertIn("後片付けに失敗しました", result.stderr)
+        stages = list(self.applications.glob(".DockBridge-install.*"))
+        self.assertEqual(len(stages), 1)
+        self.assertIn(str(stages[0]), result.stderr)
+        self.assertFalse((stages[0] / "previous.app").exists())
+
+    def test_failed_rollback_preserves_backup_and_failure(self):
+        (self.installed / "old.txt").write_text("old build")
+        self.stub("mv", """if [[ "$2" == "$INSTALL_TEST_APPLICATIONS/DockBridge.app" ]]; then
+  return 1
+fi
+command mv "$@" """)
+        result = self.install()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertFalse(self.installed.exists())
+        backups = list(self.applications.glob(".DockBridge-install.*/previous.app"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual((backups[0] / "old.txt").read_text(), "old build")
+        self.assertIn(str(backups[0]), result.stderr)
+        self.assertNotIn("rm", self.log.read_text().splitlines())
+        self.assertNotIn("インストールが完了しました", self.log.read_text())
 
     def test_writable_existing_bundle_is_replaced_not_merged(self):
         (self.installed / "old.txt").write_text("old build")
