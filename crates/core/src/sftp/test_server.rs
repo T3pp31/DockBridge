@@ -28,6 +28,7 @@ use crate::ssh::{ConnectionProfile, HostKeyPrompt, SshSession};
 pub struct FailureConfig {
     /// Post-handshake connection phases that can stop replying in timeout tests.
     pub hang_auth: AtomicBool,
+    pub hang_keyboard_interactive_response: AtomicBool,
     pub hang_channel_open: AtomicBool,
     pub hang_subsystem_request: AtomicBool,
     pub hang_sftp_init: AtomicBool,
@@ -189,13 +190,21 @@ impl russh::server::Handler for ServerImpl {
                 )]),
             });
         };
+        let answers: Vec<Vec<u8>> = response.map(|item| item.to_vec()).collect();
+        if self
+            .failures
+            .hang_keyboard_interactive_response
+            .load(Ordering::SeqCst)
+        {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         let expected = self
             .failures
             .keyboard_interactive_secret
             .lock()
             .unwrap()
             .clone();
-        let answers: Vec<Vec<u8>> = response.map(|item| item.to_vec()).collect();
         if answers.len() == 1 && answers[0] == expected.as_bytes() {
             Ok(Auth::Accept)
         } else {
