@@ -1,3 +1,5 @@
+import Combine
+import SwiftUI
 import XCTest
 @testable import DockBridge
 
@@ -200,6 +202,121 @@ final class FileDropAcceptanceTests: XCTestCase {
         }
         XCTAssertEqual(try String(contentsOf: sourceFile, encoding: .utf8), "source")
         XCTAssertEqual(try String(contentsOf: destinationFile, encoding: .utf8), "destination")
+    }
+
+    func testLocalPaneDropIntoSameDirectoryAcceptsFilesAndFoldersAsNoOp() async throws {
+        let viewModel = try makeKickoffViewModel()
+        let directory = viewModel.localPath
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("unchanged.txt")
+        let folder = directory.appendingPathComponent("folder", isDirectory: true)
+        try "unchanged".write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let nestedFile = folder.appendingPathComponent("nested.txt")
+        try "nested".write(to: nestedFile, atomically: true, encoding: .utf8)
+        await reloadLocalItems(in: viewModel)
+
+        let modifier = LocalPaneDropModifier(viewModel: viewModel, isTargeted: .constant(false), dropKind: .constant(.none))
+        let filePayload = LocalFileDragPayload(url: file, isDirectory: false)
+        let folderPayload = LocalFileDragPayload(url: folder, isDirectory: true)
+        for items in [[filePayload], [folderPayload], [filePayload, folderPayload]] {
+            XCTAssertTrue(modifier.acceptLocalMoves(items))
+            XCTAssertNil(viewModel.errorMessage)
+        }
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "unchanged")
+        XCTAssertEqual(try String(contentsOf: nestedFile, encoding: .utf8), "nested")
+
+        // A no-op must not clear an unrelated error that was already displayed.
+        viewModel.errorMessage = "existing error"
+        XCTAssertTrue(modifier.acceptLocalMoves([filePayload]))
+        XCTAssertEqual(viewModel.errorMessage, "existing error")
+    }
+
+    func testLocalPaneSameDirectoryNoOpResolvesParentButNotSymlinkEntry() async throws {
+        let viewModel = try makeKickoffViewModel()
+        let root = viewModel.localPath
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("actual", isDirectory: true)
+        let alias = root.appendingPathComponent("alias", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: directory)
+        let outsideFile = root.appendingPathComponent("outside.txt")
+        try "outside".write(to: outsideFile, atomically: true, encoding: .utf8)
+        let link = directory.appendingPathComponent("link.txt")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outsideFile)
+        // Load the fixture through the real directory. This test exercises drop
+        // path equivalence, not directory enumeration through a symlink URL.
+        viewModel.localPath = directory
+        await reloadLocalItems(in: viewModel)
+        let displayedLink = try XCTUnwrap(viewModel.localItems.first { $0.name == "link.txt" })
+        XCTAssertFalse(displayedLink.isDirectory)
+        XCTAssertNil(viewModel.errorMessage)
+
+        let modifier = LocalPaneDropModifier(viewModel: viewModel, isTargeted: .constant(false), dropKind: .constant(.none))
+        for destination in [directory, alias] {
+            viewModel.localPath = destination
+            for url in [link, alias.appendingPathComponent("link.txt")] {
+                XCTAssertTrue(modifier.acceptLocalMoves([LocalFileDragPayload(url: url, isDirectory: false)]))
+                XCTAssertNil(viewModel.errorMessage)
+            }
+        }
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), outsideFile.path)
+        XCTAssertEqual(try String(contentsOf: outsideFile, encoding: .utf8), "outside")
+    }
+
+    func testLocalPaneNoOpStillRejectsEmptyAndUndisplayedPayloads() async throws {
+        let viewModel = try makeKickoffViewModel()
+        let directory = viewModel.localPath
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("visible.txt")
+        try "visible".write(to: file, atomically: true, encoding: .utf8)
+        await reloadLocalItems(in: viewModel)
+        let undisplayedFile = directory.appendingPathComponent("undisplayed.txt")
+        try "undisplayed".write(to: undisplayedFile, atomically: true, encoding: .utf8)
+
+        let modifier = LocalPaneDropModifier(viewModel: viewModel, isTargeted: .constant(false), dropKind: .constant(.none))
+        let rejectedItems: [[LocalFileDragPayload]] = [
+            [],
+            [LocalFileDragPayload(url: undisplayedFile, isDirectory: false)],
+            [LocalFileDragPayload(url: file, isDirectory: true)],
+            [LocalFileDragPayload(url: directory.deletingLastPathComponent(), isDirectory: true)],
+        ]
+        for items in rejectedItems {
+            viewModel.errorMessage = nil
+            XCTAssertFalse(modifier.acceptLocalMoves(items))
+            XCTAssertEqual(viewModel.errorMessage, FileDropError.emptyPayload.localizedDescription)
+        }
+        XCTAssertEqual(try String(contentsOf: undisplayedFile, encoding: .utf8), "undisplayed")
+    }
+
+    func testLocalPaneNoOpStillRejectsMovingDirectoryIntoItselfOrDescendant() async throws {
+        let viewModel = try makeKickoffViewModel()
+        let directory = viewModel.localPath
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let folder = directory.appendingPathComponent("folder", isDirectory: true)
+        let nested = folder.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        await reloadLocalItems(in: viewModel)
+
+        let payload = LocalFileDragPayload(url: folder, isDirectory: true)
+        let modifier = LocalPaneDropModifier(viewModel: viewModel, isTargeted: .constant(false), dropKind: .constant(.none))
+        // Keep the displayed source row while changing the destination, as can
+        // happen between navigation and completion of the next directory load.
+        for destination in [folder, nested] {
+            viewModel.localPath = destination
+            viewModel.errorMessage = nil
+            XCTAssertFalse(modifier.acceptLocalMoves([payload]))
+            XCTAssertEqual(viewModel.errorMessage, FileDropError.invalidMove.localizedDescription)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: nested.path))
+    }
+
+    private func reloadLocalItems(in viewModel: MainViewModel) async {
+        let loaded = expectation(description: "Local items loaded")
+        let observation = viewModel.$localItems.dropFirst().sink { _ in loaded.fulfill() }
+        defer { observation.cancel() }
+        viewModel.reloadLocal()
+        await fulfillment(of: [loaded], timeout: 5)
     }
 
     // MARK: - Async kickoff (non-blocking D&D accept)
