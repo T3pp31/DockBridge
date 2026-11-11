@@ -52,15 +52,24 @@ STAGE_DIR="$(mktemp -d "/Applications/.DockBridge-install.XXXXXX")"
 STAGED_APP="${STAGE_DIR}/${APP_NAME}"
 BACKUP_PATH="${STAGE_DIR}/previous.app"
 cleanup_install() {
+  local install_status=$?
   if [[ -e "$BACKUP_PATH" || -L "$BACKUP_PATH" ]]; then
     if [[ ! -e "$INSTALL_PATH" && ! -L "$INSTALL_PATH" ]]; then
       if ! mv "$BACKUP_PATH" "$INSTALL_PATH"; then
         echo "復元できませんでした。元のアプリを ${BACKUP_PATH} に保持します。" >&2
-        return
+        return "$install_status"
       fi
     fi
   fi
-  rm -rf "$STAGE_DIR"
+  # Cleanup must not turn a completed install into a failure (or hide an
+  # installation failure). Never change permissions to remove an old bundle.
+  if ! rm -rf "$STAGE_DIR"; then
+    echo "警告: 後片付けに失敗しました。残ったファイルを ${STAGE_DIR} に保持します。" >&2
+    if [[ -e "$BACKUP_PATH" || -L "$BACKUP_PATH" ]]; then
+      echo "旧アプリの残存ファイル: ${BACKUP_PATH}" >&2
+    fi
+  fi
+  return "$install_status"
 }
 trap cleanup_install EXIT
 
