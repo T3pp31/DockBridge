@@ -1197,7 +1197,8 @@ pub fn list_partial_paths(dir: &Path) -> Vec<PathBuf> {
     }
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        // Inspect the entry itself: directory symlinks may form cycles or point outside the root.
+        if entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
             paths.extend(list_partial_paths(&path));
         } else if is_partial_file_name(
             path.file_name()
@@ -1572,6 +1573,97 @@ mod tests {
             dir_handles: HashMap::new(),
             next_handle: 1,
         }
+    }
+
+    #[test]
+    fn list_partial_paths_recurses_into_real_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(list_partial_paths(directory.path()).is_empty());
+        assert!(list_partial_paths(&directory.path().join("missing")).is_empty());
+
+        let nested = directory
+            .path()
+            .join("nested/.dockbridge-directory.partial");
+        std::fs::create_dir_all(&nested).unwrap();
+        let mut expected = vec![
+            directory.path().join(".dockbridge-root.partial"),
+            nested.join(".dockbridge-nested.partial"),
+        ];
+        for path in &expected {
+            std::fs::write(path, b"partial").unwrap();
+        }
+        for name in [
+            "ordinary.txt",
+            ".dockbridge-no-extension",
+            "unrelated.partial",
+        ] {
+            std::fs::write(nested.join(name), b"not a partial").unwrap();
+        }
+
+        let mut actual = list_partial_paths(directory.path());
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_partial_paths_does_not_follow_directory_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let nested = directory.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let partial = nested.join(".dockbridge-inside.partial");
+        std::fs::write(&partial, b"inside").unwrap();
+        std::fs::write(
+            outside.path().join(".dockbridge-outside.partial"),
+            b"outside",
+        )
+        .unwrap();
+
+        // Isolate the links so a regression cannot expand multiple cycles exponentially.
+        for (link, target) in [
+            (directory.path().join("loop"), PathBuf::from(".")),
+            (nested.join("self"), PathBuf::from(".")),
+            (nested.join("parent"), PathBuf::from("..")),
+            (directory.path().join("alias"), nested.clone()),
+            (
+                directory.path().join("outside"),
+                outside.path().to_path_buf(),
+            ),
+        ] {
+            symlink(target, &link).unwrap();
+            assert_eq!(
+                list_partial_paths(directory.path()),
+                vec![partial.clone()],
+                "link={link:?}"
+            );
+            std::fs::remove_file(link).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_partial_paths_preserves_partial_symlink_entries() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        std::fs::write(&target, b"data").unwrap();
+        let mut expected = vec![
+            directory.path().join(".dockbridge-link.partial"),
+            directory.path().join(".dockbridge-broken.partial"),
+        ];
+        symlink(&target, &expected[0]).unwrap();
+        symlink("missing", &expected[1]).unwrap();
+        symlink(&target, directory.path().join("ordinary-link")).unwrap();
+
+        let mut actual = list_partial_paths(directory.path());
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected);
     }
 
     #[test]
