@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression fixtures for language-specific String Catalog plural forms."""
+"""Regression fixtures for String Catalog variations and format arguments."""
 import json
 import pathlib
 import subprocess
@@ -14,6 +14,16 @@ def plural(**forms):
         category: {"stringUnit": {"value": value}}
         for category, value in forms.items()
     }}}
+
+
+def variation(kind, **values):
+    return {"variations": {kind: {
+        name: {"stringUnit": {"value": value}}
+        for name, value in values.items()
+    }}}
+
+
+NON_PLURAL_VARIATIONS = (("device", "iphone", "mac"), ("width", "compact", "regular"))
 
 
 class LocalizationTests(unittest.TestCase):
@@ -43,6 +53,120 @@ class LocalizationTests(unittest.TestCase):
                 result = self.verify({"stringUnit": {"value": source}},
                                      {"stringUnit": {"value": target}})
                 self.assertEqual(result.returncode == 0, valid, result.stdout + result.stderr)
+
+    def test_non_plural_variation_only(self):
+        for kind, first, second in NON_PLURAL_VARIATIONS:
+            with self.subTest(kind=kind):
+                result = self.verify(
+                    variation(kind, **{first: "%lld items", second: "%@ item"}),
+                    variation(kind, **{first: "%lld個", second: "%@個"}),
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_non_plural_variation_with_scalar(self):
+        for kind, first, _ in NON_PLURAL_VARIATIONS:
+            with self.subTest(kind=kind):
+                result = self.verify(
+                    {"stringUnit": {"value": "%lld items"},
+                     **variation(kind, **{first: "%@ item"})},
+                    {"stringUnit": {"value": "%lld個"},
+                     **variation(kind, **{first: "%@個"})},
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_non_plural_missing_or_unexpected_target_value(self):
+        for kind, first, second in NON_PLURAL_VARIATIONS:
+            for source_values, target_values, diagnostic in (
+                ({first: "%lld items", second: "%lld items"}, {second: "%lld個"},
+                 f"missing ja value at variations.{kind}.{first}"),
+                ({first: "%lld items"}, {first: "%lld個", second: "%lld個"},
+                 f"unexpected ja value at variations.{kind}.{second}"),
+            ):
+                with self.subTest(kind=kind, diagnostic=diagnostic):
+                    result = self.verify(
+                        {"stringUnit": {"value": "%lld items"},
+                         **variation(kind, **source_values)},
+                        {"stringUnit": {"value": "%lld個"},
+                         **variation(kind, **target_values)},
+                    )
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn(diagnostic, result.stderr)
+
+    def test_non_plural_invalid_value_is_not_hidden_by_scalar(self):
+        for kind, first, _ in NON_PLURAL_VARIATIONS:
+            for language in ("en", "ja"):
+                for invalid_node in (None, {}, {"stringUnit": {}},
+                                     {"stringUnit": {"value": ""}}):
+                    with self.subTest(kind=kind, language=language, node=invalid_node):
+                        english = {"stringUnit": {"value": "%lld items"},
+                                   **variation(kind, **{first: "%lld items"})}
+                        japanese = {"stringUnit": {"value": "%lld個"},
+                                    **variation(kind, **{first: "%lld個"})}
+                        invalid = english if language == "en" else japanese
+                        invalid["variations"][kind][first] = invalid_node
+                        result = self.verify(english, japanese)
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                        self.assertIn(
+                            f"empty {language} value at variations.{kind}.{first}",
+                            result.stderr,
+                        )
+
+    def test_non_plural_invalid_mapping_is_not_hidden_by_scalar(self):
+        for kind, _, _ in NON_PLURAL_VARIATIONS:
+            for language in ("en", "ja"):
+                with self.subTest(kind=kind, language=language):
+                    english = {"stringUnit": {"value": "%lld items"}}
+                    japanese = {"stringUnit": {"value": "%lld個"}}
+                    invalid = english if language == "en" else japanese
+                    invalid["variations"] = {kind: []}
+                    result = self.verify(english, japanese)
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn(f"empty {language} value at variations.{kind}", result.stderr)
+
+    def test_non_plural_format_mismatch_is_not_hidden_by_scalar(self):
+        for kind, first, _ in NON_PLURAL_VARIATIONS:
+            with self.subTest(kind=kind):
+                result = self.verify(
+                    {"stringUnit": {"value": "%lld items"},
+                     **variation(kind, **{first: "%lld items"})},
+                    {"stringUnit": {"value": "%lld個"},
+                     **variation(kind, **{first: "%@個"})},
+                )
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("ja format arguments", result.stderr)
+                self.assertIn(f"at variations.{kind}.{first} do not match", result.stderr)
+
+    def test_nested_non_plural_and_plural_variations(self):
+        for kind, first, _ in NON_PLURAL_VARIATIONS:
+            for outer_plural in (False, True):
+                for valid in (True, False):
+                    with self.subTest(kind=kind, outer_plural=outer_plural, valid=valid):
+                        target_value = "%lld個" if valid else "%@個"
+                        # The extra target category must fall back to source
+                        # `other` without changing the non-plural path segments.
+                        if outer_plural:
+                            english = {"variations": {"plural": {
+                                "other": variation(kind, **{first: "%lld items"}),
+                            }}}
+                            japanese = {"variations": {"plural": {
+                                "one": variation(kind, **{first: target_value}),
+                                "other": variation(kind, **{first: "%lld個"}),
+                            }}}
+                            target_path = f"variations.plural.one.variations.{kind}.{first}"
+                        else:
+                            english = {"variations": {kind: {
+                                first: plural(other="%lld items"),
+                            }}}
+                            japanese = {"variations": {kind: {
+                                first: plural(one=target_value, other="%lld個"),
+                            }}}
+                            target_path = f"variations.{kind}.{first}.variations.plural.one"
+                        result = self.verify(english, japanese)
+                        self.assertEqual(result.returncode, 0 if valid else 1,
+                                         result.stdout + result.stderr)
+                        if not valid:
+                            self.assertIn("ja format arguments", result.stderr)
+                            self.assertIn(f"at {target_path} do not match", result.stderr)
 
     def test_japanese_other_without_one(self):
         self.assertEqual(self.verify(plural(one="%lld item", other="%lld items"), plural(other="%lld個")).returncode, 0)
