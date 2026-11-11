@@ -101,7 +101,7 @@ extension DockBridgeError {
             return String(localized: "Unable to load the host key store. Quit the app, back up or remove known_hosts.json, then reconnect.")
         }
 
-        if lowercased.contains("host key mismatch") || lowercased.contains("mismatch") {
+        if lowercased.contains("host key mismatch") {
             return String(localized: "The server's identity has changed. Disconnect and verify with your server administrator.")
         }
 

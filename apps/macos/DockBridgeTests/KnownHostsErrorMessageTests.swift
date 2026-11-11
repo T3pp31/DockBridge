@@ -91,6 +91,71 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         )
     }
 
+    func testNonHostKeyMismatchMessagesPreserveOriginalMessage() {
+        let messages = [
+            "mismatch",
+            "failed to upload: size mismatch",
+            "checksum mismatch after download",
+            "signature mismatch",
+            "configuration value mismatch",
+            "HASH MISMATCH"
+        ]
+
+        for raw in messages {
+            XCTAssertEqual(DockBridgeError.friendlyMessage(for: raw), raw, raw)
+            let errors: [DockBridgeError] = [
+                .Other(message: raw),
+                .Config(message: raw),
+                .ConnectionLost(message: raw)
+            ]
+            for error in errors {
+                XCTAssertEqual(error.userFriendlyMessage, raw, raw)
+            }
+        }
+    }
+
+    func testHostKeyMismatchErrorMessageIsUserFriendly() {
+        let expected = String(localized: "The server's identity has changed. Disconnect and verify with your server administrator.")
+        for raw in [
+            "host key mismatch for example.com:22",
+            "SSH: HOST KEY MISMATCH for example.com:22"
+        ] {
+            XCTAssertEqual(DockBridgeError.friendlyMessage(for: raw), expected, raw)
+            XCTAssertEqual(DockBridgeError.Other(message: raw).userFriendlyMessage, expected, raw)
+        }
+        XCTAssertEqual(
+            DockBridgeError.HostKeyMismatch(host: "example.com", port: 22).userFriendlyMessage,
+            expected
+        )
+    }
+
+    func testKnownHostsErrorTakesPrecedenceOverHostKeyMismatch() {
+        XCTAssertEqual(
+            DockBridgeError.friendlyMessage(for: "failed to read known_hosts.json: host key mismatch"),
+            String(localized: "Unable to load the host key store. Quit the app, back up or remove known_hosts.json, then reconnect.")
+        )
+    }
+
+    func testHostKeyRejectedWithUnrelatedMismatchUsesRejectionMessage() {
+        XCTAssertEqual(
+            DockBridgeError.friendlyMessage(
+                for: "host key rejected by user for example.com:22 (checksum mismatch)"
+            ),
+            String(localized: "Connection aborted because the host key was not approved.")
+        )
+    }
+
+    func testNonHostKeyMismatchDoesNotOverrideOtherFriendlyMappings() {
+        XCTAssertEqual(
+            DockBridgeError.friendlyMessage(for: "authentication failed: signature mismatch"),
+            String(localized: "Check the username and password.")
+        )
+        XCTAssertEqual(
+            DockBridgeError.friendlyMessage(for: "failed to upload '/srv/mismatch.txt': permission denied"),
+            String(localized: "You do not have write permission on the remote side. Check the remote working directory.")
+        )
+    }
+
     func testHostKeyRejectedErrorMessageIsUserFriendly() {
         let message = DockBridgeError.friendlyMessage(
             for: "host key rejected by user for example.com:22"
