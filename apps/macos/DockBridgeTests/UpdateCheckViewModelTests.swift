@@ -21,7 +21,8 @@ final class UpdateCheckViewModelTests: XCTestCase {
         viewModel = UpdateCheckViewModel(
             updateService: updateService,
             downloadService: mockDownloadService,
-            settingsService: settingsService
+            settingsService: settingsService,
+            currentVersion: "0.1.0"
         )
     }
 
@@ -61,6 +62,8 @@ final class UpdateCheckViewModelTests: XCTestCase {
         mockSession.responseJSON = newerReleaseJSON
 
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
+        XCTAssertEqual(viewModel.pendingUpdate?.version, "0.2.0")
+        XCTAssertTrue(viewModel.showUpdateSheet)
         viewModel.skipVersion()
 
         XCTAssertEqual(settingsService.loadSkippedUpdateVersion(), "0.2.0")
@@ -69,10 +72,12 @@ final class UpdateCheckViewModelTests: XCTestCase {
         viewModel = UpdateCheckViewModel(
             updateService: updateService,
             downloadService: mockDownloadService,
-            settingsService: settingsService
+            settingsService: settingsService,
+            currentVersion: "0.1.0"
         )
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
 
+        XCTAssertNil(viewModel.pendingUpdate)
         XCTAssertFalse(viewModel.showUpdateSheet)
     }
 
@@ -89,12 +94,31 @@ final class UpdateCheckViewModelTests: XCTestCase {
         viewModel = UpdateCheckViewModel(
             updateService: updateService,
             downloadService: mockDownloadService,
-            settingsService: settingsService
+            settingsService: settingsService,
+            currentVersion: "0.1.0"
         )
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
 
         // The update is offered again on the next launch.
         XCTAssertTrue(viewModel.showUpdateSheet)
+    }
+
+    func testCheckOnLaunchIgnoresCurrentOrOlderRelease() async {
+        mockSession.responseJSON = newerReleaseJSON
+
+        for currentVersion in ["0.2.0", "0.3.0"] {
+            viewModel = UpdateCheckViewModel(
+                updateService: updateService,
+                downloadService: mockDownloadService,
+                settingsService: settingsService,
+                currentVersion: currentVersion
+            )
+
+            await viewModel.checkOnLaunch(isHostKeyBlocking: false)
+
+            XCTAssertNil(viewModel.pendingUpdate, "currentVersion: \(currentVersion)")
+            XCTAssertFalse(viewModel.showUpdateSheet, "currentVersion: \(currentVersion)")
+        }
     }
 
     func testCheckOnLaunchIgnoresNetworkFailure() async {
