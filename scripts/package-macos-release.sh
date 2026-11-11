@@ -67,7 +67,8 @@ else
   lipo -create "${RUST_LIB_PATHS[@]}" -output "${UNIVERSAL_LIB}"
 fi
 
-./scripts/generate-uniffi.sh "" release
+# Keep the freshly assembled universal library instead of rebuilding for host.
+DOCKBRIDGE_SKIP_HOST_BUILD=1 ./scripts/generate-uniffi.sh "" release
 
 DERIVED_DATA="${DERIVED_DATA:-${ROOT}/.derivedData/Release}"
 mkdir -p "$DERIVED_DATA"

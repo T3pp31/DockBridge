@@ -54,6 +54,10 @@ pub struct KbdInteractivePrompt {
 
 /// Callback invoked when the server requests keyboard-interactive input
 /// (PAM/2FA challenges, `KbdInteractiveAuthentication yes` servers).
+///
+/// Implementations are synchronous and may block until the user responds.
+/// As with host-key prompts, the deadline is extended after the prompt returns,
+/// so the prompt itself must not yield to the Tokio runtime.
 pub trait AuthPromptHandler: Send + Sync {
     /// Shows the challenge to the user and returns one answer per prompt.
     /// `None` answers mean the user cancelled; authentication is abandoned.
@@ -261,7 +265,7 @@ impl From<SecurityError> for ConnectionError {
     }
 }
 
-/// A deadline that can be extended after interactive host-key prompts.
+/// A deadline that can be extended after synchronous user prompts.
 #[derive(Debug)]
 struct PromptAwareDeadline {
     deadline: std::sync::Mutex<TokioInstant>,
@@ -378,11 +382,12 @@ impl SshSession {
         // TCP/SSH handshake and post-handshake startup have separate budgets.
         // Authentication, channel open, subsystem request and SFTP INIT share
         // this second deadline, so no server-response wait is unbounded (#663).
-        let deadline =
-            tokio::time::Instant::now() + Duration::from_secs(config.connection_timeout_secs);
+        // Only synchronous user-prompt time is excluded from this budget.
+        let deadline = Arc::new(PromptAwareDeadline::from_secs(
+            config.connection_timeout_secs,
+        ));
 
-        let authenticated = tokio::time::timeout_at(
-            deadline,
+        let authenticated = PromptAwareTimeout::new(
             authenticate(
                 &mut handle,
                 &username,
@@ -390,7 +395,9 @@ impl SshSession {
                 &host,
                 port,
                 auth_prompt.as_ref(),
+                &deadline,
             ),
+            deadline.clone(),
         )
         .await
         .map_err(|_| ConnectionError::Timeout {
@@ -401,7 +408,7 @@ impl SshSession {
             return Err(AuthError::Failed { username }.into());
         }
 
-        let channel = tokio::time::timeout_at(deadline, handle.channel_open_session())
+        let channel = PromptAwareTimeout::new(handle.channel_open_session(), deadline.clone())
             .await
             .map_err(|_| ConnectionError::Timeout {
                 timeout_secs: config.connection_timeout_secs,
@@ -412,7 +419,7 @@ impl SshSession {
                 message: err.to_string(),
             })?;
 
-        tokio::time::timeout_at(deadline, channel.request_subsystem(true, "sftp"))
+        PromptAwareTimeout::new(channel.request_subsystem(true, "sftp"), deadline.clone())
             .await
             .map_err(|_| ConnectionError::Timeout {
                 timeout_secs: config.connection_timeout_secs,
@@ -421,8 +428,7 @@ impl SshSession {
                 message: err.to_string(),
             })?;
 
-        let sftp = tokio::time::timeout_at(
-            deadline,
+        let sftp = PromptAwareTimeout::new(
             SftpSession::new_with_config(
                 channel.into_stream(),
                 SftpConfig {
@@ -430,6 +436,7 @@ impl SshSession {
                     ..SftpConfig::default()
                 },
             ),
+            deadline,
         )
         .await
         .map_err(|_| ConnectionError::Timeout {
@@ -479,6 +486,7 @@ async fn authenticate(
     host: &str,
     port: u16,
     auth_prompt: Option<&Arc<dyn AuthPromptHandler>>,
+    prompt_deadline: &PromptAwareDeadline,
 ) -> Result<bool, crate::error::AppError> {
     match auth {
         AuthType::Password { password } => {
@@ -506,7 +514,12 @@ async fn authenticate(
                     if remaining_methods.contains(&MethodKind::KeyboardInteractive) {
                         if let Some(handler) = auth_prompt {
                             return keyboard_interactive_auth(
-                                handle, username, host, port, handler,
+                                handle,
+                                username,
+                                host,
+                                port,
+                                handler,
+                                prompt_deadline,
                             )
                             .await;
                         }
@@ -556,7 +569,12 @@ async fn authenticate(
                     if remaining_methods.contains(&MethodKind::KeyboardInteractive) {
                         if let Some(handler) = auth_prompt {
                             return keyboard_interactive_auth(
-                                handle, username, host, port, handler,
+                                handle,
+                                username,
+                                host,
+                                port,
+                                handler,
+                                prompt_deadline,
                             )
                             .await;
                         }
@@ -611,6 +629,7 @@ async fn keyboard_interactive_auth(
     host: &str,
     port: u16,
     auth_prompt: &Arc<dyn AuthPromptHandler>,
+    prompt_deadline: &PromptAwareDeadline,
 ) -> Result<bool, crate::error::AppError> {
     let connect_failed = |err: russh::Error| ConnectionError::ConnectFailed {
         host: host.to_string(),
@@ -642,7 +661,9 @@ async fn keyboard_interactive_auth(
                 echo: prompt.echo,
             })
             .collect();
+        let prompt_started_at = TokioInstant::now();
         let mut answers = auth_prompt.prompt(&name, &instructions, &challenge);
+        prompt_deadline.extend_by(prompt_started_at.elapsed());
         if answers.len() != challenge.len() || answers.iter().any(Option::is_none) {
             // Cancelled: abandon the round instead of sending partial answers.
             answers.zeroize();
@@ -744,7 +765,7 @@ mod tests {
 
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use crate::sftp::test_server::{FailureConfig, TestSftpServer};
+    use crate::sftp::test_server::{FailureConfig, TestSftpServer, KEYBOARD_INTERACTIVE_SECRET};
 
     struct TrustTestHost;
 
@@ -752,6 +773,147 @@ mod tests {
         fn prompt_unknown_host(&self, _: &str, _: u16, _: &str) -> bool {
             true
         }
+    }
+
+    // Leave room for the test server's one-second rejection delays for both
+    // the initial password and a wrong keyboard-interactive answer.
+    const AUTH_PROMPT_TEST_TIMEOUT_SECS: u64 = 3;
+
+    struct DelayedAuthPrompt {
+        answers: Vec<Option<String>>,
+        called: AtomicBool,
+    }
+
+    impl DelayedAuthPrompt {
+        fn new(answer: Option<&str>) -> Self {
+            Self {
+                answers: vec![answer.map(str::to_owned)],
+                called: AtomicBool::new(false),
+            }
+        }
+    }
+
+    impl AuthPromptHandler for DelayedAuthPrompt {
+        fn prompt(
+            &self,
+            _name: &str,
+            _instructions: &str,
+            prompts: &[KbdInteractivePrompt],
+        ) -> Vec<Option<String>> {
+            assert_eq!(prompts.len(), 1);
+            self.called.store(true, Ordering::SeqCst);
+            // Match the synchronous user callback, without yielding to Tokio.
+            // The wait alone exceeds the entire post-handshake timeout.
+            std::thread::sleep(Duration::from_secs(AUTH_PROMPT_TEST_TIMEOUT_SECS + 1));
+            self.answers.clone()
+        }
+    }
+
+    async fn connect_with_delayed_auth_prompt(
+        server: &TestSftpServer,
+        prompt: Arc<DelayedAuthPrompt>,
+    ) -> Result<SshSession, crate::error::AppError> {
+        server
+            .failures
+            .require_keyboard_interactive
+            .store(true, Ordering::SeqCst);
+        *server.failures.keyboard_interactive_secret.lock().unwrap() =
+            KEYBOARD_INTERACTIVE_SECRET.to_string();
+        let config = AppConfig {
+            connection_timeout_secs: AUTH_PROMPT_TEST_TIMEOUT_SECS,
+            known_hosts_path: server.known_hosts_path(),
+            merge_openssh_known_hosts_on_connect: false,
+            ..AppConfig::default()
+        };
+        let known_hosts = Arc::new(Mutex::new(
+            KnownHostsManager::load(&config.known_hosts_path).unwrap(),
+        ));
+        let profile =
+            ConnectionProfile::with_password("127.0.0.1", server.addr.port(), "test", "wrong");
+        SshSession::connect(
+            profile,
+            &config,
+            known_hosts,
+            Arc::new(TrustTestHost),
+            Some(prompt),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn connect_excludes_keyboard_interactive_prompt_time() {
+        let server = TestSftpServer::start().await;
+        let prompt = Arc::new(DelayedAuthPrompt::new(Some(KEYBOARD_INTERACTIVE_SECRET)));
+        let session = tokio::time::timeout(
+            Duration::from_secs(12),
+            connect_with_delayed_auth_prompt(&server, prompt.clone()),
+        )
+        .await
+        .expect("connection must finish after the prompt")
+        .expect("user input time must not exhaust the connection budget");
+        assert!(prompt.called.load(Ordering::SeqCst));
+        // The adjusted deadline must also reach channel open, subsystem request
+        // and SFTP INIT, not just the authentication response.
+        crate::sftp::SftpClient::new(&session)
+            .canonicalize_path(".")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn slow_keyboard_interactive_cancellation_and_wrong_answer_remain_auth_failures() {
+        for answer in [None, Some("wrong-answer")] {
+            let server = TestSftpServer::start().await;
+            let prompt = Arc::new(DelayedAuthPrompt::new(answer));
+            let result = tokio::time::timeout(
+                Duration::from_secs(12),
+                connect_with_delayed_auth_prompt(&server, prompt.clone()),
+            )
+            .await
+            .expect("failed authentication must finish after the prompt");
+            assert!(prompt.called.load(Ordering::SeqCst));
+            assert!(matches!(
+                result,
+                Err(crate::error::AppError::Auth(AuthError::Failed { .. }))
+            ));
+        }
+    }
+
+    async fn assert_stalled_phase_after_auth_prompt_times_out(
+        select_flag: fn(&FailureConfig) -> &AtomicBool,
+    ) {
+        let server = TestSftpServer::start().await;
+        select_flag(&server.failures).store(true, Ordering::SeqCst);
+        let prompt = Arc::new(DelayedAuthPrompt::new(Some(KEYBOARD_INTERACTIVE_SECRET)));
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(12), async {
+            tokio::join!(
+                connect_with_delayed_auth_prompt(&server, prompt.clone()),
+                server.failures.connection_phase_started.notified()
+            )
+        })
+        .await
+        .expect("server wait must stay bounded after a slow prompt");
+        assert!(prompt.called.load(Ordering::SeqCst));
+        // Waiting for the server's notification prevents an earlier timeout
+        // (before the answers or SFTP INIT arrive) from passing this test.
+        assert!(matches!(
+            result,
+            Err(crate::error::AppError::Connection(ConnectionError::Timeout { timeout_secs }))
+                if timeout_secs == AUTH_PROMPT_TEST_TIMEOUT_SECS
+        ));
+    }
+
+    #[tokio::test]
+    async fn connect_times_out_when_keyboard_interactive_response_stalls() {
+        assert_stalled_phase_after_auth_prompt_times_out(|failures| {
+            &failures.hang_keyboard_interactive_response
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn connect_times_out_when_sftp_init_stalls_after_auth_prompt() {
+        assert_stalled_phase_after_auth_prompt_times_out(|failures| &failures.hang_sftp_init).await;
     }
 
     async fn assert_stalled_phase_times_out(
