@@ -336,18 +336,23 @@ extension AppUpdateServiceTests {
         AppUpdateConfig.releaseBodyCacheDirectory = nil
     }
 
-    func testCheckForUpdateTreats304AsNoUpdate() async throws {
-        // Given: the server returns 304 (If-None-Match matched)
-        AppUpdateConfig.etagDefaults.set("\"abc123\"", forKey: AppUpdateConfig.etagDefaultsKey)
+    func testCheckForUpdateTreatsRepeated304WithoutCachedBodyAsNoUpdate() async throws {
+        // Given: a matching ETag but no cached body; even the unconditional retry returns 304.
         AppUpdateConfig.clearReleaseBody()
+        AppUpdateConfig.persistETag("\"abc123\"")
         defer {
             AppUpdateConfig.etagDefaults.removeObject(forKey: AppUpdateConfig.etagDefaultsKey)
             AppUpdateConfig.clearReleaseBody()
         }
 
-        let service = AppUpdateService(session: MockURLSession(statusCode: 304, data: Data()))
+        let session = SequenceURLSession(responses: [(304, Data(), nil), (304, Data(), nil)])
+        let service = AppUpdateService(session: session)
         let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
-        XCTAssertNil(update, "304 Not Modified must mean no new update")
+
+        XCTAssertNil(update, "Repeated 304 responses without a cached body must mean no update")
+        let requestETags = await session.requestETags
+        XCTAssertEqual(requestETags, ["\"abc123\"", nil])
+        XCTAssertNil(AppUpdateConfig.showExistingETag(), "An ETag without a cached body must be cleared")
     }
 
     func testCheckForUpdateClearsCorruptCacheOn304() async throws {

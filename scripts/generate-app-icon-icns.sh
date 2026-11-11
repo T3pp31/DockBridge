@@ -17,6 +17,12 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 mkdir -p "$TMP/AppIcon.iconset"
-find "$ICONSET_SRC" -maxdepth 1 -name '*.png' -exec cp {} "$TMP/AppIcon.iconset/" \;
+# Unlike -exec ... \;, -exec ... + makes find fail if a copy fails.
+# Keep {} last for BSD/POSIX find, and pass the destination separately.
+find "$ICONSET_SRC" -maxdepth 1 -name '*.png' -exec sh -c '
+  dest=$1
+  shift
+  cp "$@" "$dest"
+' sh "$TMP/AppIcon.iconset/" {} +
 mkdir -p "$(dirname "$OUT")"
 iconutil -c icns "$TMP/AppIcon.iconset" -o "$OUT"
