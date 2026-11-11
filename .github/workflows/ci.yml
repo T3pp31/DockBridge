@@ -75,6 +75,8 @@ jobs:
         run: python3 scripts/test-demo-host-key.py
       - name: Test E2E log cleanup
         run: python3 scripts/test-e2e-verify.py
+      - name: Test SBOM publication
+        run: python3 scripts/test-generate-sbom.py
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
