@@ -578,7 +578,10 @@ final class ReleaseCodeSignatureVerifierTests: XCTestCase {
             if writer >= 0 { close(writer) }
         }
         DispatchQueue.global().async {
-            XCTAssertThrowsError(try verifier.verifyAppBundle(at: bundleURL)) { error in
+            do {
+                try verifier.verifyAppBundle(at: bundleURL)
+                XCTFail("Expected FIFO Info.plist to be rejected")
+            } catch {
                 XCTAssertEqual(error as? ReleaseCodeSignatureVerifierError, .unsignedBundle)
             }
             completed.fulfill()
