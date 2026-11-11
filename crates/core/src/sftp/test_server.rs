@@ -47,6 +47,9 @@ pub struct FailureConfig {
     /// Number of SSH_FXP_MKDIR requests handled, used to assert that
     /// directory mirrors issue at most one mkdir per directory (issue #312).
     pub mkdir_count: AtomicU64,
+    /// Number of SSH_FXP_REMOVE requests, used to detect delete-then-rename
+    /// regressions when finalizing uploads.
+    pub remove_count: AtomicU64,
     /// When set, a single OPENDIR for exactly this path fails (one-shot),
     /// letting tests simulate an unreadable remote subdirectory during a walk
     /// (issue #316).
@@ -728,6 +731,7 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn remove(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
+        self.failures.remove_count.fetch_add(1, Ordering::Relaxed);
         let local = self.resolve(&path);
         if let Err(err) = fs::remove_file(&local).await {
             // Match real servers: only a missing target is NoSuchFile; other

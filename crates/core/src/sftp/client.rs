@@ -3507,6 +3507,11 @@ mod tests {
             .unwrap();
         assert_eq!(contents, b"brand new");
         assert!(server.remote_partial_paths().is_empty());
+        assert_eq!(
+            server.failures.remove_count.load(Ordering::Relaxed),
+            0,
+            "atomic replacement must not issue REMOVE"
+        );
     }
 
     #[tokio::test]
@@ -3567,9 +3572,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(original, b"original contents");
-        assert!(
-            !server.remote_partial_paths().is_empty(),
-            "the fully-uploaded partial must be preserved so the user can recover it"
+        let partials = server.remote_partial_paths();
+        assert_eq!(partials.len(), 1, "keep exactly one recoverable partial");
+        assert_eq!(tokio::fs::read(&partials[0]).await.unwrap(), b"brand new");
+        assert_eq!(
+            server.failures.remove_count.load(Ordering::Relaxed),
+            0,
+            "unsupported overwrite must not issue REMOVE"
         );
     }
 
