@@ -606,28 +606,38 @@ impl<'a> SftpClient<'a> {
                 }
                 None => None,
             };
-            // Verification consumes this handle. Explicitly position both
-            // the successful resume and restart paths before copying bytes.
-            use tokio::io::AsyncSeekExt;
-            remote_file
-                .seek(std::io::SeekFrom::Start(resume_offset.unwrap_or(0)))
-                .await
-                .map_err(|err| SftpError::DownloadFailed {
-                    remote: remote.clone(),
-                    local: local.clone(),
-                    message: format!("failed to seek remote file to the download offset: {err}"),
-                })?;
-            match resume_offset {
+            let resumed_partial = match resume_offset {
                 Some(_) => {
                     PartialLocalTransfer::begin_resume(
                         local_parent,
                         &remote,
                         &local,
                         overwrite_policy,
-                        remote_metadata,
+                        remote_metadata.clone(),
                     )
                     .await?
                 }
+                None => None,
+            };
+            // Verification consumes this handle. If the partial disappeared
+            // before reopen, restart at zero rather than skipping saved bytes
+            // that no longer exist locally.
+            let start_offset = if resumed_partial.is_some() {
+                resume_offset.unwrap_or(0)
+            } else {
+                0
+            };
+            use tokio::io::AsyncSeekExt;
+            remote_file
+                .seek(std::io::SeekFrom::Start(start_offset))
+                .await
+                .map_err(|err| SftpError::DownloadFailed {
+                    remote: remote.clone(),
+                    local: local.clone(),
+                    message: format!("failed to seek remote file to the download offset: {err}"),
+                })?;
+            match resumed_partial {
+                Some(partial) => partial,
                 None => {
                     PartialLocalTransfer::begin(
                         local_parent,
@@ -2021,23 +2031,29 @@ impl PartialLocalTransfer {
     /// Reopens an existing local partial left by a previous attempt so the
     /// download continues where it stopped (issue #313). The caller must
     /// validate the partial against the remote size before calling this.
+    /// Returns `None` if the partial disappeared; the caller must restart the
+    /// remote read at zero and create a fresh partial.
     async fn begin_resume(
         local_parent: &Path,
         remote: &str,
         local: &str,
         overwrite_policy: TransferOverwritePolicy,
         remote_metadata: Option<FileAttributes>,
-    ) -> Result<Self, SftpError> {
+    ) -> Result<Option<Self>, SftpError> {
         let partial_path =
             partial_local_path_for_suffix(local_parent, &resume_partial_suffix(local, remote));
-        let local_file = Self::open_local_partial_for_append(&partial_path)
-            .await
-            .map_err(|err| SftpError::DownloadFailed {
-                remote: remote.to_string(),
-                local: local.to_string(),
-                message: format!("failed to reopen local partial for resume: {err}"),
-            })?;
-        Ok(Self {
+        let local_file = match Self::open_local_partial_for_append(&partial_path).await {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => {
+                return Err(SftpError::DownloadFailed {
+                    remote: remote.to_string(),
+                    local: local.to_string(),
+                    message: format!("failed to reopen local partial for resume: {err}"),
+                });
+            }
+        };
+        Ok(Some(Self {
             partial_path,
             local_file: Some(local_file),
             committed: false,
@@ -2046,7 +2062,7 @@ impl PartialLocalTransfer {
             overwrite_policy,
             remote_metadata,
             keep_on_error: true,
-        })
+        }))
     }
 
     async fn open_local_partial_for_append(path: &Path) -> std::io::Result<tokio::fs::File> {
@@ -6330,6 +6346,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_resume_missing_partial_requests_restart_without_creating_file() {
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        let resumed = PartialLocalTransfer::begin_resume(
+            local_dir.path(),
+            "/download/file.bin",
+            &local_path.display().to_string(),
+            TransferOverwritePolicy::Replace,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(resumed.is_none());
+        assert!(list_partial_paths(local_dir.path()).is_empty());
+        assert!(!local_path.exists());
+    }
+
+    #[tokio::test]
+    async fn download_resume_propagates_non_not_found_errors() {
+        let local_dir = tempfile::tempdir().unwrap();
+        let local = local_dir.path().join("file.bin").display().to_string();
+        let remote = "/download/file.bin";
+        let partial_path =
+            partial_local_path_for_suffix(local_dir.path(), &resume_partial_suffix(&local, remote));
+        tokio::fs::create_dir(&partial_path).await.unwrap();
+
+        let result = PartialLocalTransfer::begin_resume(
+            local_dir.path(),
+            remote,
+            &local,
+            TransferOverwritePolicy::Replace,
+            None,
+        )
+        .await;
+
+        match result {
+            Err(SftpError::DownloadFailed {
+                remote: error_remote,
+                local: error_local,
+                message,
+            }) => {
+                assert_eq!(error_remote, remote);
+                assert_eq!(error_local, local);
+                assert!(message.contains("failed to reopen local partial for resume"));
+            }
+            _ => panic!("a non-NotFound reopen error must remain a download failure"),
+        }
+        assert!(partial_path.is_dir());
+        assert!(list_partial_paths(local_dir.path()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn download_restarts_when_verified_local_partial_disappears() {
+        for overwrite_policy in [
+            TransferOverwritePolicy::Replace,
+            TransferOverwritePolicy::FailIfExists,
+        ] {
+            let server = TestSftpServer::start().await;
+            let remote = "/download/file.bin";
+            let payload = b"AAAABBBBCCCC";
+            server.write_remote_file(remote, payload).await;
+            let session = server.connect_session().await;
+            let client = SftpClient::new(&session);
+            let local_dir = tempfile::tempdir().unwrap();
+            let local_path = local_dir.path().join("file.bin");
+            let partial_path = partial_local_path_for_suffix(
+                local_dir.path(),
+                &resume_partial_suffix(&local_path.display().to_string(), remote),
+            );
+            tokio::fs::write(&partial_path, &payload[..4])
+                .await
+                .unwrap();
+            server
+                .failures
+                .pause_before_read_reply
+                .store(true, Ordering::SeqCst);
+
+            let remove_partial = async {
+                server.failures.read_started.notified().await;
+                // Verification already holds the local partial open. Unlinking
+                // its path still lets verification return Some(4), but forces
+                // the subsequent append reopen to fail with NotFound.
+                tokio::fs::remove_file(&partial_path).await.unwrap();
+                server.failures.continue_read.notify_one();
+            };
+            let transfer = client.download_cancellable(
+                remote,
+                &local_path,
+                DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
+                1,
+                overwrite_policy,
+                || false,
+                |_| {},
+            );
+            let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(transfer, remove_partial)
+            })
+            .await
+            .expect("download must restart after the verified partial disappears");
+            result.unwrap();
+
+            // Comparing all bytes also catches a fallback that creates a new
+            // partial but forgets to rewind the remote handle to zero.
+            assert_eq!(tokio::fs::read(&local_path).await.unwrap(), payload);
+            assert!(list_partial_paths(local_dir.path()).is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn download_resumes_from_leftover_local_partial() {
         // Given: a remote file and a leftover local partial with the first
         // bytes already written
@@ -6362,12 +6488,23 @@ mod tests {
         assert_eq!(tokio::fs::read(&partial_path).await.unwrap(), b"AAAA");
 
         // When: the download runs to the same paths
+        let mut transferred = 0;
         client
-            .download("/download/file.bin", &local_path)
+            .download_cancellable(
+                "/download/file.bin",
+                &local_path,
+                DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
+                1,
+                TransferOverwritePolicy::Replace,
+                || false,
+                |bytes| transferred = bytes,
+            )
             .await
             .unwrap();
 
-        // Then: the final file carries the full payload and the partial is gone
+        // Then: only the remaining bytes are written; the final file carries
+        // the full payload and the partial is gone.
+        assert_eq!(transferred, 8);
         assert_eq!(tokio::fs::read(&local_path).await.unwrap(), b"AAAABBBBCCCC");
         assert!(list_partial_paths(local_dir.path()).is_empty());
     }
