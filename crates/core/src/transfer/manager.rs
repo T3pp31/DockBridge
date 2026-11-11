@@ -2906,11 +2906,7 @@ mod tests {
                         };
                         manager
                             .prepare_upload_entry_for_session_with_policy(
-                                &session,
-                                42,
-                                &source,
-                                "/target",
-                                policy,
+                                &session, 42, &source, "/target", policy,
                             )
                             .await
                     }
@@ -2937,7 +2933,10 @@ mod tests {
                 assert_eq!(prepared.tasks.len(), names.len());
                 let queue = manager.get_transfer_queue();
                 assert_eq!(queue.len(), names.len());
-                assert_eq!(manager.cancellation_flags.lock().unwrap().len(), names.len());
+                assert_eq!(
+                    manager.cancellation_flags.lock().unwrap().len(),
+                    names.len()
+                );
                 for task in &queue {
                     assert_eq!(task.status, TransferStatus::Pending);
                     assert_eq!(task.session_id, 42);
