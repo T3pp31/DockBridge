@@ -1,3 +1,4 @@
+import Security
 import XCTest
 @testable import DockBridge
 
@@ -14,6 +15,21 @@ final class ReleaseCodeSignatureVerifierTests: XCTestCase {
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: temporaryDirectory)
         try super.tearDownWithError()
+    }
+
+    func testValidityCheckFlagsRequireCertificateExpirationAndRevocationChecks() {
+        let flags = ReleaseCodeSignatureVerifier.validityCheckFlags
+
+        XCTAssertTrue(flags.contains(.considerExpiration))
+        XCTAssertTrue(flags.contains(.enforceRevocationChecks))
+    }
+
+    func testValidityCheckFlagsPreserveStrictValidationOfAllArchitecturesAndNestedCode() {
+        let flags = ReleaseCodeSignatureVerifier.validityCheckFlags.rawValue
+
+        XCTAssertEqual(flags & kSecCSCheckAllArchitectures, kSecCSCheckAllArchitectures)
+        XCTAssertEqual(flags & kSecCSStrictValidate, kSecCSStrictValidate)
+        XCTAssertEqual(flags & kSecCSCheckNestedCode, kSecCSCheckNestedCode)
     }
 
     func testVerifyAppBundleAcceptsMatchingBundleIdentifierWhenSignatureNotRequired() throws {
