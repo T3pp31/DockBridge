@@ -6,7 +6,8 @@ struct CredentialPromptSheet: View {
     @State private var credential = SensitiveString()
     @State private var saveToKeychain = false
 
-    let onConfirm: (String, Bool) -> Void
+    /// Transfers the submitted buffer; the receiver must clear it after use.
+    let onConfirm: (SensitiveString, Bool) -> Void
     let onCancel: () -> Void
 
     var body: some View {
@@ -24,9 +25,9 @@ struct CredentialPromptSheet: View {
             }
             .keyboardShortcut(.cancelAction)
             Button(String(localized: "Connect")) {
-                let text = credential.text
-                credential.clear()
-                onConfirm(text, saveToKeychain)
+                let submittedCredential = credential
+                credential = SensitiveString()
+                onConfirm(submittedCredential, saveToKeychain)
             }
             .keyboardShortcut(.defaultAction)
             .disabled(credential.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
