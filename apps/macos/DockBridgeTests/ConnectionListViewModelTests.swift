@@ -119,6 +119,29 @@ final class ConnectionListViewModelTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: profilesURL), invalidData)
     }
 
+    func testDeleteUpdatesListAndSelectionWhenTrustRemovalFails() throws {
+        let removed = ConnectionProfile(name: "Removed", host: "removed.example.com", username: "user")
+        let remaining = ConnectionProfile(name: "Remaining", host: "remaining.example.com", username: "user")
+        try store.saveProfiles([removed, remaining])
+        try store.seedInitialTrust(for: [removed, remaining])
+        viewModel.load()
+        viewModel.selectedProfileID = removed.id
+        let account = keychain.keychainAccount(for: removed.id, kind: "profile")
+        try keychain.savePassword("test-password", account: account)
+        defer { try? keychain.deletePassword(account: account) }
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        try Data("not-json".utf8).write(to: trustURL)
+
+        viewModel.requestDelete(profile: removed)
+        viewModel.delete(profile: removed)
+
+        XCTAssertEqual(viewModel.profiles, [remaining])
+        XCTAssertEqual(viewModel.selectedProfileID, remaining.id)
+        XCTAssertNil(viewModel.confirmDeleteProfile)
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(try keychain.loadPassword(account: account))
+    }
+
     func testImportSSHConfigDeduplicatesAliasesCaseInsensitively() throws {
         viewModel.importSSHConfig(contents: """
         Host Server

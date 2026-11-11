@@ -122,6 +122,57 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertEqual(bridge.renamed.first?.to, "/target/file.txt")
     }
 
+    func testRemoteRenameWithUnchangedNameClosesWithoutRemoteOperations() async {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+
+        for isDirectory in [false, true] {
+            let target = makeRemoteItem(name: "old.txt", path: "/target/old.txt", isDirectory: isDirectory)
+            bridge.directoryListings["/target"] = [target]
+            viewModel.beginRename(item: target)
+            XCTAssertEqual(viewModel.renameText, target.name)
+
+            await viewModel.commitRename()
+
+            XCTAssertNil(viewModel.errorMessage)
+            XCTAssertNil(viewModel.renameTarget)
+            XCTAssertTrue(viewModel.renameText.isEmpty)
+            XCTAssertTrue(bridge.listedDirectories.isEmpty)
+            XCTAssertTrue(bridge.renamed.isEmpty)
+        }
+    }
+
+    func testRemoteRenameWithTrimmedUnchangedNameDoesNotRequireDirectoryListing() async {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        // No listing is configured: a destination check would fail.
+        viewModel.beginRename(item: makeRemoteItem(name: "old.txt", path: "/target/old.txt"))
+        viewModel.renameText = " \told.txt\n"
+
+        await viewModel.commitRename()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.renameTarget)
+        XCTAssertTrue(viewModel.renameText.isEmpty)
+        XCTAssertTrue(bridge.listedDirectories.isEmpty)
+        XCTAssertTrue(bridge.renamed.isEmpty)
+    }
+
+    func testRemoteRenameWithInvalidNameKeepsSheetOpenWithoutRemoteOperations() async {
+        let target = makeRemoteItem(name: "old.txt", path: "/target/old.txt")
+        for name in ["", " \t\n", ".", "..", "bad/name", "bad\0name"] {
+            viewModel.errorMessage = nil
+            viewModel.beginRename(item: target)
+            viewModel.renameText = name
+
+            await viewModel.commitRename()
+
+            XCTAssertEqual(viewModel.errorMessage, RemoteEntryNameError.invalidCharacters.localizedDescription)
+            XCTAssertEqual(viewModel.renameTarget?.path, target.path)
+            XCTAssertEqual(viewModel.renameText, name)
+            XCTAssertTrue(bridge.listedDirectories.isEmpty)
+            XCTAssertTrue(bridge.renamed.isEmpty)
+        }
+    }
+
     func testRemoteRenameRequiresKnownAbsentDestination() async {
         bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
         bridge.directoryListings["/"] = []
@@ -137,12 +188,18 @@ final class MainViewModelTestabilityTests: XCTestCase {
         await viewModel.commitRename()
         XCTAssertTrue(bridge.renamed.isEmpty)
         XCTAssertNotNil(viewModel.renameTarget)
+        XCTAssertEqual(viewModel.renameText, "new.txt")
+        XCTAssertEqual(viewModel.errorMessage, String(localized: "A file already exists at the destination."))
 
+        viewModel.errorMessage = nil
         bridge.directoryListings["/target"] = []
         await viewModel.commitRename()
         XCTAssertEqual(bridge.renamed.count, 1)
+        XCTAssertEqual(bridge.renamed.first?.from, "/target/old.txt")
         XCTAssertEqual(bridge.renamed.first?.to, "/target/new.txt")
         XCTAssertNil(viewModel.renameTarget)
+        XCTAssertTrue(viewModel.renameText.isEmpty)
+        XCTAssertNil(viewModel.errorMessage)
     }
 
     private func makeTrackedRemoteEditFile(
