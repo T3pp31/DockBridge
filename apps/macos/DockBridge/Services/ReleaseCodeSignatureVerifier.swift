@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import Security
 
@@ -44,29 +45,45 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
     ).union([.considerExpiration, .enforceRevocationChecks])
 
     private let policy: ReleaseVerificationPolicy
-    private let fileManager: FileManager
 
-    init(
-        policy: ReleaseVerificationPolicy = .current,
-        fileManager: FileManager = .default
-    ) {
+    init(policy: ReleaseVerificationPolicy = .current) {
         self.policy = policy
-        self.fileManager = fileManager
     }
 
     func verifyAppBundle(at url: URL) throws {
-        let bundleIdentifier = try readBundleIdentifier(from: url)
+        let infoPlistURL = url.appendingPathComponent("Contents/Info.plist")
+        // Do not follow links or block opening a FIFO. Validate the opened file,
+        // not path metadata that could change before the read.
+        let fileDescriptor = open(infoPlistURL.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard fileDescriptor >= 0 else {
+            throw ReleaseCodeSignatureVerifierError.unsignedBundle
+        }
+        defer { close(fileDescriptor) }
+
+        var fileStat = stat()
+        guard fstat(fileDescriptor, &fileStat) == 0,
+              (fileStat.st_mode & S_IFMT) == S_IFREG,
+              fileStat.st_size >= 0,
+              fileStat.st_size <= AppUpdateConfig.maxInfoPlistSizeBytes else {
+            throw ReleaseCodeSignatureVerifierError.unsignedBundle
+        }
+
+        // Reject unsafe metadata before Security can consume it, but only parse
+        // the bundle identifier after the required signature checks have passed.
+        if policy.requireSignedUpdates || policy.requireNotarizedUpdates {
+            try verifySignature(at: url)
+        }
+
+        let bundleIdentifier = try readBundleIdentifier(from: fileDescriptor)
         guard bundleIdentifier == policy.expectedBundleIdentifier else {
             throw ReleaseCodeSignatureVerifierError.bundleIdentifierMismatch(
                 expected: policy.expectedBundleIdentifier,
                 actual: bundleIdentifier
             )
         }
+    }
 
-        guard policy.requireSignedUpdates || policy.requireNotarizedUpdates else {
-            return
-        }
-
+    private func verifySignature(at url: URL) throws {
         if policy.requireSignedUpdates {
             try validateSignedUpdatePolicy()
         }
@@ -115,13 +132,29 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
         }
     }
 
-    private func readBundleIdentifier(from bundleURL: URL) throws -> String {
-        let infoPlistURL = bundleURL.appendingPathComponent("Contents/Info.plist")
-        guard fileManager.fileExists(atPath: infoPlistURL.path) else {
-            throw ReleaseCodeSignatureVerifierError.unsignedBundle
+    private func readBundleIdentifier(from fileDescriptor: Int32) throws -> String {
+        let sizeLimit = AppUpdateConfig.maxInfoPlistSizeBytes
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            // Read at most one byte beyond the limit to detect files growing
+            // after fstat without allocating or reading an unbounded amount.
+            let bytesRead = read(fileDescriptor, &buffer, min(buffer.count, sizeLimit - data.count + 1))
+            if bytesRead < 0 {
+                if errno == EINTR {
+                    continue
+                }
+                throw ReleaseCodeSignatureVerifierError.unsignedBundle
+            }
+            if bytesRead == 0 {
+                break
+            }
+            guard data.count + bytesRead <= sizeLimit else {
+                throw ReleaseCodeSignatureVerifierError.unsignedBundle
+            }
+            data.append(buffer, count: bytesRead)
         }
 
-        let data = try Data(contentsOf: infoPlistURL)
         let plist = try PropertyListSerialization.propertyList(from: data, format: nil)
         guard let dictionary = plist as? [String: Any],
               let bundleIdentifier = dictionary["CFBundleIdentifier"] as? String else {
