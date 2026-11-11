@@ -1,4 +1,6 @@
+import AppKit
 import Combine
+import Quartz
 import XCTest
 @testable import DockBridge
 
@@ -1278,4 +1280,93 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertGreaterThan(speed ?? 0, 0)
         XCTAssertLessThanOrEqual(speed ?? 0, 2_000)
     }
+}
+
+@MainActor
+final class QuickLookPresenterTests: XCTestCase {
+    func testPreviewHostPrefersRegularKeyWindowOverMainWindow() {
+        let keyWindow = makeWindow()
+        let mainWindow = makeWindow()
+
+        let host = QuickLookPresenter.previewHostWindow(
+            keyWindow: keyWindow, mainWindow: mainWindow, windows: [mainWindow]
+        )
+
+        XCTAssertTrue(host === keyWindow)
+    }
+
+    func testPreviewHostUsesMainWindowWhenQuickLookPanelIsKey() throws {
+        let panel = try XCTUnwrap(QLPreviewPanel.shared())
+        let mainWindow = makeWindow()
+        let otherWindow = makeWindow()
+
+        let host = QuickLookPresenter.previewHostWindow(
+            keyWindow: panel, mainWindow: mainWindow, windows: [panel, otherWindow, mainWindow]
+        )
+
+        XCTAssertTrue(host === mainWindow)
+    }
+
+    func testPreviewHostFallsBackToFirstVisibleWindowWhenPanelIsKeyAndMainIsMissing() throws {
+        let panel = try XCTUnwrap(QLPreviewPanel.shared())
+        let hiddenWindow = makeWindow(isVisible: false)
+        let firstVisibleWindow = makeWindow()
+        let secondVisibleWindow = makeWindow()
+
+        let host = QuickLookPresenter.previewHostWindow(
+            keyWindow: panel,
+            mainWindow: nil,
+            windows: [hiddenWindow, panel, firstVisibleWindow, secondVisibleWindow]
+        )
+
+        XCTAssertTrue(host === firstVisibleWindow)
+    }
+
+    func testPreviewHostExcludesQuickLookPanelFromMainWindowCandidate() throws {
+        let panel = try XCTUnwrap(QLPreviewPanel.shared())
+        let window = makeWindow()
+
+        let host = QuickLookPresenter.previewHostWindow(
+            keyWindow: nil, mainWindow: panel, windows: [panel, window]
+        )
+
+        XCTAssertTrue(host === window)
+    }
+
+    func testPreviewHostIsNilWhenOnlyQuickLookPanelAndHiddenWindowsAreAvailable() throws {
+        let panel = try XCTUnwrap(QLPreviewPanel.shared())
+        let hiddenWindow = makeWindow(isVisible: false)
+
+        XCTAssertNil(QuickLookPresenter.previewHostWindow(
+            keyWindow: panel, mainWindow: panel, windows: [panel, hiddenWindow]
+        ))
+        XCTAssertNil(QuickLookPresenter.previewHostWindow(
+            keyWindow: nil, mainWindow: nil, windows: []
+        ))
+    }
+
+    func testPreviewHostStillAcceptsOrdinaryKeyPanel() {
+        let panel = NSPanel(contentRect: .zero, styleMask: [], backing: .buffered, defer: true)
+
+        let host = QuickLookPresenter.previewHostWindow(
+            keyWindow: panel, mainWindow: makeWindow(), windows: []
+        )
+
+        XCTAssertTrue(host === panel)
+    }
+
+    private func makeWindow(isVisible: Bool = true) -> QuickLookHostTestWindow {
+        let window = QuickLookHostTestWindow(
+            contentRect: .zero, styleMask: [], backing: .buffered, defer: true
+        )
+        window.isVisibleForTesting = isVisible
+        return window
+    }
+}
+
+@MainActor
+private final class QuickLookHostTestWindow: NSWindow {
+    // Exercise fallback ordering without showing windows or changing app focus.
+    var isVisibleForTesting = false
+    override var isVisible: Bool { isVisibleForTesting }
 }
