@@ -79,6 +79,7 @@ enum AppUpdateDownloadError: Error, Equatable {
     case checksumMismatch
     case mountFailed
     case unmountFailed
+    case revealFailed
     case appBundleNotFound
     case signatureVerificationFailed(ReleaseCodeSignatureVerifierError)
 }
@@ -98,6 +99,8 @@ extension AppUpdateDownloadError: LocalizedError {
             return String(localized: "The update disk image could not be opened.")
         case .unmountFailed:
             return String(localized: "The update disk image could not be closed.")
+        case .revealFailed:
+            return String(localized: "The update could not be shown in Finder. Try again or download the update manually from the release page.")
         case .appBundleNotFound:
             return String(localized: "The update disk image does not contain the DockBridge app.")
         case .signatureVerificationFailed(let error):
@@ -136,19 +139,22 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
     private let signatureVerifier: AppBundleSignatureVerifying
     private let dmgMounter: DMGImageMounting
     private let fileManager: FileManager
+    private let revealInFinder: @MainActor @Sendable (URL) -> Bool
 
     init(
         downloadSession: URLSessionDownloadProviding = URLSession.shared,
         dataSession: URLSessionDataProviding = URLSession.shared,
         signatureVerifier: AppBundleSignatureVerifying = ReleaseCodeSignatureVerifier(),
         dmgMounter: DMGImageMounting = HdiutilDMGImageMounter(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        revealInFinder: @escaping @MainActor @Sendable (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) {
         self.downloadSession = downloadSession
         self.dataSession = dataSession
         self.signatureVerifier = signatureVerifier
         self.dmgMounter = dmgMounter
         self.fileManager = fileManager
+        self.revealInFinder = revealInFinder
     }
 
     func downloadVerifyAndReveal(update: AppUpdateInfo) async throws {
@@ -185,12 +191,13 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
             throw AppUpdateDownloadError.signatureVerificationFailed(.unsignedBundle)
         }
 
-        if NSWorkspace.shared.open(mountPoint) {
-            // Finder needs the mounted volume for the user's manual copy.
-            // Removing the backing pathname is safe while the image remains
-            // mounted, and avoids leaving the downloaded DMG in temporary files.
-            shouldUnmount = false
+        guard await revealInFinder(mountPoint) else {
+            throw AppUpdateDownloadError.revealFailed
         }
+        // Finder needs the mounted volume for the user's manual copy.
+        // Removing the backing pathname is safe while the image remains
+        // mounted, and avoids leaving the downloaded DMG in temporary files.
+        shouldUnmount = false
     }
 
     private func downloadDMG(from url: URL) async throws -> URL {
