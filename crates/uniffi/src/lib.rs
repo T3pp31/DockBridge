@@ -1286,7 +1286,10 @@ mod tests {
                             message: "connection lost during operation".to_string(),
                         }),
                     );
-                    assert!(matches!(result, Err(DockBridgeError::ConnectionLost { .. })));
+                    assert!(matches!(
+                        result,
+                        Err(DockBridgeError::ConnectionLost { .. })
+                    ));
                 }
             }
         })
@@ -1317,7 +1320,10 @@ mod tests {
                                 message: "connection lost during operation".to_string(),
                             }),
                         );
-                        assert!(matches!(result, Err(DockBridgeError::ConnectionLost { .. })));
+                        assert!(matches!(
+                            result,
+                            Err(DockBridgeError::ConnectionLost { .. })
+                        ));
                     } else {
                         client.disconnect(1).unwrap();
                     }
