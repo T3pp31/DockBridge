@@ -607,11 +607,90 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         await viewModel.connect(profile: profile)
         XCTAssertEqual(viewModel.pendingCredentialPrompt?.kind, .password)
 
-        viewModel.confirmCredentialPrompt(text: "   ", saveToKeychain: false)
+        let credential = SensitiveString()
+        credential.text = "   "
+        viewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: false)
 
+        XCTAssertEqual(credential.text, "")
         XCTAssertEqual(viewModel.pendingCredentialPrompt?.profile.id, profile.id)
         XCTAssertEqual(viewModel.pendingCredentialPrompt?.kind, .password)
         XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testConfirmCredentialPromptClearsInputWithoutPendingPrompt() {
+        let credential = SensitiveString()
+        credential.text = "unused-secret"
+
+        viewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: true)
+
+        XCTAssertEqual(credential.text, "")
+        XCTAssertNil(viewModel.pendingCredentialPrompt)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testConfirmPasswordPromptPreservesWhitespaceAndClearsBufferOnBridgeFailure() async throws {
+        // Fail before any network access, while still exercising the bridge path.
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        let blockedDirectory = baseDirectory.appendingPathComponent("not-a-directory")
+        try Data().write(to: blockedDirectory)
+        let suiteName = "com.dockbridge.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let localViewModel = ConnectionListViewModel(
+            store: store,
+            keychain: keychain,
+            bridge: RustBridgeService(
+                settings: AppSettingsService(defaults: defaults),
+                hostKeyStore: HostKeyStore(baseDirectory: blockedDirectory)
+            )
+        )
+        let profile = ConnectionProfile(
+            name: "Test", host: "example.com", username: "user", authType: .password
+        )
+        viewModel.save(profile, password: "stale-password", passphrase: nil)
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        let credential = SensitiveString()
+        credential.text = "  new-password\t"
+        let alias = credential
+        localViewModel.beginPasswordPrompt(for: profile)
+        let failed = expectation(description: "Bridge preparation fails without network access")
+        let cancellable = localViewModel.$errorMessage.compactMap { $0 }.first().sink { _ in
+            failed.fulfill()
+        }
+        defer { cancellable.cancel() }
+
+        localViewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: true)
+
+        XCTAssertNil(localViewModel.pendingCredentialPrompt)
+        // Ownership is transferred without clearing before the queued attempt.
+        XCTAssertEqual(alias.text, "  new-password\t")
+        XCTAssertEqual(try keychain.loadPassword(account: account), "  new-password\t")
+        await fulfillment(of: [failed], timeout: 5)
+        XCTAssertEqual(alias.text, "")
+        XCTAssertEqual(credential.text, "")
+    }
+
+    func testConfirmPassphrasePromptClearsBufferWhenPrivateKeyAccessIsMissing() async throws {
+        let profile = ConnectionProfile(
+            name: "Test", host: "example.com", username: "user", authType: .privateKey
+        )
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        let credential = SensitiveString()
+        credential.text = "  key-passphrase\t"
+        viewModel.beginPassphrasePrompt(for: profile)
+        let failed = expectation(description: "Missing private key bookmark rejects the attempt")
+        let cancellable = viewModel.$errorMessage.compactMap { $0 }.first().sink { _ in
+            failed.fulfill()
+        }
+        defer { cancellable.cancel() }
+
+        viewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: false)
+
+        XCTAssertNil(viewModel.pendingCredentialPrompt)
+        XCTAssertEqual(credential.text, "  key-passphrase\t")
+        await fulfillment(of: [failed], timeout: 5)
+        XCTAssertEqual(credential.text, "")
+        XCTAssertNil(try keychain.loadPassphrase(account: account))
     }
 
     func testRequestConnectShowsRsaKeyWarningForRsaPrivateKey() async throws {
