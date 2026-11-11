@@ -39,11 +39,11 @@ enum TransferProgressFormatter {
                 speedLabel
             )
             let remainingBytes = Double(total) - Double(transferred)
-            if remainingBytes > 0 {
-                let seconds = remainingBytes / bytesPerSecond
+            if remainingBytes > 0,
+               let durationLabel = formattedDuration(remainingBytes / bytesPerSecond) {
                 label += String(
                     format: String(localized: " · ETA %@"),
-                    formattedDuration(seconds)
+                    durationLabel
                 )
             }
         }
@@ -80,9 +80,13 @@ enum TransferProgressFormatter {
         return String(format: format, prefix, label)
     }
 
-    private static func formattedDuration(_ seconds: Double) -> String {
-        let clamped = max(0, seconds)
-        let duration = Duration.seconds(clamped.rounded())
+    private static func formattedDuration(_ seconds: Double) -> String? {
+        guard seconds.isFinite else { return nil }
+        let rounded = max(0, seconds).rounded()
+        // Int64.max rounds up to 2^63 as a Double, which Duration.seconds cannot represent.
+        // Omit an unrepresentable ETA without losing the byte counts or speed.
+        guard rounded < Double(Int64.max) else { return nil }
+        let duration = Duration.seconds(rounded)
         return duration.formatted(
             .units(allowed: [.minutes, .seconds], width: .narrow)
         )
