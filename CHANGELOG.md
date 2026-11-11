@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Disable Disconnect consistently in the connection toolbar and context menu while a connection is being established (#1224)
 - Clear update-check ETags when the release-body cache is missing, unreadable, or corrupt (#1143)
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
 - Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
