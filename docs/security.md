@@ -5,7 +5,7 @@
 - First-connection host key fingerprint display (SHA256)
 - User accept/reject for unknown host keys
 - Trusted keys stored in DockBridge `known_hosts.json` (written `0600`; on Unix, load rejects files that are not owner-only `0600`/`0400`, owned by the current user, or accessed through a symlink)
-- Hostname/IP alias normalization: same port and fingerprint are trusted across identifiers (OpenSSH-style comma-separated hosts)
+- Hostname/IP aliases: default strict mode (`known_hosts_strict_mode = true`) trusts matching keys only for exact host/port or stored aliases (including imported OpenSSH comma-separated hosts). Trust across other identifiers based only on the same port and fingerprint requires `known_hosts_strict_mode = false` (see [Host key trust policy](#host-key-trust-policy)).
 - OpenSSH `known_hosts` import/export helpers on `KnownHostsManager`
 - Automatic merge with OpenSSH `known_hosts` on connect (configurable; see macOS Settings)
 - Hashed host entry (`|1|...`) import and matching
@@ -18,7 +18,7 @@
 - CLI `--password-stdin` read buffers use `Zeroizing<String>` so stdin input is zeroized on drop
 - UniFFI credentials use a `SecretCredential` custom type that zeroizes on drop after lift
 - Swift clears password/passphrase and `ConnectionProfileRecord` credentials after connect
-- Delete confirmation for destructive operations
+- Mandatory confirmation before remote deletion in the macOS app (cannot be disabled; legacy `confirmBeforeDelete` settings are ignored). Local Move to Trash remains recoverable and unchanged.
 - Warning when connecting as root
 - **FileVault (or equivalent full-disk encryption) recommended** on the boot volume — see [Connection profiles](#connection-profiles-profilesjson)
 
@@ -216,8 +216,8 @@ Uploads and downloads write to temporary partial files before renaming to the fi
 |-------|---------------|----------------|
 | Create | `create_new(true)` + `O_NOFOLLOW` (Unix) | `CREATE \| EXCLUDE \| WRITE` |
 | Name | `.dockbridge-<32-hex>.partial` (cryptographic random) | same pattern in destination directory |
-| Cancel / failure | partial file removed; destination untouched | partial file removed; destination untouched |
-| Success | rename partial → final | delete existing destination when policy is `Replace`, then rename |
+| Cancel / failure | partial file removed; destination untouched | partial file removed; destination untouched (final rename failure or unsupported overwrite keeps the completed partial for recovery) |
+| Success | rename partial → final | rename partial → final; `Replace` atomically overwrites an existing destination via `posix-rename@openssh.com` (without it, fail and preserve both destination and partial; an absent destination can still use plain rename) |
 
 `TransferOverwritePolicy` controls final-destination behavior:
 
@@ -240,12 +240,12 @@ Entitlements not granted include `network.server`, `temporary-exception.files.ab
 
 ### Code signing and distribution
 
-- Hardened Runtime enabled in the Xcode project; it takes effect once release builds are signed (current public builds are unsigned, so it is not active)
-- GitHub Release workflow (`.github/workflows/release.yml`) sets `SIGN_AND_NOTARIZE=false` and publishes unsigned DMGs (`CODE_SIGNING_ALLOWED=NO` during the Xcode build)
-- Developer ID signing, Apple Notarization, and Gatekeeper verification are not currently enabled; the scripts below are ready when repository secrets are configured
+- Hardened Runtime enabled in the Xcode project; it takes effect once release builds are signed
+- GitHub Release workflow (`.github/workflows/release.yml`) imports a Developer ID certificate, creates a `notarytool` profile, and sets `SIGN_AND_NOTARIZE=true`
+- Developer ID signing, Apple Notarization, and Gatekeeper verification run for public releases; release secrets must be configured before a release can publish
 - **In-app update installation** (`Download update` in the app) is gated at runtime by `AppUpdateConfig.swift` (`requireSignedUpdates` / `requireNotarizedUpdates`). Keep those flags in sync with `config/release.toml`. Until either flag is enabled, the app opens the GitHub release page only (intentional short-term killswitch). When verification is disabled, `ReleaseCodeSignatureVerifier` checks only `CFBundleIdentifier`, which is **not** sufficient to prove authenticity — an attacker could ship a DMG with a matching bundle ID. Enabling `requireSignedUpdates` without a non-empty `expectedTeamIdentifier` and `signingCertificateFingerprintSHA256` is rejected as a misconfigured policy (those checks are not silently skipped).
 
-#### Release signing pipeline (not currently enabled)
+#### Release signing pipeline
 
 When signing is enabled, the release workflow will require these repository secrets:
 
@@ -267,7 +267,7 @@ With `SIGN_AND_NOTARIZE=true`, release packaging runs `scripts/sign-and-notarize
 
 If signing or notarization fails, the release workflow must stop before publishing assets.
 
-Local unsigned builds for development and current public releases:
+Local unsigned builds for development only:
 
 ```bash
 SIGN_AND_NOTARIZE=false ./scripts/package-macos-release.sh

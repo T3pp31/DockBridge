@@ -13,7 +13,7 @@ SCP support may be considered after v1.0.
 Pre-built macOS releases are available on the [download site](https://t3pp31.github.io/DockBridge/) and [GitHub Releases](https://github.com/T3pp31/DockBridge/releases).
 
 - Requires macOS 15 Sequoia or later
-- Public releases are unsigned; on first launch, right-click `DockBridge.app` in Applications and choose **Open** (or allow it under **System Settings → Privacy & Security**). Developer ID signing and notarization are not currently enabled; until then, verify downloads with the published SHA-256 checksum and [`gh attestation verify`](docs/security.md#supply-chain-provenance-attestation).
+- Public releases are signed and notarized by Developer ID; verify downloads with the published SHA-256 checksum and [`gh attestation verify`](docs/security.md#supply-chain-provenance-attestation).
 
 ## Requirements
 
@@ -173,16 +173,19 @@ Swift bindings were generated from a different library than the one linked into 
 ## Project layout
 
 ```text
-crates/core/       Rust SFTP core
-crates/uniffi/     UniFFI bridge
-crates/cli/        Development CLI
-apps/macos/        SwiftUI macOS app
-config/            CLI default configuration
-docs/              Product / architecture / security docs
-scripts/           Build, packaging, and verification helpers (e2e-verify.sh, verify-*.sh)
-website/           GitHub Pages download site
-.cargo/            Rust toolchain and cargo-audit ignore policy
-.github/           Workflows, issue/PR templates, SECURITY.md, CONTRIBUTING.md
+crates/core/         Rust SFTP core
+crates/uniffi/       UniFFI bridge
+crates/cli/          Development CLI
+apps/macos/          SwiftUI macOS app
+config/              CLI default configuration
+docs/                Product / architecture / security docs
+scripts/             Build, packaging, and verification helpers (e2e-verify.sh, verify-*.sh)
+website/             GitHub Pages download site
+.cargo/              audit.toml (cargo-audit ignore policy)
+.github/             Workflows, issue/PR templates, CODEOWNERS, Dependabot configuration
+rust-toolchain.toml  Rust toolchain version and components
+SECURITY.md          Security policy and vulnerability reporting
+CONTRIBUTING.md      Contribution guide
 ```
 
 ## License
