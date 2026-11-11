@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bound update bundle Info.plist reads to 5 MiB, reject links and non-regular files,
+  and check required signatures before parsing bundle identifiers (#1219)
 - Disable Disconnect consistently in the connection toolbar and context menu while a connection is being established (#1224)
 - Preserve entered credentials for the session when saving them to Keychain fails, and clarify that only the connection profile was saved (#1222)
 - Preserve the existing private-key selection when bookmark creation fails during reselection (#1223)
