@@ -100,7 +100,17 @@
               <li>Download the latest <code>DockBridge-*-macOS.dmg</code> from the button above.</li>
               <li>Double-click the DMG file to mount it.</li>
               <li>Drag <code>DockBridge.app</code> into the <code>Applications</code> folder shortcut.</li>
-              <li>Open DockBridge from Applications. Because releases are not yet Developer ID signed, macOS may block the first launch — right-click the app, choose <strong>Open</strong>, then confirm. You can also allow it under <strong>System Settings → Privacy & Security</strong>.</li>
+              <li>
+                Open DockBridge from Applications. If macOS blocks the first launch
+                because the app is not Developer ID signed or notarized, dismiss the alert.
+              </li>
+              <li>
+                If the app was blocked, proceed only if you trust the release you downloaded:
+                open <strong>System Settings → Privacy &amp; Security</strong> and scroll to
+                <strong>Security</strong>. Click <strong>Open Anyway</strong> for DockBridge
+                (this option appears only after a blocked launch attempt), authenticate with
+                Touch ID or your login password, and click <strong>Open</strong> in the confirmation dialog.
+              </li>
             </ol>
           </div>
         </div>
@@ -119,8 +129,11 @@
     </footer>
 
     <script>
-      (function () {
+      (async function () {
         const GITHUB_REPO = "T3pp31/DockBridge";
+        const RELEASE_CACHE_KEY = `github-release:${GITHUB_REPO}`;
+        // Bound staleness to one hour while avoiding repeat API calls across visits.
+        const RELEASE_CACHE_TTL_MS = 60 * 60 * 1000;
 
         const button = document.getElementById("download-button");
         const meta = document.getElementById("download-meta");
@@ -144,37 +157,88 @@
           );
         }
 
-        fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
-          headers: { Accept: "application/vnd.github+json" },
-        })
-          .then(function (response) {
-            if (!response.ok) {
-              throw new Error("Release API unavailable");
-            }
-            return response.json();
-          })
-          .then(function (release) {
-            const dmgAsset = (release.assets || []).find(function (asset) {
-              return asset.name.endsWith(".dmg");
-            });
+        function setReleaseDownload(url, tag) {
+          setDownload(url, `Version ${tag.replace(/^v/, "")} · macOS 15+`);
+        }
 
-            if (dmgAsset) {
-              setDownload(
-                dmgAsset.browser_download_url,
-                `Version ${release.tag_name.replace(/^v/, "")} · macOS 15+`
-              );
-              return;
-            }
+        try {
+          const cached = JSON.parse(localStorage.getItem(RELEASE_CACHE_KEY));
+          // Storage can be unavailable or corrupt. Only reuse a recent DMG URL
+          // belonging to this repository, never an arbitrary cached link.
+          if (
+            cached &&
+            Number.isFinite(cached.savedAt) &&
+            Date.now() >= cached.savedAt &&
+            Date.now() - cached.savedAt < RELEASE_CACHE_TTL_MS &&
+            typeof cached.tag === "string" &&
+            typeof cached.url === "string" &&
+            cached.url.startsWith(`https://github.com/${GITHUB_REPO}/releases/download/`) &&
+            cached.url.endsWith(".dmg")
+          ) {
+            setReleaseDownload(cached.url, cached.tag);
+            return;
+          }
+        } catch (_) {
+          // Caching is best-effort; continue with the API when storage is blocked.
+        }
 
-            setFallback(
-              `Version ${release.tag_name.replace(/^v/, "")} · download from Releases page`
-            );
-          })
-          .catch(function () {
-            setFallback(
-              "Could not reach the GitHub API · open the Releases page to download"
-            );
+        let response;
+        try {
+          response = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+            headers: { Accept: "application/vnd.github+json" },
           });
+        } catch (_) {
+          setFallback(
+            "Could not reach the GitHub API · open the Releases page to download"
+          );
+          return;
+        }
+
+        if (!response.ok) {
+          // A 403 can also mean access denied; only call it a rate limit when
+          // the headers confirm it. GitHub uses both 403 and 429 for limits.
+          const rateLimited = response.status === 429 || (
+            response.status === 403 && (
+              response.headers.get("x-ratelimit-remaining") === "0" ||
+              response.headers.get("retry-after") !== null
+            )
+          );
+          setFallback(
+            rateLimited
+              ? "GitHub API rate limit reached · open the Releases page to download"
+              : `GitHub API returned HTTP ${response.status} · open the Releases page to download`
+          );
+          return;
+        }
+
+        try {
+          const release = await response.json();
+          const dmgAsset = (release.assets || []).find(function (asset) {
+            return asset.name.endsWith(".dmg");
+          });
+
+          if (dmgAsset) {
+            setReleaseDownload(dmgAsset.browser_download_url, release.tag_name);
+            try {
+              localStorage.setItem(RELEASE_CACHE_KEY, JSON.stringify({
+                url: dmgAsset.browser_download_url,
+                tag: release.tag_name,
+                savedAt: Date.now(),
+              }));
+            } catch (_) {
+              // A quota or privacy restriction must not discard a working link.
+            }
+            return;
+          }
+
+          setFallback(
+            `Version ${release.tag_name.replace(/^v/, "")} · download from Releases page`
+          );
+        } catch (_) {
+          setFallback(
+            "Could not read the latest release · open the Releases page to download"
+          );
+        }
       })();
     </script>
   </body>

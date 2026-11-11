@@ -23,6 +23,11 @@ log() {
   echo "[verify-transfer-cancel] $*"
 }
 
+fail() {
+  echo "[verify-transfer-cancel] $*" >&2
+  exit 1
+}
+
 ensure_container() {
   if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
     log "Docker SFTP container $CONTAINER_NAME is already running"

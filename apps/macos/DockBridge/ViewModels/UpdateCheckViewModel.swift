@@ -12,6 +12,7 @@ final class UpdateCheckViewModel: ObservableObject {
     private let updateService: AppUpdateService
     private let downloadService: AppUpdateDownloading
     private let settingsService: AppSettingsService
+    private let currentVersion: String
     /// Tracks whether the startup host-key prompt has been resolved, so a
     /// slow update check can still present after dismissal (issue #636).
     private var isHostKeyResolved = false
@@ -19,17 +20,20 @@ final class UpdateCheckViewModel: ObservableObject {
     init(
         updateService: AppUpdateService = AppUpdateService(),
         downloadService: AppUpdateDownloading = AppUpdateDownloadService(),
-        settingsService: AppSettingsService = .shared
+        settingsService: AppSettingsService = .shared,
+        currentVersion: String = VersionComparator.currentAppVersion
     ) {
         self.updateService = updateService
         self.downloadService = downloadService
         self.settingsService = settingsService
+        self.currentVersion = currentVersion
     }
 
     func checkOnLaunch(isHostKeyBlocking: Bool) async {
         isHostKeyResolved = !isHostKeyBlocking
         do {
             let update = try await updateService.checkForUpdate(
+                currentVersion: currentVersion,
                 skippedVersion: settingsService.loadSkippedUpdateVersion()
             )
             guard let update else {
