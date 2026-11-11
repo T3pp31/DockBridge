@@ -196,6 +196,9 @@ jobs:
       - name: Verify localization catalog (en + ja)
         run: ./scripts/verify-localization.sh
 
+      - name: Guard Settings scene state wiring
+        run: python3 scripts/test-settings-scene.py
+
       - name: Build x86_64 (Intel) Rust static library
         run: |
           rustup target add x86_64-apple-darwin
