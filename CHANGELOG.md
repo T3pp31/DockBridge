@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Omit unrepresentable transfer ETAs to prevent crashes at very low transfer speeds or large remaining byte counts (#1152).
 - Clamp oversized UInt64 settings when saving on macOS to prevent integer conversion crashes (#1148)
 - Use an operation-neutral message for remote read and unspecified permission-denied errors instead of incorrectly reporting missing write permissions (#1147).
 - Clear update-check ETags when the release-body cache is missing, unreadable, or corrupt (#1143)

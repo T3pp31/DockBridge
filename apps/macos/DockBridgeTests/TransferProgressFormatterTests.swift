@@ -27,6 +27,102 @@ final class TransferProgressFormatterTests: XCTestCase {
         }
     }
 
+    func testProgressLabelFormatsRoundedETA() throws {
+        let cases: [(total: UInt64, speed: Double, seconds: Int64)] = [
+            (1, 4, 0),       // 0.25 seconds rounds to zero.
+            (3, 2, 2),       // 1.5 seconds rounds up.
+            (125, 2, 63),    // 62.5 seconds spans minutes and seconds.
+        ]
+        for testCase in cases {
+            let label = TransferProgressFormatter.progressLabel(
+                transferred: 0, total: testCase.total, bytesPerSecond: testCase.speed
+            )
+            XCTAssertEqual(label, try expectedProgressLabel(
+                total: testCase.total, speed: testCase.speed, etaSeconds: testCase.seconds
+            ))
+        }
+    }
+
+    func testProgressLabelOmitsUnrepresentableETAWithoutLosingProgressOrSpeed() throws {
+        let cases: [(total: UInt64, speed: Double)] = [
+            (1, Double.leastNonzeroMagnitude),     // Division overflows to infinity.
+            (1, Double.leastNormalMagnitude),      // Finite, but far above Int64.max.
+            (1, 1 / Double(Int64.max)),            // ETA is exactly 2^63 seconds.
+            (UInt64(1) << 63, 1),                 // Large byte count at the boundary.
+            (UInt64.max, 1),                      // ETA exceeds the boundary.
+        ]
+        for testCase in cases {
+            let label = TransferProgressFormatter.progressLabel(
+                transferred: 0, total: testCase.total, bytesPerSecond: testCase.speed
+            )
+            XCTAssertEqual(label, try expectedProgressLabel(
+                total: testCase.total, speed: testCase.speed
+            ), "total=\(testCase.total), speed=\(testCase.speed)")
+        }
+    }
+
+    func testProgressLabelKeepsETAImmediatelyBelowInt64Limit() throws {
+        // The largest Double below 2^63 is 2^63 - 1024, not Double(Int64.max).
+        let seconds = Int64.max - 1_023
+        let total = UInt64(seconds)
+        XCTAssertEqual(Double(total), Double(Int64.max).nextDown)
+
+        let label = TransferProgressFormatter.progressLabel(
+            transferred: 0, total: total, bytesPerSecond: 1
+        )
+        XCTAssertEqual(label, try expectedProgressLabel(
+            total: total, speed: 1, etaSeconds: seconds
+        ))
+    }
+
+    func testProgressLabelOmitsSpeedAndETAForInvalidSpeeds() {
+        let expected = TransferProgressFormatter.progressLabel(transferred: 0, total: 100)
+        for speed in [Double.nan, .infinity, -.infinity, 0, -1] {
+            XCTAssertEqual(
+                TransferProgressFormatter.progressLabel(
+                    transferred: 0, total: 100, bytesPerSecond: speed
+                ),
+                expected
+            )
+        }
+    }
+
+    func testProgressLabelOmitsETAWhenNoBytesRemain() throws {
+        for transferred in [UInt64(100), 101] {
+            let label = TransferProgressFormatter.progressLabel(
+                transferred: transferred, total: 100, bytesPerSecond: 1
+            )
+            XCTAssertEqual(label, try expectedProgressLabel(
+                transferred: transferred, total: 100, speed: 1
+            ))
+        }
+    }
+
+    private func expectedProgressLabel(
+        transferred: UInt64 = 0,
+        total: UInt64,
+        speed: Double,
+        etaSeconds: Int64? = nil
+    ) throws -> String {
+        var label = try XCTUnwrap(TransferProgressFormatter.progressLabel(
+            transferred: transferred, total: total
+        ))
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        // These test speeds are finite, nonnegative, and small enough for Int64.
+        label += String(
+            format: String(localized: " · %@/s"),
+            formatter.string(fromByteCount: Int64(speed))
+        )
+        if let etaSeconds {
+            let duration = Duration.seconds(etaSeconds).formatted(
+                .units(allowed: [.minutes, .seconds], width: .narrow)
+            )
+            label += String(format: String(localized: " · ETA %@"), duration)
+        }
+        return label
+    }
+
     func testProgressLabelReturnsNilWhenTotalIsZero() {
         // Given: zero total bytes
         // When: progress label is generated
