@@ -71,6 +71,20 @@ jobs:
             shellcheck -x scripts/*.sh
           fi
 
+      - name: Test demo host-key setup
+        run: python3 scripts/test-demo-host-key.py
+      - name: Test E2E log cleanup
+        run: python3 scripts/test-e2e-verify.py
+      - name: Test SBOM publication
+        run: python3 scripts/test-generate-sbom.py
+      - name: Test signing identity resolution (mocked macOS commands)
+        run: python3 scripts/test-sign-and-notarize-macos.py
+      - name: Test transfer-cancel verification diagnostics
+        run: python3 scripts/test-verify-transfer-cancel.py
+      - name: Test app icon generation script
+        run: python3 scripts/test-generate-app-icon-icns.py -v
+      - name: Test development installer
+        run: python3 scripts/test-dev-install-unsigned.py -v
       - name: Test UniFFI generation scripts (mocked tools)
         run: python3 scripts/test-generate-uniffi.py
 
@@ -171,6 +185,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Test app icon generation script
+        run: python3 scripts/test-generate-app-icon-icns.py -v
+
       - name: Pin Xcode 16.4
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90  # v1.7.0
         with:
@@ -195,6 +212,9 @@ jobs:
 
       - name: Verify localization catalog (en + ja)
         run: ./scripts/verify-localization.sh
+
+      - name: Guard Settings scene state wiring
+        run: python3 scripts/test-settings-scene.py
 
       - name: Build x86_64 (Intel) Rust static library
         run: |
