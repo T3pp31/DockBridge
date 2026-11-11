@@ -61,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Report keychain signing identity query failures separately from missing certificates and preserve `security` diagnostics (#1173)
 - Clarify that the security baseline trusts stored hostname/IP aliases in default strict mode; fingerprint-only alias trust requires `known_hosts_strict_mode = false` (#1205).
 - Stop AppIcon.icns generation when copying PNGs into staging fails (#1207)
-- Development installer no longer requires write permission on an existing app bundle when its parent directory is writable (#1206)
+- Development installer preflight checks only the parent directory and reports actual move failures (#1206)
 - Download site now explains the Privacy & Security "Open Anyway" flow for blocked first launches on macOS 15+ instead of the obsolete right-click override (#1210)
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
 - 外部ドロップで一部ファイルのセキュリティスコープを取得できなかった場合に、転送後も対象ファイル名を通知するよう修正 (#1189)
