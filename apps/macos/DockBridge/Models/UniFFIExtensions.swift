@@ -101,7 +101,7 @@ extension DockBridgeError {
             return String(localized: "Unable to load the host key store. Quit the app, back up or remove known_hosts.json, then reconnect.")
         }
 
-        if lowercased.contains("host key mismatch") || lowercased.contains("mismatch") {
+        if lowercased.contains("host key mismatch") {
             return String(localized: "The server's identity has changed. Disconnect and verify with your server administrator.")
         }
 
@@ -129,7 +129,12 @@ extension DockBridgeError {
         }
 
         if lowercased.contains("permission denied") {
-            return String(localized: "You do not have write permission on the remote side. Check the remote working directory.")
+            // Only infer a write operation from the core error prefix, not a token in a path.
+            if lowercased.hasPrefix("failed to upload")
+                || lowercased.hasPrefix("failed to create directory") {
+                return String(localized: "You do not have write permission on the remote side. Check the remote working directory.")
+            }
+            return String(localized: "You do not have permission to access this path on the remote side.")
         }
 
         if lowercased.contains("failed to create directory") {

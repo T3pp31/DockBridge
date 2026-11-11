@@ -493,12 +493,6 @@ final class ConnectionListViewModel: ObservableObject {
 
     @Published var pendingCredentialPrompt: (profile: ConnectionProfile, kind: CredentialPromptKind)?
 
-    /// One-time credential supplied by the prompt, scoped to the profile that
-    /// requested it so a failed connect cannot leak it to a different profile
-    /// (issue #778).
-    private var promptPasswordOverride: (profileID: UUID, value: String)?
-    private var promptPassphraseOverride: (profileID: UUID, value: String)?
-
     func beginPasswordPrompt(for profile: ConnectionProfile) {
         pendingCredentialPrompt = (profile, .password)
     }
@@ -507,13 +501,19 @@ final class ConnectionListViewModel: ObservableObject {
         pendingCredentialPrompt = (profile, .passphrase)
     }
 
-    func confirmCredentialPrompt(text: String, saveToKeychain: Bool) {
+    func confirmCredentialPrompt(credential: SensitiveString, saveToKeychain: Bool) {
+        var connectionScheduled = false
+        defer {
+            // Rejected submissions remain owned here; accepted buffers are
+            // cleared by the connection attempt, including its early exits.
+            if !connectionScheduled { credential.clear() }
+        }
         guard let prompt = pendingCredentialPrompt else { return }
 
         // Only the empty check trims: SSH passwords/passphrases may legitimately
         // contain leading/trailing whitespace, which must be preserved both in
         // the Keychain and in the override used for the connection.
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !credential.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         let account = keychain.keychainAccount(for: prompt.profile.id, kind: "profile")
         let profile = prompt.profile
@@ -523,9 +523,9 @@ final class ConnectionListViewModel: ObservableObject {
             do {
                 switch kind {
                 case .password:
-                    try keychain.savePassword(text, account: account)
+                    try keychain.savePassword(credential.text, account: account)
                 case .passphrase:
-                    try keychain.savePassphrase(text, account: account)
+                    try keychain.savePassphrase(credential.text, account: account)
                 }
             } catch {
                 errorMessage = error.localizedDescription
@@ -533,15 +533,15 @@ final class ConnectionListViewModel: ObservableObject {
             }
         }
 
-        switch kind {
-        case .password:
-            promptPasswordOverride = (profile.id, text)
-        case .passphrase:
-            promptPassphraseOverride = (profile.id, text)
-        }
-
         pendingCredentialPrompt = nil
-        Task { await connect(profile: profile, allowCredentialPrompt: false) }
+        connectionScheduled = true
+        Task {
+            await connect(
+                profile: profile,
+                allowCredentialPrompt: false,
+                promptCredential: (kind, credential)
+            )
+        }
     }
 
     func cancelCredentialPrompt() {
@@ -551,6 +551,17 @@ final class ConnectionListViewModel: ObservableObject {
     // MARK: - Connect
 
     func connect(profile: ConnectionProfile, allowCredentialPrompt: Bool = true) async {
+        await connect(profile: profile, allowCredentialPrompt: allowCredentialPrompt, promptCredential: nil)
+    }
+
+    private func connect(
+        profile: ConnectionProfile,
+        allowCredentialPrompt: Bool,
+        promptCredential: (kind: CredentialPromptKind, value: SensitiveString)?
+    ) async {
+        // Keep prompt credentials local to this attempt, never in a retry cache
+        // shared with another profile (issue #778).
+        defer { promptCredential?.value.clear() }
         do {
             if profile.authType == .privateKey {
                 guard let bookmark = profile.privateKeyBookmark else {
@@ -564,14 +575,16 @@ final class ConnectionListViewModel: ObservableObject {
                     try await performConnect(
                         profile: profile,
                         connectProfile: connectProfile,
-                        allowCredentialPrompt: allowCredentialPrompt
+                        allowCredentialPrompt: allowCredentialPrompt,
+                        promptCredential: promptCredential
                     )
                 }
             } else {
                 try await performConnect(
                     profile: profile,
                     connectProfile: profile,
-                    allowCredentialPrompt: allowCredentialPrompt
+                    allowCredentialPrompt: allowCredentialPrompt,
+                    promptCredential: promptCredential
                 )
             }
         } catch {
@@ -594,31 +607,29 @@ final class ConnectionListViewModel: ObservableObject {
     private func performConnect(
         profile: ConnectionProfile,
         connectProfile: ConnectionProfile,
-        allowCredentialPrompt: Bool = true
+        allowCredentialPrompt: Bool,
+        promptCredential: (kind: CredentialPromptKind, value: SensitiveString)?
     ) async throws {
         let credentials = try credentialsForConnection(profile: connectProfile)
         var password = credentials.password
         var passphrase = credentials.passphrase
 
-        // A one-time override from the credential prompt takes precedence over a
-        // saved (possibly stale) Keychain value, but only for the profile that
-        // requested it (issues #571, #778).
-        if let override = promptPasswordOverride {
-            if override.profileID == profile.id {
-                password = override.value
-            }
-            promptPasswordOverride = nil
-        }
-        if let override = promptPassphraseOverride {
-            if override.profileID == profile.id {
-                passphrase = override.value
-            }
-            promptPassphraseOverride = nil
-        }
-
         defer {
             SensitiveString.clear(&password)
             SensitiveString.clear(&passphrase)
+        }
+
+        // Materialize plain Strings only for the bridge call, not while the
+        // prompt is queued. The one-time input overrides stale saved values.
+        // Swift/UniFFI String copies cannot be guaranteed to be zeroized.
+        if let promptCredential {
+            switch promptCredential.kind {
+            case .password:
+                password = promptCredential.value.text
+            case .passphrase:
+                passphrase = promptCredential.value.text
+            }
+            promptCredential.value.clear()
         }
 
         if allowCredentialPrompt, connectProfile.authType == .password,
@@ -785,8 +796,10 @@ final class ConnectionListViewModel: ObservableObject {
         do {
             // Select the profile just created, not the first entry in the
             // store (issue #779).
-            profile = try store.upsert(profile).first { $0.id == profile.id } ?? profile
-            profiles = try store.loadProfiles()
+            let updatedProfiles = try store.upsert(profile)
+            profile = updatedProfiles.first { $0.id == profile.id } ?? profile
+            // Use the saved snapshot so a second read cannot leave the UI stale.
+            profiles = updatedProfiles
             selectedProfileID = profile.id
         } catch {
             errorMessage = error.localizedDescription

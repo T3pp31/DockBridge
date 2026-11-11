@@ -42,9 +42,14 @@ pub struct FailureConfig {
     pub fail_setstat: AtomicBool,
     pub fail_mkdir: AtomicBool,
     pub opendir_count: AtomicU64,
+    /// Repeat each READDIR entry to exercise directory-walk deduplication.
+    pub duplicate_readdir_entries: AtomicBool,
     /// Number of SSH_FXP_MKDIR requests handled, used to assert that
     /// directory mirrors issue at most one mkdir per directory (issue #312).
     pub mkdir_count: AtomicU64,
+    /// Number of SSH_FXP_REMOVE requests, used to detect delete-then-rename
+    /// regressions when finalizing uploads.
+    pub remove_count: AtomicU64,
     /// When set, a single OPENDIR for exactly this path fails (one-shot),
     /// letting tests simulate an unreadable remote subdirectory during a walk
     /// (issue #316).
@@ -375,6 +380,14 @@ impl SftpHandler {
         Ok(entries)
     }
 
+    fn io_error_status(err: std::io::Error) -> StatusCode {
+        match err.kind() {
+            std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+            std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+            _ => StatusCode::Failure,
+        }
+    }
+
     fn ok_status(id: u32) -> Status {
         Status {
             id,
@@ -683,7 +696,14 @@ impl russh_sftp::server::Handler for SftpHandler {
         if dir.read_offset >= dir.entries.len() {
             return Err(StatusCode::Eof);
         }
-        let files = dir.entries[dir.read_offset..].to_vec();
+        let mut files = dir.entries[dir.read_offset..].to_vec();
+        if self
+            .failures
+            .duplicate_readdir_entries
+            .load(Ordering::Relaxed)
+        {
+            files.extend_from_within(..);
+        }
         dir.read_offset = dir.entries.len();
         Ok(Name { id, files })
     }
@@ -711,6 +731,7 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn remove(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
+        self.failures.remove_count.fetch_add(1, Ordering::Relaxed);
         let local = self.resolve(&path);
         if let Err(err) = fs::remove_file(&local).await {
             // Match real servers: only a missing target is NoSuchFile; other
@@ -879,15 +900,15 @@ impl russh_sftp::server::Handler for SftpHandler {
                 .write(true)
                 .open(&local)
                 .await
-                .map_err(|_| StatusCode::Failure)?;
-            file.set_len(size).await.map_err(|_| StatusCode::Failure)?;
+                .map_err(Self::io_error_status)?;
+            file.set_len(size).await.map_err(Self::io_error_status)?;
         }
 
         if attrs.atime.is_some() || attrs.mtime.is_some() {
             #[cfg(unix)]
             {
                 set_file_times_by_path(&local, attrs.atime, attrs.mtime)
-                    .map_err(|_| StatusCode::Failure)?;
+                    .map_err(Self::io_error_status)?;
             }
             #[cfg(not(unix))]
             {
@@ -906,7 +927,7 @@ impl russh_sftp::server::Handler for SftpHandler {
                     .write(true)
                     .open(&local)
                     .and_then(|file| file.set_times(times))
-                    .map_err(|_| StatusCode::Failure)?;
+                    .map_err(Self::io_error_status)?;
             }
         }
 
@@ -916,7 +937,7 @@ impl russh_sftp::server::Handler for SftpHandler {
                 use std::os::unix::fs::PermissionsExt;
                 fs::set_permissions(&local, std::fs::Permissions::from_mode(mode))
                     .await
-                    .map_err(|_| StatusCode::Failure)?;
+                    .map_err(Self::io_error_status)?;
             }
             #[cfg(not(unix))]
             {
@@ -1208,6 +1229,131 @@ fn set_file_times_by_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use russh_sftp::server::Handler as _;
+
+    fn sftp_handler(root: &Path) -> SftpHandler {
+        SftpHandler {
+            root: root.to_path_buf(),
+            failures: Arc::new(FailureConfig::default()),
+            handles: HashMap::new(),
+            dir_handles: HashMap::new(),
+            next_handle: 1,
+        }
+    }
+
+    #[test]
+    fn setstat_io_errors_preserve_status_categories() {
+        use std::io::{Error, ErrorKind};
+
+        for (kind, expected) in [
+            (ErrorKind::NotFound, StatusCode::NoSuchFile),
+            (ErrorKind::PermissionDenied, StatusCode::PermissionDenied),
+            (ErrorKind::InvalidInput, StatusCode::Failure),
+            (ErrorKind::AlreadyExists, StatusCode::Failure),
+            (ErrorKind::Other, StatusCode::Failure),
+        ] {
+            assert_eq!(SftpHandler::io_error_status(Error::from(kind)), expected);
+        }
+        #[cfg(unix)]
+        for (errno, expected) in [
+            (libc::ENOENT, StatusCode::NoSuchFile),
+            (libc::EACCES, StatusCode::PermissionDenied),
+            (libc::EPERM, StatusCode::PermissionDenied),
+            (libc::EIO, StatusCode::Failure),
+        ] {
+            assert_eq!(
+                SftpHandler::io_error_status(Error::from_raw_os_error(errno)),
+                expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn setstat_classifies_errors_for_each_attribute() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut handler = sftp_handler(directory.path());
+
+        for (path, expected) in [
+            ("/missing", StatusCode::NoSuchFile),
+            ("/missing/child", StatusCode::NoSuchFile),
+            ("/invalid\0path", StatusCode::Failure),
+        ] {
+            for attribute in [
+                "size",
+                "atime",
+                "mtime",
+                #[cfg(unix)]
+                "permissions",
+            ] {
+                // Send each attribute alone so an earlier operation cannot mask
+                // a missing error mapping in a later SETSTAT branch.
+                let mut attrs = FileAttributes::empty();
+                match attribute {
+                    "size" => attrs.size = Some(2),
+                    "atime" => attrs.atime = Some(123),
+                    "mtime" => attrs.mtime = Some(456),
+                    "permissions" => attrs.permissions = Some(0o640),
+                    _ => unreachable!(),
+                }
+                let result = handler.setstat(1, path.to_string(), attrs).await;
+                assert_eq!(
+                    result.unwrap_err(),
+                    expected,
+                    "attribute={attribute}, path={path:?}"
+                );
+            }
+        }
+        assert!(!directory.path().join("missing").exists());
+    }
+
+    #[tokio::test]
+    async fn setstat_updates_attributes_and_preserves_injected_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("file");
+        std::fs::write(&path, b"data").unwrap();
+        let mut handler = sftp_handler(directory.path());
+        handler.failures.fail_setstat.store(true, Ordering::SeqCst);
+        let mut attrs = FileAttributes::empty();
+        attrs.size = Some(2);
+        let result = handler.setstat(1, "/file".to_string(), attrs).await;
+        assert_eq!(result.unwrap_err(), StatusCode::Failure);
+        assert_eq!(std::fs::read(&path).unwrap(), b"data");
+
+        // The injected failure remains one-shot; subsequent truncation and
+        // extension succeed, and other attributes can still be applied together.
+        for size in [2, 6] {
+            let mut attrs = FileAttributes::empty();
+            attrs.size = Some(size);
+            attrs.atime = Some(123);
+            attrs.mtime = Some(456);
+            #[cfg(unix)]
+            {
+                attrs.permissions = Some(0o640);
+            }
+            let status = handler
+                .setstat(7, "/file".to_string(), attrs)
+                .await
+                .unwrap();
+            assert_eq!(status.id, 7);
+            assert_eq!(status.status_code, StatusCode::Ok);
+            let metadata = std::fs::metadata(&path).unwrap();
+            assert_eq!(metadata.len(), size);
+            assert_eq!(
+                metadata.accessed().unwrap(),
+                std::time::UNIX_EPOCH + Duration::from_secs(123)
+            );
+            assert_eq!(
+                metadata.modified().unwrap(),
+                std::time::UNIX_EPOCH + Duration::from_secs(456)
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(metadata.permissions().mode() & 0o7777, 0o640);
+            }
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), b"da\0\0\0\0");
+    }
 
     #[cfg(unix)]
     #[test]
