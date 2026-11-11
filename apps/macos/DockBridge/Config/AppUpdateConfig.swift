@@ -69,6 +69,8 @@ enum AppUpdateConfig {
     static func showCachedReleaseBody() -> Data? {
         guard let data = try? Data(contentsOf: releaseBodyCacheURL()),
               let entry = try? JSONDecoder().decode(ReleaseBodyCacheEntry.self, from: data) else {
+            // Purged or damaged cache files cannot support a conditional request.
+            clearReleaseBody()
             return nil
         }
         guard Date().timeIntervalSince(entry.storedAt) <= releaseBodyCacheMaxAge else {
