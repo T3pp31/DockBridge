@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Remote deletion in the macOS app now always requires confirmation; remove the
+  opt-out setting and ignore previously saved disabled values (#1211).
 - Accept local items dropped back onto the same local pane as a no-op instead of showing an invalid-move error (#1190)
 - Local pane double-click fallback no longer navigates to `..` when it is part of a multiple selection; selecting only `..` still opens the parent directory (#1191)
 - Keep prompted credentials in a clearable buffer until connection handoff, and clear it on rejected input or failed attempts (#1188)

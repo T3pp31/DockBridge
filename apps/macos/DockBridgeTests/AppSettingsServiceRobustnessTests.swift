@@ -56,7 +56,6 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
         config.sshKeepaliveIntervalSecs = 15
         config.defaultLocalPath = "/tmp/custom-local-directory"
         config.defaultLocalBookmark = Data([1, 2, 3])
-        config.confirmBeforeDelete = false
         config.showHiddenFiles = true
         config.mergeOpensshKnownHostsOnConnect = false
         config.opensshKnownHostsPath = "/tmp/custom-known-hosts"
@@ -76,6 +75,31 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
 
         config.sshInactivityTimeoutSecs = nil
         XCTAssertEqual(try decoder.decode(AppConfig.self, from: encoder.encode(config)), config)
+    }
+
+    func testLegacyDeleteConfirmationFlagIsIgnoredWhenDecodingConfig() throws {
+        let config = try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data("{\"confirmBeforeDelete\":false,\"showHiddenFiles\":true}".utf8)
+        )
+        var expected = AppConfig.default
+        expected.showHiddenFiles = true
+        XCTAssertEqual(config, expected)
+
+        let encoded = try JSONEncoder().encode(config)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNil(fields["confirmBeforeDelete"])
+        XCTAssertEqual(try JSONDecoder().decode(AppConfig.self, from: encoded), expected)
+    }
+
+    func testLegacyDeleteConfirmationFlagIsIgnoredWhenLoadingSettings() {
+        let expected = service.loadConfig()
+        defaults().set(false, forKey: "confirmBeforeDelete")
+
+        let config = service.loadConfig()
+        XCTAssertEqual(config, expected)
+        service.saveConfig(config)
+        XCTAssertEqual(service.loadConfig(), expected)
     }
 
     func testInvalidConfigFieldTypeStillFailsDecoding() {

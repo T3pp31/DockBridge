@@ -1648,12 +1648,9 @@ final class MainViewModel: ObservableObject {
     }
 
     func requestDeleteRemote(item: RemoteFileRecord) {
-        if settings.loadConfig().confirmBeforeDelete {
-            pendingDeleteRemotePath = item.path
-            showDeleteConfirmation = true
-        } else {
-            Task { await deleteRemote(path: item.path) }
-        }
+        // Remote deletion is irreversible, so confirmation cannot be disabled.
+        pendingDeleteRemotePath = item.path
+        showDeleteConfirmation = true
     }
 
     func confirmDeleteRemote() async {

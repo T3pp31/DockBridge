@@ -8,6 +8,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
     private var keychain: KeychainService!
     private var store: ConnectionStore!
     private var settings: AppSettingsService!
+    private var userDefaults: UserDefaults!
     private var bridge: FakeBridge!
     private var realBridge: RustBridgeService!
     private var connectionList: ConnectionListViewModel!
@@ -25,7 +26,8 @@ final class MainViewModelTestabilityTests: XCTestCase {
         keychain = KeychainService(serviceName: "com.dockbridge.tests.\(UUID().uuidString)")
         let encryptionService = ProfileEncryptionService(keychain: keychain)
         store = ConnectionStore(baseDirectory: baseDirectory, encryptionService: encryptionService)
-        settings = AppSettingsService(defaults: makeIsolatedDefaults())
+        userDefaults = makeIsolatedDefaults()
+        settings = AppSettingsService(defaults: userDefaults)
         bridge = FakeBridge()
         realBridge = RustBridgeService()
         connectionList = ConnectionListViewModel(
@@ -59,6 +61,7 @@ final class MainViewModelTestabilityTests: XCTestCase {
         keychain = nil
         store = nil
         settings = nil
+        userDefaults = nil
         bridge = nil
         realBridge = nil
         connectionList = nil
@@ -99,6 +102,81 @@ final class MainViewModelTestabilityTests: XCTestCase {
             symlinkTarget: nil,
             symlinkTargetIsDir: nil
         )
+    }
+
+    // MARK: - Remote delete confirmation
+
+    func testRemoteDeleteWaitsForConfirmationAndDeletesOnlyOnce() async {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        bridge.directoryListings["/"] = []
+        let item = makeRemoteItem(name: "file.txt", path: "/file.txt")
+
+        viewModel.requestDeleteRemote(item: item)
+
+        XCTAssertEqual(viewModel.pendingDeleteRemotePath, item.path)
+        XCTAssertTrue(viewModel.showDeleteConfirmation)
+        XCTAssertTrue(bridge.deleted.isEmpty)
+        XCTAssertTrue(bridge.listedDirectories.isEmpty)
+
+        await viewModel.confirmDeleteRemote()
+
+        XCTAssertEqual(bridge.deleted, [item.path])
+        XCTAssertNil(viewModel.pendingDeleteRemotePath)
+        XCTAssertFalse(viewModel.showDeleteConfirmation)
+        XCTAssertEqual(bridge.listedDirectories, ["/"])
+        XCTAssertNil(viewModel.errorMessage)
+
+        await viewModel.confirmDeleteRemote()
+        XCTAssertEqual(bridge.deleted, [item.path])
+    }
+
+    func testFocusedRemoteDeleteStillRequiresConfirmationWithLegacyDisabledSetting() async {
+        userDefaults.set(false, forKey: "confirmBeforeDelete")
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        let item = makeRemoteItem(name: "folder", path: "/folder", isDirectory: true)
+        bridge.directoryListings["/"] = [item]
+        await viewModel.reloadRemote()
+        viewModel.selectedRemoteItemIDs = [item.id]
+        viewModel.noteFocusedGoToPathPane(.remote)
+
+        viewModel.requestDeleteForFocusedPane()
+
+        XCTAssertEqual(viewModel.pendingDeleteRemotePath, item.path)
+        XCTAssertTrue(viewModel.showDeleteConfirmation)
+        XCTAssertTrue(bridge.deleted.isEmpty)
+
+        await viewModel.confirmDeleteRemote()
+        XCTAssertEqual(bridge.deleted, [item.path])
+    }
+
+    func testCancelledRemoteDeleteDoesNotDelete() async {
+        let item = makeRemoteItem(name: "file.txt", path: "/file.txt")
+        viewModel.requestDeleteRemote(item: item)
+
+        // Match the confirmation sheet's onCancel action.
+        viewModel.pendingDeleteRemotePath = nil
+        viewModel.showDeleteConfirmation = false
+        await viewModel.confirmDeleteRemote()
+
+        XCTAssertTrue(bridge.deleted.isEmpty)
+        XCTAssertTrue(bridge.listedDirectories.isEmpty)
+    }
+
+    func testConfirmedRemoteDeleteFailureIsReportedWithoutRetrying() async {
+        bridge.deleteFails = true
+        let item = makeRemoteItem(name: "file.txt", path: "/file.txt")
+        viewModel.requestDeleteRemote(item: item)
+
+        await viewModel.confirmDeleteRemote()
+
+        XCTAssertEqual(bridge.deleted, [item.path])
+        XCTAssertNil(viewModel.pendingDeleteRemotePath)
+        XCTAssertFalse(viewModel.showDeleteConfirmation)
+        XCTAssertTrue(viewModel.errorMessage?.contains("simulated delete failure") == true)
+        XCTAssertTrue(bridge.listedDirectories.isEmpty)
+
+        await viewModel.confirmDeleteRemote()
+        XCTAssertEqual(bridge.deleted, [item.path])
     }
 
     private final class RecordingFileDropScopeService: FileDropSecurityScopeService {
