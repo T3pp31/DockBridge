@@ -1910,7 +1910,7 @@ impl<'a> PartialRemoteTransfer<'a> {
             }
             Ok(false) => {
                 let message = format!(
-                    "upload was not committed: the source file '{}' still exists and the new file is preserved at '{}': the server does not support the posix-rename@openssh.com extension, so an existing destination cannot be replaced atomically",
+                    "upload was not committed: the existing destination file '{}' still exists and the new file is preserved at '{}': the server does not support the posix-rename@openssh.com extension, so an existing destination cannot be replaced atomically",
                     self.remote,
                     self.partial_path,
                 );
@@ -1922,7 +1922,7 @@ impl<'a> PartialRemoteTransfer<'a> {
             }
             Err(err) => {
                 let message = format!(
-                    "upload was not committed: the source file '{}' still exists and the new file is preserved at '{}': {err}",
+                    "could not finalize upload to destination file '{}'; partial file recovery path: '{}': {err}",
                     self.remote,
                     self.partial_path,
                 );
@@ -3794,6 +3794,13 @@ mod tests {
         // Then: the transfer reports failure, but the ORIGINAL file is intact
         // and the fully-uploaded partial is preserved for recovery (no data loss).
         assert!(matches!(err, SftpError::UploadFailed { .. }), "{err:?}");
+        let message = err.to_string();
+        assert!(
+            message
+                .contains("could not finalize upload to destination file '/upload/overwrite.txt'"),
+            "expected the remote destination to be identified correctly: {message}"
+        );
+        assert!(message.contains("rename failed"), "{message}");
         assert!(
             server.remote_file_exists("/upload/overwrite.txt"),
             "original remote file must survive a failed rename"
@@ -3802,9 +3809,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(original, b"original contents");
+        let partials = server.remote_partial_paths();
+        assert_eq!(partials.len(), 1, "keep exactly one recoverable partial");
+        assert_eq!(
+            tokio::fs::read(&partials[0]).await.unwrap(),
+            b"new contents that are longer"
+        );
+        let partial_path = partials[0].strip_prefix(&server.root).unwrap();
         assert!(
-            !server.remote_partial_paths().is_empty(),
-            "the fully-uploaded partial must be preserved so the user can recover it"
+            message.contains(&format!(
+                "partial file recovery path: '/{}'",
+                partial_path.display()
+            )),
+            "expected the recoverable partial path in the error: {message}"
         );
     }
 
@@ -3973,7 +3990,12 @@ mod tests {
 
         // Then: the upload fails without touching the original file and the
         // fully-uploaded partial is preserved (never delete-then-rename).
+        assert!(matches!(err, SftpError::UploadFailed { .. }), "{err:?}");
         let message = err.to_string();
+        assert!(
+            message.contains("the existing destination file '/upload/overwrite.txt' still exists"),
+            "expected the remote destination to be identified correctly: {message}"
+        );
         assert!(
             message.contains("posix-rename@openssh.com"),
             "expected unsupported-extension error, got: {message}"
@@ -3985,6 +4007,14 @@ mod tests {
         let partials = server.remote_partial_paths();
         assert_eq!(partials.len(), 1, "keep exactly one recoverable partial");
         assert_eq!(tokio::fs::read(&partials[0]).await.unwrap(), b"brand new");
+        let partial_path = partials[0].strip_prefix(&server.root).unwrap();
+        assert!(
+            message.contains(&format!(
+                "the new file is preserved at '/{}'",
+                partial_path.display()
+            )),
+            "expected the recoverable partial path in the error: {message}"
+        );
         assert_eq!(
             server.failures.remove_count.load(Ordering::Relaxed),
             0,
@@ -4624,9 +4654,7 @@ mod tests {
 
     #[tokio::test]
     async fn upload_with_failed_rename_signals_upload_failure() {
-        // Exercises the `fail_remote_rename` hook (previously unused): a
-        // rename failure at finalize must surface as an upload error, not
-        // leave a silent pass.
+        // A failed rename must not claim that an absent destination exists.
         let server = TestSftpServer::start().await;
         let session = server.connect_session().await;
         let client = SftpClient::new(&session);
@@ -4639,16 +4667,49 @@ mod tests {
             .fail_remote_rename
             .store(true, Ordering::SeqCst);
         let err = client
-            .upload(&local_path, "/upload/renfail.txt")
+            .upload(&local_path, "upload/renfail.txt")
             .await
             .unwrap_err();
 
+        let SftpError::UploadFailed {
+            local,
+            remote,
+            message,
+        } = err
+        else {
+            panic!("expected upload failure, got {err:?}");
+        };
+        assert_eq!(local, local_path.display().to_string());
+        assert_eq!(remote, "/upload/renfail.txt");
         assert!(
-            matches!(
-                err,
-                SftpError::UploadFailed { .. } | SftpError::RenameFailed { .. }
+            message.starts_with(
+                "could not finalize upload to destination file '/upload/renfail.txt';"
             ),
-            "{err:?}"
+            "{message}"
+        );
+        assert!(!message.contains("still exists"), "{message}");
+        assert!(!message.contains("was not committed"), "{message}");
+        assert!(!message.contains("is preserved"), "{message}");
+        assert!(message.contains("rename failed"), "{message}");
+        assert!(
+            !server.failures.fail_remote_rename.load(Ordering::SeqCst),
+            "the rename failure hook must be consumed"
+        );
+        let partials = server.remote_partial_paths();
+        assert_eq!(partials.len(), 1, "keep exactly one recoverable partial");
+        assert_eq!(tokio::fs::read(&partials[0]).await.unwrap(), b"payload");
+        let partial_path = partials[0].strip_prefix(&server.root).unwrap();
+        assert!(
+            message.contains(&format!(
+                "partial file recovery path: '/{}': ",
+                partial_path.display()
+            )),
+            "{message}"
+        );
+        assert_eq!(
+            server.failures.remove_count.load(Ordering::Relaxed),
+            0,
+            "a failed rename must not remove the recovery file"
         );
         assert!(
             !server.remote_file_exists("/upload/renfail.txt"),
