@@ -712,8 +712,9 @@ impl KnownHostsManager {
         Ok(summary)
     }
 
-    /// Writes trusted keys to an OpenSSH `known_hosts` file with mode `0600`.
+    /// Writes host keys to an OpenSSH `known_hosts` file with mode `0600`.
     ///
+    /// Hashed entries retain their `@revoked` and `@cert-authority` markers.
     /// Entries without a stored OpenSSH public key representation are omitted.
     pub fn export_openssh(&self, path: &Path) -> Result<(), SecurityError> {
         ensure_known_hosts_parent(path)?;
@@ -757,16 +758,18 @@ impl KnownHostsManager {
                 .then_with(|| left.hash.cmp(&right.hash))
         });
         for entry in hashed_entries {
-            if entry.marker.is_some() {
-                continue;
-            }
             let Some(public_key_openssh) = entry.public_key_openssh.as_deref() else {
                 continue;
+            };
+            let marker = match entry.marker {
+                Some(KnownHostMarker::Revoked) => "@revoked ",
+                Some(KnownHostMarker::CertAuthority) => "@cert-authority ",
+                None => "",
             };
             let encode = base64::engine::general_purpose::STANDARD;
             let salt = base64::Engine::encode(&encode, &entry.salt);
             let hash = base64::Engine::encode(&encode, entry.hash);
-            lines.push(format!("|1|{salt}|{hash} {public_key_openssh}"));
+            lines.push(format!("{marker}|1|{salt}|{hash} {public_key_openssh}"));
         }
 
         let payload = if lines.is_empty() {
@@ -2202,28 +2205,93 @@ mod tests {
     }
 
     #[test]
-    fn hashed_export_omits_marked_and_unexportable_keys() {
+    fn hashed_export_preserves_markers_on_round_trip() {
+        for (prefix, marker, expected) in [
+            (
+                "@revoked",
+                KnownHostMarker::Revoked,
+                HostKeyCheckResult::Reject,
+            ),
+            (
+                "@cert-authority",
+                KnownHostMarker::CertAuthority,
+                HostKeyCheckResult::Unknown,
+            ),
+        ] {
+            for port in [22, 2222] {
+                let dir = tempdir().unwrap();
+                let path = dir.path().join("known_hosts.json");
+                let source_path = dir.path().join("known_hosts");
+                let exported_path = dir.path().join("exported_known_hosts");
+                let restored_path = dir.path().join("restored.json");
+                let key = test_public_key();
+                let public_key = key.to_openssh().unwrap();
+                let host = "hashed.example.com";
+                let salt = b"test-salt-bytes!!!!!";
+                let hash = openssh_hostname_hash(salt, host, port);
+                let encode = base64::engine::general_purpose::STANDARD;
+                let salt_b64 = base64::Engine::encode(&encode, salt);
+                let hash_b64 = base64::Engine::encode(&encode, hash);
+                let source = format!("{prefix} |1|{salt_b64}|{hash_b64} {public_key}\n");
+                write_test_file_mode_0600(&source_path, &source);
+
+                let mut manager = KnownHostsManager::load(&path).unwrap();
+                let summary = manager.import_openssh(&source_path).unwrap();
+                assert_eq!(summary.merged, 1);
+                assert_eq!(summary.skipped, 0);
+                let manager = KnownHostsManager::load(&path).unwrap();
+                assert_eq!(manager.hashed_entries[0].marker, Some(marker));
+                manager.export_openssh(&exported_path).unwrap();
+                assert_eq!(fs::read_to_string(&exported_path).unwrap(), source);
+
+                let mut restored = KnownHostsManager::load(&restored_path).unwrap();
+                let summary = restored.import_openssh(&exported_path).unwrap();
+                assert_eq!(summary.merged, 1);
+                assert_eq!(summary.skipped, 0);
+                let restored = KnownHostsManager::load(&restored_path).unwrap();
+                assert_eq!(restored.hashed_entries, manager.hashed_entries);
+                for strict_mode in [false, true] {
+                    assert_eq!(
+                        manager.check_host_key(host, port, &key, strict_mode),
+                        expected
+                    );
+                    assert_eq!(
+                        restored.check_host_key(host, port, &key, strict_mode),
+                        expected
+                    );
+                    assert_eq!(
+                        restored.check_host_key("other.example.com", port, &key, strict_mode),
+                        HostKeyCheckResult::Unknown
+                    );
+                    let other_port = if port == 22 { 2222 } else { 22 };
+                    assert_eq!(
+                        restored.check_host_key(host, other_port, &key, strict_mode),
+                        HostKeyCheckResult::Unknown
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hashed_export_omits_unexportable_keys() {
         let dir = tempdir().unwrap();
         let mut manager = KnownHostsManager::load(dir.path().join("known_hosts.json")).unwrap();
         let key = test_public_key();
-        let base = HashedHostEntry {
-            salt: b"test-salt-bytes!!".to_vec(),
-            hash: [0; 20],
-            fingerprint_sha256: fingerprint_sha256(&key),
-            algorithm: "ssh-ed25519".into(),
-            public_key_openssh: Some(key.to_openssh().unwrap()),
-            marker: Some(KnownHostMarker::Revoked),
-        };
-        manager.hashed_entries.push(base.clone());
-        manager.hashed_entries.push(HashedHostEntry {
-            marker: Some(KnownHostMarker::CertAuthority),
-            ..base.clone()
-        });
-        manager.hashed_entries.push(HashedHostEntry {
-            marker: None,
-            public_key_openssh: None,
-            ..base
-        });
+        for marker in [
+            None,
+            Some(KnownHostMarker::Revoked),
+            Some(KnownHostMarker::CertAuthority),
+        ] {
+            manager.hashed_entries.push(HashedHostEntry {
+                salt: b"test-salt-bytes!!".to_vec(),
+                hash: [0; 20],
+                fingerprint_sha256: fingerprint_sha256(&key),
+                algorithm: "ssh-ed25519".into(),
+                public_key_openssh: None,
+                marker,
+            });
+        }
         let exported_path = dir.path().join("exported_known_hosts");
 
         manager.export_openssh(&exported_path).unwrap();
