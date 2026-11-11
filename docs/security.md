@@ -5,7 +5,7 @@
 - First-connection host key fingerprint display (SHA256)
 - User accept/reject for unknown host keys
 - Trusted keys stored in DockBridge `known_hosts.json` (written `0600`; on Unix, load rejects files that are not owner-only `0600`/`0400`, owned by the current user, or accessed through a symlink)
-- Hostname/IP alias normalization: same port and fingerprint are trusted across identifiers (OpenSSH-style comma-separated hosts)
+- Hostname/IP aliases: default strict mode (`known_hosts_strict_mode = true`) trusts matching keys only for exact host/port or stored aliases (including imported OpenSSH comma-separated hosts). Trust across other identifiers based only on the same port and fingerprint requires `known_hosts_strict_mode = false` (see [Host key trust policy](#host-key-trust-policy)).
 - OpenSSH `known_hosts` import/export helpers on `KnownHostsManager`
 - Automatic merge with OpenSSH `known_hosts` on connect (configurable; see macOS Settings)
 - Hashed host entry (`|1|...`) import and matching
