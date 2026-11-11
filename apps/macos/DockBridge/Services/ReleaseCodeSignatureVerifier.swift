@@ -28,7 +28,7 @@ enum ReleaseCodeSignatureVerifierError: Error, Equatable {
     case teamIdentifierMismatch(expected: String, actual: String)
     case certificateFingerprintMismatch(expected: String, actual: String)
     case notarizationMissing
-    /// `requireSignedUpdates` is enabled but team ID or certificate fingerprint is empty.
+    /// Signature or notarization verification requires a team ID; signed updates also require a certificate fingerprint.
     case misconfiguredSignaturePolicy
 }
 
@@ -84,9 +84,7 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
     }
 
     private func verifySignature(at url: URL) throws {
-        if policy.requireSignedUpdates {
-            try validateSignedUpdatePolicy()
-        }
+        try validateSignaturePolicy()
 
         var staticCode: SecStaticCode?
         let createStatus = SecStaticCodeCreateWithPath(
@@ -117,12 +115,18 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
             throw ReleaseCodeSignatureVerifierError.unsignedBundle
         }
 
-        let info = signingInfo as NSDictionary
+        try verifySigningInformation(signingInfo as NSDictionary)
+    }
 
+    /// Evaluates metadata after static code validity and policy validation have succeeded.
+    func verifySigningInformation(_ info: NSDictionary) throws {
         if policy.requireSignedUpdates {
             try verifyDeveloperIDSignature(signingInfo: info)
             try verifyTeamIdentifier(signingInfo: info)
             try verifyCertificateFingerprint(signingInfo: info)
+        } else if policy.requireNotarizedUpdates {
+            // Notarization alone does not bind an update to the expected vendor.
+            try verifyTeamIdentifier(signingInfo: info)
         }
 
         if policy.requireNotarizedUpdates {
@@ -163,9 +167,9 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
         return bundleIdentifier
     }
 
-    private func validateSignedUpdatePolicy() throws {
+    private func validateSignaturePolicy() throws {
         guard !policy.expectedTeamIdentifier.isEmpty,
-              !policy.signingCertificateFingerprintSHA256.isEmpty else {
+              !policy.requireSignedUpdates || !policy.signingCertificateFingerprintSHA256.isEmpty else {
             throw ReleaseCodeSignatureVerifierError.misconfiguredSignaturePolicy
         }
     }

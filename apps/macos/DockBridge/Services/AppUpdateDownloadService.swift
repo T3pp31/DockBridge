@@ -132,7 +132,7 @@ extension AppUpdateDownloadError: LocalizedError {
         case .notarizationMissing:
             return String(localized: "The update is not notarized by Apple.")
         case .misconfiguredSignaturePolicy:
-            return String(localized: "Update signature policy is misconfigured. Expected team identifier and certificate fingerprint must both be set when signed updates are required.")
+            return String(localized: "Update signature policy is misconfigured. Expected team identifier must be set for signed or notarized updates; certificate fingerprint is also required for signed updates.")
         }
     }
 }
