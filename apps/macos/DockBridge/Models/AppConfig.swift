@@ -11,7 +11,6 @@ struct AppConfig: Codable, Equatable, Sendable {
     var sshKeepaliveIntervalSecs: UInt64
     var defaultLocalPath: String
     var defaultLocalBookmark: Data?
-    var confirmBeforeDelete: Bool
     var showHiddenFiles: Bool
     var mergeOpensshKnownHostsOnConnect: Bool
     var opensshKnownHostsPath: String
@@ -36,7 +35,6 @@ struct AppConfig: Codable, Equatable, Sendable {
         case sshKeepaliveIntervalSecs
         case defaultLocalPath
         case defaultLocalBookmark
-        case confirmBeforeDelete
         case showHiddenFiles
         case mergeOpensshKnownHostsOnConnect
         case opensshKnownHostsPath
@@ -103,7 +101,6 @@ extension AppConfig {
         sshKeepaliveIntervalSecs = try container.decodeIfPresent(UInt64.self, forKey: .sshKeepaliveIntervalSecs) ?? defaults.sshKeepaliveIntervalSecs
         defaultLocalPath = try container.decodeIfPresent(String.self, forKey: .defaultLocalPath) ?? defaults.defaultLocalPath
         defaultLocalBookmark = try container.decodeIfPresent(Data.self, forKey: .defaultLocalBookmark)
-        confirmBeforeDelete = try container.decodeIfPresent(Bool.self, forKey: .confirmBeforeDelete) ?? defaults.confirmBeforeDelete
         showHiddenFiles = try container.decodeIfPresent(Bool.self, forKey: .showHiddenFiles) ?? defaults.showHiddenFiles
         mergeOpensshKnownHostsOnConnect = try container.decodeIfPresent(Bool.self, forKey: .mergeOpensshKnownHostsOnConnect) ?? defaults.mergeOpensshKnownHostsOnConnect
         opensshKnownHostsPath = try container.decodeIfPresent(String.self, forKey: .opensshKnownHostsPath) ?? defaults.opensshKnownHostsPath
@@ -141,7 +138,6 @@ extension AppConfig {
         sshKeepaliveIntervalSecs = 30
         defaultLocalPath = DefaultLocalPathResolver.containerHomeURL().path
         defaultLocalBookmark = nil
-        confirmBeforeDelete = true
         showHiddenFiles = false
         mergeOpensshKnownHostsOnConnect = true
         opensshKnownHostsPath = "~/.ssh/known_hosts"
@@ -169,7 +165,6 @@ extension AppConfig {
         try container.encode(sshKeepaliveIntervalSecs, forKey: .sshKeepaliveIntervalSecs)
         try container.encode(defaultLocalPath, forKey: .defaultLocalPath)
         try container.encodeIfPresent(defaultLocalBookmark, forKey: .defaultLocalBookmark)
-        try container.encode(confirmBeforeDelete, forKey: .confirmBeforeDelete)
         try container.encode(showHiddenFiles, forKey: .showHiddenFiles)
         try container.encode(mergeOpensshKnownHostsOnConnect, forKey: .mergeOpensshKnownHostsOnConnect)
         try container.encode(opensshKnownHostsPath, forKey: .opensshKnownHostsPath)
