@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 保存済みの接続プロファイル削除を、後続の信頼エントリ削除エラーで失敗と誤報告しないよう修正 (#1181)
 - Reject local moves into self, the current parent, or descendants through symlinked ancestors while still allowing moves of symlinks themselves (#1178)
 - Preserve local directory types via a separate file-system lookup when resource metadata is unreadable (#1179)
+- Allow cancelling upload resume verification without waiting for stalled remote reads (#1229)
 - Preserve completed partial files from resumed downloads when committing the destination fails, allowing manual recovery (#1196).
 - Preserve the original upload destination preparation error when partial-file cleanup fails (#1162).
 - Preserve cancellation after the final upload progress callback even when remote partial cleanup fails (#1160)
