@@ -13,9 +13,11 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     @Published private(set) var connectedUsername: String?
     @Published var pendingHostKeyChallenge: HostKeyChallenge?
     @Published var hostKeyContinuation: CheckedContinuation<Bool, Never>?
+    private var hostKeyPromptID: UUID?
     /// Keyboard-interactive (PAM/2FA) challenge awaiting user input.
     @Published var pendingKbdInteractiveChallenge: KbdInteractiveChallenge?
     @Published var kbdInteractiveContinuation: CheckedContinuation<[String?], Never>?
+    private var kbdInteractivePromptID: UUID?
 
     var isConnected: Bool { connectionStatus.isConnected }
 
@@ -273,6 +275,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     }
 
     func respondToHostKeyChallenge(accepted: Bool) {
+        hostKeyPromptID = nil
         pendingHostKeyChallenge = nil
         guard let continuation = hostKeyContinuation else { return }
         hostKeyContinuation = nil
@@ -293,39 +296,50 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
 
     @MainActor
     func awaitHostKeyDecision(for challenge: HostKeyChallenge) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        let promptID = UUID()
         if pendingHostKeyChallenge != nil {
             respondToHostKeyChallenge(accepted: false)
         }
 
         let timeoutSecs = settings.loadConfig().connectionTimeoutSecs
 
-        let decision = await withTaskGroup(of: Bool.self) { group in
-            group.addTask { @MainActor in
-                await withCheckedContinuation { continuation in
-                    self.hostKeyContinuation = continuation
-                    self.pendingHostKeyChallenge = challenge
+        let decision = await withTaskGroup(of: Void.self) { group in
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                self.hostKeyPromptID = promptID
+                self.hostKeyContinuation = continuation
+                self.pendingHostKeyChallenge = challenge
+
+                // Install the continuation before starting the timer. Its
+                // cancellation must also resume the prompt so this group exits.
+                group.addTask { @MainActor in
+                    defer {
+                        // A replaced prompt's timer must never resolve its successor.
+                        if self.hostKeyPromptID == promptID {
+                            self.respondToHostKeyChallenge(accepted: false)
+                        }
+                    }
+                    do {
+                        try await Task.sleep(for: .seconds(timeoutSecs))
+                    } catch {
+                        return
+                    }
                 }
             }
-
-            group.addTask { @MainActor in
-                do {
-                    try await Task.sleep(for: .seconds(timeoutSecs))
-                } catch is CancellationError {
-                    return false
-                } catch {
-                    return false
-                }
-                self.respondToHostKeyChallenge(accepted: false)
-                return false
-            }
-
-            let result = await group.next() ?? false
             group.cancelAll()
             return result
         }
 
-        pendingHostKeyChallenge = nil
-        hostKeyContinuation = nil
+        // The older task may finish only after a new prompt has been installed.
+        if hostKeyPromptID == promptID {
+            hostKeyPromptID = nil
+            pendingHostKeyChallenge = nil
+            hostKeyContinuation = nil
+        }
         return decision
     }
 
@@ -350,6 +364,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     }
 
     func respondToKbdInteractiveChallenge(_ answers: [String?]?) {
+        kbdInteractivePromptID = nil
         let fallbackCount = pendingKbdInteractiveChallenge?.prompts.count ?? 0
         pendingKbdInteractiveChallenge = nil
         guard let continuation = kbdInteractiveContinuation else { return }
@@ -360,50 +375,59 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     }
 
     @MainActor
-    private func awaitKbdInteractiveAnswers(
+    func awaitKbdInteractiveAnswers(
         name: String,
         instructions: String,
         prompts: [KbdInteractivePromptRecord]
     ) async -> [String?] {
+        guard !Task.isCancelled else { return prompts.map { _ in nil } }
+        let promptID = UUID()
         if pendingKbdInteractiveChallenge != nil {
             respondToKbdInteractiveChallenge(nil)
         }
 
         let timeoutSecs = settings.loadConfig().connectionTimeoutSecs
 
-        let answers = await withTaskGroup(of: [String?].self) { group in
-            group.addTask { @MainActor in
-                await withCheckedContinuation { continuation in
-                    self.kbdInteractiveContinuation = continuation
-                    self.pendingKbdInteractiveChallenge = KbdInteractiveChallenge(
-                        name: name,
-                        instructions: instructions,
-                        prompts: prompts.map { item in
-                            KbdInteractivePromptItem(text: item.text, echo: item.echo)
+        let answers = await withTaskGroup(of: Void.self) { group in
+            let result = await withCheckedContinuation { (continuation: CheckedContinuation<[String?], Never>) in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: prompts.map { _ in Optional<String>.none })
+                    return
+                }
+                self.kbdInteractivePromptID = promptID
+                self.kbdInteractiveContinuation = continuation
+                self.pendingKbdInteractiveChallenge = KbdInteractiveChallenge(
+                    name: name,
+                    instructions: instructions,
+                    prompts: prompts.map { item in
+                        KbdInteractivePromptItem(text: item.text, echo: item.echo)
+                    }
+                )
+
+                // Register the prompt before its timer can expire or be
+                // cancelled, and always resume it when the timer exits.
+                group.addTask { @MainActor in
+                    defer {
+                        if self.kbdInteractivePromptID == promptID {
+                            self.respondToKbdInteractiveChallenge(nil)
                         }
-                    )
+                    }
+                    do {
+                        try await Task.sleep(for: .seconds(timeoutSecs))
+                    } catch {
+                        return
+                    }
                 }
             }
-
-            group.addTask { @MainActor in
-                do {
-                    try await Task.sleep(for: .seconds(timeoutSecs))
-                } catch is CancellationError {
-                    return prompts.map { _ in Optional<String>.none }
-                } catch {
-                    return prompts.map { _ in Optional<String>.none }
-                }
-                self.respondToKbdInteractiveChallenge(nil)
-                return prompts.map { _ in Optional<String>.none }
-            }
-
-            let result = await group.next() ?? prompts.map { _ in Optional<String>.none }
             group.cancelAll()
             return result
         }
 
-        pendingKbdInteractiveChallenge = nil
-        kbdInteractiveContinuation = nil
+        if kbdInteractivePromptID == promptID {
+            kbdInteractivePromptID = nil
+            pendingKbdInteractiveChallenge = nil
+            kbdInteractiveContinuation = nil
+        }
         return answers
     }
 
