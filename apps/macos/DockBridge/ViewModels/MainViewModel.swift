@@ -1681,6 +1681,11 @@ final class MainViewModel: ObservableObject {
             errorMessage = RemoteEntryNameError.invalidCharacters.localizedDescription
             return
         }
+        guard name != target.name else {
+            renameTarget = nil
+            renameText = ""
+            return
+        }
         guard let parent = try? RemotePath.parent(of: target.path) else {
             errorMessage = RemotePathError.invalidPath(target.path).localizedDescription
             return

@@ -216,8 +216,8 @@ Uploads and downloads write to temporary partial files before renaming to the fi
 |-------|---------------|----------------|
 | Create | `create_new(true)` + `O_NOFOLLOW` (Unix) | `CREATE \| EXCLUDE \| WRITE` |
 | Name | `.dockbridge-<32-hex>.partial` (cryptographic random) | same pattern in destination directory |
-| Cancel / failure | partial file removed; destination untouched | partial file removed; destination untouched |
-| Success | rename partial → final | delete existing destination when policy is `Replace`, then rename |
+| Cancel / failure | partial file removed; destination untouched | partial file removed; destination untouched (final rename failure or unsupported overwrite keeps the completed partial for recovery) |
+| Success | rename partial → final | rename partial → final; `Replace` atomically overwrites an existing destination via `posix-rename@openssh.com` (without it, fail and preserve both destination and partial; an absent destination can still use plain rename) |
 
 `TransferOverwritePolicy` controls final-destination behavior:
 

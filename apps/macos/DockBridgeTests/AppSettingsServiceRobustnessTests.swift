@@ -205,6 +205,63 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
         XCTAssertEqual(reloaded.transferUploadPipelineDepth, 256)
     }
 
+    func testSaveConfigClampsUInt64ValuesAtIntStorageBoundary() {
+        let keys = [
+            AppSettingsKeys.connectionTimeoutSecs,
+            AppSettingsKeys.sessionHealthCheckIntervalSecs,
+            AppSettingsKeys.transferChunkSizeBytes,
+            AppSettingsKeys.sshInactivityTimeoutSecs,
+            AppSettingsKeys.sshKeepaliveIntervalSecs,
+            AppSettingsKeys.directoryWalkMaxFiles,
+            AppSettingsKeys.directoryWalkMaxTotalBytes,
+        ]
+        let intMax = UInt64(Int.max)
+        for value in [intMax, intMax + 1, UInt64.max] {
+            var config = AppConfig.default
+            config.connectionTimeoutSecs = value
+            config.sessionHealthCheckIntervalSecs = value
+            config.transferChunkSizeBytes = value
+            config.sshInactivityTimeoutSecs = value
+            config.sshKeepaliveIntervalSecs = value
+            config.directoryWalkMaxFiles = value
+            config.directoryWalkMaxTotalBytes = value
+
+            service.saveConfig(config)
+
+            for key in keys {
+                XCTAssertEqual(defaults().object(forKey: key) as? Int, Int.max, "\(key): \(value)")
+            }
+
+            // Only fields with existing load-time upper limits are reduced further.
+            var expected = config
+            expected.connectionTimeoutSecs = 86_400
+            expected.sessionHealthCheckIntervalSecs = intMax
+            expected.transferChunkSizeBytes = 8_388_608
+            expected.sshInactivityTimeoutSecs = intMax
+            expected.sshKeepaliveIntervalSecs = intMax
+            expected.directoryWalkMaxFiles = intMax
+            expected.directoryWalkMaxTotalBytes = intMax
+            XCTAssertEqual(service.loadConfig(), expected, "\(value)")
+        }
+    }
+
+    func testSaveConfigPreservesRepresentableUInt64Values() {
+        for value in [UInt64(0), 42] {
+            var config = AppConfig.default
+            config.connectionTimeoutSecs = 300
+            config.sessionHealthCheckIntervalSecs = 7
+            config.transferChunkSizeBytes = 65_536
+            config.sshInactivityTimeoutSecs = 90
+            config.sshKeepaliveIntervalSecs = value
+            config.directoryWalkMaxFiles = value
+            config.directoryWalkMaxTotalBytes = value
+
+            service.saveConfig(config)
+
+            XCTAssertEqual(service.loadConfig(), config, "\(value)")
+        }
+    }
+
     func testSaveConfigPreservesUploadPipelineDepth() {
         // Given: a non-default upload pipeline depth
         var config = service.loadConfig()
