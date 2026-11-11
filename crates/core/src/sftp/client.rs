@@ -1829,7 +1829,14 @@ impl<'a> PartialRemoteTransfer<'a> {
         )
         .await
         {
-            self.abort(true).await?;
+            if let Err(cleanup_error) = self.abort(true).await {
+                tracing::warn!(
+                    primary_error = %err,
+                    cleanup_error = %cleanup_error,
+                    partial_remote_path = %self.partial_path,
+                    "failed to clean up a partial upload after destination preparation failure"
+                );
+            }
             return Err(err);
         }
 
@@ -3611,6 +3618,89 @@ mod tests {
             message.contains("is a directory"),
             "expected directory destination error, got: {message}"
         );
+    }
+
+    #[tokio::test]
+    async fn upload_finalize_preparation_preserves_primary_error_and_attempts_cleanup() {
+        for overwrite_policy in [
+            TransferOverwritePolicy::Replace,
+            TransferOverwritePolicy::FailIfExists,
+        ] {
+            for fail_cleanup in [false, true] {
+                let server = TestSftpServer::start().await;
+                let remote_path = "/upload/destination";
+                let (original_path, expected_message) = match overwrite_policy {
+                    TransferOverwritePolicy::Replace => (
+                        "/upload/destination/keep.txt",
+                        format!(
+                            "destination '{remote_path}' is a directory and cannot be replaced by a file"
+                        ),
+                    ),
+                    TransferOverwritePolicy::FailIfExists => (
+                        remote_path,
+                        TransferOverwritePolicy::destination_exists_message(remote_path),
+                    ),
+                };
+                server.write_remote_file(original_path, b"original").await;
+                let session = server.connect_session().await;
+                let client = SftpClient::new(&session);
+                let local_dir = tempfile::tempdir().unwrap();
+                let local_path = local_dir.path().join("file.txt");
+                tokio::fs::write(&local_path, b"payload").await.unwrap();
+                server
+                    .failures
+                    .fail_remote_remove
+                    .store(fail_cleanup, Ordering::SeqCst);
+
+                let err = client
+                    .upload_cancellable(
+                        &local_path,
+                        remote_path,
+                        DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
+                        overwrite_policy,
+                        || false,
+                        |_| {},
+                    )
+                    .await
+                    .expect_err("destination preparation must fail");
+
+                match err {
+                    SftpError::UploadFailed {
+                        local,
+                        remote,
+                        message,
+                    } => {
+                        assert_eq!(local, local_path.display().to_string());
+                        assert_eq!(remote, remote_path);
+                        assert_eq!(message, expected_message);
+                    }
+                    other => panic!(
+                        "expected the primary upload error with {overwrite_policy:?}, \
+                         fail_cleanup={fail_cleanup}, got {other:?}"
+                    ),
+                }
+                assert!(
+                    !server.failures.fail_remote_remove.load(Ordering::SeqCst),
+                    "cleanup must attempt REMOVE even after destination preparation fails"
+                );
+                assert_eq!(
+                    tokio::fs::read(server.root.join(original_path.trim_start_matches('/')))
+                        .await
+                        .unwrap(),
+                    b"original"
+                );
+                let partials = server.remote_partial_paths();
+                if fail_cleanup {
+                    assert_eq!(partials.len(), 1, "failed cleanup must leave the partial");
+                    assert_eq!(tokio::fs::read(&partials[0]).await.unwrap(), b"payload");
+                } else {
+                    assert!(
+                        partials.is_empty(),
+                        "successful cleanup must delete the partial"
+                    );
+                }
+            }
+        }
     }
 
     #[tokio::test]
