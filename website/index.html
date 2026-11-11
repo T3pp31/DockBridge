@@ -100,7 +100,17 @@
               <li>Download the latest <code>DockBridge-*-macOS.dmg</code> from the button above.</li>
               <li>Double-click the DMG file to mount it.</li>
               <li>Drag <code>DockBridge.app</code> into the <code>Applications</code> folder shortcut.</li>
-              <li>Open DockBridge from Applications. Because releases are not yet Developer ID signed, macOS may block the first launch — right-click the app, choose <strong>Open</strong>, then confirm. You can also allow it under <strong>System Settings → Privacy & Security</strong>.</li>
+              <li>
+                Open DockBridge from Applications. If macOS blocks the first launch
+                because the app is not Developer ID signed or notarized, dismiss the alert.
+              </li>
+              <li>
+                If the app was blocked, proceed only if you trust the release you downloaded:
+                open <strong>System Settings → Privacy &amp; Security</strong> and scroll to
+                <strong>Security</strong>. Click <strong>Open Anyway</strong> for DockBridge
+                (this option appears only after a blocked launch attempt), authenticate with
+                Touch ID or your login password, and click <strong>Open</strong> in the confirmation dialog.
+              </li>
             </ol>
           </div>
         </div>

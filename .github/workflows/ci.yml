@@ -87,6 +87,8 @@ jobs:
         run: python3 scripts/test-dev-install-unsigned.py -v
       - name: Test UniFFI generation scripts (mocked tools)
         run: python3 scripts/test-generate-uniffi.py
+      - name: Test website install instructions
+        run: python3 scripts/test-website-install.py
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
