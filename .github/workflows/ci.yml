@@ -90,6 +90,8 @@ jobs:
         run: python3 scripts/test-e2e-verify.py
       - name: Test SBOM publication
         run: python3 scripts/test-generate-sbom.py
+      - name: Test release configuration reader and workflow guards
+        run: python3 scripts/test-release-config.py
       - name: Test signing identity resolution (mocked macOS commands)
         run: python3 scripts/test-sign-and-notarize-macos.py
       - name: Test transfer-cancel verification diagnostics
@@ -108,7 +110,7 @@ jobs:
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
           cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
-          release_version="$(awk -F'"' '/^version = / { print $2; exit }' config/release.toml)"
+          release_version="$(bash scripts/release-config.sh version)"
           if [[ "$cargo_version" != "$release_version" ]]; then
             echo "error: Cargo.toml version ($cargo_version) != config/release.toml version ($release_version)" >&2
             exit 1
@@ -133,7 +135,7 @@ jobs:
       - name: Resolve cargo-cyclonedx version
         id: cyclonedx
         run: |
-          VERSION="$(awk -F'"' '/^cargo_cyclonedx_version / { print $2; exit }' config/release.toml)"
+          VERSION="$(bash scripts/release-config.sh cargo_cyclonedx_version)"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Cache cargo-cyclonedx
@@ -208,6 +210,9 @@ jobs:
       - name: Test development installer
         run: python3 scripts/test-dev-install-unsigned.py -v
 
+      - name: Test release configuration reader and workflow guards
+        run: python3 scripts/test-release-config.py
+
       - name: Pin Xcode 16.4
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90  # v1.7.0
         with:
@@ -245,8 +250,8 @@ jobs:
 
       - name: Install pinned XcodeGen
         run: |
-          version="$(awk -F'"' '/^xcodegen_version / { print $2; exit }' config/release.toml)"
-          checksum="$(awk -F'"' '/^xcodegen_sha256 / { print $2; exit }' config/release.toml)"
+          version="$(bash scripts/release-config.sh xcodegen_version)"
+          checksum="$(bash scripts/release-config.sh xcodegen_sha256)"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Invalid xcodegen_version in config/release.toml"
             exit 1

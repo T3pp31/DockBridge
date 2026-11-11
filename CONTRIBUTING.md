@@ -80,6 +80,14 @@ Labels: `bug`, `enhancement`, `security`, `rust`, `github_actions`,
 
 ## Release process (maintainers)
 
+CI and release workflows read non-empty, single-line, unescaped double-quoted
+strings in `[release]` through `bash scripts/release-config.sh <key>` (for example,
+`bash scripts/release-config.sh cargo_cyclonedx_version`). Keep workflow
+configuration reading changes in that helper and run
+`python3 scripts/test-release-config.py`.
+The version remains in both files below; CI checks equality and release also
+checks both against the requested tag version.
+
 1. Update the version in `Cargo.toml` and `config/release.toml`, move
    `CHANGELOG.md` `[Unreleased]` to a dated section.
 2. Tag `v<version>` and push; the release workflow builds DMG/CLI/SBOM and
