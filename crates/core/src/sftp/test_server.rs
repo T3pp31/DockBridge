@@ -389,6 +389,14 @@ impl SftpHandler {
         Ok(entries)
     }
 
+    fn mkdir_error_status(err: std::io::Error) -> StatusCode {
+        match err.kind() {
+            std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+            std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+            _ => StatusCode::Failure,
+        }
+    }
+
     fn ok_status(id: u32) -> Status {
         Status {
             id,
@@ -735,7 +743,7 @@ impl russh_sftp::server::Handler for SftpHandler {
 
         fs::create_dir(&local)
             .await
-            .map_err(|_| StatusCode::Failure)?;
+            .map_err(Self::mkdir_error_status)?;
         Ok(Self::ok_status(id))
     }
 
@@ -1242,6 +1250,88 @@ fn set_file_times_by_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use russh_sftp::client::error::Error as SftpClientError;
+
+    #[test]
+    fn mkdir_errors_are_classified() {
+        use std::io::ErrorKind;
+
+        // Synthetic errors also cover PermissionDenied when tests run as root,
+        // without relying on platform-specific directory permissions.
+        for (kind, expected) in [
+            (ErrorKind::NotFound, StatusCode::NoSuchFile),
+            (ErrorKind::PermissionDenied, StatusCode::PermissionDenied),
+            (ErrorKind::AlreadyExists, StatusCode::Failure),
+            (ErrorKind::Other, StatusCode::Failure),
+        ] {
+            assert_eq!(
+                SftpHandler::mkdir_error_status(std::io::Error::from(kind)),
+                expected,
+                "unexpected MKDIR status for {kind:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mkdir_reports_missing_parent_and_succeeds_after_parent_is_created() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let sftp = session.sftp();
+
+        let err = sftp.create_dir("/missing/child").await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SftpClientError::Status(ref status)
+                    if status.status_code == StatusCode::NoSuchFile
+            ),
+            "unexpected MKDIR error: {err:?}"
+        );
+        assert!(!server.root.join("missing").exists());
+
+        sftp.create_dir("/missing").await.unwrap();
+        sftp.create_dir("/missing/child").await.unwrap();
+        assert!(server.root.join("missing/child").is_dir());
+    }
+
+    #[tokio::test]
+    async fn mkdir_preserves_existing_paths_and_one_shot_failure() {
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/existing-file", b"keep").await;
+        let session = server.connect_session().await;
+        let sftp = session.sftp();
+
+        for path in ["/upload", "/existing-file"] {
+            let err = sftp.create_dir(path).await.unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    SftpClientError::Status(ref status)
+                        if status.status_code == StatusCode::Failure
+                ),
+                "unexpected MKDIR error for {path}: {err:?}"
+            );
+        }
+        assert!(server.root.join("upload").is_dir());
+        assert_eq!(
+            fs::read(server.root.join("existing-file")).await.unwrap(),
+            b"keep"
+        );
+
+        server.failures.fail_mkdir.store(true, Ordering::SeqCst);
+        let err = sftp.create_dir("/injected").await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SftpClientError::Status(ref status)
+                    if status.status_code == StatusCode::Failure
+            ),
+            "unexpected injected MKDIR error: {err:?}"
+        );
+        assert!(!server.root.join("injected").exists());
+        sftp.create_dir("/injected").await.unwrap();
+        assert!(server.root.join("injected").is_dir());
+    }
     use russh_sftp::server::Handler as _;
 
     fn sftp_handler(root: &Path) -> SftpHandler {
