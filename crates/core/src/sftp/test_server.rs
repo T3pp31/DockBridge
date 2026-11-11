@@ -41,6 +41,11 @@ pub struct FailureConfig {
     /// One-shot STAT failure / missing size for upload resume validation.
     pub fail_stat: AtomicBool,
     pub omit_stat_size: AtomicBool,
+    /// One-shot preopen and opened-handle resume validation failures.
+    pub fail_lstat: AtomicBool,
+    pub omit_lstat_size: AtomicBool,
+    pub fail_fstat: AtomicBool,
+    pub omit_fstat_size: AtomicBool,
     /// When set, `realpath` reports a connection-lost style failure so tests
     /// can exercise health-monitor cleanup.
     pub fail_realpath_connection_lost: AtomicBool,
@@ -502,15 +507,22 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
+        if self.failures.fail_lstat.swap(false, Ordering::SeqCst) {
+            return Err(StatusCode::Failure);
+        }
         let local = self.resolve(&path);
         std::fs::symlink_metadata(&local).map_err(Self::metadata_error_status)?;
-        Ok(Attrs {
-            id,
-            attrs: Self::attrs_for(&local),
-        })
+        let mut attrs = Self::attrs_for(&local);
+        if self.failures.omit_lstat_size.swap(false, Ordering::SeqCst) {
+            attrs.size = None;
+        }
+        Ok(Attrs { id, attrs })
     }
 
     async fn fstat(&mut self, id: u32, handle: String) -> Result<Attrs, Self::Error> {
+        if self.failures.fail_fstat.swap(false, Ordering::SeqCst) {
+            return Err(StatusCode::Failure);
+        }
         let open = self.handles.get(&handle).ok_or(StatusCode::Failure)?;
         let metadata = open
             .file
@@ -531,6 +543,9 @@ impl russh_sftp::server::Handler for SftpHandler {
             attrs.gid = Some(metadata.gid());
             attrs.permissions = Some(metadata.mode());
             attrs.mtime = metadata.mtime().try_into().ok();
+        }
+        if self.failures.omit_fstat_size.swap(false, Ordering::SeqCst) {
+            attrs.size = None;
         }
         Ok(Attrs { id, attrs })
     }
