@@ -15,8 +15,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Disable Disconnect consistently in the connection toolbar and context menu while a connection is being established (#1224)
+- Preserve entered credentials for the session when saving them to Keychain fails, and clarify that only the connection profile was saved (#1222)
+- Preserve the existing private-key selection when bookmark creation fails during reselection (#1223)
+- 新規セッションの接続失敗時に、最後に開いたセッションではなく直前のアクティブセッションへ戻るよう修正 (#1220)
+- Keep Quick Look's presenter in a non-preview window's responder chain when updating an already focused preview panel (#1221)
+- Local file and directory drag exports allow access to the original URL instead of staging a full copy (#1215)
+- Avoid classifying unrelated `mismatch` errors as host key changes in macOS error messages (#1216)
+- Report update presentation failures in Finder instead of returning success, with guidance to retry or download manually (#1217)
+- Remote deletion in the macOS app now always requires confirmation; remove the
+  opt-out setting and ignore previously saved disabled values (#1211).
+- Accept local items dropped back onto the same local pane as a no-op instead of showing an invalid-move error (#1190)
+- Local pane double-click fallback no longer navigates to `..` when it is part of a multiple selection; selecting only `..` still opens the parent directory (#1191)
+- Keep prompted credentials in a clearable buffer until connection handoff, and clear it on rejected input or failed attempts (#1188)
+- SFTP URL imports now use the saved profile list directly, avoiding stale UI state and duplicate profiles when a post-save reload would fail (#1186).
+- リモートのリネームを名前の変更なしで確定した際、衝突エラーを出さずにシートを閉じるよう修正 (#1187)
+- Wait for cancelled synchronous bridge operations to finish before reporting timeout, and dismiss cancelled authentication prompts (#1184)
+- Prevent update disk image attach/detach from hanging when hdiutil emits more output than a pipe can buffer (#1180)
+- 保存済みの接続プロファイル削除を、後続の信頼エントリ削除エラーで失敗と誤報告しないよう修正 (#1181)
+- Reject local moves into self, the current parent, or descendants through symlinked ancestors while still allowing moves of symlinks themselves (#1178)
+- Preserve local directory types via a separate file-system lookup when resource metadata is unreadable (#1179)
+- Omit unrepresentable transfer ETAs to prevent crashes at very low transfer speeds or large remaining byte counts (#1152).
+- Clamp oversized UInt64 settings when saving on macOS to prevent integer conversion crashes (#1148)
+- Use an operation-neutral message for remote read and unspecified permission-denied errors instead of incorrectly reporting missing write permissions (#1147).
+- Clear update-check ETags when the release-body cache is missing, unreadable, or corrupt (#1143)
+- E2E verification now reports the saved debug log path only after a successful copy, rather than a deleted temporary path (#1171).
+- Publish SBOM and checksum files with readable `0644` permissions instead of staging-only `0600` (#1172)
+- Report keychain signing identity query failures separately from missing certificates and preserve `security` diagnostics (#1173)
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
-- Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
+- 外部ドロップで一部ファイルのセキュリティスコープを取得できなかった場合に、転送後も対象ファイル名を通知するよう修正 (#1189)
+- Allow ExpandingFrame content to grow and shrink after measurement in scroll containers (#1185)
+- Avoid mirroring unreadable local directories, repeated local symlink targets,
+  and duplicate remote directory listing entries (#1166).
 
 ## [v1.1.1] - 2026-07-24
 
