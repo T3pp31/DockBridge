@@ -356,6 +356,79 @@ final class MainViewModelTestabilityTests: XCTestCase {
         return (session, file)
     }
 
+    // MARK: - Local table primary action
+
+    func testLocalPrimaryActionSkipsParentInMultipleSelectionAndPreservesStableFallback() async throws {
+        let directory = baseDirectory.appendingPathComponent("primary-action", isDirectory: true)
+        let folder = directory.appendingPathComponent("folder", isDirectory: true)
+        let firstFile = directory.appendingPathComponent("a.txt")
+        let secondFile = directory.appendingPathComponent("b.txt")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "a".write(to: firstFile, atomically: true, encoding: .utf8)
+        try "b".write(to: secondFile, atomically: true, encoding: .utf8)
+        viewModel.localPath = directory
+
+        let loaded = expectation(description: "Local items loaded")
+        let subscription = viewModel.$localItems.dropFirst().sink { _ in loaded.fulfill() }
+        viewModel.reloadLocal()
+        await fulfillment(of: [loaded], timeout: 5)
+        subscription.cancel()
+
+        XCTAssertEqual(viewModel.localItems.map(\.name), ["folder", "a.txt", "b.txt"])
+        // Selection IDs must come from the listing, not fixture URL strings:
+        // macOS can resolve temporary-directory aliases when enumerating URLs.
+        let folderItem = try XCTUnwrap(viewModel.localItems.first { $0.name == "folder" })
+        let firstFileItem = try XCTUnwrap(viewModel.localItems.first { $0.name == "a.txt" })
+        let secondFileItem = try XCTUnwrap(viewModel.localItems.first { $0.name == "b.txt" })
+        let parent = try XCTUnwrap(viewModel.localTableItems.first)
+        XCTAssertTrue(parent.isParentDirectory)
+        let unknownID = directory.appendingPathComponent("missing.txt").path
+        let pane = LocalPaneView(viewModel: viewModel)
+        let cases: [(name: String, ids: Set<String>, expectedID: String?)] = [
+            ("empty", [], nil),
+            ("unknown", [unknownID], nil),
+            ("parent only", [parent.id], parent.id),
+            ("folder only", [folderItem.id], folderItem.id),
+            ("file only", [firstFileItem.id], firstFileItem.id),
+            ("parent and folder", [parent.id, folderItem.id], folderItem.id),
+            ("parent and file", [parent.id, firstFileItem.id], firstFileItem.id),
+            ("multiple files", [secondFileItem.id, firstFileItem.id], firstFileItem.id),
+            ("parent and multiple files", [parent.id, secondFileItem.id, firstFileItem.id], firstFileItem.id),
+            ("all rows", Set(viewModel.localTableItems.map(\.id)), folderItem.id),
+            ("parent and unknown", [parent.id, unknownID], nil),
+        ]
+        for testCase in cases {
+            XCTAssertEqual(
+                pane.primaryActionLocalItem(from: testCase.ids)?.id,
+                testCase.expectedID,
+                testCase.name
+            )
+        }
+
+        // Opening an all-selected table must enter the child, not the parent,
+        // and the back history must still point to the original directory.
+        viewModel.selectedLocalItemIDs = Set(viewModel.localTableItems.map(\.id))
+        let target = try XCTUnwrap(pane.primaryActionLocalItem(from: viewModel.selectedLocalItemIDs))
+        viewModel.openLocalTableItem(target)
+        XCTAssertEqual(viewModel.localPath.path, folderItem.url.path)
+        viewModel.navigateLocalBack()
+        XCTAssertEqual(viewModel.localPath.path, directory.path)
+    }
+
+    func testLocalPrimaryActionPreservesParentOnlyNavigationAndHistory() throws {
+        viewModel.localPath = baseDirectory
+        let parent = try XCTUnwrap(viewModel.localTableItems.first)
+        XCTAssertTrue(parent.isParentDirectory)
+        let pane = LocalPaneView(viewModel: viewModel)
+        let target = try XCTUnwrap(pane.primaryActionLocalItem(from: [parent.id]))
+
+        viewModel.openLocalTableItem(target)
+
+        XCTAssertEqual(viewModel.localPath.path, baseDirectory.deletingLastPathComponent().path)
+        viewModel.navigateLocalBack()
+        XCTAssertEqual(viewModel.localPath.path, baseDirectory.path)
+    }
+
     // MARK: - Hidden files
 
     func testReloadRemoteHidesDotFilesWhenSettingIsOff() async {
