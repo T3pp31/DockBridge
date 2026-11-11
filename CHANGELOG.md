@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Local file and directory drag exports allow access to the original URL instead of staging a full copy (#1215)
 - Avoid classifying unrelated `mismatch` errors as host key changes in macOS error messages (#1216)
 - Report update presentation failures in Finder instead of returning success, with guidance to retry or download manually (#1217)
 - Remote deletion in the macOS app now always requires confirmation; remove the

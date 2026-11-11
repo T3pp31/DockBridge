@@ -1,7 +1,46 @@
+import CoreTransferable
 import XCTest
 @testable import DockBridge
 
 final class FileDropValidationTests: XCTestCase {
+    func testLocalFileExportAllowsAccessingOriginalURL() {
+        let url = URL(fileURLWithPath: "/tmp/DockBridge drag/大きな archive.bin", isDirectory: false)
+        let payload = LocalFileDragPayload(url: url, isDirectory: false)
+
+        let exportedFile = payload.exportedFile
+
+        XCTAssertEqual(exportedFile.file, url)
+        XCTAssertFalse(exportedFile.file.hasDirectoryPath)
+        XCTAssertTrue(exportedFile.allowAccessingOriginalFile, "External drops must not stage a full copy")
+    }
+
+    func testLocalDirectoryExportAllowsAccessingOriginalURL() {
+        let url = URL(fileURLWithPath: "/tmp/DockBridge drag/ディレクトリ", isDirectory: true)
+        let payload = LocalFileDragPayload(url: url, isDirectory: true)
+
+        let exportedFile = payload.exportedFile
+
+        XCTAssertEqual(exportedFile.file, url)
+        XCTAssertTrue(exportedFile.file.hasDirectoryPath)
+        XCTAssertTrue(exportedFile.allowAccessingOriginalFile, "Directory trees must not be copied before a drop")
+    }
+
+    func testLocalDragPayloadCodableRoundTripPreservesInternalDropData() throws {
+        for isDirectory in [false, true] {
+            let url = URL(fileURLWithPath: "/tmp/DockBridge drag/日本語 item", isDirectory: isDirectory)
+            let payload = LocalFileDragPayload(url: url, isDirectory: isDirectory)
+
+            let data = try JSONEncoder().encode(payload)
+            let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            XCTAssertEqual(Set(fields.keys), Set(["path", "isDirectory"]))
+
+            let decoded = try JSONDecoder().decode(LocalFileDragPayload.self, from: data)
+            XCTAssertEqual(decoded, payload)
+            XCTAssertEqual(decoded.url, url)
+            XCTAssertEqual(decoded.isDirectory, isDirectory)
+        }
+    }
+
     func testRejectsMovingLocalItemIntoSameDirectory() {
         let source = URL(fileURLWithPath: "/tmp/project/readme.txt")
         let directory = URL(fileURLWithPath: "/tmp/project")
