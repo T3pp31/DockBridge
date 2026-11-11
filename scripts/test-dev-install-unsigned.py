@@ -4,7 +4,6 @@ import os
 import pathlib
 import shutil
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -110,34 +109,39 @@ fi
         self.assertEqual((self.installed / "old.txt").read_text(), "old build")
         self.assert_no_staging()
 
-    def read_only_bundle(self):
-        (self.installed / "old.txt").write_text("old build")
-        self.installed.chmod(0o555)
-        if sys.platform != "darwin":
-            # Linux requires write permission for cross-parent directory rename.
-            # Model only macOS rename here; cleanup still uses the real rm.
-            self.stub("mv", """if [[ -d "$1" && ! -w "$1" ]]; then
-  chmod u+w "$1"
-  command mv "$@" || return $?
-  chmod 0555 "$2"
-else
-  command mv "$@"
-fi""")
-
-    def test_read_only_bundle_is_replaced_with_cleanup_warning(self):
-        self.read_only_bundle()
+    def test_read_only_contents_are_replaced_with_cleanup_warning(self):
+        # Keep the bundle root writable so real cross-parent rename succeeds.
+        # A readonly child then makes the real recursive cleanup fail on both
+        # Linux and macOS. Do not change permissions or mock mv/rm here.
+        contents = self.installed / "Contents"
+        contents.mkdir()
+        (contents / "old.txt").write_text("old build")
+        contents.chmod(0o555)
         result = self.install()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.installed / "new.txt").read_text(), "new build")
-        self.assertFalse((self.installed / "old.txt").exists())
+        self.assertFalse((self.installed / "Contents").exists())
         self.assertIn("open", self.log.read_text().splitlines())
         self.assertIn("インストールが完了しました", self.log.read_text())
         backups = list(self.applications.glob(".DockBridge-install.*/previous.app"))
         self.assertEqual(len(backups), 1)
-        self.assertEqual((backups[0] / "old.txt").read_text(), "old build")
-        self.assertEqual(backups[0].stat().st_mode & 0o777, 0o555)
+        self.assertEqual((backups[0] / "Contents" / "old.txt").read_text(), "old build")
+        self.assertEqual((backups[0] / "Contents").stat().st_mode & 0o777, 0o555)
         self.assertIn("後片付けに失敗しました", result.stderr)
         self.assertIn(str(backups[0]), result.stderr)
+
+    def test_read_only_bundle_root_fails_backup_safely(self):
+        (self.installed / "old.txt").write_text("old build")
+        self.installed.chmod(0o555)
+        result = self.install()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual((self.installed / "old.txt").read_text(), "old build")
+        self.assertEqual(self.installed.stat().st_mode & 0o777, 0o555)
+        self.assertFalse((self.installed / "new.txt").exists())
+        self.assertIn("既存の DockBridge.app を移動できませんでした", self.log.read_text())
+        self.assertNotIn("open", self.log.read_text().splitlines())
+        self.assertNotIn("インストールが完了しました", self.log.read_text())
+        self.assert_no_staging()
 
     def test_cleanup_failure_preserves_install_failure_and_rollback(self):
         (self.installed / "old.txt").write_text("old build")
