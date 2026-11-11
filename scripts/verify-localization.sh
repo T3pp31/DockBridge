@@ -39,7 +39,7 @@ errors = []
 # Keep argument positions and length modifiers: %ld and %lld need distinct
 # argument types. A literal %% consumes no argument; dynamic width/precision do.
 format_pattern = re.compile(
-    r"%(?:%|(?:(?P<position>\d+)\$)?[+#0\- ']*"
+    r"%(?:%|(?:(?P<position>\d+)\$)?(?P<flags>[+#0\- ']*)"
     r"(?P<width>\*(?:\d+\$)?|\d+)?"
     r"(?:\.(?P<precision>\*(?:\d+\$)?|\d*))?"
     r"(?P<length>hh|h|ll|l|q|L|z|t|j)?"
@@ -62,6 +62,19 @@ def format_signature(value):
 
     for match in format_pattern.finditer(value):
         if match.group() == "%%":
+            continue
+        # Catalogs also contain plain UI text. A bare letter conversion must
+        # not consume the start of a word ("50% off", "100%CPU"). Explicit
+        # format syntax and %@ still allow adjacent text, e.g. "%llds".
+        explicit_format = any(
+            match.group(field) is not None
+            for field in ("position", "width", "precision", "length")
+        ) or bool(match.group("flags").strip(" '"))
+        if (
+            not explicit_format
+            and match.group("conversion") != "@"
+            and re.match(r"[A-Za-z]", value[match.end():match.end() + 1])
+        ):
             continue
         for field in ("width", "precision"):
             specifier = match.group(field)
@@ -95,23 +108,18 @@ def collect_string_units(node, prefix=()):
         else:
             for variation_name, variation in variations.items():
                 variation_path = prefix + ("variations", variation_name)
-                if variation_name == "plural":
-                    if not isinstance(variation, dict):
-                        units[variation_path] = None
-                        continue
-                    for category, category_node in variation.items():
-                        category_path = variation_path + (category,)
-                        category_units = collect_string_units(
-                            category_node, category_path
-                        )
-                        if not category_units:
-                            units[category_path] = None
-                        else:
-                            units.update(category_units)
-                else:
-                    units.update(
-                        collect_string_units(variation, variation_path)
-                    )
+                if not isinstance(variation, dict):
+                    units[variation_path] = None
+                    continue
+                # Every variation kind maps value names (e.g. one, iphone,
+                # compact) to nodes, which may themselves contain variations.
+                for value_name, value_node in variation.items():
+                    value_path = variation_path + (value_name,)
+                    value_units = collect_string_units(value_node, value_path)
+                    if not value_units:
+                        units[value_path] = None
+                    else:
+                        units.update(value_units)
     return units
 
 
