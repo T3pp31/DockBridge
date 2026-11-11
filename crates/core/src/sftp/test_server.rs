@@ -116,14 +116,13 @@ pub struct TestSftpServer {
 }
 
 struct ServerFactory {
-    clients: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
     root: PathBuf,
     failures: Arc<FailureConfig>,
 }
 
-#[derive(Clone)]
 struct ServerImpl {
-    clients: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
+    // Channel IDs are scoped to a single SSH connection.
+    channels: HashMap<ChannelId, Channel<Msg>>,
     root: PathBuf,
     failures: Arc<FailureConfig>,
 }
@@ -133,7 +132,7 @@ impl russh::server::Server for ServerFactory {
 
     fn new_client(&mut self, _: Option<SocketAddr>) -> Self::Handler {
         ServerImpl {
-            clients: Arc::clone(&self.clients),
+            channels: HashMap::new(),
             root: self.root.clone(),
             failures: Arc::clone(&self.failures),
         }
@@ -215,7 +214,7 @@ impl russh::server::Handler for ServerImpl {
             self.failures.connection_phase_started.notify_one();
             std::future::pending::<()>().await;
         }
-        self.clients.lock().unwrap().insert(channel.id(), channel);
+        self.channels.insert(channel.id(), channel);
         Ok(true)
     }
 
@@ -234,7 +233,10 @@ impl russh::server::Handler for ServerImpl {
             return Ok(());
         }
 
-        let channel = self.clients.lock().unwrap().remove(&channel_id).unwrap();
+        let Some(channel) = self.channels.remove(&channel_id) else {
+            session.channel_failure(channel_id)?;
+            return Ok(());
+        };
         let sftp = SftpHandler {
             root: self.root.clone(),
             failures: Arc::clone(&self.failures),
@@ -986,7 +988,6 @@ impl TestSftpServer {
         failures
             .advertise_posix_rename
             .store(true, Ordering::SeqCst);
-        let clients = Arc::new(Mutex::new(HashMap::new()));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
@@ -1019,7 +1020,6 @@ impl TestSftpServer {
                     }
                 };
                 let mut factory = ServerFactory {
-                    clients: Arc::clone(&clients),
                     root: server_root.clone(),
                     failures: Arc::clone(&server_failures),
                 };
@@ -1229,7 +1229,109 @@ fn set_file_times_by_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use russh::client;
+    use russh::ChannelMsg;
+    use russh_sftp::client::SftpSession;
     use russh_sftp::server::Handler as _;
+
+    struct AcceptServerKey;
+
+    impl client::Handler for AcceptServerKey {
+        type Error = russh::Error;
+
+        async fn check_server_key(
+            &mut self,
+            _: &russh::keys::PublicKey,
+        ) -> Result<bool, Self::Error> {
+            Ok(true)
+        }
+    }
+
+    async fn connect_ssh_client(addr: SocketAddr) -> client::Handle<AcceptServerKey> {
+        let mut client = client::connect(Arc::new(client::Config::default()), addr, AcceptServerKey)
+            .await
+            .unwrap();
+        assert!(client
+            .authenticate_password("test", "test")
+            .await
+            .unwrap()
+            .success());
+        client
+    }
+
+    async fn start_sftp(mut channel: Channel<client::Msg>) -> SftpSession {
+        channel.request_subsystem(true, "sftp").await.unwrap();
+        assert!(matches!(channel.wait().await, Some(ChannelMsg::Success)));
+        SftpSession::new(channel.into_stream()).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn overlapping_connections_keep_channels_independent() {
+        tokio::time::timeout(
+            Duration::from_secs(AppConfig::default().connection_timeout_secs),
+            async {
+                let server = TestSftpServer::start().await;
+                server.write_remote_file("/first", b"first connection").await;
+                server.write_remote_file("/second", b"second connection").await;
+                let first = connect_ssh_client(server.addr).await;
+                let second = connect_ssh_client(server.addr).await;
+
+                // Open BOTH channels before requesting either subsystem. A
+                // shared map would overwrite the first entry deterministically.
+                let first_channel = first.channel_open_session().await.unwrap();
+                let second_channel = second.channel_open_session().await.unwrap();
+                assert_eq!(first_channel.id(), second_channel.id());
+
+                let first_sftp = start_sftp(first_channel).await;
+                let second_sftp = start_sftp(second_channel).await;
+                let (first_data, second_data) =
+                    tokio::join!(first_sftp.read("/first"), second_sftp.read("/second"));
+                assert_eq!(first_data.unwrap(), b"first connection");
+                assert_eq!(second_data.unwrap(), b"second connection");
+
+                // Later connections must remain usable as well.
+                let third = connect_ssh_client(server.addr).await;
+                let third_sftp = start_sftp(third.channel_open_session().await.unwrap()).await;
+                assert_eq!(third_sftp.read("/first").await.unwrap(), b"first connection");
+            },
+        )
+        .await
+        .expect("overlapping SFTP connections should not hang");
+    }
+
+    #[tokio::test]
+    async fn subsystem_rejections_preserve_connection_and_active_sftp() {
+        tokio::time::timeout(
+            Duration::from_secs(AppConfig::default().connection_timeout_secs),
+            async {
+                let server = TestSftpServer::start().await;
+                server.write_remote_file("/file", b"still usable").await;
+                let client = connect_ssh_client(server.addr).await;
+                let mut channel = client.channel_open_session().await.unwrap();
+
+                // Unsupported subsystems must not consume the pending channel.
+                channel.request_subsystem(true, "unsupported").await.unwrap();
+                assert!(matches!(channel.wait().await, Some(ChannelMsg::Failure)));
+                channel.request_subsystem(true, "sftp").await.unwrap();
+                assert!(matches!(channel.wait().await, Some(ChannelMsg::Success)));
+
+                // The first SFTP request has removed this channel from the map.
+                // A repeated request must fail rather than panic on None.
+                channel.request_subsystem(true, "sftp").await.unwrap();
+                assert!(matches!(channel.wait().await, Some(ChannelMsg::Failure)));
+                let sftp = SftpSession::new(channel.into_stream()).await.unwrap();
+                assert_eq!(sftp.read("/file").await.unwrap(), b"still usable");
+
+                // The rejection must not tear down the SSH connection or
+                // interfere with a second channel on that same connection.
+                let other_sftp = start_sftp(client.channel_open_session().await.unwrap()).await;
+                assert_eq!(other_sftp.read("/file").await.unwrap(), b"still usable");
+                assert_eq!(sftp.read("/file").await.unwrap(), b"still usable");
+            },
+        )
+        .await
+        .expect("rejected subsystem requests should not hang or kill the connection");
+    }
 
     fn sftp_handler(root: &Path) -> SftpHandler {
         SftpHandler {
