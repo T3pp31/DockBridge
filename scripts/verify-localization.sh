@@ -95,23 +95,18 @@ def collect_string_units(node, prefix=()):
         else:
             for variation_name, variation in variations.items():
                 variation_path = prefix + ("variations", variation_name)
-                if variation_name == "plural":
-                    if not isinstance(variation, dict):
-                        units[variation_path] = None
-                        continue
-                    for category, category_node in variation.items():
-                        category_path = variation_path + (category,)
-                        category_units = collect_string_units(
-                            category_node, category_path
-                        )
-                        if not category_units:
-                            units[category_path] = None
-                        else:
-                            units.update(category_units)
-                else:
-                    units.update(
-                        collect_string_units(variation, variation_path)
-                    )
+                if not isinstance(variation, dict):
+                    units[variation_path] = None
+                    continue
+                # Every variation kind maps value names (e.g. one, iphone,
+                # compact) to nodes, which may themselves contain variations.
+                for value_name, value_node in variation.items():
+                    value_path = variation_path + (value_name,)
+                    value_units = collect_string_units(value_node, value_path)
+                    if not value_units:
+                        units[value_path] = None
+                    else:
+                        units.update(value_units)
     return units
 
 
