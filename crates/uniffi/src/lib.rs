@@ -910,14 +910,16 @@ impl DockBridgeClient {
         reason: String,
     ) -> Result<(), DockBridgeError> {
         self.transfer_manager.cancel_session_transfers(session_id);
-        block_on(async {
+        let removed = block_on(async {
             if let Some(handle) = self.monitors.lock().await.remove(&session_id) {
                 handle.abort();
             }
-            self.sessions.lock().await.remove(&session_id);
+            self.sessions.lock().await.remove(&session_id).is_some()
         })?;
 
-        if notify {
+        // Removing the session claims the disconnect event, even if aborting
+        // a monitor that is already running its cleanup is too late.
+        if removed && notify {
             self.connection_event_handler
                 .on_session_disconnected(session_id, reason);
         }
@@ -975,10 +977,15 @@ impl DockBridgeClient {
                 if let Err(error) = check_result {
                     let message = error.to_string();
                     if is_connection_lost_message(&message) {
-                        transfer_manager.cancel_session_transfers(session_id);
-                        monitors_in_task.lock().await.remove(&session_id);
-                        sessions.lock().await.remove(&session_id);
-                        connection_event_handler.on_session_disconnected(session_id, message);
+                        finish_disconnected_monitor(
+                            session_id,
+                            message,
+                            &sessions,
+                            &monitors_in_task,
+                            &transfer_manager,
+                            connection_event_handler.as_ref(),
+                        )
+                        .await;
                         break;
                     }
                 }
@@ -987,6 +994,24 @@ impl DockBridgeClient {
 
         monitors.lock().await.insert(session_id, monitor_task);
         Ok(())
+    }
+}
+
+async fn finish_disconnected_monitor(
+    session_id: u64,
+    reason: String,
+    sessions: &AsyncMutex<HashMap<u64, Arc<SshSession>>>,
+    monitors: &AsyncMutex<HashMap<u64, JoinHandle<()>>>,
+    transfer_manager: &TransferManager,
+    connection_event_handler: &dyn ConnectionEventHandler,
+) {
+    transfer_manager.cancel_session_transfers(session_id);
+    monitors.lock().await.remove(&session_id);
+    let removed = sessions.lock().await.remove(&session_id).is_some();
+    // No await between claiming the event and notifying: another removal
+    // must neither duplicate the event nor abort its owner before delivery.
+    if removed {
+        connection_event_handler.on_session_disconnected(session_id, reason);
     }
 }
 
@@ -1156,15 +1181,14 @@ mod tests {
     use super::*;
     use dockbridge_core::sftp::test_server::TestSftpServer;
 
+    #[derive(Default)]
     struct RecordingDisconnectHandler {
-        session_id: std::sync::Mutex<Option<u64>>,
-        reason: std::sync::Mutex<Option<String>>,
+        events: std::sync::Mutex<Vec<(u64, String)>>,
     }
 
     impl ConnectionEventHandler for RecordingDisconnectHandler {
         fn on_session_disconnected(&self, session_id: u64, reason: String) {
-            *self.session_id.lock().unwrap() = Some(session_id);
-            *self.reason.lock().unwrap() = Some(reason);
+            self.events.lock().unwrap().push((session_id, reason));
         }
     }
 
@@ -1189,17 +1213,11 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn health_monitor_removes_session_and_emits_one_disconnect_event() {
-        // Given: a monitor watching a session and a server that reports the
-        // connection as lost on its next health check.
-        let server = TestSftpServer::start().await;
-        let session = server.connect_session().await;
-        let handler = Arc::new(RecordingDisconnectHandler {
-            session_id: std::sync::Mutex::new(None),
-            reason: std::sync::Mutex::new(None),
-        });
-        let client = DockBridgeClient {
+    fn client_with_session(
+        session: SshSession,
+        handler: Arc<dyn ConnectionEventHandler>,
+    ) -> Arc<DockBridgeClient> {
+        Arc::new(DockBridgeClient {
             config: AppConfig {
                 session_health_check_interval_secs: 1,
                 ..AppConfig::default()
@@ -1209,7 +1227,7 @@ mod tests {
             ))),
             host_key_handler: Arc::new(NoopHostKeyHandler),
             auth_prompt_handler: Arc::new(NoopAuthPromptHandler),
-            connection_event_handler: handler.clone(),
+            connection_event_handler: handler,
             sessions: Arc::new(AsyncMutex::new(HashMap::from([(1u64, Arc::new(session))]))),
             monitors: Arc::new(AsyncMutex::new(HashMap::new())),
             next_session_id: AtomicU64::new(2),
@@ -1217,7 +1235,16 @@ mod tests {
                 session_health_check_interval_secs: 1,
                 ..AppConfig::default()
             })),
-        };
+        })
+    }
+
+    #[tokio::test]
+    async fn health_monitor_removes_session_and_emits_one_disconnect_event() {
+        // Given: a monitor watching a session and a server that reports the
+        // connection as lost on its next health check.
+        let server = TestSftpServer::start().await;
+        let handler = Arc::new(RecordingDisconnectHandler::default());
+        let client = client_with_session(server.connect_session().await, handler.clone());
         server
             .failures
             .fail_realpath_connection_lost
@@ -1236,23 +1263,114 @@ mod tests {
         // Then: the session is removed, the callback fired exactly once, and
         // the monitor completed rather than being aborted before cleanup.
         tokio::time::timeout(Duration::from_secs(1), async {
-            while handler.reason.lock().unwrap().is_none() {
+            while handler.events.lock().unwrap().is_empty() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
         .await
         .unwrap();
-        assert_eq!(*handler.session_id.lock().unwrap(), Some(1));
-        assert!(handler
-            .reason
-            .lock()
-            .unwrap()
-            .clone()
-            .unwrap()
-            .to_lowercase()
-            .contains("connection lost"));
+        let events = handler.events.lock().unwrap().clone();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, 1);
+        assert!(events[0].1.to_lowercase().contains("connection lost"));
+
+        // An in-flight operation may report the same loss after the monitor
+        // has won removal. Neither it nor a repeated failure may notify again.
+        tokio::task::spawn_blocking({
+            let client = Arc::clone(&client);
+            move || {
+                for _ in 0..2 {
+                    let result = client.handle_session_result::<()>(
+                        1,
+                        Err(DockBridgeError::ConnectionLost {
+                            message: "connection lost during operation".to_string(),
+                        }),
+                    );
+                    assert!(matches!(result, Err(DockBridgeError::ConnectionLost { .. })));
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(*handler.events.lock().unwrap(), events);
         assert!(!client.sessions.lock().await.contains_key(&1));
         assert!(!client.monitors.lock().await.contains_key(&1));
+    }
+
+    #[tokio::test]
+    async fn session_removal_suppresses_late_monitor_notifications() {
+        // Exercise both error-driven removal and deliberate (silent) disconnect.
+        for notify in [true, false] {
+            let server = TestSftpServer::start().await;
+            let handler = Arc::new(RecordingDisconnectHandler::default());
+            let client = client_with_session(server.connect_session().await, handler.clone());
+            let monitor = tokio::spawn(std::future::pending::<()>());
+            client.monitors.lock().await.insert(1, monitor);
+
+            tokio::task::spawn_blocking({
+                let client = Arc::clone(&client);
+                move || {
+                    if notify {
+                        let result = client.handle_session_result::<()>(
+                            1,
+                            Err(DockBridgeError::ConnectionLost {
+                                message: "connection lost during operation".to_string(),
+                            }),
+                        );
+                        assert!(matches!(result, Err(DockBridgeError::ConnectionLost { .. })));
+                    } else {
+                        client.disconnect(1).unwrap();
+                    }
+                }
+            })
+            .await
+            .unwrap();
+
+            // Deterministically run the tail of a health check that already
+            // observed failure, as if abort arrived after its last yield.
+            finish_disconnected_monitor(
+                1,
+                "connection lost during health check".to_string(),
+                &client.sessions,
+                &client.monitors,
+                &client.transfer_manager,
+                client.connection_event_handler.as_ref(),
+            )
+            .await;
+
+            let expected = if notify {
+                vec![(1, "connection lost during operation".to_string())]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(*handler.events.lock().unwrap(), expected);
+            assert!(!client.sessions.lock().await.contains_key(&1));
+            assert!(!client.monitors.lock().await.contains_key(&1));
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_and_non_connection_results_keep_session_without_notification() {
+        let server = TestSftpServer::start().await;
+        let handler = Arc::new(RecordingDisconnectHandler::default());
+        let client = client_with_session(server.connect_session().await, handler.clone());
+        tokio::task::spawn_blocking({
+            let client = Arc::clone(&client);
+            move || {
+                assert_eq!(client.handle_session_result(1, Ok(42)).unwrap(), 42);
+                let result = client.handle_session_result::<()>(
+                    1,
+                    Err(DockBridgeError::Other {
+                        message: "permission denied".to_string(),
+                    }),
+                );
+                assert!(matches!(result, Err(DockBridgeError::Other { .. })));
+            }
+        })
+        .await
+        .unwrap();
+        assert!(client.sessions.lock().await.contains_key(&1));
+        assert!(handler.events.lock().unwrap().is_empty());
     }
 
     fn task(status: TransferStatus) -> TransferTask {
