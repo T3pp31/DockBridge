@@ -18,7 +18,7 @@
 - CLI `--password-stdin` read buffers use `Zeroizing<String>` so stdin input is zeroized on drop
 - UniFFI credentials use a `SecretCredential` custom type that zeroizes on drop after lift
 - Swift clears password/passphrase and `ConnectionProfileRecord` credentials after connect
-- Delete confirmation for destructive operations
+- Mandatory confirmation before remote deletion in the macOS app (cannot be disabled; legacy `confirmBeforeDelete` settings are ignored). Local Move to Trash remains recoverable and unchanged.
 - Warning when connecting as root
 - **FileVault (or equivalent full-disk encryption) recommended** on the boot volume — see [Connection profiles](#connection-profiles-profilesjson)
 

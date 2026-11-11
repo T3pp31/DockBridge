@@ -26,7 +26,6 @@ enum AppSettingsKeys {
     static let sshKeepaliveIntervalSecs = "sshKeepaliveIntervalSecs"
     static let defaultLocalPath = "defaultLocalPath"
     static let defaultLocalBookmark = "defaultLocalBookmark"
-    static let confirmBeforeDelete = "confirmBeforeDelete"
     static let showHiddenFiles = "showHiddenFiles"
     static let mergeOpensshKnownHostsOnConnect = "mergeOpensshKnownHostsOnConnect"
     static let opensshKnownHostsPath = "opensshKnownHostsPath"
@@ -87,7 +86,6 @@ final class AppSettingsService: @unchecked Sendable {
             AppSettingsKeys.sshInactivityTimeoutSecs: AppConfig.default.sshInactivityTimeoutSecs,
             AppSettingsKeys.sshKeepaliveIntervalSecs: Int(AppConfig.default.sshKeepaliveIntervalSecs),
             AppSettingsKeys.defaultLocalPath: AppConfig.default.defaultLocalPath,
-            AppSettingsKeys.confirmBeforeDelete: AppConfig.default.confirmBeforeDelete,
             AppSettingsKeys.showHiddenFiles: AppConfig.default.showHiddenFiles,
             AppSettingsKeys.mergeOpensshKnownHostsOnConnect: AppConfig.default.mergeOpensshKnownHostsOnConnect,
             AppSettingsKeys.opensshKnownHostsPath: AppConfig.default.opensshKnownHostsPath,
@@ -178,7 +176,6 @@ final class AppSettingsService: @unchecked Sendable {
             defaultLocalPath: defaults.string(forKey: AppSettingsKeys.defaultLocalPath)
                 ?? AppConfig.default.defaultLocalPath,
             defaultLocalBookmark: defaults.data(forKey: AppSettingsKeys.defaultLocalBookmark),
-            confirmBeforeDelete: defaults.bool(forKey: AppSettingsKeys.confirmBeforeDelete),
             showHiddenFiles: defaults.bool(forKey: AppSettingsKeys.showHiddenFiles),
             mergeOpensshKnownHostsOnConnect: defaults.object(
                 forKey: AppSettingsKeys.mergeOpensshKnownHostsOnConnect
@@ -246,7 +243,6 @@ final class AppSettingsService: @unchecked Sendable {
         )
         defaults.set(config.defaultLocalPath, forKey: AppSettingsKeys.defaultLocalPath)
         defaults.set(config.defaultLocalBookmark, forKey: AppSettingsKeys.defaultLocalBookmark)
-        defaults.set(config.confirmBeforeDelete, forKey: AppSettingsKeys.confirmBeforeDelete)
         defaults.set(config.showHiddenFiles, forKey: AppSettingsKeys.showHiddenFiles)
         defaults.set(config.mergeOpensshKnownHostsOnConnect, forKey: AppSettingsKeys.mergeOpensshKnownHostsOnConnect)
         defaults.set(config.opensshKnownHostsPath, forKey: AppSettingsKeys.opensshKnownHostsPath)

@@ -79,10 +79,6 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
 
-            Section(String(localized: "Safety")) {
-                Toggle(String(localized: "Confirm before delete"), isOn: $config.confirmBeforeDelete)
-            }
-
             Section(String(localized: "Transfer")) {
                 Picker(String(localized: "Overwrite policy"), selection: $config.transferOverwritePolicy) {
                     ForEach(TransferOverwritePolicy.allCases, id: \.self) { policy in
