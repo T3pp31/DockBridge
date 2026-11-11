@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 保存済みの接続プロファイル削除を、後続の信頼エントリ削除エラーで失敗と誤報告しないよう修正 (#1181)
 - Reject local moves into self, the current parent, or descendants through symlinked ancestors while still allowing moves of symlinks themselves (#1178)
 - Preserve local directory types via a separate file-system lookup when resource metadata is unreadable (#1179)
+- Prevent duplicate session-disconnected notifications when health checks race with session removal (#1204)
 - Transfer results no longer fall back to stale Pending tasks when the queue is
   cleared concurrently (#1200).
 - Zeroize private key file buffers on read/UTF-8 errors and buffer growth during
