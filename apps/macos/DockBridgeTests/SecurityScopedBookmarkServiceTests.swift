@@ -258,6 +258,87 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
     }
 }
 
+@MainActor
+final class ConnectionFormPrivateKeySelectionTests: XCTestCase {
+    private let selectedURL = URL(fileURLWithPath: "/keys/replacement")
+
+    func testBookmarkCreationFailurePreservesExistingPrivateKeySelection() {
+        let original = makeProfile(path: "/keys/original", bookmark: Data([1, 2, 3]))
+        var profile = original
+        let error = SecurityScopedBookmarkError.creationFailed(underlying: CocoaError(.fileReadNoPermission))
+
+        let message = ConnectionFormView.applyPrivateKeySelection(selectedURL, to: &profile) { url, readOnly in
+            XCTAssertEqual(url, self.selectedURL)
+            XCTAssertTrue(readOnly)
+            throw error
+        }
+
+        XCTAssertEqual(profile, original)
+        // The form's private-key Save guard must still accept the existing bookmark.
+        XCTAssertTrue(profile.hasPrivateKeyBookmark)
+        XCTAssertEqual(message, String(
+            format: String(localized: "%@ Use Browse… to try again."),
+            error.localizedDescription
+        ))
+    }
+
+    func testBookmarkCreationFailureWithoutBookmarkPreservesUnsaveableSelection() {
+        // Cover both a new profile and a legacy path that still needs a bookmark.
+        let paths: [String?] = [nil, "/keys/legacy"]
+        for path in paths {
+            let original = makeProfile(path: path)
+            var profile = original
+
+            let message = ConnectionFormView.applyPrivateKeySelection(selectedURL, to: &profile) { _, _ in
+                throw SecurityScopedBookmarkError.accessDenied
+            }
+
+            XCTAssertEqual(profile, original)
+            XCTAssertFalse(profile.hasPrivateKeyBookmark)
+            XCTAssertNotNil(message)
+        }
+    }
+
+    func testSuccessfulSelectionUpdatesPathAndBookmarkTogether() {
+        let originals = [
+            makeProfile(),
+            makeProfile(path: "/keys/original", bookmark: Data([1, 2, 3]))
+        ]
+        let newBookmark = Data([4, 5, 6])
+        for original in originals {
+            var profile = original
+            var bookmarkCalls = 0
+
+            let message = ConnectionFormView.applyPrivateKeySelection(selectedURL, to: &profile) { url, readOnly in
+                bookmarkCalls += 1
+                XCTAssertEqual(url, self.selectedURL)
+                XCTAssertTrue(readOnly)
+                return newBookmark
+            }
+
+            var expected = original
+            expected.privateKeyPath = selectedURL.path
+            expected.privateKeyBookmark = newBookmark
+            XCTAssertEqual(profile, expected)
+            XCTAssertTrue(profile.hasPrivateKeyBookmark)
+            XCTAssertEqual(bookmarkCalls, 1)
+            XCTAssertNil(message)
+        }
+    }
+
+    private func makeProfile(path: String? = nil, bookmark: Data? = nil) -> ConnectionProfile {
+        ConnectionProfile(
+            name: "Edited connection",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyPath: path,
+            privateKeyBookmark: bookmark,
+            initialRemotePath: "/edited/path"
+        )
+    }
+}
+
 private final class SecurityScopeCallRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var startCount = 0
