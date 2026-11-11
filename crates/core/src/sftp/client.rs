@@ -1718,17 +1718,35 @@ impl<'a> PartialRemoteTransfer<'a> {
                 return Ok(None);
             }
         };
-        let actual_size = client
-            .sftp()
-            .metadata(&partial_path)
-            .await
-            .ok()
-            .and_then(|metadata| metadata.size)
-            .unwrap_or(0);
+        let metadata = match client.sftp().metadata(&partial_path).await {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                tracing::warn!(
+                    partial_remote_path = %partial_path,
+                    error = %err,
+                    "failed to read partial metadata for upload resume; retaining saved partial"
+                );
+                return Ok(None);
+            }
+        };
+        let Some(actual_size) = metadata.size else {
+            // An unknown size is not evidence of a truncated partial.
+            tracing::warn!(
+                partial_remote_path = %partial_path,
+                "partial size unavailable for upload resume; retaining saved partial"
+            );
+            return Ok(None);
+        };
         if actual_size != start_offset {
             // A truncated or otherwise invalid partial would create a sparse
             // hole and corrupt the final file. Remove it and restart cleanly.
-            let _ = client.sftp().remove_file(&partial_path).await;
+            if let Err(err) = client.sftp().remove_file(&partial_path).await {
+                tracing::warn!(
+                    partial_remote_path = %partial_path,
+                    error = %err,
+                    "failed to delete size-mismatched upload partial"
+                );
+            }
             return Ok(None);
         }
         use tokio::io::AsyncSeekExt;
@@ -6295,6 +6313,89 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_resume_retains_partial_when_size_is_unknown_and_resumes_on_retry() {
+        for missing_size in [false, true] {
+            let server = TestSftpServer::start().await;
+            let session = server.connect_session().await;
+            let client = SftpClient::new(&session);
+            let local_dir = tempfile::tempdir().unwrap();
+            let local_path = local_dir.path().join("file.bin");
+            let payload = b"AAAABBBBCCCC";
+            tokio::fs::write(&local_path, payload).await.unwrap();
+            let local = local_path.display().to_string();
+            let remote = "/upload/file.bin";
+            let partial_path = format!(
+                "/upload/.dockbridge-{}.partial",
+                resume_partial_suffix(&local, remote)
+            );
+            server.write_remote_file(&partial_path, &payload[..4]).await;
+            let offset = client
+                .find_resumable_upload_offset(payload.len() as u64, "/upload", &local, remote)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(offset, 4);
+
+            // Fail only the recheck after successful content verification.
+            let failure = if missing_size {
+                &server.failures.omit_stat_size
+            } else {
+                &server.failures.fail_stat
+            };
+            failure.store(true, Ordering::SeqCst);
+            let resumed = PartialRemoteTransfer::begin_resume(
+                &client,
+                partial_path.clone(),
+                offset,
+                &local,
+                remote,
+                TransferOverwritePolicy::default(),
+            )
+            .await
+            .unwrap();
+
+            assert!(resumed.is_none(), "unknown size must not allow resume");
+            assert!(!failure.load(Ordering::SeqCst), "STAT injection was not used");
+            assert_eq!(server.failures.remove_count.load(Ordering::SeqCst), 0);
+            assert_eq!(
+                tokio::fs::read(server.root.join(partial_path.trim_start_matches('/')))
+                    .await
+                    .unwrap(),
+                &payload[..4]
+            );
+
+            // A fresh transfer uses another partial, leaving the saved bytes
+            // intact; a later retry must still find and resume the original.
+            let mut fresh = PartialRemoteTransfer::begin(
+                &client,
+                "/upload",
+                &local,
+                remote,
+                TransferOverwritePolicy::default(),
+            )
+            .await
+            .unwrap();
+            assert_ne!(fresh.partial_path, partial_path);
+            fresh.abort(true).await.unwrap();
+            assert_eq!(
+                client
+                    .find_resumable_upload_offset(payload.len() as u64, "/upload", &local, remote)
+                    .await
+                    .unwrap(),
+                Some(offset)
+            );
+            client.upload(&local_path, remote).await.unwrap();
+            assert_eq!(
+                tokio::fs::read(server.root.join("upload/file.bin"))
+                    .await
+                    .unwrap(),
+                payload
+            );
+            assert!(server.remote_partial_paths().is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn upload_resume_discards_size_mismatched_partial() {
         // Given: a partial whose size no longer matches the resume offset
         let server = TestSftpServer::start().await;
@@ -6309,24 +6410,28 @@ mod tests {
             "/upload/.dockbridge-{}.partial",
             resume_partial_suffix(&local_path.display().to_string(), remote)
         );
-        server.write_remote_file(&partial_path, b"AAAABBBB").await;
+        // A confirmed zero size is a mismatch too, unlike an unknown size.
+        for contents in [b"".as_slice(), b"AAAABBBB".as_slice()] {
+            server.write_remote_file(&partial_path, contents).await;
 
-        // When: the client prepares a resume at an offset that does not match
-        // the partial's actual size
-        let resumed = PartialRemoteTransfer::begin_resume(
-            &client,
-            partial_path.clone(),
-            4,
-            &local_path.display().to_string(),
-            remote,
-            TransferOverwritePolicy::default(),
-        )
-        .await
-        .unwrap();
+            // When: the client prepares a resume at an offset that does not match
+            // the partial's actual size
+            let resumed = PartialRemoteTransfer::begin_resume(
+                &client,
+                partial_path.clone(),
+                4,
+                &local_path.display().to_string(),
+                remote,
+                TransferOverwritePolicy::default(),
+            )
+            .await
+            .unwrap();
 
-        // Then: the invalid partial is discarded and the caller restarts
-        assert!(resumed.is_none());
-        assert!(!server.remote_file_exists(&partial_path));
+            // Then: the invalid partial is discarded and the caller restarts
+            assert!(resumed.is_none());
+            assert!(!server.remote_file_exists(&partial_path));
+        }
+        assert_eq!(server.failures.remove_count.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
