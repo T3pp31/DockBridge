@@ -565,6 +565,8 @@ pub async fn walk_local_directory_with_options(
 /// All directories under `root`, as relative paths, ordered parent-first
 /// (e.g. `a`, `a/b`, `a/b/c`). Used to mirror empty directories exactly once
 /// per batch instead of issuing `create_directory_all` per file (issue #312).
+/// Directories that cannot be canonicalized or opened are omitted, as are
+/// revisits of the same canonical path.
 pub async fn local_directories(
     root: &Path,
     options: WalkLocalDirectoryOptions,
@@ -599,6 +601,11 @@ pub(crate) async fn walk_local_directories(
                 continue;
             };
 
+            // Only mirror directories that can be examined, once per canonical path.
+            if !relative.as_os_str().is_empty() {
+                directories.push(relative.clone());
+            }
+
             loop {
                 let Ok(Some(entry)) = read_dir.next_entry().await else {
                     break;
@@ -611,7 +618,6 @@ pub(crate) async fn walk_local_directories(
 
                 if file_type.is_dir() {
                     let child_relative = relative.join(path.file_name().unwrap_or_default());
-                    directories.push(child_relative.clone());
                     let child_depth = depth.saturating_add(1);
                     accumulator.check_depth(child_depth, &path.display().to_string())?;
                     pending.push((path, child_relative, child_depth));
@@ -620,7 +626,6 @@ pub(crate) async fn walk_local_directories(
                         if metadata.is_dir() {
                             let child_relative =
                                 relative.join(path.file_name().unwrap_or_default());
-                            directories.push(child_relative.clone());
                             let child_depth = depth.saturating_add(1);
                             accumulator.check_depth(child_depth, &path.display().to_string())?;
                             pending.push((path, child_relative, child_depth));
@@ -693,10 +698,10 @@ pub async fn remote_directories<'a>(
             } else {
                 relative_prefix.join(&entry.name)
             };
-            directories.push(relative_path.clone());
             let child_depth = depth.saturating_add(1);
             accumulator.check_depth(child_depth, &child_remote)?;
             if visited.insert(child_remote.clone()) {
+                directories.push(relative_path.clone());
                 pending.push((child_remote, relative_path, child_depth));
             }
         }
@@ -1149,6 +1154,148 @@ mod tests {
             pos_a < pos_ab,
             "parent 'a' must be created before child 'a/b': {strings:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_directories_deduplicates_followed_symlinks_and_cycles() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let outside = tempdir().unwrap();
+        fs::create_dir(root.join("empty")).unwrap();
+        fs::create_dir(outside.path().join("nested")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("alias-a")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("alias-b")).unwrap();
+        std::os::unix::fs::symlink(root, root.join("cycle")).unwrap();
+
+        // Default traversal must still ignore directory symlinks.
+        assert_eq!(
+            local_directories(root, WalkLocalDirectoryOptions::default())
+                .await
+                .unwrap(),
+            vec![PathBuf::from("empty")]
+        );
+
+        let directories = local_directories(
+            root,
+            WalkLocalDirectoryOptions {
+                follow_symlinks: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        // Filesystem listing order determines which alias is visited first.
+        // Only that alias and its child should be mirrored, never the cycle.
+        assert!(
+            directories
+                == vec![
+                    PathBuf::from("alias-a"),
+                    PathBuf::from("empty"),
+                    PathBuf::from("alias-a/nested"),
+                ]
+                || directories
+                    == vec![
+                        PathBuf::from("alias-b"),
+                        PathBuf::from("empty"),
+                        PathBuf::from("alias-b/nested"),
+                    ],
+            "{directories:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_directories_omits_unreadable_subdirectory_but_keeps_empty_siblings() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Root bypasses DAC permissions, as in the file-walk permission test.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let locked = root.join("locked");
+        fs::create_dir_all(locked.join("hidden")).unwrap();
+        fs::create_dir_all(root.join("readable/empty")).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = local_directories(root, WalkLocalDirectoryOptions::default()).await;
+
+        // Restore permissions before asserting so the fixture can be removed.
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            result.unwrap(),
+            vec![PathBuf::from("readable"), PathBuf::from("readable/empty")]
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_directories_deduplicates_listing_entries_and_preserves_structure() {
+        use crate::sftp::test_server::TestSftpServer;
+        use std::sync::atomic::Ordering;
+
+        let server = TestSftpServer::start().await;
+        fs::create_dir_all(server.root.join("tree/a/b")).unwrap();
+        fs::create_dir(server.root.join("tree/empty")).unwrap();
+        fs::write(server.root.join("tree/file.txt"), b"x").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(server.root.join("tree/a"), server.root.join("tree/link"))
+            .unwrap();
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        for duplicate in [false, true] {
+            server
+                .failures
+                .duplicate_readdir_entries
+                .store(duplicate, Ordering::Relaxed);
+            let listing = client.list_directory("/tree").await.unwrap();
+            assert_eq!(
+                listing.iter().filter(|entry| entry.name == "a").count(),
+                if duplicate { 2 } else { 1 }
+            );
+            let before = server.failures.opendir_count.load(Ordering::Relaxed);
+
+            let directories =
+                remote_directories(&client, "/tree///", DirectoryWalkLimits::default())
+                    .await
+                    .unwrap();
+
+            // Empty directories and parent-first ordering are preserved. Files
+            // and symlinks stay excluded even when READDIR repeats entries.
+            assert_eq!(
+                directories,
+                vec![
+                    PathBuf::from("a"),
+                    PathBuf::from("empty"),
+                    PathBuf::from("a/b"),
+                ],
+                "duplicate={duplicate}"
+            );
+            assert_eq!(
+                server.failures.opendir_count.load(Ordering::Relaxed) - before,
+                4,
+                "each directory, including the root, must be listed once"
+            );
+        }
+
+        let err = remote_directories(
+            &client,
+            "/tree",
+            DirectoryWalkLimits {
+                max_depth: 1,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            SftpError::DirectoryWalkLimitExceeded { limit, .. } if limit == "max_depth"
+        ));
     }
 
     #[tokio::test]
