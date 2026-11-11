@@ -90,6 +90,9 @@ pub struct TransferManager {
     /// avoid real sleeping. `None` uses the exponential jittered backoff.
     #[cfg(test)]
     backoff_override_ms: Option<u64>,
+    /// Signals entry into the retry wait, after the failed attempt has settled.
+    #[cfg(test)]
+    backoff_started: tokio::sync::Notify,
 }
 
 impl TransferManager {
@@ -108,6 +111,8 @@ impl TransferManager {
             removed_task_ids: Mutex::new(HashSet::new()),
             #[cfg(test)]
             backoff_override_ms: None,
+            #[cfg(test)]
+            backoff_started: tokio::sync::Notify::new(),
         }
     }
 
@@ -1311,6 +1316,9 @@ impl TransferManager {
             retry_backoff_ms = delay.as_millis(),
             "waiting before retrying transfer"
         );
+
+        #[cfg(test)]
+        self.backoff_started.notify_one();
 
         tokio::time::timeout(delay, async {
             loop {
@@ -2768,13 +2776,14 @@ mod tests {
     #[tokio::test]
     async fn retry_sleep_aborts_when_cancelled_during_backoff() {
         // Given: a manager with retries enabled, a server whose first WRITE
-        // fails (one-shot), and the real exponential backoff so the retry is
-        // still waiting when we cancel.
+        // fails (one-shot), and a fixed backoff longer than the test deadlines.
         let config = AppConfig {
             transfer_retry_count: 5,
             ..AppConfig::default()
         };
-        let manager = Arc::new(TransferManager::new(&config));
+        let mut manager = TransferManager::new(&config);
+        manager.backoff_override_ms = Some(60_000);
+        let manager = Arc::new(manager);
 
         let server = TestSftpServer::start().await;
         let session = server.connect_session().await;
@@ -2788,7 +2797,7 @@ mod tests {
             .store(true, Ordering::SeqCst);
 
         // When: an upload task is spawned, then cancelled while it waits on
-        // the exponential backoff before retrying.
+        // the backoff before retrying.
         let manager_for_task = Arc::clone(&manager);
         let upload = tokio::spawn(async move {
             manager_for_task
@@ -2796,38 +2805,46 @@ mod tests {
                 .await
         });
 
-        // Give the transfer a moment to fail the first write and enter the
-        // backoff sleep (first retry waits 0.5-1s without override), then
-        // cancel while it is sleeping.
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let task_id = {
-            let tasks = manager.tasks.lock().unwrap();
-            tasks
-                .iter()
-                .find(|task| task.local_path.ends_with("cancelled-retry.bin"))
-                .map(|task| task.id)
-                .unwrap_or_else(|| panic!("task not found"))
-        };
-
-        let cancel_result = manager.cancel_transfer(task_id);
+        // Wait for the client to finish handling the failed attempt, not just
+        // for the server to consume fail_remote_write. notify_one retains a
+        // permit even if the spawned task reaches backoff before this waiter.
+        tokio::time::timeout(Duration::from_secs(10), manager.backoff_started.notified())
+            .await
+            .expect("upload must enter retry backoff after the first WRITE failure");
         assert!(
-            cancel_result.is_ok(),
-            "task should be cancellable: {cancel_result:?}"
+            !server.failures.fail_remote_write.load(Ordering::SeqCst),
+            "the injected WRITE failure must have been consumed"
         );
+        assert!(!upload.is_finished(), "upload must still be in backoff");
+        let task = manager
+            .get_transfer_queue()
+            .into_iter()
+            .find(|task| task.local_path.ends_with("cancelled-retry.bin"))
+            .expect("a task entering retry backoff must already be registered");
+        let task_id = task.id;
+        assert_eq!(task.status, TransferStatus::InProgress);
+        assert!(manager.is_in_flight(task_id));
 
-        // Then: the spawned upload finishes with an error (cancelled at the
-        // next check boundary) and the task settles as Cancelled.
-        let result = upload.await.unwrap();
-        assert!(result.is_err(), "upload should not complete");
-        let status = manager
-            .tasks
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|task| task.id == task_id)
-            .map(|task| task.status.clone())
-            .unwrap();
-        assert_eq!(status, TransferStatus::Cancelled);
+        manager
+            .cancel_transfer(task_id)
+            .expect("task waiting in backoff must be cancellable");
+
+        // Then: cancellation interrupts the wait rather than waiting for the
+        // full backoff, and the upload future settles with the precise error.
+        let result = tokio::time::timeout(Duration::from_secs(10), upload)
+            .await
+            .expect("cancellation must interrupt the 60-second retry backoff")
+            .expect("upload task must not panic");
+        assert!(
+            matches!(result, Err(TransferError::Cancelled)),
+            "expected cancellation, got {result:?}"
+        );
+        assert_eq!(
+            manager.find_task(task_id).unwrap().status,
+            TransferStatus::Cancelled
+        );
+        assert!(!manager.is_in_flight(task_id));
+        assert!(!server.remote_file_exists("/upload/cancelled-retry.bin"));
     }
 
     #[tokio::test]
