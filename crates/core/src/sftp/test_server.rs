@@ -389,20 +389,20 @@ impl SftpHandler {
         Ok(entries)
     }
 
-    fn io_error_status(err: std::io::Error) -> StatusCode {
-        match err.kind() {
-            std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
-            std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
-            _ => StatusCode::Failure,
-        }
-    }
-
     fn ok_status(id: u32) -> Status {
         Status {
             id,
             status_code: StatusCode::Ok,
             error_message: "Ok".to_string(),
             language_tag: "en-US".to_string(),
+        }
+    }
+
+    fn io_error_status(err: std::io::Error) -> StatusCode {
+        match err.kind() {
+            std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+            std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+            _ => StatusCode::Failure,
         }
     }
 
@@ -884,7 +884,7 @@ impl russh_sftp::server::Handler for SftpHandler {
                 // posix-rename replaces an existing destination atomically.
                 fs::rename(&from, &to)
                     .await
-                    .map_err(|_| StatusCode::Failure)?;
+                    .map_err(Self::io_error_status)?;
                 Ok(Packet::Status(Self::ok_status(id)))
             }
             _ => Err(StatusCode::OpUnsupported),
@@ -1362,6 +1362,101 @@ mod tests {
             }
         }
         assert_eq!(std::fs::read(&path).unwrap(), b"da\0\0\0\0");
+    }
+
+    #[test]
+    fn io_errors_map_to_sftp_status_codes() {
+        use std::io::{Error, ErrorKind};
+
+        for (kind, expected) in [
+            (ErrorKind::NotFound, StatusCode::NoSuchFile),
+            (ErrorKind::PermissionDenied, StatusCode::PermissionDenied),
+            (ErrorKind::Other, StatusCode::Failure),
+        ] {
+            assert_eq!(SftpHandler::io_error_status(Error::from(kind)), expected);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_errno_maps_to_sftp_status_codes() {
+        // Test permission errors without depending on the test runner's privileges.
+        for (errno, expected) in [
+            (libc::ENOENT, StatusCode::NoSuchFile),
+            (libc::EACCES, StatusCode::PermissionDenied),
+            (libc::EPERM, StatusCode::PermissionDenied),
+            (libc::EISDIR, StatusCode::Failure),
+            (libc::ENOTDIR, StatusCode::Failure),
+            (libc::EXDEV, StatusCode::Failure),
+        ] {
+            assert_eq!(
+                SftpHandler::io_error_status(std::io::Error::from_raw_os_error(errno)),
+                expected,
+                "errno {errno}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn posix_rename_errors_preserve_status_and_files() {
+        use russh_sftp::client::error::Error as SftpClientError;
+
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/source.txt", b"source").await;
+        server.write_remote_file("/target.txt", b"original").await;
+        server
+            .write_remote_file("/directory/child.txt", b"child")
+            .await;
+        let session = server.connect_session().await;
+
+        for (from, to, expected) in [
+            ("/absent.txt", "/target.txt", StatusCode::NoSuchFile),
+            ("/absent/source.txt", "/target.txt", StatusCode::NoSuchFile),
+            ("/source.txt", "/absent/target.txt", StatusCode::NoSuchFile),
+            ("/source.txt", "/directory", StatusCode::Failure),
+        ] {
+            let err = session.sftp().posix_rename(from, to).await.unwrap_err();
+            let SftpClientError::Status(status) = err else {
+                panic!("expected SFTP status for {from} -> {to}, got {err:?}");
+            };
+            assert_eq!(status.status_code, expected, "{from} -> {to}");
+            assert_eq!(
+                fs::read(server.root.join("source.txt")).await.unwrap(),
+                b"source"
+            );
+            assert_eq!(
+                fs::read(server.root.join("target.txt")).await.unwrap(),
+                b"original"
+            );
+            assert_eq!(
+                fs::read(server.root.join("directory/child.txt"))
+                    .await
+                    .unwrap(),
+                b"child"
+            );
+            assert!(!server.root.join("absent").exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn posix_rename_still_replaces_existing_destination() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/source.txt", b"replacement")
+            .await;
+        server.write_remote_file("/target.txt", b"original").await;
+        let session = server.connect_session().await;
+
+        assert!(session
+            .sftp()
+            .posix_rename("/source.txt", "/target.txt")
+            .await
+            .unwrap());
+        assert!(!server.root.join("source.txt").exists());
+        assert_eq!(
+            fs::read(server.root.join("target.txt")).await.unwrap(),
+            b"replacement"
+        );
     }
 
     #[cfg(unix)]
