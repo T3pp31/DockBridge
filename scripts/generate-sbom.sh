@@ -111,6 +111,8 @@ CHECKSUM_STAGE="$(mktemp "${OUT_DIR}/${SBOM_FILENAME}.sha256.tmp.XXXXXX")"
 DIGEST="$(shasum -a 256 "$STAGE_PATH")"
 DIGEST="${DIGEST%% *}"
 printf '%s  %s\n' "$DIGEST" "$SBOM_FILENAME" > "$CHECKSUM_STAGE"
+# Publish readable release artifacts, not mktemp's owner-only staging modes.
+chmod 0644 "$STAGE_PATH" "$CHECKSUM_STAGE"
 mv "$STAGE_PATH" "$OUT_PATH"
 mv "$CHECKSUM_STAGE" "${OUT_PATH}.sha256"
 
