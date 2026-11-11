@@ -36,9 +36,11 @@ pub struct FailureConfig {
     pub fail_remote_write: AtomicBool,
     pub fail_remote_read: AtomicBool,
     pub fail_remote_close: AtomicBool,
-    pub fail_remote_rename: AtomicBool,
-    /// Fails a single REMOVE request so tests can exercise partial cleanup errors.
     pub fail_remote_remove: AtomicBool,
+    pub fail_remote_rename: AtomicBool,
+    /// One-shot STAT failure / missing size for upload resume validation.
+    pub fail_stat: AtomicBool,
+    pub omit_stat_size: AtomicBool,
     /// When set, `realpath` reports a connection-lost style failure so tests
     /// can exercise health-monitor cleanup.
     pub fail_realpath_connection_lost: AtomicBool,
@@ -487,12 +489,16 @@ impl russh_sftp::server::Handler for SftpHandler {
     }
 
     async fn stat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
+        if self.failures.fail_stat.swap(false, Ordering::SeqCst) {
+            return Err(StatusCode::Failure);
+        }
         let local = self.resolve(&path);
         std::fs::metadata(&local).map_err(Self::metadata_error_status)?;
-        Ok(Attrs {
-            id,
-            attrs: Self::attrs_for_follow(&local),
-        })
+        let mut attrs = Self::attrs_for_follow(&local);
+        if self.failures.omit_stat_size.swap(false, Ordering::SeqCst) {
+            attrs.size = None;
+        }
+        Ok(Attrs { id, attrs })
     }
 
     async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
