@@ -35,6 +35,7 @@ struct DockBridgeApp: App {
             )
             .onReceive(NotificationCenter.default.publisher(for: .appConfigDidChange)) { notification in
                 guard let config = notification.object as? AppConfig else { return }
+                settingsConfig = config
                 TransferNotificationService.requestAuthorizationIfNeeded(for: config)
             }
             .onOpenURL { url in
@@ -55,9 +56,14 @@ struct DockBridgeApp: App {
 
         Settings {
             SettingsView(
-                config: AppSettingsService.shared.loadConfig()
+                config: settingsConfig
             ) { config in
                 AppSettingsService.shared.saveConfig(config)
+                settingsConfig = config
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .appConfigDidChange)) { notification in
+                // Settings can remain open after the last main window closes.
+                guard let config = notification.object as? AppConfig else { return }
                 settingsConfig = config
             }
         }

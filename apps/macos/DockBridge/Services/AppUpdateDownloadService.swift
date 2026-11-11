@@ -18,23 +18,31 @@ protocol DMGImageMounting: Sendable {
 }
 
 struct HdiutilDMGImageMounter: DMGImageMounting {
+    private let executableURL: URL
+
+    init(executableURL: URL = URL(fileURLWithPath: "/usr/bin/hdiutil")) {
+        self.executableURL = executableURL
+    }
+
     func mount(dmgURL: URL) throws -> URL {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        process.executableURL = executableURL
         process.arguments = ["attach", "-nobrowse", "-plist", dmgURL.path]
 
         let outputPipe = Pipe()
         process.standardOutput = outputPipe
-        process.standardError = Pipe()
+        // Diagnostics are not used; an unread stderr pipe could block hdiutil.
+        process.standardError = FileHandle.nullDevice
 
         try process.run()
+        // Drain stdout while hdiutil is running, before waiting for its exit.
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
             throw AppUpdateDownloadError.mountFailed
         }
 
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
         let plist = try? PropertyListSerialization.propertyList(from: outputData, format: nil)
         let systemEntities = (plist as? [String: Any])?["system-entities"] as? [[String: Any]]
 
@@ -58,10 +66,11 @@ struct HdiutilDMGImageMounter: DMGImageMounting {
 
     func unmount(mountPoint: URL) throws {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        process.executableURL = executableURL
         process.arguments = ["detach", mountPoint.path, "-quiet"]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
+        // Neither stream is used for detach, including failure-path cleanup.
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
 
         try process.run()
         process.waitUntilExit()
