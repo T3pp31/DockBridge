@@ -445,11 +445,13 @@ impl TransferManager {
             .is_some_and(|in_flight| in_flight.contains(&task_id))
     }
 
+    /// Returns the final task snapshot while holding the queue lock, so a
+    /// concurrent clear cannot replace the result with a stale Pending task.
     fn finalize_task_result(
         &self,
         task_id: u64,
         result: Result<(), TransferError>,
-    ) -> Result<(), TransferError> {
+    ) -> Result<TransferTask, TransferError> {
         let mut tasks = self
             .tasks
             .lock()
@@ -471,7 +473,9 @@ impl TransferManager {
         in_flight.remove(&task_id);
 
         let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) else {
-            return result;
+            // Preserve transfer errors (especially cleanup failures) even if
+            // the task was cleared, but never report success without a task.
+            return result.and(Err(TransferError::TaskNotFound { task_id }));
         };
 
         let final_status = match (&result, was_cancelled) {
@@ -502,7 +506,7 @@ impl TransferManager {
         };
         task.status = final_status;
 
-        result
+        result.map(|()| task.clone())
     }
 
     /// Enqueues and immediately executes a single upload task.
@@ -598,7 +602,6 @@ impl TransferManager {
         let task_id = task.id;
         let local_path = task.local_path.clone();
         let remote_path = task.remote_path.clone();
-        let original = task.clone();
 
         if self.find_task(task_id).is_none() {
             self.register_task(task, overwrite_policy);
@@ -624,9 +627,7 @@ impl TransferManager {
             )
             .await;
 
-        self.finalize_task_result(task_id, result)?;
-
-        Ok(self.find_task(task_id).unwrap_or(original))
+        self.finalize_task_result(task_id, result)
     }
 
     /// Enqueues and immediately executes a single download task.
@@ -703,7 +704,6 @@ impl TransferManager {
         let task_id = task.id;
         let local_path = task.local_path.clone();
         let remote_path = task.remote_path.clone();
-        let original = task.clone();
 
         if self.find_task(task_id).is_none() {
             self.register_task(task, overwrite_policy);
@@ -729,9 +729,7 @@ impl TransferManager {
             )
             .await;
 
-        self.finalize_task_result(task_id, result)?;
-
-        Ok(self.find_task(task_id).unwrap_or(original))
+        self.finalize_task_result(task_id, result)
     }
 
     /// Enqueues and executes upload tasks for a local file or directory tree.
@@ -1794,25 +1792,102 @@ mod tests {
     }
 
     #[test]
-    fn finalize_removed_task_preserves_result_and_clears_tracking() {
-        for result in [
-            Ok(()),
-            Err(TransferError::Cancelled),
-            Err(TransferError::CleanupFailed {
-                message: "cleanup failed".into(),
-            }),
-        ] {
-            let manager = TransferManager::new(&AppConfig::default());
-            manager.register_cancellation_flag(24);
-            manager.mark_in_flight(24);
-            let expected = result.as_ref().err().map(ToString::to_string);
+    fn finalize_cleared_task_reports_missing_or_preserves_error_and_clears_tracking() {
+        for direction in [TransferDirection::Upload, TransferDirection::Download] {
+            for clear_completed in [false, true] {
+                for result in [
+                    Ok(()),
+                    Err(TransferError::Cancelled),
+                    Err(TransferError::CleanupFailed {
+                        message: "cleanup failed".into(),
+                    }),
+                    Err(TransferError::RetriesExhausted {
+                        attempts: 1,
+                        message: "transfer failed".into(),
+                    }),
+                ] {
+                    let manager = TransferManager::new(&AppConfig::default());
+                    let task = manager.make_task(
+                        42,
+                        direction,
+                        Path::new("/tmp/file.txt"),
+                        "/remote/file.txt",
+                    );
+                    let task_id = task.id;
+                    manager.insert_task(task);
+                    manager.register_cancellation_flag(task_id);
+                    manager.mark_in_flight(task_id);
+                    manager.update_task_status(task_id, TransferStatus::InProgress);
 
-            let actual = manager.finalize_task_result(24, result);
+                    // Clear-completed can remove a synchronously cancelled task
+                    // while its transfer future is still unwinding.
+                    if clear_completed {
+                        manager.cancel_transfer(task_id).unwrap();
+                        manager.clear_completed_transfers();
+                    } else {
+                        manager.clear_all_transfers().unwrap();
+                    }
+                    assert!(manager.get_transfer_queue().is_empty());
+                    assert!(manager.is_cancelled(task_id));
+                    assert!(manager.is_in_flight(task_id));
+                    let expected = match &result {
+                        Ok(()) => TransferError::TaskNotFound { task_id }.to_string(),
+                        Err(error) => error.to_string(),
+                    };
 
-            assert_eq!(actual.as_ref().err().map(ToString::to_string), expected);
-            assert!(!manager.is_cancelled(24));
-            assert!(!manager.is_in_flight(24));
-            assert!(manager.get_transfer_queue().is_empty());
+                    let error = manager
+                        .finalize_task_result(task_id, result)
+                        .expect_err("a cleared task must never return a stale Pending task");
+
+                    assert_eq!(error.to_string(), expected);
+                    assert!(!manager.is_in_flight(task_id));
+                    assert!(manager.cancellation_flags.lock().unwrap().is_empty());
+                    assert!(manager.get_transfer_queue().is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn finalized_task_snapshot_survives_queue_clear() {
+        for direction in [TransferDirection::Upload, TransferDirection::Download] {
+            for clear_completed in [false, true] {
+                let manager = TransferManager::new(&AppConfig::default());
+                let original = manager.make_task(
+                    42,
+                    direction,
+                    Path::new("/tmp/file.txt"),
+                    "/remote/file.txt",
+                );
+                let task_id = original.id;
+                manager.insert_task(original.clone());
+                manager.register_cancellation_flag(task_id);
+                manager.mark_in_flight(task_id);
+                manager.update_task_status(task_id, TransferStatus::InProgress);
+                manager.set_task_total_bytes(task_id, 1024);
+                manager.update_task_progress(task_id, 512);
+
+                let finalized = manager.finalize_task_result(task_id, Ok(())).unwrap();
+                // A clear after finalization must not affect the value returned
+                // to run_upload_task/run_download_task's caller.
+                if clear_completed {
+                    manager.clear_completed_transfers();
+                } else {
+                    manager.clear_all_transfers().unwrap();
+                }
+
+                assert!(manager.get_transfer_queue().is_empty());
+                assert_eq!(finalized.id, original.id);
+                assert_eq!(finalized.session_id, original.session_id);
+                assert_eq!(finalized.direction, original.direction);
+                assert_eq!(finalized.local_path, original.local_path);
+                assert_eq!(finalized.remote_path, original.remote_path);
+                assert_eq!(finalized.status, TransferStatus::Completed);
+                assert_eq!(finalized.total_bytes, 1024);
+                assert_eq!(finalized.bytes_transferred, 1024);
+                assert!(!manager.is_in_flight(task_id));
+                assert!(manager.cancellation_flags.lock().unwrap().is_empty());
+            }
         }
     }
 

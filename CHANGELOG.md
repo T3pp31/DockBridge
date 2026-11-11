@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Transfer results no longer fall back to stale Pending tasks when the queue is
+  cleared concurrently (#1200).
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
 - Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
 
