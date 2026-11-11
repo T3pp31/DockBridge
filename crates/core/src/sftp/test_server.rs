@@ -28,6 +28,7 @@ use crate::ssh::{ConnectionProfile, HostKeyPrompt, SshSession};
 pub struct FailureConfig {
     /// Post-handshake connection phases that can stop replying in timeout tests.
     pub hang_auth: AtomicBool,
+    pub hang_keyboard_interactive_response: AtomicBool,
     pub hang_channel_open: AtomicBool,
     pub hang_subsystem_request: AtomicBool,
     pub hang_sftp_init: AtomicBool,
@@ -36,6 +37,8 @@ pub struct FailureConfig {
     pub fail_remote_read: AtomicBool,
     pub fail_remote_close: AtomicBool,
     pub fail_remote_rename: AtomicBool,
+    /// Fails a single REMOVE request so tests can exercise partial cleanup errors.
+    pub fail_remote_remove: AtomicBool,
     /// When set, `realpath` reports a connection-lost style failure so tests
     /// can exercise health-monitor cleanup.
     pub fail_realpath_connection_lost: AtomicBool,
@@ -116,14 +119,13 @@ pub struct TestSftpServer {
 }
 
 struct ServerFactory {
-    clients: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
     root: PathBuf,
     failures: Arc<FailureConfig>,
 }
 
-#[derive(Clone)]
 struct ServerImpl {
-    clients: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
+    // Channel IDs are scoped to a single SSH connection.
+    channels: HashMap<ChannelId, Channel<Msg>>,
     root: PathBuf,
     failures: Arc<FailureConfig>,
 }
@@ -133,7 +135,7 @@ impl russh::server::Server for ServerFactory {
 
     fn new_client(&mut self, _: Option<SocketAddr>) -> Self::Handler {
         ServerImpl {
-            clients: Arc::clone(&self.clients),
+            channels: HashMap::new(),
             root: self.root.clone(),
             failures: Arc::clone(&self.failures),
         }
@@ -189,13 +191,21 @@ impl russh::server::Handler for ServerImpl {
                 )]),
             });
         };
+        let answers: Vec<Vec<u8>> = response.map(|item| item.to_vec()).collect();
+        if self
+            .failures
+            .hang_keyboard_interactive_response
+            .load(Ordering::SeqCst)
+        {
+            self.failures.connection_phase_started.notify_one();
+            std::future::pending::<()>().await;
+        }
         let expected = self
             .failures
             .keyboard_interactive_secret
             .lock()
             .unwrap()
             .clone();
-        let answers: Vec<Vec<u8>> = response.map(|item| item.to_vec()).collect();
         if answers.len() == 1 && answers[0] == expected.as_bytes() {
             Ok(Auth::Accept)
         } else {
@@ -215,7 +225,7 @@ impl russh::server::Handler for ServerImpl {
             self.failures.connection_phase_started.notify_one();
             std::future::pending::<()>().await;
         }
-        self.clients.lock().unwrap().insert(channel.id(), channel);
+        self.channels.insert(channel.id(), channel);
         Ok(true)
     }
 
@@ -234,7 +244,10 @@ impl russh::server::Handler for ServerImpl {
             return Ok(());
         }
 
-        let channel = self.clients.lock().unwrap().remove(&channel_id).unwrap();
+        let Some(channel) = self.channels.remove(&channel_id) else {
+            session.channel_failure(channel_id)?;
+            return Ok(());
+        };
         let sftp = SftpHandler {
             root: self.root.clone(),
             failures: Arc::clone(&self.failures),
@@ -320,6 +333,14 @@ impl SftpHandler {
         }
     }
 
+    fn metadata_error_status(err: std::io::Error) -> StatusCode {
+        match err.kind() {
+            std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+            std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+            _ => StatusCode::Failure,
+        }
+    }
+
     /// Like `attrs_for`, but follows symlinks (matching SFTP `STAT`, which
     /// resolves the target for the attributes).
     fn attrs_for_follow(path: &Path) -> FileAttributes {
@@ -380,7 +401,7 @@ impl SftpHandler {
         Ok(entries)
     }
 
-    fn io_error_status(err: std::io::Error) -> StatusCode {
+    fn mkdir_error_status(err: std::io::Error) -> StatusCode {
         match err.kind() {
             std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
             std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
@@ -394,6 +415,14 @@ impl SftpHandler {
             status_code: StatusCode::Ok,
             error_message: "Ok".to_string(),
             language_tag: "en-US".to_string(),
+        }
+    }
+
+    fn io_error_status(err: std::io::Error) -> StatusCode {
+        match err.kind() {
+            std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+            std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+            _ => StatusCode::Failure,
         }
     }
 
@@ -456,9 +485,7 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn stat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
         let local = self.resolve(&path);
-        if !local.exists() {
-            return Err(StatusCode::NoSuchFile);
-        }
+        std::fs::metadata(&local).map_err(Self::metadata_error_status)?;
         Ok(Attrs {
             id,
             attrs: Self::attrs_for_follow(&local),
@@ -467,9 +494,7 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
         let local = self.resolve(&path);
-        if std::fs::symlink_metadata(&local).is_err() {
-            return Err(StatusCode::NoSuchFile);
-        }
+        std::fs::symlink_metadata(&local).map_err(Self::metadata_error_status)?;
         Ok(Attrs {
             id,
             attrs: Self::attrs_for(&local),
@@ -726,12 +751,23 @@ impl russh_sftp::server::Handler for SftpHandler {
 
         fs::create_dir(&local)
             .await
-            .map_err(|_| StatusCode::Failure)?;
+            .map_err(Self::mkdir_error_status)?;
         Ok(Self::ok_status(id))
     }
 
     async fn remove(&mut self, id: u32, path: String) -> Result<Status, Self::Error> {
         self.failures.remove_count.fetch_add(1, Ordering::Relaxed);
+        if self
+            .failures
+            .fail_remote_remove
+            .swap(false, Ordering::SeqCst)
+        {
+            return Ok(Self::err_status(
+                id,
+                StatusCode::PermissionDenied,
+                "simulated remove failure",
+            ));
+        }
         let local = self.resolve(&path);
         if let Err(err) = fs::remove_file(&local).await {
             // Match real servers: only a missing target is NoSuchFile; other
@@ -875,7 +911,7 @@ impl russh_sftp::server::Handler for SftpHandler {
                 // posix-rename replaces an existing destination atomically.
                 fs::rename(&from, &to)
                     .await
-                    .map_err(|_| StatusCode::Failure)?;
+                    .map_err(Self::io_error_status)?;
                 Ok(Packet::Status(Self::ok_status(id)))
             }
             _ => Err(StatusCode::OpUnsupported),
@@ -951,7 +987,11 @@ impl russh_sftp::server::Handler for SftpHandler {
         #[cfg(unix)]
         {
             let local = self.resolve(&path);
-            let target = std::fs::read_link(&local).map_err(|_| StatusCode::Failure)?;
+            let target = std::fs::read_link(&local).map_err(|err| match err.kind() {
+                std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+                std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+                _ => StatusCode::Failure,
+            })?;
             // Return the link target as the remote-relative path.
             let remote_target = target
                 .strip_prefix(&self.root)
@@ -986,7 +1026,6 @@ impl TestSftpServer {
         failures
             .advertise_posix_rename
             .store(true, Ordering::SeqCst);
-        let clients = Arc::new(Mutex::new(HashMap::new()));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
@@ -1019,7 +1058,6 @@ impl TestSftpServer {
                     }
                 };
                 let mut factory = ServerFactory {
-                    clients: Arc::clone(&clients),
                     root: server_root.clone(),
                     failures: Arc::clone(&server_failures),
                 };
@@ -1172,7 +1210,8 @@ pub fn list_partial_paths(dir: &Path) -> Vec<PathBuf> {
     }
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        // Inspect the entry itself: directory symlinks may form cycles or point outside the root.
+        if entry.file_type().is_ok_and(|file_type| file_type.is_dir()) {
             paths.extend(list_partial_paths(&path));
         } else if is_partial_file_name(
             path.file_name()
@@ -1229,6 +1268,314 @@ fn set_file_times_by_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use russh::client;
+    use russh::ChannelMsg;
+    use russh_sftp::client::SftpSession;
+    struct AcceptServerKey;
+
+    impl client::Handler for AcceptServerKey {
+        type Error = russh::Error;
+
+        async fn check_server_key(
+            &mut self,
+            _: &russh::keys::PublicKey,
+        ) -> Result<bool, Self::Error> {
+            Ok(true)
+        }
+    }
+
+    async fn connect_ssh_client(addr: SocketAddr) -> client::Handle<AcceptServerKey> {
+        let mut client =
+            client::connect(Arc::new(client::Config::default()), addr, AcceptServerKey)
+                .await
+                .unwrap();
+        assert!(client
+            .authenticate_password("test", "test")
+            .await
+            .unwrap()
+            .success());
+        client
+    }
+
+    async fn start_sftp(mut channel: Channel<client::Msg>) -> SftpSession {
+        channel.request_subsystem(true, "sftp").await.unwrap();
+        assert!(matches!(channel.wait().await, Some(ChannelMsg::Success)));
+        SftpSession::new(channel.into_stream()).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn overlapping_connections_keep_channels_independent() {
+        tokio::time::timeout(
+            Duration::from_secs(AppConfig::default().connection_timeout_secs),
+            async {
+                let server = TestSftpServer::start().await;
+                server
+                    .write_remote_file("/first", b"first connection")
+                    .await;
+                server
+                    .write_remote_file("/second", b"second connection")
+                    .await;
+                let first = connect_ssh_client(server.addr).await;
+                let second = connect_ssh_client(server.addr).await;
+
+                // Open BOTH channels before requesting either subsystem. A
+                // shared map would overwrite the first entry deterministically.
+                let first_channel = first.channel_open_session().await.unwrap();
+                let second_channel = second.channel_open_session().await.unwrap();
+                assert_eq!(first_channel.id(), second_channel.id());
+
+                let first_sftp = start_sftp(first_channel).await;
+                let second_sftp = start_sftp(second_channel).await;
+                let (first_data, second_data) =
+                    tokio::join!(first_sftp.read("/first"), second_sftp.read("/second"));
+                assert_eq!(first_data.unwrap(), b"first connection");
+                assert_eq!(second_data.unwrap(), b"second connection");
+
+                // Later connections must remain usable as well.
+                let third = connect_ssh_client(server.addr).await;
+                let third_sftp = start_sftp(third.channel_open_session().await.unwrap()).await;
+                assert_eq!(
+                    third_sftp.read("/first").await.unwrap(),
+                    b"first connection"
+                );
+            },
+        )
+        .await
+        .expect("overlapping SFTP connections should not hang");
+    }
+
+    #[tokio::test]
+    async fn subsystem_rejections_preserve_connection_and_active_sftp() {
+        tokio::time::timeout(
+            Duration::from_secs(AppConfig::default().connection_timeout_secs),
+            async {
+                let server = TestSftpServer::start().await;
+                server.write_remote_file("/file", b"still usable").await;
+                let client = connect_ssh_client(server.addr).await;
+                let mut channel = client.channel_open_session().await.unwrap();
+
+                // Unsupported subsystems must not consume the pending channel.
+                channel
+                    .request_subsystem(true, "unsupported")
+                    .await
+                    .unwrap();
+                assert!(matches!(channel.wait().await, Some(ChannelMsg::Failure)));
+                channel.request_subsystem(true, "sftp").await.unwrap();
+                assert!(matches!(channel.wait().await, Some(ChannelMsg::Success)));
+
+                // The first SFTP request has removed this channel from the map.
+                // A repeated request must fail rather than panic on None.
+                channel.request_subsystem(true, "sftp").await.unwrap();
+                assert!(matches!(channel.wait().await, Some(ChannelMsg::Failure)));
+                let sftp = SftpSession::new(channel.into_stream()).await.unwrap();
+                assert_eq!(sftp.read("/file").await.unwrap(), b"still usable");
+
+                // The rejection must not tear down the SSH connection or
+                // interfere with a second channel on that same connection.
+                let other_sftp = start_sftp(client.channel_open_session().await.unwrap()).await;
+                assert_eq!(other_sftp.read("/file").await.unwrap(), b"still usable");
+                assert_eq!(sftp.read("/file").await.unwrap(), b"still usable");
+            },
+        )
+        .await
+        .expect("rejected subsystem requests should not hang or kill the connection");
+    }
+
+    fn metadata_handler(root: &Path) -> SftpHandler {
+        SftpHandler {
+            root: root.to_path_buf(),
+            failures: Arc::new(FailureConfig::default()),
+            handles: HashMap::new(),
+            dir_handles: HashMap::new(),
+            next_handle: 1,
+        }
+    }
+
+    #[test]
+    fn metadata_errors_preserve_status_codes() {
+        use std::io::ErrorKind;
+
+        // Synthetic errors also cover permission denial when tests run as root.
+        for (kind, expected) in [
+            (ErrorKind::NotFound, StatusCode::NoSuchFile),
+            (ErrorKind::PermissionDenied, StatusCode::PermissionDenied),
+            (ErrorKind::InvalidInput, StatusCode::Failure),
+            (ErrorKind::Other, StatusCode::Failure),
+        ] {
+            assert_eq!(
+                SftpHandler::metadata_error_status(std::io::Error::from(kind)),
+                expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stat_and_lstat_distinguish_missing_paths_from_other_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut handler = metadata_handler(directory.path());
+
+        // A NUL in a pathname reliably produces InvalidInput without requiring
+        // a particular filesystem or process privilege level.
+        for (path, expected) in [
+            ("/missing", StatusCode::NoSuchFile),
+            ("/invalid\0path", StatusCode::Failure),
+        ] {
+            assert_eq!(handler.stat(1, path.into()).await.unwrap_err(), expected);
+            assert_eq!(handler.lstat(2, path.into()).await.unwrap_err(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn stat_and_lstat_preserve_file_and_directory_attributes() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("file"), b"data").unwrap();
+        let mut handler = metadata_handler(directory.path());
+
+        for (path, is_dir, size) in [("/file", false, Some(4)), ("/", true, None)] {
+            let stat = handler.stat(7, path.into()).await.unwrap();
+            let lstat = handler.lstat(8, path.into()).await.unwrap();
+            assert_eq!(stat.id, 7);
+            assert_eq!(lstat.id, 8);
+            for attrs in [stat.attrs, lstat.attrs] {
+                assert_eq!(attrs.file_type().is_dir(), is_dir);
+                assert!(!attrs.file_type().is_symlink());
+                assert_eq!(attrs.size, size);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stat_and_lstat_preserve_symlink_following_behavior() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("target"), b"data").unwrap();
+        std::os::unix::fs::symlink("target", directory.path().join("link")).unwrap();
+        std::os::unix::fs::symlink("missing", directory.path().join("dangling")).unwrap();
+        let mut handler = metadata_handler(directory.path());
+
+        let stat = handler.stat(1, "/link".into()).await.unwrap();
+        assert!(!stat.attrs.file_type().is_dir());
+        assert!(!stat.attrs.file_type().is_symlink());
+        assert_eq!(stat.attrs.size, Some(4));
+        for path in ["/link", "/dangling"] {
+            let lstat = handler.lstat(2, path.into()).await.unwrap();
+            assert!(lstat.attrs.file_type().is_symlink());
+        }
+        assert_eq!(
+            handler.stat(3, "/dangling".into()).await.unwrap_err(),
+            StatusCode::NoSuchFile
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stat_and_lstat_report_permission_denied_for_unsearchable_parent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Root bypasses directory search permissions; the mapping itself is
+        // still tested unconditionally in metadata_errors_preserve_status_codes.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("directory search permissions cannot be tested as root");
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("restricted");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::write(parent.join("file"), b"data").unwrap();
+        let mut handler = metadata_handler(directory.path());
+        let permissions = std::fs::metadata(&parent).unwrap().permissions();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let stat = handler.stat(1, "/restricted/file".into()).await;
+        let lstat = handler.lstat(2, "/restricted/file".into()).await;
+
+        // Restore permissions before assertions so failures do not break cleanup.
+        std::fs::set_permissions(&parent, permissions).unwrap();
+        assert_eq!(stat.unwrap_err(), StatusCode::PermissionDenied);
+        assert_eq!(lstat.unwrap_err(), StatusCode::PermissionDenied);
+    }
+    use russh_sftp::client::error::Error as SftpClientError;
+
+    #[test]
+    fn mkdir_errors_are_classified() {
+        use std::io::ErrorKind;
+
+        // Synthetic errors also cover PermissionDenied when tests run as root,
+        // without relying on platform-specific directory permissions.
+        for (kind, expected) in [
+            (ErrorKind::NotFound, StatusCode::NoSuchFile),
+            (ErrorKind::PermissionDenied, StatusCode::PermissionDenied),
+            (ErrorKind::AlreadyExists, StatusCode::Failure),
+            (ErrorKind::Other, StatusCode::Failure),
+        ] {
+            assert_eq!(
+                SftpHandler::mkdir_error_status(std::io::Error::from(kind)),
+                expected,
+                "unexpected MKDIR status for {kind:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mkdir_reports_missing_parent_and_succeeds_after_parent_is_created() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let sftp = session.sftp();
+
+        let err = sftp.create_dir("/missing/child").await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SftpClientError::Status(ref status)
+                    if status.status_code == StatusCode::NoSuchFile
+            ),
+            "unexpected MKDIR error: {err:?}"
+        );
+        assert!(!server.root.join("missing").exists());
+
+        sftp.create_dir("/missing").await.unwrap();
+        sftp.create_dir("/missing/child").await.unwrap();
+        assert!(server.root.join("missing/child").is_dir());
+    }
+
+    #[tokio::test]
+    async fn mkdir_preserves_existing_paths_and_one_shot_failure() {
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/existing-file", b"keep").await;
+        let session = server.connect_session().await;
+        let sftp = session.sftp();
+
+        for path in ["/upload", "/existing-file"] {
+            let err = sftp.create_dir(path).await.unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    SftpClientError::Status(ref status)
+                        if status.status_code == StatusCode::Failure
+                ),
+                "unexpected MKDIR error for {path}: {err:?}"
+            );
+        }
+        assert!(server.root.join("upload").is_dir());
+        assert_eq!(
+            fs::read(server.root.join("existing-file")).await.unwrap(),
+            b"keep"
+        );
+
+        server.failures.fail_mkdir.store(true, Ordering::SeqCst);
+        let err = sftp.create_dir("/injected").await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SftpClientError::Status(ref status)
+                    if status.status_code == StatusCode::Failure
+            ),
+            "unexpected injected MKDIR error: {err:?}"
+        );
+        assert!(!server.root.join("injected").exists());
+        sftp.create_dir("/injected").await.unwrap();
+        assert!(server.root.join("injected").is_dir());
+    }
     use russh_sftp::server::Handler as _;
 
     fn sftp_handler(root: &Path) -> SftpHandler {
@@ -1239,6 +1586,97 @@ mod tests {
             dir_handles: HashMap::new(),
             next_handle: 1,
         }
+    }
+
+    #[test]
+    fn list_partial_paths_recurses_into_real_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(list_partial_paths(directory.path()).is_empty());
+        assert!(list_partial_paths(&directory.path().join("missing")).is_empty());
+
+        let nested = directory
+            .path()
+            .join("nested/.dockbridge-directory.partial");
+        std::fs::create_dir_all(&nested).unwrap();
+        let mut expected = vec![
+            directory.path().join(".dockbridge-root.partial"),
+            nested.join(".dockbridge-nested.partial"),
+        ];
+        for path in &expected {
+            std::fs::write(path, b"partial").unwrap();
+        }
+        for name in [
+            "ordinary.txt",
+            ".dockbridge-no-extension",
+            "unrelated.partial",
+        ] {
+            std::fs::write(nested.join(name), b"not a partial").unwrap();
+        }
+
+        let mut actual = list_partial_paths(directory.path());
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_partial_paths_does_not_follow_directory_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let nested = directory.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let partial = nested.join(".dockbridge-inside.partial");
+        std::fs::write(&partial, b"inside").unwrap();
+        std::fs::write(
+            outside.path().join(".dockbridge-outside.partial"),
+            b"outside",
+        )
+        .unwrap();
+
+        // Isolate the links so a regression cannot expand multiple cycles exponentially.
+        for (link, target) in [
+            (directory.path().join("loop"), PathBuf::from(".")),
+            (nested.join("self"), PathBuf::from(".")),
+            (nested.join("parent"), PathBuf::from("..")),
+            (directory.path().join("alias"), nested.clone()),
+            (
+                directory.path().join("outside"),
+                outside.path().to_path_buf(),
+            ),
+        ] {
+            symlink(target, &link).unwrap();
+            assert_eq!(
+                list_partial_paths(directory.path()),
+                vec![partial.clone()],
+                "link={link:?}"
+            );
+            std::fs::remove_file(link).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_partial_paths_preserves_partial_symlink_entries() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("target");
+        std::fs::write(&target, b"data").unwrap();
+        let mut expected = vec![
+            directory.path().join(".dockbridge-link.partial"),
+            directory.path().join(".dockbridge-broken.partial"),
+        ];
+        symlink(&target, &expected[0]).unwrap();
+        symlink("missing", &expected[1]).unwrap();
+        symlink(&target, directory.path().join("ordinary-link")).unwrap();
+
+        let mut actual = list_partial_paths(directory.path());
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -1353,6 +1791,162 @@ mod tests {
             }
         }
         assert_eq!(std::fs::read(&path).unwrap(), b"da\0\0\0\0");
+    }
+
+    #[test]
+    fn io_errors_map_to_sftp_status_codes() {
+        use std::io::{Error, ErrorKind};
+
+        for (kind, expected) in [
+            (ErrorKind::NotFound, StatusCode::NoSuchFile),
+            (ErrorKind::PermissionDenied, StatusCode::PermissionDenied),
+            (ErrorKind::Other, StatusCode::Failure),
+        ] {
+            assert_eq!(SftpHandler::io_error_status(Error::from(kind)), expected);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_errno_maps_to_sftp_status_codes() {
+        // Test permission errors without depending on the test runner's privileges.
+        for (errno, expected) in [
+            (libc::ENOENT, StatusCode::NoSuchFile),
+            (libc::EACCES, StatusCode::PermissionDenied),
+            (libc::EPERM, StatusCode::PermissionDenied),
+            (libc::EISDIR, StatusCode::Failure),
+            (libc::ENOTDIR, StatusCode::Failure),
+            (libc::EXDEV, StatusCode::Failure),
+        ] {
+            assert_eq!(
+                SftpHandler::io_error_status(std::io::Error::from_raw_os_error(errno)),
+                expected,
+                "errno {errno}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn posix_rename_errors_preserve_status_and_files() {
+        use russh_sftp::client::error::Error as SftpClientError;
+
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/source.txt", b"source").await;
+        server.write_remote_file("/target.txt", b"original").await;
+        server
+            .write_remote_file("/directory/child.txt", b"child")
+            .await;
+        let session = server.connect_session().await;
+
+        for (from, to, expected) in [
+            ("/absent.txt", "/target.txt", StatusCode::NoSuchFile),
+            ("/absent/source.txt", "/target.txt", StatusCode::NoSuchFile),
+            ("/source.txt", "/absent/target.txt", StatusCode::NoSuchFile),
+            ("/source.txt", "/directory", StatusCode::Failure),
+        ] {
+            let err = session.sftp().posix_rename(from, to).await.unwrap_err();
+            let SftpClientError::Status(status) = err else {
+                panic!("expected SFTP status for {from} -> {to}, got {err:?}");
+            };
+            assert_eq!(status.status_code, expected, "{from} -> {to}");
+            assert_eq!(
+                fs::read(server.root.join("source.txt")).await.unwrap(),
+                b"source"
+            );
+            assert_eq!(
+                fs::read(server.root.join("target.txt")).await.unwrap(),
+                b"original"
+            );
+            assert_eq!(
+                fs::read(server.root.join("directory/child.txt"))
+                    .await
+                    .unwrap(),
+                b"child"
+            );
+            assert!(!server.root.join("absent").exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn posix_rename_still_replaces_existing_destination() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/source.txt", b"replacement")
+            .await;
+        server.write_remote_file("/target.txt", b"original").await;
+        let session = server.connect_session().await;
+
+        assert!(session
+            .sftp()
+            .posix_rename("/source.txt", "/target.txt")
+            .await
+            .unwrap());
+        assert!(!server.root.join("source.txt").exists());
+        assert_eq!(
+            fs::read(server.root.join("target.txt")).await.unwrap(),
+            b"replacement"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn readlink_missing_paths_return_no_such_file() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+
+        for path in ["/missing-link", "/missing-parent/link"] {
+            let err = session.sftp().read_link(path).await.unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    russh_sftp::client::error::Error::Status(ref status)
+                        if status.status_code == StatusCode::NoSuchFile
+                ),
+                "READLINK {path}: {err:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn readlink_non_symlink_paths_return_failure() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/file.txt", b"data")
+            .await;
+        let session = server.connect_session().await;
+
+        for path in ["/download/file.txt", "/download"] {
+            let err = session.sftp().read_link(path).await.unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    russh_sftp::client::error::Error::Status(ref status)
+                        if status.status_code == StatusCode::Failure
+                ),
+                "READLINK {path}: {err:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn readlink_returns_stored_targets_including_dangling_links() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/download/target.txt", b"data")
+            .await;
+        let session = server.connect_session().await;
+
+        for (link, target) in [
+            ("/download/absolute-link", "/download/target.txt"),
+            ("/download/relative-link", "target.txt"),
+            ("/download/dangling-absolute-link", "/download/missing.txt"),
+            ("/download/dangling-relative-link", "missing.txt"),
+        ] {
+            session.sftp().symlink(link, target).await.unwrap();
+            assert_eq!(session.sftp().read_link(link).await.unwrap(), target);
+        }
     }
 
     #[cfg(unix)]
