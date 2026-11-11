@@ -1248,9 +1248,10 @@ mod tests {
     }
 
     async fn connect_ssh_client(addr: SocketAddr) -> client::Handle<AcceptServerKey> {
-        let mut client = client::connect(Arc::new(client::Config::default()), addr, AcceptServerKey)
-            .await
-            .unwrap();
+        let mut client =
+            client::connect(Arc::new(client::Config::default()), addr, AcceptServerKey)
+                .await
+                .unwrap();
         assert!(client
             .authenticate_password("test", "test")
             .await
@@ -1271,8 +1272,12 @@ mod tests {
             Duration::from_secs(AppConfig::default().connection_timeout_secs),
             async {
                 let server = TestSftpServer::start().await;
-                server.write_remote_file("/first", b"first connection").await;
-                server.write_remote_file("/second", b"second connection").await;
+                server
+                    .write_remote_file("/first", b"first connection")
+                    .await;
+                server
+                    .write_remote_file("/second", b"second connection")
+                    .await;
                 let first = connect_ssh_client(server.addr).await;
                 let second = connect_ssh_client(server.addr).await;
 
@@ -1292,7 +1297,10 @@ mod tests {
                 // Later connections must remain usable as well.
                 let third = connect_ssh_client(server.addr).await;
                 let third_sftp = start_sftp(third.channel_open_session().await.unwrap()).await;
-                assert_eq!(third_sftp.read("/first").await.unwrap(), b"first connection");
+                assert_eq!(
+                    third_sftp.read("/first").await.unwrap(),
+                    b"first connection"
+                );
             },
         )
         .await
@@ -1310,7 +1318,10 @@ mod tests {
                 let mut channel = client.channel_open_session().await.unwrap();
 
                 // Unsupported subsystems must not consume the pending channel.
-                channel.request_subsystem(true, "unsupported").await.unwrap();
+                channel
+                    .request_subsystem(true, "unsupported")
+                    .await
+                    .unwrap();
                 assert!(matches!(channel.wait().await, Some(ChannelMsg::Failure)));
                 channel.request_subsystem(true, "sftp").await.unwrap();
                 assert!(matches!(channel.wait().await, Some(ChannelMsg::Success)));
