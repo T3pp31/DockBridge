@@ -1648,12 +1648,9 @@ final class MainViewModel: ObservableObject {
     }
 
     func requestDeleteRemote(item: RemoteFileRecord) {
-        if settings.loadConfig().confirmBeforeDelete {
-            pendingDeleteRemotePath = item.path
-            showDeleteConfirmation = true
-        } else {
-            Task { await deleteRemote(path: item.path) }
-        }
+        // Remote deletion is irreversible, so confirmation cannot be disabled.
+        pendingDeleteRemotePath = item.path
+        showDeleteConfirmation = true
     }
 
     func confirmDeleteRemote() async {
@@ -1682,6 +1679,11 @@ final class MainViewModel: ObservableObject {
         let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard RemotePath.isValidEntryName(name) else {
             errorMessage = RemoteEntryNameError.invalidCharacters.localizedDescription
+            return
+        }
+        guard name != target.name else {
+            renameTarget = nil
+            renameText = ""
             return
         }
         guard let parent = try? RemotePath.parent(of: target.path) else {
