@@ -43,7 +43,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Publish SBOM and checksum files with readable `0644` permissions instead of staging-only `0600` (#1172)
 - Report keychain signing identity query failures separately from missing certificates and preserve `security` diagnostics (#1173)
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
-- Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
 - 外部ドロップで一部ファイルのセキュリティスコープを取得できなかった場合に、転送後も対象ファイル名を通知するよう修正 (#1189)
 - Allow ExpandingFrame content to grow and shrink after measurement in scroll containers (#1185)
 - Avoid mirroring unreadable local directories, repeated local symlink targets,
