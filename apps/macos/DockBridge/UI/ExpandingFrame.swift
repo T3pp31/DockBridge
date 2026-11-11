@@ -10,12 +10,9 @@ struct ExpandingFrame<Content: View>: View {
             // Draw content even before a size is measured so a parent that
             // proposes no explicit size (e.g. vertical ScrollView) can derive
             // a nonzero frame from the content itself (issue #775).
+            // Keep the measured size as an output, not a fixed proposal: on an
+            // unspecified axis, the content must remain free to change its ideal size.
             content(size)
-                .frame(
-                    width: size.width > 0 ? size.width : nil,
-                    height: size.height > 0 ? size.height : nil,
-                    alignment: .topLeading
-                )
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .clipped()
