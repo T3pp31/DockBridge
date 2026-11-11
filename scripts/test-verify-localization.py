@@ -53,6 +53,14 @@ class LocalizationTests(unittest.TestCase):
             ("%%@ %d", "%d", True),
             ("%S", "%s", False),
             ("%Lf", "%f", False),
+            ("% d", "%d", True),
+            ("% d", "%@", False),
+            ("%'d", "%d", True),
+            ("%'d", "%@", False),
+            ("%+#08.2f", "%f", True),
+            ("%+#08.2f", "%d", False),
+            ("%@files", "%@個", True),
+            ("%@files", "個", False),
         ]
         for source, target, valid in cases:
             with self.subTest(source=source, target=target):
@@ -178,6 +186,63 @@ class LocalizationTests(unittest.TestCase):
                         if not valid:
                             self.assertIn("ja format arguments", result.stderr)
                             self.assertIn(f"at {target_path} do not match", result.stderr)
+
+    def test_explicit_formats_allow_adjacent_units(self):
+        cases = [
+            ("%llds", "%lld秒"),
+            ("%1$ds", "%1$d秒"),
+            ("%08dms", "%dミリ秒"),
+            ("%.fms", "%fミリ秒"),
+            ("%*.*fms", "%3$*1$.*2$fミリ秒"),
+            ("%+dms", "%dミリ秒"),
+            ("%-dms", "%dミリ秒"),
+        ]
+        for source, target in cases:
+            with self.subTest(source=source, target=target):
+                result = self.verify({"stringUnit": {"value": source}},
+                                     {"stringUnit": {"value": target}})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                missing = self.verify({"stringUnit": {"value": source}},
+                                      {"stringUnit": {"value": "引数なし"}})
+                self.assertEqual(missing.returncode, 1, missing.stdout + missing.stderr)
+                self.assertIn("ja format arguments []", missing.stderr)
+                self.assertIn("do not match en", missing.stderr)
+
+    def test_literal_percent_in_words(self):
+        cases = [
+            ("50% off", "50%割引"),
+            ("100%CPU", "100%使用"),
+            ("100% Done", "100%完了"),
+            ("50%'off", "50%割引"),
+            ("100% disk", "100%ディスク"),
+            ("100% free", "100%空き"),
+            ("100%", "100%完了"),
+            ("100% ready", "100%準備完了"),
+        ]
+        for source, target in cases:
+            # Literal percentages can occur in either localization.
+            for english, japanese in ((source, target), (target, source)):
+                with self.subTest(english=english, japanese=japanese):
+                    result = self.verify({"stringUnit": {"value": english}},
+                                         {"stringUnit": {"value": japanese}})
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_literal_percent_does_not_hide_real_arguments(self):
+        cases = [
+            ("%@ is 50% off", "%@ は50%割引", 0),
+            ("%@ is 50% off", "%d は50%割引", 1),
+            ("%@ is 50% off", "50%割引", 1),
+            ("50% off: %d %@", "%2$@は50%割引（%1$d）", 0),
+            ("50% off: %d %@", "%@は50%割引", 1),
+        ]
+        for source, target, expected_code in cases:
+            with self.subTest(source=source, target=target):
+                result = self.verify({"stringUnit": {"value": source}},
+                                     {"stringUnit": {"value": target}})
+                self.assertEqual(result.returncode, expected_code, result.stdout + result.stderr)
+                if expected_code:
+                    self.assertIn("ja format arguments", result.stderr)
+                    self.assertIn("do not match en", result.stderr)
 
     def test_japanese_other_without_one(self):
         self.assertEqual(self.verify(plural(one="%lld item", other="%lld items"), plural(other="%lld個")).returncode, 0)

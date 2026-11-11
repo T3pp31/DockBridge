@@ -39,7 +39,7 @@ errors = []
 # Keep argument positions and length modifiers: %ld and %lld need distinct
 # argument types. A literal %% consumes no argument; dynamic width/precision do.
 format_pattern = re.compile(
-    r"%(?:%|(?:(?P<position>\d+)\$)?[+#0\- ']*"
+    r"%(?:%|(?:(?P<position>\d+)\$)?(?P<flags>[+#0\- ']*)"
     r"(?P<width>\*(?:\d+\$)?|\d+)?"
     r"(?:\.(?P<precision>\*(?:\d+\$)?|\d*))?"
     r"(?P<length>hh|h|ll|l|q|L|z|t|j)?"
@@ -62,6 +62,19 @@ def format_signature(value):
 
     for match in format_pattern.finditer(value):
         if match.group() == "%%":
+            continue
+        # Catalogs also contain plain UI text. A bare letter conversion must
+        # not consume the start of a word ("50% off", "100%CPU"). Explicit
+        # format syntax and %@ still allow adjacent text, e.g. "%llds".
+        explicit_format = any(
+            match.group(field) is not None
+            for field in ("position", "width", "precision", "length")
+        ) or bool(match.group("flags").strip(" '"))
+        if (
+            not explicit_format
+            and match.group("conversion") != "@"
+            and re.match(r"[A-Za-z]", value[match.end():match.end() + 1])
+        ):
             continue
         for field in ("width", "precision"):
             specifier = match.group(field)
