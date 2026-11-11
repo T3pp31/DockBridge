@@ -6208,7 +6208,9 @@ mod tests {
         );
         let saved_prefix = &payload[..chunk * 2 + 3];
         server.write_remote_file(&partial_path, saved_prefix).await;
-        server.write_remote_file(remote, b"existing destination").await;
+        server
+            .write_remote_file(remote, b"existing destination")
+            .await;
         server
             .failures
             .read_delay_ms
@@ -6255,7 +6257,9 @@ mod tests {
         let client = SftpClient::new(&session);
         let local_dir = tempfile::tempdir().unwrap();
         let local_path = local_dir.path().join("file.bin");
-        tokio::fs::write(&local_path, b"AAAABBBBCCCC").await.unwrap();
+        tokio::fs::write(&local_path, b"AAAABBBBCCCC")
+            .await
+            .unwrap();
         let remote = "/upload/file.bin";
         let partial_path = format!(
             "/upload/.dockbridge-{}.partial",
