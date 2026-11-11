@@ -104,6 +104,8 @@ jobs:
         run: python3 scripts/test-website-install.py
       - name: Test hello-world documentation credential flow
         run: python3 scripts/test-hello-world-docs.py
+      - name: Test macOS Rust test coverage
+        run: python3 scripts/test-ci-macos-rust.py -v
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
@@ -242,6 +244,9 @@ jobs:
           ./scripts/build-rust.sh x86_64-apple-darwin release
           lipo target/x86_64-apple-darwin/release/libdockbridge_uniffi.a \
             -verify_arch x86_64
+
+      - name: Test Rust workspace (all targets)
+        run: cargo test --workspace --all-targets
 
       - name: Install pinned XcodeGen
         run: |
