@@ -20,7 +20,7 @@ final class ConnectionListViewModel: ObservableObject {
     @Published var pendingEndpointChange: ProfileEndpointChange?
 
     private let store: ConnectionStore
-    private let keychain: KeychainService
+    private let keychain: any ProfileCredentialStoring
     private let bridge: RustBridgeService
     private let bookmarkService: SecurityScopedBookmarkService
     // Form credentials retained only for this view model's lifetime; never
@@ -29,7 +29,7 @@ final class ConnectionListViewModel: ObservableObject {
 
     private let rsaKeyInspector: @Sendable (
         ConnectionProfile,
-        KeychainService,
+        any ProfileCredentialStoring,
         SecurityScopedBookmarkService
     ) -> Bool?
     private let onRsaInspectionCompleted: ((Bool?) -> Void)?
@@ -57,12 +57,12 @@ final class ConnectionListViewModel: ObservableObject {
 
     init(
         store: ConnectionStore = .shared,
-        keychain: KeychainService = .shared,
+        keychain: any ProfileCredentialStoring = KeychainService.shared,
         bookmarkService: SecurityScopedBookmarkService = .shared,
         bridge: RustBridgeService,
         rsaKeyInspector: @escaping @Sendable (
             ConnectionProfile,
-            KeychainService,
+            any ProfileCredentialStoring,
             SecurityScopedBookmarkService
         ) -> Bool? = ConnectionListViewModel.inspectRsa,
         onRsaInspectionCompleted: ((Bool?) -> Void)? = nil
@@ -207,6 +207,7 @@ final class ConnectionListViewModel: ObservableObject {
     }
 
     func save(_ profile: ConnectionProfile, password: String?, passphrase: String?, saveSecrets: Bool = true) {
+        errorMessage = nil
         if profile.requiresPrivateKeyBookmark, !profile.hasPrivateKeyBookmark {
             errorMessage = String(localized: "Select the private key with Browse…. A security-scoped bookmark is required.")
             return
@@ -215,16 +216,19 @@ final class ConnectionListViewModel: ObservableObject {
         do {
             profiles = try store.upsert(profile)
             selectedProfileID = profile.id
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
 
-            // When Keychain storage is disabled, skip all secret operations so
-            // typed credentials are used only for the current session
-            // (issue #782).
-            guard saveSecrets else {
-                transientCredentials[profile.id] = (password, passphrase)
-                return
-            }
-            transientCredentials.removeValue(forKey: profile.id)
+        // When Keychain storage is disabled, skip all secret operations so
+        // typed credentials are used only for the current session (issue #782).
+        guard saveSecrets else {
+            transientCredentials[profile.id] = (password, passphrase)
+            return
+        }
 
+        do {
             let account = keychain.keychainAccount(for: profile.id, kind: "profile")
             switch profile.authType {
             case .password:
@@ -246,8 +250,18 @@ final class ConnectionListViewModel: ObservableObject {
                     }
                 }
             }
+            transientCredentials.removeValue(forKey: profile.id)
         } catch {
-            errorMessage = error.localizedDescription
+            // The form closes after saving. Keep the entered values usable for
+            // this session instead of falling back to stale Keychain secrets.
+            // Nil means unchanged; retain any existing session credentials then.
+            if password != nil || passphrase != nil {
+                transientCredentials[profile.id] = (password, passphrase)
+            }
+            errorMessage = String(
+                format: String(localized: "The connection profile was saved, but Keychain credentials could not be updated. Any entered credentials are available only for this session. %@"),
+                error.localizedDescription
+            )
         }
     }
 
@@ -637,7 +651,7 @@ final class ConnectionListViewModel: ObservableObject {
     /// inspected (missing bookmark / undecryptable key).
     private nonisolated static func inspectRsa(
         profile: ConnectionProfile,
-        keychain: KeychainService,
+        keychain: any ProfileCredentialStoring,
         bookmarkService: SecurityScopedBookmarkService
     ) -> Bool? {
         guard profile.privateKeyBookmark != nil else { return nil }
