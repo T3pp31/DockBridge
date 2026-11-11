@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
 - Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
+- Register prepared directory transfers atomically so Clear All cannot leave part of a batch queued (#1202)
 
 ## [v1.1.1] - 2026-07-24
 

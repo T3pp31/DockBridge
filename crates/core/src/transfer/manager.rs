@@ -305,6 +305,39 @@ impl TransferManager {
         }
     }
 
+    /// Publishes a prepared batch atomically with respect to cancellation and clearing.
+    fn register_prepared_tasks<'a>(
+        &self,
+        prepared: impl IntoIterator<Item = &'a TransferTask>,
+        overwrite_policy: TransferOverwritePolicy,
+    ) {
+        // Match clear_all_transfers' lock order. Keep the queue locked for the
+        // whole batch so a clear cannot remove a prefix and leave the rest queued.
+        let Ok(mut tasks) = self.tasks.lock() else {
+            return;
+        };
+        let Ok(mut flags) = self.cancellation_flags.lock() else {
+            return;
+        };
+        let Ok(removed) = self.removed_task_ids.lock() else {
+            return;
+        };
+        let Ok(mut policies) = self.overwrite_policies.lock() else {
+            return;
+        };
+
+        for task in prepared {
+            if removed.contains(&task.id) {
+                continue;
+            }
+            flags
+                .entry(task.id)
+                .or_insert_with(|| Arc::new(AtomicBool::new(false)));
+            policies.insert(task.id, overwrite_policy);
+            tasks.push(task.clone());
+        }
+    }
+
     /// Atomically verifies that `task_id` refers to a failed or cancelled task
     /// and removes it from the queue. Returns `None` when the task is missing,
     /// not retryable, or already removed by a concurrent retry (issue #757).
@@ -896,10 +929,7 @@ impl TransferManager {
                 }
             }
 
-            for task in &tasks {
-                self.register_task(task.clone(), overwrite_policy);
-                self.register_cancellation_flag(task.id);
-            }
+            self.register_prepared_tasks(&tasks, overwrite_policy);
 
             return Ok(PreparedEntryTasks {
                 tasks,
@@ -924,8 +954,7 @@ impl TransferManager {
             local_path,
             &remote_path,
         );
-        self.register_task(task.clone(), overwrite_policy);
-        self.register_cancellation_flag(task.id);
+        self.register_prepared_tasks(std::iter::once(&task), overwrite_policy);
         Ok(PreparedEntryTasks {
             tasks: vec![task],
             skipped: 0,
@@ -1115,10 +1144,7 @@ impl TransferManager {
                 }
             }
 
-            for task in &tasks {
-                self.register_task(task.clone(), overwrite_policy);
-                self.register_cancellation_flag(task.id);
-            }
+            self.register_prepared_tasks(&tasks, overwrite_policy);
 
             return Ok(PreparedEntryTasks {
                 tasks,
@@ -1138,8 +1164,7 @@ impl TransferManager {
             &local_path,
             &normalized,
         );
-        self.register_task(task.clone(), overwrite_policy);
-        self.register_cancellation_flag(task.id);
+        self.register_prepared_tasks(std::iter::once(&task), overwrite_policy);
         Ok(PreparedEntryTasks {
             tasks: vec![task],
             skipped: 0,
@@ -2286,6 +2311,73 @@ mod tests {
         assert!(manager.is_cancelled(1));
     }
 
+    #[test]
+    fn prepared_batch_registration_is_atomic_with_clear_all() {
+        let manager = TransferManager::new(&AppConfig::default());
+        let batch = [TransferDirection::Upload, TransferDirection::Download].map(|direction| {
+            manager.make_task(42, direction, Path::new("local.txt"), "/remote.txt")
+        });
+
+        std::thread::scope(|scope| {
+            let (clear_tx, clear_rx) = std::sync::mpsc::channel();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let manager_ref = &manager;
+            let clear = scope.spawn(move || {
+                clear_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                // The first task has been inserted, but the second has not.
+                // Neither clear nor cancel may observe this partial batch.
+                assert!(manager_ref.tasks.try_lock().is_err());
+                assert!(manager_ref.cancellation_flags.try_lock().is_err());
+                started_tx.send(()).unwrap();
+                manager_ref.clear_all_transfers().unwrap();
+            });
+
+            manager.register_prepared_tasks(
+                batch.iter().enumerate().map(|(index, task)| {
+                    if index == 1 {
+                        clear_tx.send(()).unwrap();
+                        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    }
+                    task
+                }),
+                TransferOverwritePolicy::FailIfExists,
+            );
+            clear.join().unwrap();
+        });
+
+        assert!(manager.get_transfer_queue().is_empty());
+        assert!(manager.overwrite_policies.lock().unwrap().is_empty());
+        for task in &batch {
+            assert!(manager.is_cancelled(task.id));
+            assert!(manager.removed_task_ids.lock().unwrap().contains(&task.id));
+            // Stale execution must not resurrect any member of the batch.
+            manager.register_task(task.clone(), TransferOverwritePolicy::FailIfExists);
+        }
+        manager.register_prepared_tasks(&batch, TransferOverwritePolicy::FailIfExists);
+        assert!(manager.get_transfer_queue().is_empty());
+        assert!(manager.overwrite_policies.lock().unwrap().is_empty());
+
+        // A new batch registered after the clear remains valid.
+        let later = manager.make_task(42, TransferDirection::Upload, Path::new("new"), "/new");
+        manager.register_prepared_tasks(std::iter::once(&later), TransferOverwritePolicy::Replace);
+        assert_eq!(manager.get_transfer_queue().len(), 1);
+        assert_eq!(manager.get_transfer_queue()[0].id, later.id);
+        assert!(!manager.is_cancelled(later.id));
+    }
+
+    #[test]
+    fn prepared_registration_preserves_existing_cancellation_flag() {
+        let manager = TransferManager::new(&AppConfig::default());
+        let task = manager.make_task(42, TransferDirection::Upload, Path::new("local"), "/remote");
+        manager.request_cancellation(task.id);
+        let captured = manager.cancellation_flag(task.id);
+
+        manager.register_prepared_tasks(std::iter::once(&task), TransferOverwritePolicy::Replace);
+
+        assert!(Arc::ptr_eq(&captured, &manager.cancellation_flag(task.id)));
+        assert!(captured.load(Ordering::Relaxed));
+    }
+
     #[tokio::test]
     async fn enqueue_download_transfers_remote_file_end_to_end() {
         // Given: a remote file, a session, and a manager fed by default config
@@ -2774,6 +2866,128 @@ mod tests {
             .filter(|name| server.remote_file_exists(&format!("/batchero/batchsrc/{name}")))
             .count();
         assert_eq!(remote_found, 2, "two remote files should be uploaded");
+    }
+
+    #[tokio::test]
+    async fn prepared_entries_remain_pending_and_honor_individual_cancellation() {
+        for direction in [TransferDirection::Upload, TransferDirection::Download] {
+            for directory in [false, true] {
+                let server = TestSftpServer::start().await;
+                let session = server.connect_session().await;
+                let manager = TransferManager::new(&AppConfig::default());
+                let local_dir = tempfile::tempdir().unwrap();
+                let names: &[&str] = if directory {
+                    &["a.txt", "b.txt"]
+                } else {
+                    &["a.txt"]
+                };
+                let policy = TransferOverwritePolicy::FailIfExists;
+                for name in names {
+                    match direction {
+                        TransferDirection::Upload => {
+                            tokio::fs::write(local_dir.path().join(name), b"payload")
+                                .await
+                                .unwrap();
+                        }
+                        TransferDirection::Download => {
+                            server
+                                .write_remote_file(&format!("/source/{name}"), b"payload")
+                                .await;
+                        }
+                    }
+                }
+
+                let prepared = match direction {
+                    TransferDirection::Upload => {
+                        let source = if directory {
+                            local_dir.path().to_path_buf()
+                        } else {
+                            local_dir.path().join("a.txt")
+                        };
+                        manager
+                            .prepare_upload_entry_for_session_with_policy(
+                                &session,
+                                42,
+                                &source,
+                                "/target",
+                                policy,
+                            )
+                            .await
+                    }
+                    TransferDirection::Download => {
+                        let source = if directory {
+                            "/source"
+                        } else {
+                            "/source/a.txt"
+                        };
+                        manager
+                            .prepare_download_entry_for_session_with_policy(
+                                &session,
+                                42,
+                                source,
+                                local_dir.path(),
+                                policy,
+                            )
+                            .await
+                    }
+                }
+                .unwrap();
+
+                assert_eq!(prepared.skipped, 0);
+                assert_eq!(prepared.tasks.len(), names.len());
+                let queue = manager.get_transfer_queue();
+                assert_eq!(queue.len(), names.len());
+                assert_eq!(manager.cancellation_flags.lock().unwrap().len(), names.len());
+                for task in &queue {
+                    assert_eq!(task.status, TransferStatus::Pending);
+                    assert_eq!(task.session_id, 42);
+                    assert_eq!(task.direction, direction);
+                    assert!(!manager.is_cancelled(task.id));
+                    assert_eq!(manager.overwrite_policies.lock().unwrap()[&task.id], policy);
+                    match direction {
+                        TransferDirection::Upload => {
+                            assert!(!server.remote_file_exists(&task.remote_path));
+                        }
+                        TransferDirection::Download => assert!(!task.local_path.exists()),
+                    }
+                }
+
+                let cancelled_id = prepared.tasks[0].id;
+                manager.cancel_transfer(cancelled_id).unwrap();
+                let (finished, batch) = match direction {
+                    TransferDirection::Upload => {
+                        manager
+                            .execute_upload_tasks(&session, prepared.tasks, policy)
+                            .await
+                    }
+                    TransferDirection::Download => {
+                        manager
+                            .execute_download_tasks(&session, prepared.tasks, policy)
+                            .await
+                    }
+                }
+                .unwrap();
+
+                assert_eq!(batch.failed, 1);
+                assert_eq!(batch.succeeded, (names.len() - 1) as u64);
+                assert_eq!(finished.len(), names.len());
+                for task in finished {
+                    let destination = match direction {
+                        TransferDirection::Upload => {
+                            server.root.join(task.remote_path.trim_start_matches('/'))
+                        }
+                        TransferDirection::Download => task.local_path,
+                    };
+                    if task.id == cancelled_id {
+                        assert_eq!(task.status, TransferStatus::Cancelled);
+                        assert!(!destination.exists());
+                    } else {
+                        assert_eq!(task.status, TransferStatus::Completed);
+                        assert_eq!(tokio::fs::read(destination).await.unwrap(), b"payload");
+                    }
+                }
+            }
+        }
     }
 
     #[tokio::test]
