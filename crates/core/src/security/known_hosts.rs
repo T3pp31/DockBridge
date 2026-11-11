@@ -389,14 +389,44 @@ impl KnownHostsManager {
     ///
     /// When the fingerprint already exists for the same port under another host,
     /// the new host is recorded as an alias instead of creating a duplicate entry.
+    /// Failed acceptance leaves the latest successfully reloaded snapshot intact;
+    /// new trust is published in memory only after it has been persisted.
     pub fn accept_host_key(
         &mut self,
         host: &str,
         port: u16,
         key: &PublicKey,
     ) -> Result<(), SecurityError> {
+        self.accept_host_key_with_persist(host, port, key, Self::persist)
+    }
+
+    fn accept_host_key_with_persist(
+        &mut self,
+        host: &str,
+        port: u16,
+        key: &PublicKey,
+        persist: impl FnOnce(&Self) -> Result<(), SecurityError>,
+    ) -> Result<(), SecurityError> {
         let _store_lock = acquire_store_lock(&self.path)?;
         self.reload_for_update()?;
+
+        // Stage against the latest locked snapshot. Neither validation errors
+        // nor persistence failures may publish uncommitted trust changes.
+        let mut working = self.clone();
+        if working.stage_host_key(host, port, key)? {
+            persist(&working)?;
+            self.entries = working.entries;
+        }
+        Ok(())
+    }
+
+    /// Applies an acceptance in memory, returning whether persistence is needed.
+    fn stage_host_key(
+        &mut self,
+        host: &str,
+        port: u16,
+        key: &PublicKey,
+    ) -> Result<bool, SecurityError> {
         let fingerprint = fingerprint_sha256(key);
         let public_key_openssh = key.to_openssh().ok();
 
@@ -409,7 +439,7 @@ impl KnownHostsManager {
         if let Some(existing) = self.find_entry(host, port) {
             if let Some(marker) = existing.marker {
                 if fingerprints_match(&existing.fingerprint_sha256, &fingerprint) {
-                    return Ok(());
+                    return Ok(false);
                 }
                 return Err(SecurityError::KnownHostsWriteFailed {
                     path: self.path.display().to_string(),
@@ -425,7 +455,7 @@ impl KnownHostsManager {
 
             // The presented key is already trusted for this exact (host, port).
             if fingerprints_match(&existing.fingerprint_sha256, &fingerprint) {
-                return Ok(());
+                return Ok(false);
             }
 
             let host_is_canonical =
@@ -537,7 +567,7 @@ impl KnownHostsManager {
             self.entries
                 .insert(entry_key(&normalized_host, port), entry);
 
-            return self.persist();
+            return Ok(true);
         }
 
         if let Some(canonical_key) = self.find_canonical_key_by_fingerprint(port, &fingerprint) {
@@ -559,7 +589,7 @@ impl KnownHostsManager {
                 entry.public_key_openssh = public_key_openssh;
             }
 
-            return self.persist();
+            return Ok(true);
         }
 
         let entry = KnownHostEntry {
@@ -574,7 +604,7 @@ impl KnownHostsManager {
         };
 
         self.entries.insert(entry_key(host, port), entry);
-        self.persist()
+        Ok(true)
     }
 
     /// Merges the configured OpenSSH `known_hosts` file into this store before connecting.
@@ -1830,6 +1860,16 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
         });
     }
 
+    // Complete all fallible file updates before the atomic replacement. A
+    // caller must not see Err after the new trust store has been committed.
+    if let Err(err) = file.set_permissions(fs::Permissions::from_mode(0o600)) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(SecurityError::KnownHostsWriteFailed {
+            path: path.display().to_string(),
+            message: err.to_string(),
+        });
+    }
+
     if let Err(err) = file.sync_all() {
         let _ = fs::remove_file(&temp_path);
         return Err(SecurityError::KnownHostsWriteFailed {
@@ -1851,13 +1891,6 @@ fn write_file_mode_0600(path: &Path, data: &[u8]) -> Result<(), SecurityError> {
             let _ = dir.sync_all();
         }
     }
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|err| {
-        SecurityError::KnownHostsWriteFailed {
-            path: path.display().to_string(),
-            message: err.to_string(),
-        }
-    })?;
 
     Ok(())
 }
@@ -3511,6 +3544,130 @@ mod tests {
     }
 
     #[test]
+    fn accept_persist_failure_preserves_latest_committed_snapshot() {
+        // Cover canonical/alias detachment, alias merging, and new entries.
+        for (host, same_key) in [
+            ("example.com", false),
+            ("alias.example.com", false),
+            ("another.example.com", true),
+            ("new.example.com", false),
+        ] {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("known_hosts.json");
+            let export_path = dir.path().join("exported_known_hosts");
+            let old_key = test_public_key();
+            let new_key = test_other_public_key();
+            let accepted_key = if same_key { &old_key } else { &new_key };
+
+            // This manager is deliberately stale: rollback must retain the
+            // locked reload, not the empty state from before the update.
+            let mut manager = KnownHostsManager::load(&path).unwrap();
+            let mut writer = KnownHostsManager::load(&path).unwrap();
+            writer.accept_host_key("example.com", 22, &old_key).unwrap();
+            writer
+                .accept_host_key("alias.example.com", 22, &old_key)
+                .unwrap();
+            let before_entries = writer.entries();
+            let before_disk = fs::read(&path).unwrap();
+            writer.export_openssh(&export_path).unwrap();
+            let before_export = fs::read(&export_path).unwrap();
+
+            let err = manager
+                .accept_host_key_with_persist(host, 22, accepted_key, |staged| {
+                    // Fail only after the requested trust change was staged.
+                    assert_ne!(staged.entries(), before_entries);
+                    assert_eq!(
+                        staged.check_host_key(host, 22, accepted_key, true),
+                        HostKeyCheckResult::Trust
+                    );
+                    Err(SecurityError::KnownHostsWriteFailed {
+                        path: staged.path.display().to_string(),
+                        message: "injected persistence failure".to_string(),
+                    })
+                })
+                .unwrap_err();
+            match err {
+                SecurityError::KnownHostsWriteFailed {
+                    path: failed_path,
+                    message,
+                } => {
+                    assert_eq!(failed_path, path.display().to_string());
+                    assert_eq!(message, "injected persistence failure");
+                }
+                other => panic!("expected persistence failure, got {other:?}"),
+            }
+
+            assert_eq!(manager.entries(), before_entries);
+            assert_eq!(manager.status(), KnownHostsStatus::Available);
+            assert_eq!(fs::read(&path).unwrap(), before_disk);
+            assert_eq!(
+                KnownHostsManager::load(&path).unwrap().entries(),
+                before_entries
+            );
+            for trusted_host in ["example.com", "alias.example.com"] {
+                for strict_mode in [false, true] {
+                    assert_eq!(
+                        manager.check_host_key(trusted_host, 22, &old_key, strict_mode),
+                        HostKeyCheckResult::Trust
+                    );
+                    assert_eq!(
+                        manager.check_host_key(trusted_host, 22, &new_key, strict_mode),
+                        HostKeyCheckResult::Mismatch {
+                            expected_fingerprint: fingerprint_sha256(&old_key),
+                            actual_fingerprint: fingerprint_sha256(&new_key),
+                        }
+                    );
+                }
+            }
+            if host != "example.com" && host != "alias.example.com" {
+                assert_eq!(
+                    manager.check_host_key(host, 22, accepted_key, true),
+                    HostKeyCheckResult::Unknown
+                );
+            }
+            manager.export_openssh(&export_path).unwrap();
+            assert_eq!(fs::read(&export_path).unwrap(), before_export);
+
+            // A subsequent successful acceptance must still commit normally.
+            manager.accept_host_key(host, 22, accepted_key).unwrap();
+            let reloaded = KnownHostsManager::load(&path).unwrap();
+            assert_ne!(manager.entries(), before_entries);
+            assert_eq!(manager.entries(), reloaded.entries());
+            assert_eq!(
+                reloaded.check_host_key(host, 22, accepted_key, true),
+                HostKeyCheckResult::Trust
+            );
+            for other_host in ["example.com", "alias.example.com"] {
+                if other_host != host {
+                    assert_eq!(
+                        reloaded.check_host_key(other_host, 22, &old_key, true),
+                        HostKeyCheckResult::Trust
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn accept_same_key_does_not_require_persistence() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("known_hosts.json");
+        let key = test_public_key();
+        let mut manager = KnownHostsManager::load(&path).unwrap();
+        manager.accept_host_key("example.com", 22, &key).unwrap();
+        let before_entries = manager.entries();
+        let before_disk = fs::read(&path).unwrap();
+
+        manager
+            .accept_host_key_with_persist("example.com", 22, &key, |_| {
+                panic!("idempotent acceptance must not attempt a write")
+            })
+            .unwrap();
+        assert_eq!(manager.entries(), before_entries);
+        assert_eq!(fs::read(&path).unwrap(), before_disk);
+    }
+
+    #[test]
     fn accept_changed_key_detaches_only_accepted_host_from_aliases() {
         // Given: example.com and 203.0.113.1 share one entry (same old key)
         // When: the user accepts a NEW key for example.com
@@ -3939,9 +4096,13 @@ mod tests {
         let mut manager = KnownHostsManager::load(&path).unwrap();
         manager.import_openssh(&openssh_path).unwrap();
 
+        let before_entries = manager.entries();
+        let before_disk = fs::read(&path).unwrap();
         let err = manager
             .accept_host_key("example.com", 22, &new_key)
             .expect_err("an excluded alias must not be promoted");
+        assert_eq!(manager.entries(), before_entries);
+        assert_eq!(fs::read(&path).unwrap(), before_disk);
         assert!(matches!(err, SecurityError::KnownHostsWriteFailed { .. }));
         assert_eq!(
             manager.check_host_key("example.com", 22, &old_key, false),

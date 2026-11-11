@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 保存済みの接続プロファイル削除を、後続の信頼エントリ削除エラーで失敗と誤報告しないよう修正 (#1181)
 - Reject local moves into self, the current parent, or descendants through symlinked ancestors while still allowing moves of symlinks themselves (#1178)
 - Preserve local directory types via a separate file-system lookup when resource metadata is unreadable (#1179)
+- Preserve committed in-memory host trust when accepting a host key fails to save (#1228).
 - Keep imported plain host trust separate from existing `@cert-authority` records
   for the same host and key, without changing CA scope (#1195)
 - Preserve expanded aliases and exclusions when reimporting matching `@revoked` or
