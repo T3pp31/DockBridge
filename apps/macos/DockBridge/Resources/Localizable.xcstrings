@@ -2840,6 +2840,22 @@
         }
       }
     },
+    "You do not have permission to access this path on the remote side.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You do not have permission to access this path on the remote side."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモート側のこのパスにアクセスする権限がありません。"
+          }
+        }
+      }
+    },
     "You do not have write permission on the remote side. Check the remote working directory.": {
       "localizations": {
         "en": {
