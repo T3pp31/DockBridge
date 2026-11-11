@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Omit unrepresentable transfer ETAs to prevent crashes at very low transfer speeds or large remaining byte counts (#1152).
 - Clamp oversized UInt64 settings when saving on macOS to prevent integer conversion crashes (#1148)
 - Use an operation-neutral message for remote read and unspecified permission-denied errors instead of incorrectly reporting missing write permissions (#1147).
+- Distinguish download-site GitHub API rate limits and HTTP errors from network
+  failures, and cache successful DMG links for up to one hour (#1239).
 - Clear update-check ETags when the release-body cache is missing, unreadable, or corrupt (#1143)
 - E2E verification now reports the saved debug log path only after a successful copy, rather than a deleted temporary path (#1171).
 - Publish SBOM and checksum files with readable `0644` permissions instead of staging-only `0600` (#1172)
