@@ -3,15 +3,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use russh::client::{self, AuthResult, Handle, KeyboardInteractiveAuthResponse};
-use russh::keys::PublicKey;
-use russh::keys::{decode_secret_key, PrivateKeyWithHashAlg};
+use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
 use russh::MethodKind;
 use russh_sftp::client::{Config as SftpConfig, SftpSession};
 use tokio::sync::Mutex;
 use tokio::time::{Instant as TokioInstant, Sleep};
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use super::algorithm_policy::build_client_config;
+use super::key_file::load_private_key;
 use crate::config::AppConfig;
 use crate::error::{AuthError, ConnectionError, SecurityError, SftpError};
 use crate::security::{fingerprint_sha256, HostKeyCheckResult, KnownHostsManager};
@@ -537,22 +537,8 @@ async fn authenticate(
             key_path,
             passphrase,
         } => {
-            let key_contents =
-                Zeroizing::new(std::fs::read_to_string(key_path).map_err(|err| {
-                    AuthError::PrivateKeyLoadFailed {
-                        path: key_path.display().to_string(),
-                        message: err.to_string(),
-                    }
-                })?);
             let passphrase = passphrase.as_ref().map(|value| value.expose());
-            let private_key =
-                decode_secret_key(key_contents.as_str(), passphrase).map_err(|err| {
-                    AuthError::PrivateKeyLoadFailed {
-                        path: key_path.display().to_string(),
-                        message: err.to_string(),
-                    }
-                })?;
-            drop(key_contents);
+            let private_key = load_private_key(key_path, passphrase)?;
             let rsa_hash = handle.best_supported_rsa_hash().await.map_err(|err| {
                 ConnectionError::ConnectFailed {
                     host: host.to_string(),
