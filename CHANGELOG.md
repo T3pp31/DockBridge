@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- 新規セッションの接続失敗時に、最後に開いたセッションではなく直前のアクティブセッションへ戻るよう修正 (#1220)
 - Keep Quick Look's presenter in a non-preview window's responder chain when updating an already focused preview panel (#1221)
 - Local file and directory drag exports allow access to the original URL instead of staging a full copy (#1215)
 - Avoid classifying unrelated `mismatch` errors as host key changes in macOS error messages (#1216)

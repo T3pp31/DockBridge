@@ -540,6 +540,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
             throw DockBridgeError.Other(message: String(localized: "Rust client is not initialized."))
         }
 
+        let previousActiveSessionID = activeSessionID
         let session = RemoteSession(
             profileID: profile.id,
             endpointLabel: profile.endpointLabel
@@ -598,7 +599,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
                     try client.disconnect(sessionId: pendingSessionId)
                 }.value
             }
-            removeSession(session)
+            removeSession(session, fallbackSessionID: previousActiveSessionID)
             throw error
         }
     }
@@ -612,14 +613,16 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         }
     }
 
-    private func removeSession(_ session: RemoteSession) {
+    private func removeSession(_ session: RemoteSession, fallbackSessionID: UUID? = nil) {
         let wasActive = activeSessionID == session.id
         sessions.removeValue(forKey: session.id)
         sessionOrder.removeAll { $0 == session.id }
         sessionCancellables.removeValue(forKey: session.id)
         if wasActive {
             activeSessionID = nil
-            if let next = allSessions.last {
+            // Restore the selection from before a failed connection if it is still open.
+            let fallbackSession = fallbackSessionID.flatMap { sessions[$0] }
+            if let next = fallbackSession ?? allSessions.last {
                 setActiveSession(next)
             } else {
                 resetPublishedSessionFields()
@@ -707,6 +710,10 @@ extension RustBridgeService {
             session.markDisconnected()
         }
         syncPublishedState(from: session)
+    }
+
+    func removeSessionForTesting(_ session: RemoteSession, fallbackSessionID: UUID?) {
+        removeSession(session, fallbackSessionID: fallbackSessionID)
     }
 
     func simulateSessionDisconnectedForTesting(sessionId: UInt64, reason: String) {
