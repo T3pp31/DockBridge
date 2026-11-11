@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Download site now explains the Privacy & Security "Open Anyway" flow for blocked first launches on macOS 15+ instead of the obsolete right-click override (#1210)
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
 - Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
 
