@@ -71,6 +71,9 @@ jobs:
             shellcheck -x scripts/*.sh
           fi
 
+      - name: Test demo host-key setup
+        run: python3 scripts/test-demo-host-key.py
+
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
           cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
