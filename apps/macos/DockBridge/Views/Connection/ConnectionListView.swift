@@ -139,8 +139,8 @@ struct ConnectionListView: View {
             CredentialPromptSheet(
                 profileName: item.profile.displayName,
                 kind: item.kind,
-                onConfirm: { text, save in
-                    viewModel.confirmCredentialPrompt(text: text, saveToKeychain: save)
+                onConfirm: { credential, save in
+                    viewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: save)
                 },
                 onCancel: viewModel.cancelCredentialPrompt
             )

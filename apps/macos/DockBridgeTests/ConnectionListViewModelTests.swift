@@ -1,4 +1,5 @@
 import Combine
+import Security
 import XCTest
 @testable import DockBridge
 
@@ -46,6 +47,100 @@ final class ConnectionListViewModelTests: XCTestCase {
         try? keychain.deleteKeyData(account: ProfileEncryptionService.masterKeyAccount)
         try? FileManager.default.removeItem(at: baseDirectory)
         super.tearDown()
+    }
+
+    func testHandleSFTPURLAddsAndSelectsNewProfileWithoutConnecting() throws {
+        let existing = ConnectionProfile(name: "Existing", host: "existing.example.com", username: "user")
+        try store.saveProfiles([existing])
+        viewModel.load()
+        let url = try XCTUnwrap(URL(string: "sftp://alice@new.example.com:2222/incoming"))
+
+        viewModel.handleSFTPURL(url)
+
+        let imported = try XCTUnwrap(viewModel.profiles.first { $0.host == "new.example.com" })
+        XCTAssertEqual(imported.username, "alice")
+        XCTAssertEqual(imported.port, 2222)
+        XCTAssertEqual(imported.initialRemotePath, "/incoming")
+        XCTAssertEqual(viewModel.profiles, [existing, imported])
+        XCTAssertEqual(try store.loadProfiles(), viewModel.profiles)
+        XCTAssertEqual(viewModel.selectedProfileID, imported.id)
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testHandleSFTPURLKeepsSavedSnapshotAndAvoidsDuplicatesWhenReloadFails() throws {
+        let existing = ConnectionProfile(name: "Existing", host: "existing.example.com", username: "user")
+        try store.saveProfiles([existing])
+        viewModel.load()
+        let url = try XCTUnwrap(URL(string: "sftp://alice@new.example.com:2222/incoming"))
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json")
+        // A malformed trust file makes loadProfiles throw, while upsert still
+        // succeeds because trust refresh is secondary to the encrypted save.
+        try Data("invalid trust store".utf8).write(to: trustURL)
+
+        viewModel.handleSFTPURL(url)
+
+        let imported = try XCTUnwrap(viewModel.profiles.first { $0.host == "new.example.com" })
+        XCTAssertEqual(viewModel.profiles, [existing, imported])
+        XCTAssertEqual(viewModel.selectedProfileID, imported.id)
+        XCTAssertEqual(imported.username, "alice")
+        XCTAssertEqual(imported.port, 2222)
+        XCTAssertEqual(imported.initialRemotePath, "/incoming")
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertThrowsError(try store.loadProfiles())
+
+        viewModel.handleSFTPURL(url)
+
+        XCTAssertEqual(viewModel.profiles, [existing, imported])
+        XCTAssertEqual(viewModel.selectedProfileID, imported.id)
+        // The matched-profile connection must still report the trust read error
+        // rather than bypassing the endpoint check or creating another profile.
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        try FileManager.default.removeItem(at: trustURL)
+        XCTAssertEqual(try store.loadProfiles(), [existing, imported])
+    }
+
+    func testHandleSFTPURLPreservesProfilesAndSelectionWhenUpsertFails() throws {
+        let existing = ConnectionProfile(name: "Existing", host: "existing.example.com", username: "user")
+        try store.saveProfiles([existing])
+        viewModel.load()
+        let url = try XCTUnwrap(URL(string: "sftp://alice@new.example.com/incoming"))
+        let profilesURL = baseDirectory.appendingPathComponent("profiles.json")
+        let invalidData = Data("invalid profiles".utf8)
+        try invalidData.write(to: profilesURL)
+
+        viewModel.handleSFTPURL(url)
+
+        XCTAssertEqual(viewModel.profiles, [existing])
+        XCTAssertEqual(viewModel.selectedProfileID, existing.id)
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertEqual(try Data(contentsOf: profilesURL), invalidData)
+    }
+
+    func testDeleteUpdatesListAndSelectionWhenTrustRemovalFails() throws {
+        let removed = ConnectionProfile(name: "Removed", host: "removed.example.com", username: "user")
+        let remaining = ConnectionProfile(name: "Remaining", host: "remaining.example.com", username: "user")
+        try store.saveProfiles([removed, remaining])
+        try store.seedInitialTrust(for: [removed, remaining])
+        viewModel.load()
+        viewModel.selectedProfileID = removed.id
+        let account = keychain.keychainAccount(for: removed.id, kind: "profile")
+        try keychain.savePassword("test-password", account: account)
+        defer { try? keychain.deletePassword(account: account) }
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        try Data("not-json".utf8).write(to: trustURL)
+
+        viewModel.requestDelete(profile: removed)
+        viewModel.delete(profile: removed)
+
+        XCTAssertEqual(viewModel.profiles, [remaining])
+        XCTAssertEqual(viewModel.selectedProfileID, remaining.id)
+        XCTAssertNil(viewModel.confirmDeleteProfile)
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(try keychain.loadPassword(account: account))
     }
 
     func testImportSSHConfigDeduplicatesAliasesCaseInsensitively() throws {
@@ -578,11 +673,90 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         await viewModel.connect(profile: profile)
         XCTAssertEqual(viewModel.pendingCredentialPrompt?.kind, .password)
 
-        viewModel.confirmCredentialPrompt(text: "   ", saveToKeychain: false)
+        let credential = SensitiveString()
+        credential.text = "   "
+        viewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: false)
 
+        XCTAssertEqual(credential.text, "")
         XCTAssertEqual(viewModel.pendingCredentialPrompt?.profile.id, profile.id)
         XCTAssertEqual(viewModel.pendingCredentialPrompt?.kind, .password)
         XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testConfirmCredentialPromptClearsInputWithoutPendingPrompt() {
+        let credential = SensitiveString()
+        credential.text = "unused-secret"
+
+        viewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: true)
+
+        XCTAssertEqual(credential.text, "")
+        XCTAssertNil(viewModel.pendingCredentialPrompt)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testConfirmPasswordPromptPreservesWhitespaceAndClearsBufferOnBridgeFailure() async throws {
+        // Fail before any network access, while still exercising the bridge path.
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        let blockedDirectory = baseDirectory.appendingPathComponent("not-a-directory")
+        try Data().write(to: blockedDirectory)
+        let suiteName = "com.dockbridge.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let localViewModel = ConnectionListViewModel(
+            store: store,
+            keychain: keychain,
+            bridge: RustBridgeService(
+                settings: AppSettingsService(defaults: defaults),
+                hostKeyStore: HostKeyStore(baseDirectory: blockedDirectory)
+            )
+        )
+        let profile = ConnectionProfile(
+            name: "Test", host: "example.com", username: "user", authType: .password
+        )
+        viewModel.save(profile, password: "stale-password", passphrase: nil)
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        let credential = SensitiveString()
+        credential.text = "  new-password\t"
+        let alias = credential
+        localViewModel.beginPasswordPrompt(for: profile)
+        let failed = expectation(description: "Bridge preparation fails without network access")
+        let cancellable = localViewModel.$errorMessage.compactMap { $0 }.first().sink { _ in
+            failed.fulfill()
+        }
+        defer { cancellable.cancel() }
+
+        localViewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: true)
+
+        XCTAssertNil(localViewModel.pendingCredentialPrompt)
+        // Ownership is transferred without clearing before the queued attempt.
+        XCTAssertEqual(alias.text, "  new-password\t")
+        XCTAssertEqual(try keychain.loadPassword(account: account), "  new-password\t")
+        await fulfillment(of: [failed], timeout: 5)
+        XCTAssertEqual(alias.text, "")
+        XCTAssertEqual(credential.text, "")
+    }
+
+    func testConfirmPassphrasePromptClearsBufferWhenPrivateKeyAccessIsMissing() async throws {
+        let profile = ConnectionProfile(
+            name: "Test", host: "example.com", username: "user", authType: .privateKey
+        )
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        let credential = SensitiveString()
+        credential.text = "  key-passphrase\t"
+        viewModel.beginPassphrasePrompt(for: profile)
+        let failed = expectation(description: "Missing private key bookmark rejects the attempt")
+        let cancellable = viewModel.$errorMessage.compactMap { $0 }.first().sink { _ in
+            failed.fulfill()
+        }
+        defer { cancellable.cancel() }
+
+        viewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: false)
+
+        XCTAssertNil(viewModel.pendingCredentialPrompt)
+        XCTAssertEqual(credential.text, "  key-passphrase\t")
+        await fulfillment(of: [failed], timeout: 5)
+        XCTAssertEqual(credential.text, "")
+        XCTAssertNil(try keychain.loadPassphrase(account: account))
     }
 
     func testRequestConnectShowsRsaKeyWarningForRsaPrivateKey() async throws {
@@ -823,6 +997,123 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertEqual(try keychain.loadPassphrase(account: account), "previous")
     }
 
+    func testSaveRetainsEnteredCredentialsWhenAnyKeychainMutationFails() throws {
+        let cases: [(AuthType, String, FailingProfileCredentials.Operation)] = [
+            (.password, "new-password", .deletePassphrase),
+            (.password, "new-password", .savePassword),
+            (.password, "", .deletePassword),
+            (.privateKey, "new-passphrase", .deletePassword),
+            (.privateKey, "new-passphrase", .savePassphrase),
+            (.privateKey, "", .deletePassphrase),
+        ]
+
+        for (authType, entered, operation) in cases {
+            for hasSessionCredentials in [false, true] {
+                // Saving treats bookmarks as opaque data; no key access or RSA
+                // inspection is needed to exercise credential persistence.
+                var profile = ConnectionProfile(
+                    name: "Before", host: "example.com", username: "user",
+                    authType: authType,
+                    privateKeyBookmark: authType == .privateKey ? Data([1]) : nil
+                )
+                let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+                try keychain.savePassword("old-password", account: account)
+                try keychain.savePassphrase("old-passphrase", account: account)
+                let credentials = FailingProfileCredentials(backing: keychain, failingOperation: operation)
+                let model = ConnectionListViewModel(store: store, keychain: credentials, bridge: RustBridgeService())
+                if hasSessionCredentials {
+                    model.save(profile, password: "session-password", passphrase: "session-passphrase", saveSecrets: false)
+                    XCTAssertNil(model.errorMessage)
+                }
+
+                profile.name = "After"
+                let password = authType == .password ? entered : nil
+                let passphrase = authType == .privateKey ? entered : nil
+                model.save(profile, password: password, passphrase: passphrase)
+
+                XCTAssertEqual(model.selectedProfileID, profile.id)
+                XCTAssertEqual(model.profiles.first(where: { $0.id == profile.id })?.name, "After")
+                XCTAssertEqual(try store.loadProfiles().first(where: { $0.id == profile.id })?.name, "After")
+                let expectedError = String(
+                    format: String(localized: "The connection profile was saved, but Keychain credentials could not be updated. Any entered credentials are available only for this session. %@"),
+                    KeychainServiceError.unexpectedStatus(errSecInteractionNotAllowed).localizedDescription
+                )
+                XCTAssertEqual(model.errorMessage, expectedError)
+                let retained = try model.credentialsForConnection(profile: profile)
+                XCTAssertEqual(retained.password, password)
+                XCTAssertEqual(retained.passphrase, passphrase)
+                let storedSecret = try (authType == .password
+                    ? keychain.loadPassword(account: account)
+                    : keychain.loadPassphrase(account: account))
+                XCTAssertEqual(storedSecret, authType == .password ? "old-password" : "old-passphrase")
+
+                // The injected failure is one-shot. A successful retry must
+                // clear both the session fallback and the partial-save error.
+                model.save(profile, password: password, passphrase: passphrase)
+                XCTAssertNil(model.errorMessage)
+                if authType == .password {
+                    XCTAssertEqual(try keychain.loadPassword(account: account), entered.isEmpty ? nil : entered)
+                    XCTAssertNil(try keychain.loadPassphrase(account: account))
+                    try keychain.savePassword("later-password", account: account)
+                    XCTAssertEqual(try model.credentialsForConnection(profile: profile).password, "later-password")
+                } else {
+                    XCTAssertEqual(try keychain.loadPassphrase(account: account), entered.isEmpty ? nil : entered)
+                    XCTAssertNil(try keychain.loadPassword(account: account))
+                    try keychain.savePassphrase("later-passphrase", account: account)
+                    XCTAssertEqual(try model.credentialsForConnection(profile: profile).passphrase, "later-passphrase")
+                }
+            }
+        }
+    }
+
+    func testSaveRetainsExistingSessionCredentialsWhenKeychainFailsWithoutNewInput() throws {
+        for authType in AuthType.allCases {
+            let profile = ConnectionProfile(
+                name: "Session", host: "example.com", username: "user",
+                authType: authType,
+                privateKeyBookmark: authType == .privateKey ? Data([1]) : nil
+            )
+            let credentials = FailingProfileCredentials(
+                backing: keychain,
+                failingOperation: authType == .password ? .deletePassphrase : .deletePassword
+            )
+            let model = ConnectionListViewModel(store: store, keychain: credentials, bridge: RustBridgeService())
+            model.save(profile, password: "session-password", passphrase: "session-passphrase", saveSecrets: false)
+
+            model.save(profile, password: nil, passphrase: nil)
+
+            XCTAssertNotNil(model.errorMessage)
+            let retained = try model.credentialsForConnection(profile: profile)
+            XCTAssertEqual(retained.password, authType == .password ? "session-password" : nil)
+            XCTAssertEqual(retained.passphrase, authType == .privateKey ? "session-passphrase" : nil)
+        }
+    }
+
+    func testProfileSaveFailureLeavesSessionAndKeychainCredentialsUnchanged() throws {
+        let profile = ConnectionProfile(name: "Before", host: "example.com", username: "user")
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        try keychain.savePassword("stored-password", account: account)
+        viewModel.save(profile, password: "session-password", passphrase: nil, saveSecrets: false)
+        XCTAssertNil(viewModel.errorMessage)
+
+        let profilesURL = baseDirectory.appendingPathComponent("profiles.json")
+        let savedData = try Data(contentsOf: profilesURL)
+        defer { XCTAssertNoThrow(try savedData.write(to: profilesURL)) }
+        try Data("invalid-profile-data".utf8).write(to: profilesURL)
+        var updated = profile
+        updated.name = "After"
+
+        viewModel.save(updated, password: "new-password", passphrase: nil)
+
+        XCTAssertEqual(viewModel.profiles.first?.name, "Before")
+        XCTAssertEqual(try viewModel.credentialsForConnection(profile: profile).password, "session-password")
+        XCTAssertEqual(try keychain.loadPassword(account: account), "stored-password")
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            ConnectionStoreError.readFailed(String(localized: "Unsupported profiles.json format.")).localizedDescription
+        )
+    }
+
     private func makeGeneratedPrivateKeyProfile(
         id: UUID = UUID(),
         keyFilename: String,
@@ -861,7 +1152,7 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
     private func makeViewModel(
         rsaKeyInspector: @escaping @Sendable (
             ConnectionProfile,
-            KeychainService,
+            any ProfileCredentialStoring,
             SecurityScopedBookmarkService
         ) -> Bool?,
         onRsaInspectionCompleted: ((Bool?) -> Void)? = nil
@@ -884,5 +1175,62 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
             try? await Task.sleep(for: .milliseconds(10))
         }
         return false
+    }
+}
+
+/// Delegates to the isolated test Keychain, failing one selected mutation once.
+/// The lock protects the only mutable state; the backing service is Sendable.
+private final class FailingProfileCredentials: ProfileCredentialStoring, @unchecked Sendable {
+    enum Operation: Equatable {
+        case savePassword, deletePassword, savePassphrase, deletePassphrase
+    }
+
+    private let backing: KeychainService
+    private let lock = NSLock()
+    private var failingOperation: Operation?
+
+    init(backing: KeychainService, failingOperation: Operation) {
+        self.backing = backing
+        self.failingOperation = failingOperation
+    }
+
+    func keychainAccount(for profileID: UUID, kind: String) -> String {
+        backing.keychainAccount(for: profileID, kind: kind)
+    }
+
+    func savePassword(_ password: String, account: String) throws {
+        try failIfNeeded(.savePassword)
+        try backing.savePassword(password, account: account)
+    }
+
+    func loadPassword(account: String) throws -> String? {
+        try backing.loadPassword(account: account)
+    }
+
+    func deletePassword(account: String) throws {
+        try failIfNeeded(.deletePassword)
+        try backing.deletePassword(account: account)
+    }
+
+    func savePassphrase(_ passphrase: String, account: String) throws {
+        try failIfNeeded(.savePassphrase)
+        try backing.savePassphrase(passphrase, account: account)
+    }
+
+    func loadPassphrase(account: String) throws -> String? {
+        try backing.loadPassphrase(account: account)
+    }
+
+    func deletePassphrase(account: String) throws {
+        try failIfNeeded(.deletePassphrase)
+        try backing.deletePassphrase(account: account)
+    }
+
+    private func failIfNeeded(_ operation: Operation) throws {
+        try lock.withLock {
+            guard failingOperation == operation else { return }
+            failingOperation = nil
+            throw KeychainServiceError.unexpectedStatus(errSecInteractionNotAllowed)
+        }
     }
 }
