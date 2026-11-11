@@ -33,6 +33,19 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  website:
+    name: Website download
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test website download behavior (offline)
+        run: node --test scripts/test-website-download.cjs
+
   rust:
     name: Rust
     runs-on: ubuntu-latest
