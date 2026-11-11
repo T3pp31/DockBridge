@@ -771,8 +771,10 @@ final class ConnectionListViewModel: ObservableObject {
         do {
             // Select the profile just created, not the first entry in the
             // store (issue #779).
-            profile = try store.upsert(profile).first { $0.id == profile.id } ?? profile
-            profiles = try store.loadProfiles()
+            let updatedProfiles = try store.upsert(profile)
+            profile = updatedProfiles.first { $0.id == profile.id } ?? profile
+            // Use the saved snapshot so a second read cannot leave the UI stale.
+            profiles = updatedProfiles
             selectedProfileID = profile.id
         } catch {
             errorMessage = error.localizedDescription

@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- SFTP URL imports now use the saved profile list directly, avoiding stale UI state and duplicate profiles when a post-save reload would fail (#1186).
 - リモートのリネームを名前の変更なしで確定した際、衝突エラーを出さずにシートを閉じるよう修正 (#1187)
 - Wait for cancelled synchronous bridge operations to finish before reporting timeout, and dismiss cancelled authentication prompts (#1184)
 - Prevent update disk image attach/detach from hanging when hdiutil emits more output than a pipe can buffer (#1180)
