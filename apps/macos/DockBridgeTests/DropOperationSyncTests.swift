@@ -36,18 +36,20 @@ final class DropOperationSyncTests: XCTestCase {
         // Regression test for issue #181: a throwing operation must not leave
         // the caller hanging. Run off the main thread and wait with an XCTest
         // expectation so a hang fails at the deadline instead of blocking CI
-        // (issue #697).
-        struct TestError: Error {}
+        // (issue #697). Keep the bridge timeout longer than the expectation
+        // deadline so a missing signal fails before the bridge times out.
+        struct TestError: Error, Equatable {}
 
         let completion = expectation(description: "DropOperationSync.run returned")
         DispatchQueue.global().async {
             do {
-                try DropOperationSync.run { @MainActor in
+                try DropOperationSync.run(timeout: 10) { @MainActor in
                     await Task.yield()
                     throw TestError()
                 }
                 XCTFail("Expected run to throw")
             } catch {
+                XCTAssertEqual(error as? TestError, TestError())
                 completion.fulfill()
             }
         }
@@ -56,13 +58,60 @@ final class DropOperationSyncTests: XCTestCase {
 
     @MainActor
     func testTimesOutWhenOperationDoesNotComplete() {
+        var operationFinished = false
         XCTAssertThrowsError(
             try DropOperationSync.run(timeout: 0.01) {
+                defer { operationFinished = true }
                 try await Task.sleep(for: .seconds(1))
                 return 1
             }
         ) { error in
             XCTAssertEqual(error as? DropOperationSyncError, .timedOut)
         }
+        XCTAssertTrue(operationFinished, "Cancellation cleanup must finish before run throws")
+    }
+
+    func testTimeoutWaitsForLateSuccess() {
+        assertTimeoutWaitsForOperation(throwsAfterCancellation: false)
+    }
+
+    func testTimeoutWaitsForLateError() {
+        assertTimeoutWaitsForOperation(throwsAfterCancellation: true)
+    }
+
+    private func assertTimeoutWaitsForOperation(throwsAfterCancellation: Bool) {
+        struct TestError: Error {}
+        let operationFinished = expectation(description: "Operation finished after cancellation")
+        let bridgeReturned = expectation(description: "Bridge reported timeout")
+
+        // Keep the wait bounded even if the bridge regresses and hangs (#697).
+        DispatchQueue.global().async {
+            do {
+                _ = try DropOperationSync.run(timeout: 0.1) {
+                    do {
+                        try await Task.sleep(for: .seconds(60))
+                    } catch {
+                        XCTAssertTrue(error is CancellationError)
+                    }
+
+                    // Model callback-backed work that cannot be interrupted by
+                    // cancellation and finishes after the cancellation request.
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+                            continuation.resume()
+                        }
+                    }
+                    XCTAssertTrue(Task.isCancelled)
+                    operationFinished.fulfill()
+                    if throwsAfterCancellation { throw TestError() }
+                    return 42
+                }
+                XCTFail("Expected the bridge to report timeout after the operation finishes")
+            } catch {
+                XCTAssertEqual(error as? DropOperationSyncError, .timedOut)
+            }
+            bridgeReturned.fulfill()
+        }
+        wait(for: [operationFinished, bridgeReturned], timeout: 5, enforceOrder: true)
     }
 }
