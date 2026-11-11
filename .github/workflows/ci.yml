@@ -73,6 +73,8 @@ jobs:
 
       - name: Test demo host-key setup
         run: python3 scripts/test-demo-host-key.py
+      - name: Test E2E log cleanup
+        run: python3 scripts/test-e2e-verify.py
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
