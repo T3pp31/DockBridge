@@ -2,10 +2,9 @@
 
 use std::path::Path;
 
-use russh::keys::decode_secret_key;
 use ssh_key::Algorithm;
-use zeroize::Zeroizing;
 
+use super::key_file::load_private_key;
 use crate::error::AuthError;
 
 /// Classifies a private key algorithm for security policy decisions.
@@ -26,21 +25,9 @@ pub fn inspect_private_key_algorithm(
     key_path: &Path,
     passphrase: Option<&str>,
 ) -> Result<PrivateKeyAlgorithm, AuthError> {
-    let key_contents = Zeroizing::new(std::fs::read_to_string(key_path).map_err(|err| {
-        AuthError::PrivateKeyLoadFailed {
-            path: key_path.display().to_string(),
-            message: err.to_string(),
-        }
-    })?);
-    // ssh-key zeroizes the internal key material on drop (Ed25519, ECDSA
-    // and RSA all implement Drop). The file contents above are additionally
-    // wrapped in Zeroizing so no plaintext PEM lingers (issue #799).
-    let private_key = decode_secret_key(key_contents.as_str(), passphrase).map_err(|err| {
-        AuthError::PrivateKeyLoadFailed {
-            path: key_path.display().to_string(),
-            message: err.to_string(),
-        }
-    })?;
+    // The loader zeroizes file buffers on success, read/UTF-8/decode errors,
+    // and buffer growth. ssh-key zeroizes the decoded key material on drop.
+    let private_key = load_private_key(key_path, passphrase)?;
     let algorithm = private_key.algorithm();
     // Explicitly drop the decoded key so its zeroize-on-drop runs before
     // the function returns.
@@ -100,6 +87,42 @@ mod tests {
 
         let algorithm = inspect_private_key_algorithm(&path, None).expect("inspect key");
         assert_eq!(algorithm, PrivateKeyAlgorithm::Rsa);
+    }
+
+    #[test]
+    fn inspect_non_utf8_key_returns_load_failed() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("binary_key");
+        // Include enough data to grow the guarded buffer before validation fails.
+        let mut contents = vec![b's'; 20_000];
+        contents.push(0xff);
+        fs::write(&path, contents).expect("write binary key");
+
+        let err = inspect_private_key_algorithm(&path, None).expect_err("invalid UTF-8");
+        match err {
+            AuthError::PrivateKeyLoadFailed {
+                path: error_path,
+                message,
+            } => {
+                assert_eq!(error_path, path.display().to_string());
+                assert_eq!(message, "stream did not contain valid UTF-8");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inspect_malformed_key_returns_load_failed() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("malformed_key");
+        fs::write(&path, "not a private key").expect("write malformed key");
+
+        let err = inspect_private_key_algorithm(&path, None).expect_err("invalid key");
+        assert!(matches!(
+            err,
+            AuthError::PrivateKeyLoadFailed { path: error_path, .. }
+                if error_path == path.display().to_string()
+        ));
     }
 
     #[test]

@@ -3,12 +3,14 @@ import SwiftUI
 
 struct SettingsView: View {
     @State private var config: AppConfig
+    private let savedConfig: AppConfig
     @State private var pickerErrorMessage: String?
     @Environment(\.dismiss) private var dismiss
     let onSave: (AppConfig) -> Void
 
     init(config: AppConfig, onSave: @escaping (AppConfig) -> Void) {
         _config = State(initialValue: config)
+        savedConfig = config
         self.onSave = onSave
     }
 
@@ -77,10 +79,6 @@ struct SettingsView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Section(String(localized: "Safety")) {
-                Toggle(String(localized: "Confirm before delete"), isOn: $config.confirmBeforeDelete)
             }
 
             Section(String(localized: "Transfer")) {
@@ -197,6 +195,15 @@ struct SettingsView: View {
         }
         .padding()
         .frame(minWidth: 420, minHeight: 400)
+        .onAppear {
+            // A Settings scene can reuse its state after Cancel and reopen.
+            config = savedConfig
+        }
+        .onChange(of: savedConfig) { _, newConfig in
+            // State(initialValue:) alone does not refresh an already open editor.
+            // Unrelated redraws keep the draft; only a changed saved config replaces it.
+            config = newConfig
+        }
         .alert(String(localized: "File Selection"), isPresented: Binding(
             get: { pickerErrorMessage != nil },
             set: { if !$0 { pickerErrorMessage = nil } }
