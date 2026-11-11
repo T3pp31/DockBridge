@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reject local moves into self, the current parent, or descendants through symlinked ancestors while still allowing moves of symlinks themselves (#1178)
 - Preserve local directory types via a separate file-system lookup when resource metadata is unreadable (#1179)
 - Omit unrepresentable transfer ETAs to prevent crashes at very low transfer speeds or large remaining byte counts (#1152).
 - Clamp oversized UInt64 settings when saving on macOS to prevent integer conversion crashes (#1148)
