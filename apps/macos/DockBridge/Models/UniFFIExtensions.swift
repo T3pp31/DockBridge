@@ -129,7 +129,12 @@ extension DockBridgeError {
         }
 
         if lowercased.contains("permission denied") {
-            return String(localized: "You do not have write permission on the remote side. Check the remote working directory.")
+            // Only infer a write operation from the core error prefix, not a token in a path.
+            if lowercased.hasPrefix("failed to upload")
+                || lowercased.hasPrefix("failed to create directory") {
+                return String(localized: "You do not have write permission on the remote side. Check the remote working directory.")
+            }
+            return String(localized: "You do not have permission to access this path on the remote side.")
         }
 
         if lowercased.contains("failed to create directory") {

@@ -169,11 +169,14 @@ struct LocalPaneView: View {
         }
     }
 
-    /// Opens the only item when a row is selected; when several rows are
-    /// selected, opens the first row in display order as an explicit fallback.
-    private func primaryActionLocalItem(from ids: Set<String>) -> LocalFileItem? {
+    /// A single selection can open `..`; the multi-selection fallback must
+    /// ignore it and use the first transferable item in table-item order.
+    func primaryActionLocalItem(from ids: Set<String>) -> LocalFileItem? {
         guard !ids.isEmpty else { return nil }
-        return viewModel.localTableItems.first { ids.contains($0.id) }
+        if ids.count == 1 {
+            return viewModel.localTableItems.first { ids.contains($0.id) }
+        }
+        return transferableLocalItems(from: ids).first
     }
 
     private func transferableLocalItems(from ids: Set<String>) -> [LocalFileItem] {

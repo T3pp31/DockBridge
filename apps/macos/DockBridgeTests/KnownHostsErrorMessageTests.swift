@@ -53,12 +53,79 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         XCTAssertTrue(connectedTitle.contains("user@host:22"))
     }
 
-    func testPermissionDeniedErrorMessageMentionsRemoteDirectory() {
+    func testUploadPermissionDeniedErrorMessageMentionsRemoteDirectory() {
         let message = DockBridgeError.friendlyMessage(for: "failed to upload: permission denied")
         XCTAssertEqual(
             message,
             String(localized: "You do not have write permission on the remote side. Check the remote working directory.")
         )
+    }
+
+    func testReadAndUnspecifiedPermissionDeniedMessagesAreOperationNeutral() {
+        let messages = [
+            "permission denied",
+            "PeRmIsSiOn DeNiEd",
+            "failed to list directory '/root': Permission denied",
+            "failed to download '/root/private.txt' to '/tmp/private.txt': Permission denied",
+            "failed to open '/root/private.txt': Permission denied",
+            "failed to stat '/root/private.txt': Permission denied",
+            "failed to canonicalize remote path '/root': Permission denied",
+            // Write-operation tokens in paths do not identify the operation.
+            "failed to download '/srv/failed to upload.txt' to '/tmp/a': Permission denied",
+            "failed to list directory '/srv/failed to create directory': Permission denied",
+        ]
+        let expected = String(localized: "You do not have permission to access this path on the remote side.")
+
+        for raw in messages {
+            XCTAssertEqual(DockBridgeError.friendlyMessage(for: raw), expected, raw)
+        }
+    }
+
+    func testPermissionDeniedIsOperationNeutralThroughMessageBasedErrorCases() {
+        let raw = "failed to list directory '/root': Permission denied"
+        let errors: [DockBridgeError] = [
+            .Other(message: raw),
+            .ConnectionLost(message: raw),
+            .Config(message: raw),
+        ]
+
+        for error in errors {
+            XCTAssertEqual(
+                error.dockBridgeUserMessage,
+                String(localized: "You do not have permission to access this path on the remote side.")
+            )
+        }
+    }
+
+    func testPermissionDeniedPreservesMoreSpecificErrorMessages() {
+        let cases = [
+            (
+                "authentication failed: Permission denied",
+                String(localized: "Check the username and password.")
+            ),
+            (
+                "failed to load private key from /tmp/key: Permission denied",
+                String(localized: "Unable to load the private key. Check the key file path, permissions, and passphrase.")
+            ),
+            (
+                "failed to read known hosts store: Permission denied",
+                String(localized: "Unable to load the host key store. Quit the app, back up or remove known_hosts.json, then reconnect.")
+            ),
+        ]
+
+        for (raw, expected) in cases {
+            XCTAssertEqual(DockBridgeError.friendlyMessage(for: raw), expected, raw)
+        }
+    }
+
+    func testReadErrorsWithoutPermissionDeniedKeepRawMessage() {
+        let messages = [
+            "failed to download '/remote/a' to '/tmp/a': No such file",
+            "failed to list directory '/remote': server-specific error",
+        ]
+        for raw in messages {
+            XCTAssertEqual(DockBridgeError.friendlyMessage(for: raw), raw)
+        }
     }
 
     func testCorruptedKnownHostsErrorMessageIsUserFriendly() {
@@ -303,6 +370,16 @@ final class ErrorRecoveryKindTests: XCTestCase {
         XCTAssertNotEqual(
             MainViewModel.recoveryKind(for: "permission denied", isDisconnected: false),
             .editConnection
+        )
+    }
+
+    func testReadPermissionDeniedDoesNotSuggestCredentialOrTransferRecovery() {
+        let friendly = DockBridgeError.friendlyMessage(
+            for: "failed to list directory '/root': Permission denied"
+        )
+        XCTAssertEqual(
+            MainViewModel.recoveryKind(for: friendly, isDisconnected: false),
+            .none
         )
     }
 
