@@ -1,6 +1,40 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "Update signature policy is misconfigured. Expected team identifier must be set for signed or notarized updates; certificate fingerprint is also required for signed updates.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update signature policy is misconfigured. Expected team identifier must be set for signed or notarized updates; certificate fingerprint is also required for signed updates."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更新の署名ポリシーが正しく設定されていません。署名または公証を必須にする場合は、期待するチーム識別子の設定が必要です。署名を必須にする場合は、証明書のフィンガープリントも必要です。"
+          }
+        }
+      }
+    },
+    "The update could not be shown in Finder. Try again or download the update manually from the release page.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update could not be shown in Finder. Try again or download the update manually from the release page."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finder にアップデートを表示できませんでした。もう一度お試しいただくか、リリースページから手動でダウンロードしてください。"
+          }
+        }
+      }
+    },
     "Unable to check the remote destination. Try again.": {
       "extractionState": "manual",
       "localizations": {
@@ -2807,6 +2841,22 @@
         }
       }
     },
+    "The connection profile was saved, but Keychain credentials could not be updated. Any entered credentials are available only for this session. %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The connection profile was saved, but Keychain credentials could not be updated. Any entered credentials are available only for this session. %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続プロファイルは保存されましたが、Keychainの資格情報を更新できませんでした。入力した資格情報は、このセッション内でのみ使用できます。%@"
+          }
+        }
+      }
+    },
     "The connection was closed. Reconnect and try again.": {
       "localizations": {
         "en": {
@@ -2819,6 +2869,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "接続が切断されました。再接続して再試行してください。"
+          }
+        }
+      }
+    },
+    "You do not have permission to access this path on the remote side.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You do not have permission to access this path on the remote side."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモート側のこのパスにアクセスする権限がありません。"
           }
         }
       }

@@ -165,16 +165,24 @@ struct ConnectionFormView: View {
         panel.allowedContentTypes = [UTType.data, UTType.plainText]
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
+        pickerErrorMessage = Self.applyPrivateKeySelection(url, to: &profile)
+    }
+
+    static func applyPrivateKeySelection(
+        _ url: URL,
+        to profile: inout ConnectionProfile,
+        createBookmark: (URL, Bool) throws -> Data = {
+            try SecurityScopedBookmarkService.shared.createBookmark(for: $0, readOnly: $1)
+        }
+    ) -> String? {
         do {
-            profile.privateKeyBookmark = try SecurityScopedBookmarkService.shared.createBookmark(
-                for: url,
-                readOnly: true
-            )
+            // Keep the previous selection intact until the replacement is usable.
+            let bookmark = try createBookmark(url, true)
+            profile.privateKeyBookmark = bookmark
             profile.privateKeyPath = url.path
+            return nil
         } catch {
-            profile.privateKeyPath = nil
-            profile.privateKeyBookmark = nil
-            pickerErrorMessage = String(
+            return String(
                 format: String(localized: "%@ Use Browse… to try again."),
                 error.localizedDescription
             )

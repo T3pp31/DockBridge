@@ -69,6 +69,8 @@ enum AppUpdateConfig {
     static func showCachedReleaseBody() -> Data? {
         guard let data = try? Data(contentsOf: releaseBodyCacheURL()),
               let entry = try? JSONDecoder().decode(ReleaseBodyCacheEntry.self, from: data) else {
+            // Purged or damaged cache files cannot support a conditional request.
+            clearReleaseBody()
             return nil
         }
         guard Date().timeIntervalSince(entry.storedAt) <= releaseBodyCacheMaxAge else {
@@ -90,6 +92,8 @@ enum AppUpdateConfig {
     static let githubReleasePagePathPrefix = "/T3pp31/DockBridge/releases/"
     static let appName = "DockBridge"
     static let bundleIdentifier = "com.dockbridge.app"
+    /// Bound update bundle metadata even when signature verification is disabled.
+    static let maxInfoPlistSizeBytes = 5 * 1024 * 1024
 
     // Keep in sync with config/release.toml. Enable when SIGN_AND_NOTARIZE=true.
     static let expectedTeamIdentifier = ""
