@@ -36,18 +36,20 @@ final class DropOperationSyncTests: XCTestCase {
         // Regression test for issue #181: a throwing operation must not leave
         // the caller hanging. Run off the main thread and wait with an XCTest
         // expectation so a hang fails at the deadline instead of blocking CI
-        // (issue #697).
-        struct TestError: Error {}
+        // (issue #697). Keep the bridge timeout longer than the expectation
+        // deadline so a missing signal fails before the bridge times out.
+        struct TestError: Error, Equatable {}
 
         let completion = expectation(description: "DropOperationSync.run returned")
         DispatchQueue.global().async {
             do {
-                try DropOperationSync.run { @MainActor in
+                try DropOperationSync.run(timeout: 10) { @MainActor in
                     await Task.yield()
                     throw TestError()
                 }
                 XCTFail("Expected run to throw")
             } catch {
+                XCTAssertEqual(error as? TestError, TestError())
                 completion.fulfill()
             }
         }
