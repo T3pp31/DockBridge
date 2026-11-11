@@ -33,9 +33,10 @@ else
   LIB_PATH="$CARGO_TARGET_DIR/${PROFILE_DIR}/libdockbridge_uniffi.a"
 fi
 
-if [[ ! -f "$LIB_PATH" ]]; then
-  ./scripts/build-rust.sh "$RUST_TARGET" "$PROFILE"
-fi
+# Refresh embedded UniFFI metadata before generation, even when the .a exists.
+# Cargo handles incremental freshness; build-rust.sh also honors the explicit
+# DOCKBRIDGE_SKIP_HOST_BUILD opt-out used for prebuilt release/CI libraries.
+./scripts/build-rust.sh "$RUST_TARGET" "$PROFILE"
 
 mkdir -p "$OUT_DIR"
 

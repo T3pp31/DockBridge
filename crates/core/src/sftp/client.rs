@@ -445,7 +445,15 @@ impl<'a> SftpClient<'a> {
         .await?;
 
         if is_cancelled() {
-            partial.abort(true).await?;
+            // Cleanup must not replace the caller's cancellation result.
+            if let Err(err) = partial.abort(true).await {
+                tracing::warn!(
+                    remote = %remote,
+                    local = %local,
+                    error = %err,
+                    "failed to clean up the remote partial after cancellation"
+                );
+            }
             return Err(SftpError::Cancelled);
         }
 
@@ -3232,6 +3240,75 @@ mod tests {
         assert!(server.remote_partial_paths().is_empty());
     }
 
+    #[tokio::test]
+    async fn upload_cancel_after_final_progress_preserves_cancelled_result() {
+        for fail_cleanup in [false, true] {
+            let server = TestSftpServer::start().await;
+            let remote_path = "/upload/cancel-after-upload.txt";
+            let original = b"existing destination";
+            server.write_remote_file(remote_path, original).await;
+            let session = server.connect_session().await;
+            let client = SftpClient::new(&session);
+            let local_dir = tempfile::tempdir().unwrap();
+            let local_path = local_dir.path().join("source.txt");
+            // A small payload reports progress only after shutdown has drained
+            // every WRITE ACK, so cancellation reaches upload_cancellable's
+            // final check rather than a check inside upload_from_reader.
+            let payload = b"fully acknowledged upload";
+            tokio::fs::write(&local_path, payload).await.unwrap();
+            let cancel = AtomicBool::new(false);
+            let mut progress = Vec::new();
+
+            let err = client
+                .upload_cancellable(
+                    &local_path,
+                    remote_path,
+                    DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
+                    TransferOverwritePolicy::Replace,
+                    || cancel.load(Ordering::SeqCst),
+                    |transferred| {
+                        progress.push(transferred);
+                        if transferred == payload.len() as u64 {
+                            server
+                                .failures
+                                .fail_remote_remove
+                                .store(fail_cleanup, Ordering::SeqCst);
+                            cancel.store(true, Ordering::SeqCst);
+                        }
+                    },
+                )
+                .await
+                .unwrap_err();
+
+            assert_eq!(progress, vec![payload.len() as u64]);
+            assert!(
+                matches!(err, SftpError::Cancelled),
+                "cleanup failure = {fail_cleanup}: {err:?}"
+            );
+            assert!(
+                !server.failures.fail_remote_remove.load(Ordering::SeqCst),
+                "the injected REMOVE failure must be consumed"
+            );
+            assert_eq!(
+                tokio::fs::read(server.root.join("upload/cancel-after-upload.txt"))
+                    .await
+                    .unwrap(),
+                original,
+                "cancellation must not commit the upload"
+            );
+            let partials = server.remote_partial_paths();
+            if fail_cleanup {
+                assert_eq!(partials.len(), 1);
+                assert_eq!(tokio::fs::read(&partials[0]).await.unwrap(), payload);
+            } else {
+                assert!(
+                    partials.is_empty(),
+                    "successful cleanup must remove the partial"
+                );
+            }
+        }
+    }
+
     #[test]
     fn append_cleanup_context_preserves_original_error() {
         let message = append_cleanup_context(
@@ -3514,6 +3591,11 @@ mod tests {
             .unwrap();
         assert_eq!(contents, b"brand new");
         assert!(server.remote_partial_paths().is_empty());
+        assert_eq!(
+            server.failures.remove_count.load(Ordering::Relaxed),
+            0,
+            "atomic replacement must not issue REMOVE"
+        );
     }
 
     #[tokio::test]
@@ -3657,9 +3739,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(original, b"original contents");
-        assert!(
-            !server.remote_partial_paths().is_empty(),
-            "the fully-uploaded partial must be preserved so the user can recover it"
+        let partials = server.remote_partial_paths();
+        assert_eq!(partials.len(), 1, "keep exactly one recoverable partial");
+        assert_eq!(tokio::fs::read(&partials[0]).await.unwrap(), b"brand new");
+        assert_eq!(
+            server.failures.remove_count.load(Ordering::Relaxed),
+            0,
+            "unsupported overwrite must not issue REMOVE"
         );
     }
 
