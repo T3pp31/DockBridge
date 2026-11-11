@@ -84,25 +84,28 @@ final class DropOperationSyncTests: XCTestCase {
 
         // Keep the wait bounded even if the bridge regresses and hangs (#697).
         DispatchQueue.global().async {
-            XCTAssertThrowsError(try DropOperationSync.run(timeout: 0.1) {
-                do {
-                    try await Task.sleep(for: .seconds(60))
-                } catch {
-                    XCTAssertTrue(error is CancellationError)
-                }
-
-                // Model callback-backed work that cannot be interrupted by
-                // cancellation and finishes after the cancellation request.
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
-                        continuation.resume()
+            do {
+                _ = try DropOperationSync.run(timeout: 0.1) {
+                    do {
+                        try await Task.sleep(for: .seconds(60))
+                    } catch {
+                        XCTAssertTrue(error is CancellationError)
                     }
+
+                    // Model callback-backed work that cannot be interrupted by
+                    // cancellation and finishes after the cancellation request.
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+                            continuation.resume()
+                        }
+                    }
+                    XCTAssertTrue(Task.isCancelled)
+                    operationFinished.fulfill()
+                    if throwsAfterCancellation { throw TestError() }
+                    return 42
                 }
-                XCTAssertTrue(Task.isCancelled)
-                operationFinished.fulfill()
-                if throwsAfterCancellation { throw TestError() }
-                return 42
-            }) { error in
+                XCTFail("Expected the bridge to report timeout after the operation finishes")
+            } catch {
                 XCTAssertEqual(error as? DropOperationSyncError, .timedOut)
             }
             bridgeReturned.fulfill()
