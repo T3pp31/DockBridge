@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Report update presentation failures in Finder instead of returning success, with guidance to retry or download manually (#1217)
 - Remote deletion in the macOS app now always requires confirmation; remove the
   opt-out setting and ignore previously saved disabled values (#1211).
 - Accept local items dropped back onto the same local pane as a no-op instead of showing an invalid-move error (#1190)

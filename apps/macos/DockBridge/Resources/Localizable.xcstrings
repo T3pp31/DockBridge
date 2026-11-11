@@ -1,6 +1,23 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "The update could not be shown in Finder. Try again or download the update manually from the release page.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update could not be shown in Finder. Try again or download the update manually from the release page."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Finder にアップデートを表示できませんでした。もう一度お試しいただくか、リリースページから手動でダウンロードしてください。"
+          }
+        }
+      }
+    },
     "Unable to check the remote destination. Try again.": {
       "extractionState": "manual",
       "localizations": {

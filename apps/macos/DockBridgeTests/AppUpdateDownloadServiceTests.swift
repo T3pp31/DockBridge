@@ -33,14 +33,28 @@ private struct MockChecksumURLSession: URLSessionDataProviding {
     }
 }
 
-private struct MockDMGImageMounter: DMGImageMounting {
+// Mutable call records are protected by the lock.
+private final class MockDMGImageMounter: DMGImageMounting, @unchecked Sendable {
     let mountPoint: URL
+    private let lock = NSLock()
+    private var mountedDMGURL: URL?
+    private var unmountedPoints: [URL] = []
+
+    var downloadedURL: URL? { lock.withLock { mountedDMGURL } }
+    var unmountedMountPoints: [URL] { lock.withLock { unmountedPoints } }
+
+    init(mountPoint: URL) {
+        self.mountPoint = mountPoint
+    }
 
     func mount(dmgURL: URL) throws -> URL {
+        lock.withLock { mountedDMGURL = dmgURL }
         return mountPoint
     }
 
-    func unmount(mountPoint: URL) throws {}
+    func unmount(mountPoint: URL) throws {
+        lock.withLock { unmountedPoints.append(mountPoint) }
+    }
 }
 
 private struct MockSignatureVerifier: AppBundleSignatureVerifying {
@@ -66,6 +80,62 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: temporaryDirectory)
         try super.tearDownWithError()
+    }
+
+    func testDownloadVerifyAndRevealRequiresFinderToOpenVolume() async throws {
+        let contents = Data("dmg-contents".utf8)
+        let checksum = SHA256.hash(data: contents).map { String(format: "%02x", $0) }.joined()
+        let mountPoint = temporaryDirectory.appendingPathComponent("mount", isDirectory: true)
+        _ = try makeTestBundle(bundleIdentifier: "com.dockbridge.app", in: mountPoint)
+        let update = AppUpdateInfo(
+            version: "0.2.0",
+            downloadURL: URL(string: "https://example.com/update.dmg")!,
+            checksumURL: URL(string: "https://example.com/update.dmg.sha256")!,
+            releasePageURL: URL(string: "https://example.com/release")!
+        )
+
+        for opensInFinder in [false, true] {
+            let dmgURL = temporaryDirectory.appendingPathComponent("update.dmg")
+            try contents.write(to: dmgURL)
+            let mounter = MockDMGImageMounter(mountPoint: mountPoint)
+            let revealRequested = expectation(description: "Reveal volume (opens=\(opensInFinder))")
+            let service = AppUpdateDownloadService(
+                downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 200),
+                dataSession: MockChecksumURLSession(checksumLine: "\(checksum) update.dmg", statusCode: 200),
+                signatureVerifier: MockSignatureVerifier(),
+                dmgMounter: mounter,
+                revealInFinder: { url in
+                    XCTAssertEqual(url, mountPoint)
+                    XCTAssertTrue(mounter.unmountedMountPoints.isEmpty)
+                    if let downloadedURL = mounter.downloadedURL {
+                        XCTAssertTrue(FileManager.default.fileExists(atPath: downloadedURL.path))
+                    } else {
+                        XCTFail("Expected the image to be mounted before revealing it")
+                    }
+                    revealRequested.fulfill()
+                    return opensInFinder
+                }
+            )
+
+            do {
+                try await service.downloadVerifyAndReveal(update: update)
+                XCTAssertTrue(opensInFinder, "A Finder failure must not return success")
+            } catch let error as AppUpdateDownloadError {
+                XCTAssertFalse(opensInFinder, "A Finder success must not throw")
+                XCTAssertEqual(error, .revealFailed)
+                XCTAssertEqual(
+                    error.localizedDescription,
+                    String(localized: "The update could not be shown in Finder. Try again or download the update manually from the release page.")
+                )
+            }
+
+            await fulfillment(of: [revealRequested], timeout: 1)
+            XCTAssertEqual(mounter.unmountedMountPoints, opensInFinder ? [] : [mountPoint])
+            let downloadedURL = try XCTUnwrap(mounter.downloadedURL)
+            // Both outcomes remove the temporary DMG, but only success leaves
+            // the volume mounted for the user's manual copy.
+            XCTAssertFalse(FileManager.default.fileExists(atPath: downloadedURL.path))
+        }
     }
 
     func testDownloadVerifyAndRevealRejectsChecksumMismatch() async throws {
@@ -105,12 +175,16 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         let digest = SHA256.hash(data: Data("dmg-contents".utf8))
         let checksum = digest.map { String(format: "%02x", $0) }.joined()
 
+        let mounter = MockDMGImageMounter(mountPoint: mountPoint)
         let service = AppUpdateDownloadService(
             downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 200),
             dataSession: MockChecksumURLSession(checksumLine: "\(checksum) update.dmg", statusCode: 200),
             signatureVerifier: MockSignatureVerifier(error: .unsignedBundle),
-            dmgMounter: MockDMGImageMounter(mountPoint: mountPoint),
-            fileManager: .default
+            dmgMounter: mounter,
+            revealInFinder: { _ in
+                XCTFail("Signature verification must succeed before revealing the update")
+                return true
+            }
         )
 
         let update = AppUpdateInfo(
@@ -126,6 +200,9 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         } catch let error as AppUpdateDownloadError {
             XCTAssertEqual(error, .signatureVerificationFailed(.unsignedBundle))
         }
+        XCTAssertEqual(mounter.unmountedMountPoints, [mountPoint])
+        let downloadedURL = try XCTUnwrap(mounter.downloadedURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: downloadedURL.path))
     }
 
     func testDownloadVerifyAndRevealRejectsMissingAppBundle() async throws {
