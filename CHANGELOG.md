@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Accept local items dropped back onto the same local pane as a no-op instead of showing an invalid-move error (#1190)
 - Local pane double-click fallback no longer navigates to `..` when it is part of a multiple selection; selecting only `..` still opens the parent directory (#1191)
 - Keep prompted credentials in a clearable buffer until connection handoff, and clear it on rejected input or failed attempts (#1188)
 - SFTP URL imports now use the saved profile list directly, avoiding stale UI state and duplicate profiles when a post-save reload would fail (#1186).

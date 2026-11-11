@@ -200,12 +200,20 @@ struct LocalPaneDropModifier: ViewModifier {
         return accepted
     }
 
-    private func acceptLocalMoves(_ items: [LocalFileDragPayload]) -> Bool {
+    func acceptLocalMoves(_ items: [LocalFileDragPayload]) -> Bool {
         var accepted = false
         var hasInvalidMove = false
         let target = viewModel.localPath
+        let targetPath = target.standardizedFileURL.resolvingSymlinksInPath().path
         for item in items {
             guard FileDropValidation.isDisplayedLocalItem(item, in: viewModel.localTableItems) else {
+                continue
+            }
+            // Dropping a displayed item back onto its own pane is a no-op.
+            // Resolve only the parent: a symlink entry must not be treated as its target.
+            let sourceParent = item.url.standardizedFileURL.deletingLastPathComponent()
+            if sourceParent.resolvingSymlinksInPath().path == targetPath {
+                accepted = true
                 continue
             }
             guard FileDropValidation.canMoveLocalItem(from: item.url, to: target) else {
