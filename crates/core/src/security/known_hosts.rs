@@ -2097,14 +2097,41 @@ mod tests {
         assert_eq!(summary.merged, 1);
         assert_eq!(summary.skipped, 0);
 
-        assert_eq!(
-            manager.check_host_key("example.com", 22, &key, false),
-            HostKeyCheckResult::Trust
-        );
-        assert_eq!(
-            manager.check_host_key("203.0.113.1", 22, &key, false),
-            HostKeyCheckResult::Trust
-        );
+        // Stored aliases must survive reload and work with the default policy,
+        // not just with fingerprint-only alias fallback enabled.
+        let manager = KnownHostsManager::load(&json_path).unwrap();
+        let default_strict_mode = AppConfig::default().known_hosts_strict_mode;
+        assert!(default_strict_mode);
+        let other_key = test_other_public_key();
+
+        for strict_mode in [default_strict_mode, false] {
+            for host in ["example.com", "203.0.113.1"] {
+                assert_eq!(
+                    manager.check_host_key(host, 22, &key, strict_mode),
+                    HostKeyCheckResult::Trust
+                );
+                assert!(matches!(
+                    manager.check_host_key(host, 22, &other_key, strict_mode),
+                    HostKeyCheckResult::Mismatch { .. }
+                ));
+                assert_eq!(
+                    manager.check_host_key(host, 2222, &key, strict_mode),
+                    HostKeyCheckResult::Unknown
+                );
+            }
+            assert_eq!(
+                manager.check_host_key("203.0.113.2", 22, &key, strict_mode),
+                if strict_mode {
+                    HostKeyCheckResult::Unknown
+                } else {
+                    HostKeyCheckResult::Trust
+                }
+            );
+            assert_eq!(
+                manager.check_host_key("203.0.113.2", 22, &other_key, strict_mode),
+                HostKeyCheckResult::Unknown
+            );
+        }
     }
 
     #[test]

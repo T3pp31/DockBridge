@@ -564,13 +564,21 @@ fn terminal_safe_text(value: &str) -> String {
 fn print_json_listing(entries: Vec<dockbridge_core::RemoteFile>) -> anyhow::Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
+    write_json_listing(&mut out, &entries)
+}
+
+fn write_json_listing(
+    out: &mut impl Write,
+    entries: &[dockbridge_core::RemoteFile],
+) -> anyhow::Result<()> {
+    let json = json_listing(entries)?;
     // BrokenPipe (e.g. `list | head -1`) must exit quietly instead of
-    // panicking (issue #791).
-    if writeln!(out, "{}", json_listing(&entries)?).is_err() {
-        return Ok(());
+    // panicking (issue #791). All other write/flush errors must reach the caller.
+    match writeln!(out, "{json}").and_then(|_| out.flush()) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(err) => Err(err.into()),
     }
-    let _ = out.flush();
-    Ok(())
 }
 
 /// Serializes a remote directory listing as a JSON array. Each entry's
@@ -879,6 +887,110 @@ mod tests {
         assert_eq!(exit_code_for_error(&err), EXIT_TRANSFER);
     }
 
+    #[derive(Default)]
+    struct ListingWriter {
+        bytes: Vec<u8>,
+        fail_write_after: Option<(usize, std::io::ErrorKind)>,
+        flush_error: Option<std::io::ErrorKind>,
+        flush_called: bool,
+    }
+
+    impl Write for ListingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let len = if let Some((limit, kind)) = self.fail_write_after {
+                if self.bytes.len() >= limit {
+                    return Err(kind.into());
+                }
+                buf.len().min(limit - self.bytes.len())
+            } else {
+                buf.len()
+            };
+            self.bytes.extend_from_slice(&buf[..len]);
+            Ok(len)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flush_called = true;
+            match self.flush_error {
+                Some(kind) => Err(kind.into()),
+                None => Ok(()),
+            }
+        }
+    }
+
+    #[test]
+    fn json_listing_writes_and_flushes_empty_array() {
+        let mut out = ListingWriter::default();
+        write_json_listing(&mut out, &[]).expect("write empty listing");
+        assert_eq!(out.bytes.as_slice(), b"[]\n");
+        assert!(out.flush_called);
+    }
+
+    #[test]
+    fn json_listing_propagates_write_errors_even_after_partial_output() {
+        use std::io::ErrorKind;
+
+        for kind in [
+            ErrorKind::StorageFull,
+            ErrorKind::QuotaExceeded,
+            ErrorKind::Other,
+        ] {
+            for limit in [0, 1] {
+                let mut out = ListingWriter {
+                    fail_write_after: Some((limit, kind)),
+                    ..Default::default()
+                };
+                let err = write_json_listing(&mut out, &[]).expect_err("write must fail");
+                assert_eq!(err.downcast_ref::<std::io::Error>().unwrap().kind(), kind);
+                assert_eq!(exit_code_for_error(&err), EXIT_OTHER);
+                assert_eq!(out.bytes.as_slice(), &b"[]\n"[..limit]);
+                assert!(!out.flush_called);
+            }
+        }
+    }
+
+    #[test]
+    fn json_listing_propagates_flush_errors() {
+        use std::io::ErrorKind;
+
+        for kind in [
+            ErrorKind::StorageFull,
+            ErrorKind::QuotaExceeded,
+            ErrorKind::Other,
+        ] {
+            let mut out = ListingWriter {
+                flush_error: Some(kind),
+                ..Default::default()
+            };
+            let err = write_json_listing(&mut out, &[]).expect_err("flush must fail");
+            assert_eq!(err.downcast_ref::<std::io::Error>().unwrap().kind(), kind);
+            assert_eq!(exit_code_for_error(&err), EXIT_OTHER);
+            assert_eq!(out.bytes.as_slice(), b"[]\n");
+            assert!(out.flush_called);
+        }
+    }
+
+    #[test]
+    fn json_listing_ignores_only_broken_pipe_on_write_or_flush() {
+        for limit in [0, 1] {
+            let mut out = ListingWriter {
+                fail_write_after: Some((limit, std::io::ErrorKind::BrokenPipe)),
+                ..Default::default()
+            };
+            write_json_listing(&mut out, &[]).expect("broken pipe must exit quietly");
+            assert_eq!(out.bytes.as_slice(), &b"[]\n"[..limit]);
+            assert!(!out.flush_called);
+        }
+
+        let mut out = ListingWriter {
+            flush_error: Some(std::io::ErrorKind::BrokenPipe),
+            ..Default::default()
+        };
+        write_json_listing(&mut out, &[]).expect("broken pipe on flush must exit quietly");
+        assert_eq!(out.bytes.as_slice(), b"[]\n");
+        assert!(out.flush_called);
+    }
+
     #[test]
     fn json_listing_serializes_entries_with_expected_keys() {
         use dockbridge_core::RemoteFile;
@@ -914,6 +1026,10 @@ mod tests {
         ];
 
         let json_text = json_listing(&entries).expect("serialize listing");
+        let mut out = ListingWriter::default();
+        write_json_listing(&mut out, &entries).expect("write listing");
+        assert_eq!(out.bytes.as_slice(), format!("{json_text}\n").as_bytes());
+        assert!(out.flush_called);
         let json: Value = serde_json::from_str(&json_text).expect("valid JSON");
         let array = json.as_array().expect("array");
         assert_eq!(array.len(), 2);
