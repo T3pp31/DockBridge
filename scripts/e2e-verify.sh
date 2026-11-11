@@ -35,10 +35,13 @@ LOCK_ACQUIRED=false
 
 cleanup() {
   if (( fail > 0 )); then
-    # Keep the diagnostics when verification failed; otherwise remove the
-    # whole temporary workdir (issue #673).
-    log "Keeping debug log: $LOG"
-    cp "$LOG" "${TMPDIR:-/tmp}/dockbridge-e2e-verify.log" || true
+    # Only advertise the persistent copy, after it has been saved (issue #673).
+    local saved_log="${TMPDIR:-/tmp}/dockbridge-e2e-verify.log"
+    if cp "$LOG" "$saved_log"; then
+      log "Keeping debug log: $saved_log"
+    else
+      log "WARNING: Could not save debug log to $saved_log"
+    fi
   fi
   # Discard the per-run container so stale authorized_keys cannot survive into
   # the next run (issue #672).
@@ -290,7 +293,7 @@ main() {
   check "in-progress large upload can be cancelled (Transfer Queue)" transfer_cancel_in_progress
 
   log "SUMMARY: $pass passed, $fail failed"
-  log "Log: $LOG"
+  # cleanup reports the saved log path on failure; $LOG itself is temporary.
 
   if [[ "$fail" -gt 0 ]]; then
     exit 1
