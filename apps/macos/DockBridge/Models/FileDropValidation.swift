@@ -39,18 +39,21 @@ enum FileDropValidation {
     }
 
     static func canMoveLocalItem(from source: URL, to directory: URL) -> Bool {
-        // NOTE: This resolves destination symlinks at check time. Callers
-        // should re-run this validation immediately before the actual move to
-        // narrow the TOCTOU window (see MainViewModel.moveLocalItem).
-        let sourcePath = source.standardizedFileURL.path
+        // NOTE: This resolves ancestor and destination symlinks at check time.
+        // Callers should re-run this validation immediately before the actual
+        // move to narrow the TOCTOU window (see MainViewModel.moveLocalItem).
+        // Keep the final source component unresolved: we move the link itself,
+        // not its target.
+        let standardizedSource = source.standardizedFileURL
+        let sourceParent = standardizedSource.deletingLastPathComponent().resolvingSymlinksInPath()
+        let sourcePath = sourceParent.appendingPathComponent(standardizedSource.lastPathComponent).path
         let directoryPath = normalizedLocalPath(directory)
 
         if sourcePath == directoryPath {
             return false
         }
 
-        let sourceParentPath = (sourcePath as NSString).deletingLastPathComponent
-        if sourceParentPath == directoryPath {
+        if sourceParent.path == directoryPath {
             return false
         }
 
