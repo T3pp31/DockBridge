@@ -315,6 +315,14 @@ impl SftpHandler {
         }
     }
 
+    fn metadata_error_status(err: std::io::Error) -> StatusCode {
+        match err.kind() {
+            std::io::ErrorKind::NotFound => StatusCode::NoSuchFile,
+            std::io::ErrorKind::PermissionDenied => StatusCode::PermissionDenied,
+            _ => StatusCode::Failure,
+        }
+    }
+
     /// Like `attrs_for`, but follows symlinks (matching SFTP `STAT`, which
     /// resolves the target for the attributes).
     fn attrs_for_follow(path: &Path) -> FileAttributes {
@@ -443,9 +451,7 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn stat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
         let local = self.resolve(&path);
-        if !local.exists() {
-            return Err(StatusCode::NoSuchFile);
-        }
+        std::fs::metadata(&local).map_err(Self::metadata_error_status)?;
         Ok(Attrs {
             id,
             attrs: Self::attrs_for_follow(&local),
@@ -454,9 +460,7 @@ impl russh_sftp::server::Handler for SftpHandler {
 
     async fn lstat(&mut self, id: u32, path: String) -> Result<Attrs, Self::Error> {
         let local = self.resolve(&path);
-        if std::fs::symlink_metadata(&local).is_err() {
-            return Err(StatusCode::NoSuchFile);
-        }
+        std::fs::symlink_metadata(&local).map_err(Self::metadata_error_status)?;
         Ok(Attrs {
             id,
             attrs: Self::attrs_for(&local),
@@ -1208,6 +1212,121 @@ fn set_file_times_by_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use russh_sftp::server::Handler as _;
+
+    fn metadata_handler(root: &Path) -> SftpHandler {
+        SftpHandler {
+            root: root.to_path_buf(),
+            failures: Arc::new(FailureConfig::default()),
+            handles: HashMap::new(),
+            dir_handles: HashMap::new(),
+            next_handle: 1,
+        }
+    }
+
+    #[test]
+    fn metadata_errors_preserve_status_codes() {
+        use std::io::ErrorKind;
+
+        // Synthetic errors also cover permission denial when tests run as root.
+        for (kind, expected) in [
+            (ErrorKind::NotFound, StatusCode::NoSuchFile),
+            (ErrorKind::PermissionDenied, StatusCode::PermissionDenied),
+            (ErrorKind::InvalidInput, StatusCode::Failure),
+            (ErrorKind::Other, StatusCode::Failure),
+        ] {
+            assert_eq!(
+                SftpHandler::metadata_error_status(std::io::Error::from(kind)),
+                expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stat_and_lstat_distinguish_missing_paths_from_other_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut handler = metadata_handler(directory.path());
+
+        // A NUL in a pathname reliably produces InvalidInput without requiring
+        // a particular filesystem or process privilege level.
+        for (path, expected) in [
+            ("/missing", StatusCode::NoSuchFile),
+            ("/invalid\0path", StatusCode::Failure),
+        ] {
+            assert_eq!(handler.stat(1, path.into()).await.unwrap_err(), expected);
+            assert_eq!(handler.lstat(2, path.into()).await.unwrap_err(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn stat_and_lstat_preserve_file_and_directory_attributes() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("file"), b"data").unwrap();
+        let mut handler = metadata_handler(directory.path());
+
+        for (path, is_dir, size) in [("/file", false, Some(4)), ("/", true, None)] {
+            let stat = handler.stat(7, path.into()).await.unwrap();
+            let lstat = handler.lstat(8, path.into()).await.unwrap();
+            assert_eq!(stat.id, 7);
+            assert_eq!(lstat.id, 8);
+            for attrs in [stat.attrs, lstat.attrs] {
+                assert_eq!(attrs.file_type().is_dir(), is_dir);
+                assert!(!attrs.file_type().is_symlink());
+                assert_eq!(attrs.size, size);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stat_and_lstat_preserve_symlink_following_behavior() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("target"), b"data").unwrap();
+        std::os::unix::fs::symlink("target", directory.path().join("link")).unwrap();
+        std::os::unix::fs::symlink("missing", directory.path().join("dangling")).unwrap();
+        let mut handler = metadata_handler(directory.path());
+
+        let stat = handler.stat(1, "/link".into()).await.unwrap();
+        assert!(!stat.attrs.file_type().is_dir());
+        assert!(!stat.attrs.file_type().is_symlink());
+        assert_eq!(stat.attrs.size, Some(4));
+        for path in ["/link", "/dangling"] {
+            let lstat = handler.lstat(2, path.into()).await.unwrap();
+            assert!(lstat.attrs.file_type().is_symlink());
+        }
+        assert_eq!(
+            handler.stat(3, "/dangling".into()).await.unwrap_err(),
+            StatusCode::NoSuchFile
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stat_and_lstat_report_permission_denied_for_unsearchable_parent() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Root bypasses directory search permissions; the mapping itself is
+        // still tested unconditionally in metadata_errors_preserve_status_codes.
+        if unsafe { libc::geteuid() } == 0 {
+            eprintln!("directory search permissions cannot be tested as root");
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("restricted");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::write(parent.join("file"), b"data").unwrap();
+        let mut handler = metadata_handler(directory.path());
+        let permissions = std::fs::metadata(&parent).unwrap().permissions();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let stat = handler.stat(1, "/restricted/file".into()).await;
+        let lstat = handler.lstat(2, "/restricted/file".into()).await;
+
+        // Restore permissions before assertions so failures do not break cleanup.
+        std::fs::set_permissions(&parent, permissions).unwrap();
+        assert_eq!(stat.unwrap_err(), StatusCode::PermissionDenied);
+        assert_eq!(lstat.unwrap_err(), StatusCode::PermissionDenied);
+    }
 
     #[cfg(unix)]
     #[test]
