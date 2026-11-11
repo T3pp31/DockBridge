@@ -71,6 +71,9 @@ jobs:
             shellcheck -x scripts/*.sh
           fi
 
+      - name: Test demo host-key setup
+        run: python3 scripts/test-demo-host-key.py
+
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
           cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
@@ -192,6 +195,9 @@ jobs:
 
       - name: Verify localization catalog (en + ja)
         run: ./scripts/verify-localization.sh
+
+      - name: Guard Settings scene state wiring
+        run: python3 scripts/test-settings-scene.py
 
       - name: Build x86_64 (Intel) Rust static library
         run: |
