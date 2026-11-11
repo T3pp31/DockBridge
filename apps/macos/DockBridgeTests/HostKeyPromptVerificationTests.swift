@@ -408,6 +408,116 @@ final class HostKeyPromptVerificationTests: XCTestCase {
     }
 
     @MainActor
+    func testReplacementHostKeyPromptSurvivesOldTimerAndCompletion() async throws {
+        try await assertReplacementHostKeyPrompt(cancelReplacement: false)
+    }
+
+    @MainActor
+    func testReplacementHostKeyPromptCanStillBeCancelled() async throws {
+        try await assertReplacementHostKeyPrompt(cancelReplacement: true)
+    }
+
+    @MainActor
+    private func assertReplacementHostKeyPrompt(cancelReplacement: Bool) async throws {
+        let bridge = try makeBridge(connectionTimeoutSecs: 60)
+        let oldFinished = expectation(description: "Replaced host prompt and its timer finished")
+        let newFinished = expectation(description: "Replacement host prompt finished")
+        let oldChallenge = HostKeyChallenge(
+            host: "old.example.com", port: 22,
+            fingerprintSha256: "SHA256:old", expectedFingerprintSha256: nil
+        )
+        let newChallenge = HostKeyChallenge(
+            host: "new.example.com", port: 22,
+            fingerprintSha256: "SHA256:new", expectedFingerprintSha256: nil
+        )
+        let oldTask = Task { @MainActor in
+            let accepted = await bridge.awaitHostKeyDecision(for: oldChallenge)
+            XCTAssertFalse(accepted)
+            oldFinished.fulfill()
+        }
+        try await waitForPendingHostKeyChallenge(on: bridge)
+        let newTask = Task { @MainActor in
+            let accepted = await bridge.awaitHostKeyDecision(for: newChallenge)
+            XCTAssertEqual(accepted, !cancelReplacement)
+            newFinished.fulfill()
+        }
+        defer {
+            oldTask.cancel()
+            newTask.cancel()
+            bridge.respondToHostKeyChallenge(accepted: false)
+        }
+
+        // The old await returns only after its timer's cancellation defer and
+        // final cleanup have run. Both must leave the newer prompt untouched.
+        await fulfillment(of: [oldFinished], timeout: 5)
+        XCTAssertEqual(bridge.pendingHostKeyChallenge?.fingerprintSha256, "SHA256:new")
+        XCTAssertNotNil(bridge.hostKeyContinuation)
+        if cancelReplacement {
+            newTask.cancel()
+        } else {
+            bridge.respondToHostKeyChallenge(accepted: true)
+        }
+        await fulfillment(of: [newFinished], timeout: 5)
+        XCTAssertNil(bridge.pendingHostKeyChallenge)
+        XCTAssertNil(bridge.hostKeyContinuation)
+    }
+
+    @MainActor
+    func testReplacementKeyboardPromptSurvivesOldTimerAndCompletion() async throws {
+        try await assertReplacementKeyboardPrompt(cancelReplacement: false)
+    }
+
+    @MainActor
+    func testReplacementKeyboardPromptCanStillBeCancelled() async throws {
+        try await assertReplacementKeyboardPrompt(cancelReplacement: true)
+    }
+
+    @MainActor
+    private func assertReplacementKeyboardPrompt(cancelReplacement: Bool) async throws {
+        let bridge = try makeBridge(connectionTimeoutSecs: 60)
+        let oldFinished = expectation(description: "Replaced keyboard prompt and its timer finished")
+        let newFinished = expectation(description: "Replacement keyboard prompt finished")
+        let oldTask = Task { @MainActor in
+            let answers = await bridge.awaitKbdInteractiveAnswers(
+                name: "Old", instructions: "",
+                prompts: [KbdInteractivePromptRecord(text: "Old password:", echo: false)]
+            )
+            XCTAssertEqual(answers, [nil])
+            oldFinished.fulfill()
+        }
+        try await waitForPendingKbdInteractiveChallenge(on: bridge)
+        let newTask = Task { @MainActor in
+            let answers = await bridge.awaitKbdInteractiveAnswers(
+                name: "New", instructions: "",
+                prompts: [
+                    KbdInteractivePromptRecord(text: "Password:", echo: false),
+                    KbdInteractivePromptRecord(text: "Code:", echo: true),
+                ]
+            )
+            XCTAssertEqual(answers, cancelReplacement ? [nil, nil] : ["password", "123456"])
+            newFinished.fulfill()
+        }
+        defer {
+            oldTask.cancel()
+            newTask.cancel()
+            bridge.respondToKbdInteractiveChallenge(nil)
+        }
+
+        await fulfillment(of: [oldFinished], timeout: 5)
+        XCTAssertEqual(bridge.pendingKbdInteractiveChallenge?.name, "New")
+        XCTAssertEqual(bridge.pendingKbdInteractiveChallenge?.prompts.count, 2)
+        XCTAssertNotNil(bridge.kbdInteractiveContinuation)
+        if cancelReplacement {
+            newTask.cancel()
+        } else {
+            bridge.respondToKbdInteractiveChallenge(["password", "123456"])
+        }
+        await fulfillment(of: [newFinished], timeout: 5)
+        XCTAssertNil(bridge.pendingKbdInteractiveChallenge)
+        XCTAssertNil(bridge.kbdInteractiveContinuation)
+    }
+
+    @MainActor
     private func makeBridge(connectionTimeoutSecs: UInt64) throws -> RustBridgeService {
         let defaults = UserDefaults(suiteName: "HostKeyPromptVerificationTests.\(UUID().uuidString)")!
         defaults.set(Int(connectionTimeoutSecs), forKey: AppSettingsKeys.connectionTimeoutSecs)
