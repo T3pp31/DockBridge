@@ -31,8 +31,10 @@ this VM run a local OpenSSH server instead:
 sudo apt-get update -qq && sudo apt-get install -y openssh-server
 sudo mkdir -p /run/sshd
 mkdir -p /tmp/sftpdemo
-ssh-keygen -t ed25519 -f /tmp/sftpdemo/ssh_host_ed25519_key -N ""
-sudo chown root:root /tmp/sftpdemo/ssh_host_ed25519_key
+if [ ! -f /tmp/sftpdemo/ssh_host_ed25519_key ]; then
+  ssh-keygen -t ed25519 -f /tmp/sftpdemo/ssh_host_ed25519_key -N "" &&
+    sudo chown root:root /tmp/sftpdemo/ssh_host_ed25519_key
+fi
 sudo useradd --create-home --shell /bin/bash dockbridge-demo
 sudo install -d -o dockbridge-demo -g dockbridge-demo /home/dockbridge-demo/upload
 DEMO_PASS="$(openssl rand -base64 24)"
@@ -40,6 +42,18 @@ echo "dockbridge-demo:$DEMO_PASS" | sudo chpasswd
 printf 'Port 2222\nListenAddress 127.0.0.1\nHostKey /tmp/sftpdemo/ssh_host_ed25519_key\nPidFile /tmp/sftpdemo/sshd.pid\nAllowUsers dockbridge-demo\nUsePAM yes\nPasswordAuthentication yes\nSubsystem sftp internal-sftp\n' > /tmp/sftpdemo/sshd_config
 sudo /usr/sbin/sshd -f /tmp/sftpdemo/sshd_config
 ```
+
+The host-key step reuses an existing private key, including a root-owned `0600` key,
+without reading or overwriting it. This preserves the key trusted by `accept-new`
+and used by an already-running demo daemon. The other steps are for initial setup:
+if the demo account already exists, skip `useradd`; if the demo daemon is already
+running, reuse it instead of starting a second instance.
+
+If you intentionally regenerate the host key, first stop the demo daemon using
+its PID file, then remove the demo key pair before repeating the key-generation
+step. Also reset only the disposable `known_hosts_path` file dedicated to this
+demo (see below); `accept-new` rejects changed keys. Do not delete your normal
+known-hosts store.
 
 Use a disposable environment; stop the demo daemon after testing with
 `sudo kill "$(cat /tmp/sftpdemo/sshd.pid)"`, then remove the dedicated account
