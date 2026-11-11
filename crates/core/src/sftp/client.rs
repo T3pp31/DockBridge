@@ -471,9 +471,14 @@ impl<'a> SftpClient<'a> {
             parent,
             Path::new(&partial_file_name(&resume_partial_suffix(local, remote))),
         )?;
-        let Ok(metadata) = self.sftp().metadata(&partial_path).await else {
+        let Ok(metadata) = self.sftp().symlink_metadata(&partial_path).await else {
             return Ok(None);
         };
+        // Do not follow a planted symlink (or open a special file) even for
+        // prefix verification. Only regular partials are resumable.
+        if !metadata.file_type().is_file() {
+            return Ok(None);
+        }
         let Some(size) = metadata.size else {
             return Ok(None);
         };
@@ -1705,6 +1710,21 @@ impl<'a> PartialRemoteTransfer<'a> {
         remote: &str,
         overwrite_policy: TransferOverwritePolicy,
     ) -> Result<Option<Self>, SftpError> {
+        // Like local resume's O_NOFOLLOW, reject symlinks and special files
+        // before opening for write. SFTP v3 has no atomic no-follow OPEN flag,
+        // so this cannot eliminate concurrent pathname replacement races.
+        let Ok(metadata) = client.sftp().symlink_metadata(&partial_path).await else {
+            return Ok(None);
+        };
+        if !metadata.file_type().is_file() {
+            return Ok(None);
+        }
+        if metadata.size != Some(start_offset) {
+            // A truncated or otherwise invalid partial would create a sparse
+            // hole and corrupt the final file. Remove it and restart cleanly.
+            let _ = client.sftp().remove_file(&partial_path).await;
+            return Ok(None);
+        }
         let mut remote_file = match client
             .sftp()
             .open_with_flags(&partial_path, OpenFlags::WRITE)
@@ -1718,17 +1738,13 @@ impl<'a> PartialRemoteTransfer<'a> {
                 return Ok(None);
             }
         };
-        let actual_size = client
-            .sftp()
-            .metadata(&partial_path)
-            .await
-            .ok()
-            .and_then(|metadata| metadata.size)
-            .unwrap_or(0);
-        if actual_size != start_offset {
-            // A truncated or otherwise invalid partial would create a sparse
-            // hole and corrupt the final file. Remove it and restart cleanly.
-            let _ = client.sftp().remove_file(&partial_path).await;
+        // Recheck the opened handle, not the pathname: the entry may have
+        // changed since lstat. Fail closed when FSTAT cannot confirm its type
+        // and size. Do not unlink a pathname that may now name another file.
+        let Ok(metadata) = remote_file.metadata().await else {
+            return Ok(None);
+        };
+        if !metadata.file_type().is_file() || metadata.size != Some(start_offset) {
             return Ok(None);
         }
         use tokio::io::AsyncSeekExt;
@@ -6170,6 +6186,21 @@ mod tests {
             .write_remote_file(&format!("/upload/{partial_local_name}"), &payload[..4])
             .await;
 
+        // A valid regular partial must still reopen for resume, rather than
+        // silently falling back to a full upload.
+        let resumed = PartialRemoteTransfer::begin_resume(
+            &client,
+            format!("/upload/{partial_local_name}"),
+            4,
+            &local_display,
+            remote,
+            TransferOverwritePolicy::default(),
+        )
+        .await
+        .unwrap();
+        assert!(resumed.is_some());
+        drop(resumed);
+
         // When: the upload runs to the same paths
         client.upload(&local_path, remote).await.unwrap();
 
@@ -6180,6 +6211,70 @@ mod tests {
             .unwrap();
         assert_eq!(contents, payload);
         assert!(server.remote_partial_paths().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn upload_restarts_without_following_partial_symlink() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        let payload = b"AAAABBBBCCCC";
+        tokio::fs::write(&local_path, payload).await.unwrap();
+        let local = local_path.display().to_string();
+        let remote = "/upload/file.bin";
+        let partial_path =
+            partial_remote_path_for_suffix(remote, &resume_partial_suffix(&local, remote)).unwrap();
+        let planted_link = server.root.join(partial_path.trim_start_matches('/'));
+        // Matching bytes and size would pass the old STAT/prefix checks and
+        // allow the upload to append to this unrelated file through the link.
+        server.write_remote_file("/upload/victim.bin", b"AAAA").await;
+        std::os::unix::fs::symlink("victim.bin", &planted_link).unwrap();
+
+        assert_eq!(
+            client
+                .find_resumable_upload_offset(payload.len() as u64, "/upload", &local, remote)
+                .await
+                .unwrap(),
+            None
+        );
+        // Recheck at reopen too, even if the caller already verified a prefix.
+        let resumed = PartialRemoteTransfer::begin_resume(
+            &client,
+            partial_path,
+            4,
+            &local,
+            remote,
+            TransferOverwritePolicy::default(),
+        )
+        .await
+        .unwrap();
+        assert!(resumed.is_none());
+
+        client.upload(&local_path, remote).await.unwrap();
+
+        let destination = server.root.join("upload/file.bin");
+        assert_eq!(tokio::fs::read(&destination).await.unwrap(), payload);
+        assert!(tokio::fs::symlink_metadata(&destination)
+            .await
+            .unwrap()
+            .is_file());
+        assert_eq!(
+            tokio::fs::read(server.root.join("upload/victim.bin"))
+                .await
+                .unwrap(),
+            b"AAAA"
+        );
+        assert!(tokio::fs::symlink_metadata(&planted_link)
+            .await
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        // Only the pre-existing, rejected link remains; the fresh exclusive
+        // partial used by the restarted upload was committed successfully.
+        assert_eq!(server.remote_partial_paths(), vec![planted_link]);
     }
 
     #[tokio::test]
@@ -6283,6 +6378,54 @@ mod tests {
             payload
         );
         assert!(server.remote_partial_paths().is_empty());
+    }
+
+    #[tokio::test]
+    async fn upload_resume_validates_opened_handle_after_path_replacement() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local = "source.bin";
+        let remote = "/upload/file.bin";
+        let partial_path =
+            partial_remote_path_for_suffix(remote, &resume_partial_suffix(local, remote)).unwrap();
+        server.write_remote_file(&partial_path, b"AAAA").await;
+        let partial_on_disk = server.root.join(partial_path.trim_start_matches('/'));
+        let opened_path = server.root.join("upload/opened.bin");
+        server
+            .failures
+            .pause_after_open
+            .store(true, Ordering::SeqCst);
+
+        let resume = PartialRemoteTransfer::begin_resume(
+            &client,
+            partial_path.clone(),
+            4,
+            local,
+            remote,
+            TransferOverwritePolicy::default(),
+        );
+        let replace_path = async {
+            server.failures.file_opened.notified().await;
+            // The OPEN handle stays attached to this now-truncated inode,
+            // while a pathname-based STAT would see a valid four-byte file.
+            tokio::fs::rename(&partial_on_disk, &opened_path)
+                .await
+                .unwrap();
+            tokio::fs::write(&opened_path, b"AA").await.unwrap();
+            tokio::fs::write(&partial_on_disk, b"AAAA").await.unwrap();
+            server.failures.continue_open.notify_one();
+        };
+        let (resumed, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(resume, replace_path)
+        })
+        .await
+        .expect("resume and pathname replacement should finish");
+
+        assert!(resumed.unwrap().is_none());
+        // Reject the stale handle without deleting the replacement pathname.
+        assert_eq!(tokio::fs::read(&partial_on_disk).await.unwrap(), b"AAAA");
+        assert_eq!(tokio::fs::read(&opened_path).await.unwrap(), b"AA");
     }
 
     #[tokio::test]

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reject symlink and non-regular remote upload partials before resuming, and
+  recheck the opened handle's type and size before writing (#1230).
 - Clear update-check ETags when the release-body cache is missing, unreadable, or corrupt (#1143)
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
 - Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
