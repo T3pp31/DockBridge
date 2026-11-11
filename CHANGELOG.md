@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clear update-check ETags when the release-body cache is missing, unreadable, or corrupt (#1143)
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
 - Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
+- Allow ExpandingFrame content to grow and shrink after measurement in scroll containers (#1185)
 - Avoid mirroring unreadable local directories, repeated local symlink targets,
   and duplicate remote directory listing entries (#1166).
 
