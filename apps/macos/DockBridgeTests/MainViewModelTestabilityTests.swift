@@ -101,6 +101,135 @@ final class MainViewModelTestabilityTests: XCTestCase {
         )
     }
 
+    private final class RecordingFileDropScopeService: FileDropSecurityScopeService {
+        let deniedURLs: Set<URL>
+        let stopExpectation: XCTestExpectation?
+        private(set) var startedURLs: [URL] = []
+        private(set) var stoppedURLs: [URL] = []
+
+        init(deniedURLs: Set<URL> = [], stopExpectation: XCTestExpectation? = nil) {
+            self.deniedURLs = deniedURLs
+            self.stopExpectation = stopExpectation
+        }
+
+        func beginAccessing(_ url: URL) -> Bool {
+            startedURLs.append(url)
+            return !deniedURLs.contains(url)
+        }
+
+        func stopAccessing(_ url: URL) {
+            stoppedURLs.append(url)
+            stopExpectation?.fulfill()
+        }
+    }
+
+    private func prepareExternalUploadFiles(_ names: [String]) throws -> [URL] {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        bridge.directoryListings["/target"] = []
+        viewModel.remotePath = "/target"
+        var config = settings.loadConfig()
+        config.transferOverwritePolicy = .replace
+        settings.saveConfig(config)
+        return try names.map { name in
+            let url = baseDirectory.appendingPathComponent(name)
+            try "upload source".write(to: url, atomically: true, encoding: .utf8)
+            return url
+        }
+    }
+
+    func testExternalUploadReportsPartialScopeFailuresAfterSuccessfulUploads() async throws {
+        let urls = try prepareExternalUploadFiles(["first.txt", "denied.txt", "last.txt", "also-denied.txt"])
+        let stopped = expectation(description: "Acquired scopes released after batch")
+        stopped.expectedFulfillmentCount = 2
+        let scopes = RecordingFileDropScopeService(deniedURLs: [urls[1], urls[3]], stopExpectation: stopped)
+
+        let accepted = FileDropTransferKickoff.acceptExternalUploads(
+            urls: urls, viewModel: viewModel, toRemoteDirectory: "/target", bookmarkService: scopes
+        )
+        viewModel.remotePath = "/elsewhere"
+        bridge.directoryListings["/elsewhere"] = []
+
+        XCTAssertTrue(accepted, "A partial drop still starts the accessible uploads")
+        await fulfillment(of: [stopped], timeout: 2)
+        XCTAssertEqual(scopes.startedURLs, urls)
+        XCTAssertEqual(scopes.stoppedURLs, [urls[0], urls[2]])
+        XCTAssertEqual(bridge.uploaded.map(\.localPath), [urls[0].path, urls[2].path])
+        XCTAssertEqual(bridge.uploaded.map(\.remoteDirectory), ["/target", "/target"])
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            FileDropError.unreadableSource.localizedDescription + "\ndenied.txt\nalso-denied.txt"
+        )
+    }
+
+    func testExternalUploadScopeWarningPreservesTransferFailure() async throws {
+        let urls = try prepareExternalUploadFiles(["upload-fails.txt", "denied.txt"])
+        bridge.uploadFails = true
+        let stopped = expectation(description: "Scope released after failed upload")
+        let scopes = RecordingFileDropScopeService(deniedURLs: [urls[1]], stopExpectation: stopped)
+
+        XCTAssertTrue(FileDropTransferKickoff.acceptExternalUploads(
+            urls: urls, viewModel: viewModel, bookmarkService: scopes
+        ))
+        await fulfillment(of: [stopped], timeout: 2)
+
+        let message = try XCTUnwrap(viewModel.errorMessage)
+        let transferError = DockBridgeError.Other(message: "simulated upload failure").dockBridgeUserMessage
+        XCTAssertEqual(message, transferError + "\n\n" + FileDropError.unreadableSource.localizedDescription + "\ndenied.txt")
+        XCTAssertEqual(bridge.uploaded.map(\.localPath), [urls[0].path])
+        XCTAssertEqual(scopes.stoppedURLs, [urls[0]])
+    }
+
+    func testExternalUploadRejectsAllScopeFailuresWithFilenames() throws {
+        let urls = try prepareExternalUploadFiles(["denied.txt", "also-denied.txt"])
+        let scopes = RecordingFileDropScopeService(deniedURLs: Set(urls))
+
+        XCTAssertFalse(FileDropTransferKickoff.acceptExternalUploads(
+            urls: urls, viewModel: viewModel, bookmarkService: scopes
+        ))
+
+        XCTAssertEqual(scopes.startedURLs, urls)
+        XCTAssertTrue(scopes.stoppedURLs.isEmpty, "Failed acquisitions must not be released")
+        XCTAssertTrue(bridge.uploaded.isEmpty)
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            FileDropError.unreadableSource.localizedDescription + "\ndenied.txt\nalso-denied.txt"
+        )
+    }
+
+    func testExternalUploadRejectsEmptyAndMissingSourcesBeforeAcquiringScopes() {
+        let scopes = RecordingFileDropScopeService()
+        XCTAssertFalse(FileDropTransferKickoff.acceptExternalUploads(
+            urls: [], viewModel: viewModel, bookmarkService: scopes
+        ))
+        XCTAssertEqual(viewModel.errorMessage, FileDropError.emptyPayload.localizedDescription)
+
+        let missingURL = baseDirectory.appendingPathComponent("missing.txt")
+        XCTAssertFalse(FileDropTransferKickoff.acceptExternalUploads(
+            urls: [missingURL], viewModel: viewModel, bookmarkService: scopes
+        ))
+        XCTAssertEqual(viewModel.errorMessage, FileDropError.unreadableSource.localizedDescription)
+        XCTAssertTrue(scopes.startedURLs.isEmpty)
+        XCTAssertTrue(scopes.stoppedURLs.isEmpty)
+        XCTAssertTrue(bridge.uploaded.isEmpty)
+    }
+
+    func testExternalUploadWithAllScopesSucceedsWithoutWarning() async throws {
+        let urls = try prepareExternalUploadFiles(["first.txt", "last.txt"])
+        let stopped = expectation(description: "All scopes released after uploads")
+        stopped.expectedFulfillmentCount = urls.count
+        let scopes = RecordingFileDropScopeService(stopExpectation: stopped)
+
+        XCTAssertTrue(FileDropTransferKickoff.acceptExternalUploads(
+            urls: urls, viewModel: viewModel, bookmarkService: scopes
+        ))
+        await fulfillment(of: [stopped], timeout: 2)
+
+        XCTAssertEqual(scopes.startedURLs, urls)
+        XCTAssertEqual(scopes.stoppedURLs, urls)
+        XCTAssertEqual(bridge.uploaded.map(\.localPath), urls.map(\.path))
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
     func testRemoteMoveRequiresKnownAbsentDestination() async {
         bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
         bridge.directoryListings["/"] = []
@@ -122,6 +251,57 @@ final class MainViewModelTestabilityTests: XCTestCase {
         XCTAssertEqual(bridge.renamed.first?.to, "/target/file.txt")
     }
 
+    func testRemoteRenameWithUnchangedNameClosesWithoutRemoteOperations() async {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+
+        for isDirectory in [false, true] {
+            let target = makeRemoteItem(name: "old.txt", path: "/target/old.txt", isDirectory: isDirectory)
+            bridge.directoryListings["/target"] = [target]
+            viewModel.beginRename(item: target)
+            XCTAssertEqual(viewModel.renameText, target.name)
+
+            await viewModel.commitRename()
+
+            XCTAssertNil(viewModel.errorMessage)
+            XCTAssertNil(viewModel.renameTarget)
+            XCTAssertTrue(viewModel.renameText.isEmpty)
+            XCTAssertTrue(bridge.listedDirectories.isEmpty)
+            XCTAssertTrue(bridge.renamed.isEmpty)
+        }
+    }
+
+    func testRemoteRenameWithTrimmedUnchangedNameDoesNotRequireDirectoryListing() async {
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        // No listing is configured: a destination check would fail.
+        viewModel.beginRename(item: makeRemoteItem(name: "old.txt", path: "/target/old.txt"))
+        viewModel.renameText = " \told.txt\n"
+
+        await viewModel.commitRename()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.renameTarget)
+        XCTAssertTrue(viewModel.renameText.isEmpty)
+        XCTAssertTrue(bridge.listedDirectories.isEmpty)
+        XCTAssertTrue(bridge.renamed.isEmpty)
+    }
+
+    func testRemoteRenameWithInvalidNameKeepsSheetOpenWithoutRemoteOperations() async {
+        let target = makeRemoteItem(name: "old.txt", path: "/target/old.txt")
+        for name in ["", " \t\n", ".", "..", "bad/name", "bad\0name"] {
+            viewModel.errorMessage = nil
+            viewModel.beginRename(item: target)
+            viewModel.renameText = name
+
+            await viewModel.commitRename()
+
+            XCTAssertEqual(viewModel.errorMessage, RemoteEntryNameError.invalidCharacters.localizedDescription)
+            XCTAssertEqual(viewModel.renameTarget?.path, target.path)
+            XCTAssertEqual(viewModel.renameText, name)
+            XCTAssertTrue(bridge.listedDirectories.isEmpty)
+            XCTAssertTrue(bridge.renamed.isEmpty)
+        }
+    }
+
     func testRemoteRenameRequiresKnownAbsentDestination() async {
         bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
         bridge.directoryListings["/"] = []
@@ -137,12 +317,18 @@ final class MainViewModelTestabilityTests: XCTestCase {
         await viewModel.commitRename()
         XCTAssertTrue(bridge.renamed.isEmpty)
         XCTAssertNotNil(viewModel.renameTarget)
+        XCTAssertEqual(viewModel.renameText, "new.txt")
+        XCTAssertEqual(viewModel.errorMessage, String(localized: "A file already exists at the destination."))
 
+        viewModel.errorMessage = nil
         bridge.directoryListings["/target"] = []
         await viewModel.commitRename()
         XCTAssertEqual(bridge.renamed.count, 1)
+        XCTAssertEqual(bridge.renamed.first?.from, "/target/old.txt")
         XCTAssertEqual(bridge.renamed.first?.to, "/target/new.txt")
         XCTAssertNil(viewModel.renameTarget)
+        XCTAssertTrue(viewModel.renameText.isEmpty)
+        XCTAssertNil(viewModel.errorMessage)
     }
 
     private func makeTrackedRemoteEditFile(
@@ -168,6 +354,79 @@ final class MainViewModelTestabilityTests: XCTestCase {
             viewModel.trackRemoteEditFile(localURL: file, remotePath: remotePath)
         )
         return (session, file)
+    }
+
+    // MARK: - Local table primary action
+
+    func testLocalPrimaryActionSkipsParentInMultipleSelectionAndPreservesStableFallback() async throws {
+        let directory = baseDirectory.appendingPathComponent("primary-action", isDirectory: true)
+        let folder = directory.appendingPathComponent("folder", isDirectory: true)
+        let firstFile = directory.appendingPathComponent("a.txt")
+        let secondFile = directory.appendingPathComponent("b.txt")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "a".write(to: firstFile, atomically: true, encoding: .utf8)
+        try "b".write(to: secondFile, atomically: true, encoding: .utf8)
+        viewModel.localPath = directory
+
+        let loaded = expectation(description: "Local items loaded")
+        let subscription = viewModel.$localItems.dropFirst().sink { _ in loaded.fulfill() }
+        viewModel.reloadLocal()
+        await fulfillment(of: [loaded], timeout: 5)
+        subscription.cancel()
+
+        XCTAssertEqual(viewModel.localItems.map(\.name), ["folder", "a.txt", "b.txt"])
+        // Selection IDs must come from the listing, not fixture URL strings:
+        // macOS can resolve temporary-directory aliases when enumerating URLs.
+        let folderItem = try XCTUnwrap(viewModel.localItems.first { $0.name == "folder" })
+        let firstFileItem = try XCTUnwrap(viewModel.localItems.first { $0.name == "a.txt" })
+        let secondFileItem = try XCTUnwrap(viewModel.localItems.first { $0.name == "b.txt" })
+        let parent = try XCTUnwrap(viewModel.localTableItems.first)
+        XCTAssertTrue(parent.isParentDirectory)
+        let unknownID = directory.appendingPathComponent("missing.txt").path
+        let pane = LocalPaneView(viewModel: viewModel)
+        let cases: [(name: String, ids: Set<String>, expectedID: String?)] = [
+            ("empty", [], nil),
+            ("unknown", [unknownID], nil),
+            ("parent only", [parent.id], parent.id),
+            ("folder only", [folderItem.id], folderItem.id),
+            ("file only", [firstFileItem.id], firstFileItem.id),
+            ("parent and folder", [parent.id, folderItem.id], folderItem.id),
+            ("parent and file", [parent.id, firstFileItem.id], firstFileItem.id),
+            ("multiple files", [secondFileItem.id, firstFileItem.id], firstFileItem.id),
+            ("parent and multiple files", [parent.id, secondFileItem.id, firstFileItem.id], firstFileItem.id),
+            ("all rows", Set(viewModel.localTableItems.map(\.id)), folderItem.id),
+            ("parent and unknown", [parent.id, unknownID], nil),
+        ]
+        for testCase in cases {
+            XCTAssertEqual(
+                pane.primaryActionLocalItem(from: testCase.ids)?.id,
+                testCase.expectedID,
+                testCase.name
+            )
+        }
+
+        // Opening an all-selected table must enter the child, not the parent,
+        // and the back history must still point to the original directory.
+        viewModel.selectedLocalItemIDs = Set(viewModel.localTableItems.map(\.id))
+        let target = try XCTUnwrap(pane.primaryActionLocalItem(from: viewModel.selectedLocalItemIDs))
+        viewModel.openLocalTableItem(target)
+        XCTAssertEqual(viewModel.localPath.path, folderItem.url.path)
+        viewModel.navigateLocalBack()
+        XCTAssertEqual(viewModel.localPath.path, directory.path)
+    }
+
+    func testLocalPrimaryActionPreservesParentOnlyNavigationAndHistory() throws {
+        viewModel.localPath = baseDirectory
+        let parent = try XCTUnwrap(viewModel.localTableItems.first)
+        XCTAssertTrue(parent.isParentDirectory)
+        let pane = LocalPaneView(viewModel: viewModel)
+        let target = try XCTUnwrap(pane.primaryActionLocalItem(from: [parent.id]))
+
+        viewModel.openLocalTableItem(target)
+
+        XCTAssertEqual(viewModel.localPath.path, baseDirectory.deletingLastPathComponent().path)
+        viewModel.navigateLocalBack()
+        XCTAssertEqual(viewModel.localPath.path, baseDirectory.path)
     }
 
     // MARK: - Hidden files

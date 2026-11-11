@@ -16,8 +16,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Accept local items dropped back onto the same local pane as a no-op instead of showing an invalid-move error (#1190)
+- Local pane double-click fallback no longer navigates to `..` when it is part of a multiple selection; selecting only `..` still opens the parent directory (#1191)
+- Keep prompted credentials in a clearable buffer until connection handoff, and clear it on rejected input or failed attempts (#1188)
+- SFTP URL imports now use the saved profile list directly, avoiding stale UI state and duplicate profiles when a post-save reload would fail (#1186).
+- リモートのリネームを名前の変更なしで確定した際、衝突エラーを出さずにシートを閉じるよう修正 (#1187)
+- Wait for cancelled synchronous bridge operations to finish before reporting timeout, and dismiss cancelled authentication prompts (#1184)
+- Prevent update disk image attach/detach from hanging when hdiutil emits more output than a pipe can buffer (#1180)
+- 保存済みの接続プロファイル削除を、後続の信頼エントリ削除エラーで失敗と誤報告しないよう修正 (#1181)
+- Reject local moves into self, the current parent, or descendants through symlinked ancestors while still allowing moves of symlinks themselves (#1178)
+- Preserve local directory types via a separate file-system lookup when resource metadata is unreadable (#1179)
+- Omit unrepresentable transfer ETAs to prevent crashes at very low transfer speeds or large remaining byte counts (#1152).
+- Clamp oversized UInt64 settings when saving on macOS to prevent integer conversion crashes (#1148)
+- Use an operation-neutral message for remote read and unspecified permission-denied errors instead of incorrectly reporting missing write permissions (#1147).
+- Clear update-check ETags when the release-body cache is missing, unreadable, or corrupt (#1143)
 - README, CHANGELOG, docs, and download site now accurately describe unsigned GitHub Release DMGs (#136)
 - Local directory walk symlink cycle detection when `follow_symlinks` is enabled (#120)
+- 外部ドロップで一部ファイルのセキュリティスコープを取得できなかった場合に、転送後も対象ファイル名を通知するよう修正 (#1189)
+- Allow ExpandingFrame content to grow and shrink after measurement in scroll containers (#1185)
+- Avoid mirroring unreadable local directories, repeated local symlink targets,
+  and duplicate remote directory listing entries (#1166).
 
 ## [v1.1.1] - 2026-07-24
 
