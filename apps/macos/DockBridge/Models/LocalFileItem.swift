@@ -9,16 +9,21 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
 
     var id: String { url.path }
 
-    init(url: URL) {
+    init(
+        url: URL,
+        resourceValuesProvider: (URL, Set<URLResourceKey>) throws -> URLResourceValues = {
+            try $0.resourceValues(forKeys: $1)
+        }
+    ) {
         self.url = url
         self.name = url.lastPathComponent
 
-        let values = try? url.resourceValues(forKeys: [
+        let values = try? resourceValuesProvider(url, [
             .isDirectoryKey,
             .fileSizeKey,
             .contentModificationDateKey,
         ])
-        self.isDirectory = values?.isDirectory ?? false
+        self.isDirectory = values?.isDirectory ?? Self.isDirectoryOnFileSystem(at: url)
         self.size = Int64(values?.fileSize ?? 0)
         self.modificationDate = values?.contentModificationDate
     }
@@ -26,7 +31,7 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
     init(url: URL, resourceValues values: URLResourceValues) {
         self.url = url
         self.name = url.lastPathComponent
-        self.isDirectory = values.isDirectory ?? false
+        self.isDirectory = values.isDirectory ?? Self.isDirectoryOnFileSystem(at: url)
         self.size = Int64(values.fileSize ?? 0)
         self.modificationDate = values.contentModificationDate
     }
@@ -53,9 +58,21 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
 
     var modificationSortKey: Date { modificationDate ?? .distantPast }
 
+    private static func isDirectoryOnFileSystem(at url: URL) -> Bool {
+        // A size/date lookup can fail even when the entry's type is still readable.
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            return false
+        }
+        return isDirectory.boolValue
+    }
+
     static func list(
         directory: URL,
-        showHiddenFiles: Bool
+        showHiddenFiles: Bool,
+        resourceValuesProvider: (URL, Set<URLResourceKey>) throws -> URLResourceValues = {
+            try $0.resourceValues(forKeys: $1)
+        }
     ) throws -> [LocalFileItem] {
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
         let urls = try FileManager.default.contentsOfDirectory(
@@ -70,10 +87,11 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
         // between the directory listing and this call, or an unreadable
         // protected directory.
         let items = urls.compactMap { url -> LocalFileItem? in
-            guard let values = try? url.resourceValues(forKeys: keys) else {
+            guard let values = try? resourceValuesProvider(url, keys) else {
                 // Keep the entry visible with unknown size/date instead of
-                // silently dropping it (issue #686).
-                return LocalFileItem(url: url)
+                // silently dropping it (issue #686). The initializer also tries
+                // an independent type lookup if resource values remain unreadable.
+                return LocalFileItem(url: url, resourceValuesProvider: resourceValuesProvider)
             }
             return LocalFileItem(url: url, resourceValues: values)
         }

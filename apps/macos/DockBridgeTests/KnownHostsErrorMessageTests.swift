@@ -53,12 +53,79 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         XCTAssertTrue(connectedTitle.contains("user@host:22"))
     }
 
-    func testPermissionDeniedErrorMessageMentionsRemoteDirectory() {
+    func testUploadPermissionDeniedErrorMessageMentionsRemoteDirectory() {
         let message = DockBridgeError.friendlyMessage(for: "failed to upload: permission denied")
         XCTAssertEqual(
             message,
             String(localized: "You do not have write permission on the remote side. Check the remote working directory.")
         )
+    }
+
+    func testReadAndUnspecifiedPermissionDeniedMessagesAreOperationNeutral() {
+        let messages = [
+            "permission denied",
+            "PeRmIsSiOn DeNiEd",
+            "failed to list directory '/root': Permission denied",
+            "failed to download '/root/private.txt' to '/tmp/private.txt': Permission denied",
+            "failed to open '/root/private.txt': Permission denied",
+            "failed to stat '/root/private.txt': Permission denied",
+            "failed to canonicalize remote path '/root': Permission denied",
+            // Write-operation tokens in paths do not identify the operation.
+            "failed to download '/srv/failed to upload.txt' to '/tmp/a': Permission denied",
+            "failed to list directory '/srv/failed to create directory': Permission denied",
+        ]
+        let expected = String(localized: "You do not have permission to access this path on the remote side.")
+
+        for raw in messages {
+            XCTAssertEqual(DockBridgeError.friendlyMessage(for: raw), expected, raw)
+        }
+    }
+
+    func testPermissionDeniedIsOperationNeutralThroughMessageBasedErrorCases() {
+        let raw = "failed to list directory '/root': Permission denied"
+        let errors: [DockBridgeError] = [
+            .Other(message: raw),
+            .ConnectionLost(message: raw),
+            .Config(message: raw),
+        ]
+
+        for error in errors {
+            XCTAssertEqual(
+                error.dockBridgeUserMessage,
+                String(localized: "You do not have permission to access this path on the remote side.")
+            )
+        }
+    }
+
+    func testPermissionDeniedPreservesMoreSpecificErrorMessages() {
+        let cases = [
+            (
+                "authentication failed: Permission denied",
+                String(localized: "Check the username and password.")
+            ),
+            (
+                "failed to load private key from /tmp/key: Permission denied",
+                String(localized: "Unable to load the private key. Check the key file path, permissions, and passphrase.")
+            ),
+            (
+                "failed to read known hosts store: Permission denied",
+                String(localized: "Unable to load the host key store. Quit the app, back up or remove known_hosts.json, then reconnect.")
+            ),
+        ]
+
+        for (raw, expected) in cases {
+            XCTAssertEqual(DockBridgeError.friendlyMessage(for: raw), expected, raw)
+        }
+    }
+
+    func testReadErrorsWithoutPermissionDeniedKeepRawMessage() {
+        let messages = [
+            "failed to download '/remote/a' to '/tmp/a': No such file",
+            "failed to list directory '/remote': server-specific error",
+        ]
+        for raw in messages {
+            XCTAssertEqual(DockBridgeError.friendlyMessage(for: raw), raw)
+        }
     }
 
     func testCorruptedKnownHostsErrorMessageIsUserFriendly() {
@@ -88,6 +155,71 @@ final class KnownHostsErrorMessageTests: XCTestCase {
         XCTAssertEqual(
             message,
             String(localized: "The remote destination directory does not exist. Open a valid directory in the remote pane and try again.")
+        )
+    }
+
+    func testNonHostKeyMismatchMessagesPreserveOriginalMessage() {
+        let messages = [
+            "mismatch",
+            "failed to upload: size mismatch",
+            "checksum mismatch after download",
+            "signature mismatch",
+            "configuration value mismatch",
+            "HASH MISMATCH"
+        ]
+
+        for raw in messages {
+            XCTAssertEqual(DockBridgeError.friendlyMessage(for: raw), raw, raw)
+            let errors: [DockBridgeError] = [
+                .Other(message: raw),
+                .Config(message: raw),
+                .ConnectionLost(message: raw)
+            ]
+            for error in errors {
+                XCTAssertEqual(error.userFriendlyMessage, raw, raw)
+            }
+        }
+    }
+
+    func testHostKeyMismatchErrorMessageIsUserFriendly() {
+        let expected = String(localized: "The server's identity has changed. Disconnect and verify with your server administrator.")
+        for raw in [
+            "host key mismatch for example.com:22",
+            "SSH: HOST KEY MISMATCH for example.com:22"
+        ] {
+            XCTAssertEqual(DockBridgeError.friendlyMessage(for: raw), expected, raw)
+            XCTAssertEqual(DockBridgeError.Other(message: raw).userFriendlyMessage, expected, raw)
+        }
+        XCTAssertEqual(
+            DockBridgeError.HostKeyMismatch(host: "example.com", port: 22).userFriendlyMessage,
+            expected
+        )
+    }
+
+    func testKnownHostsErrorTakesPrecedenceOverHostKeyMismatch() {
+        XCTAssertEqual(
+            DockBridgeError.friendlyMessage(for: "failed to read known_hosts.json: host key mismatch"),
+            String(localized: "Unable to load the host key store. Quit the app, back up or remove known_hosts.json, then reconnect.")
+        )
+    }
+
+    func testHostKeyRejectedWithUnrelatedMismatchUsesRejectionMessage() {
+        XCTAssertEqual(
+            DockBridgeError.friendlyMessage(
+                for: "host key rejected by user for example.com:22 (checksum mismatch)"
+            ),
+            String(localized: "Connection aborted because the host key was not approved.")
+        )
+    }
+
+    func testNonHostKeyMismatchDoesNotOverrideOtherFriendlyMappings() {
+        XCTAssertEqual(
+            DockBridgeError.friendlyMessage(for: "authentication failed: signature mismatch"),
+            String(localized: "Check the username and password.")
+        )
+        XCTAssertEqual(
+            DockBridgeError.friendlyMessage(for: "failed to upload '/srv/mismatch.txt': permission denied"),
+            String(localized: "You do not have write permission on the remote side. Check the remote working directory.")
         )
     }
 
@@ -238,6 +370,16 @@ final class ErrorRecoveryKindTests: XCTestCase {
         XCTAssertNotEqual(
             MainViewModel.recoveryKind(for: "permission denied", isDisconnected: false),
             .editConnection
+        )
+    }
+
+    func testReadPermissionDeniedDoesNotSuggestCredentialOrTransferRecovery() {
+        let friendly = DockBridgeError.friendlyMessage(
+            for: "failed to list directory '/root': Permission denied"
+        )
+        XCTAssertEqual(
+            MainViewModel.recoveryKind(for: friendly, isDisconnected: false),
+            .none
         )
     }
 

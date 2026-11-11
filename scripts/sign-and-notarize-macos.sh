@@ -36,11 +36,12 @@ resolve_sign_identity() {
     return
   fi
 
-  local identity
-  identity="$(
-    security find-identity -v -p codesigning 2>/dev/null \
-      | awk -F'"' '/Developer ID Application/ { print $2; exit }'
-  )"
+  local identities identity
+  if ! identities="$(security find-identity -v -p codesigning)"; then
+    echo "Failed to query signing identities from keychain." >&2
+    exit 1
+  fi
+  identity="$(awk -F'"' '/Developer ID Application/ { print $2; exit }' <<< "$identities")"
 
   if [[ -z "$identity" ]]; then
     echo "No Developer ID Application identity found in the keychain." >&2
