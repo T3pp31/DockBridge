@@ -117,7 +117,15 @@ final class ConnectionStore: @unchecked Sendable {
         var profiles = try readProfilesFromDisk()
         profiles.removeAll { $0.id == id }
         try saveProfiles(profiles)
-        try trustStore.removeTrust(for: id)
+        do {
+            try trustStore.removeTrust(for: id)
+        } catch {
+            // The encrypted profile file is already saved. A secondary trust
+            // cleanup failure must not prevent callers from updating their list.
+            AppLogging.connection.error(
+                "profile trust removal failed after deleting profile: \(error.localizedDescription, privacy: .public)"
+            )
+        }
         return profiles
     }
 

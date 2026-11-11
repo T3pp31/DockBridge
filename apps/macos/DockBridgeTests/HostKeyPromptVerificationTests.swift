@@ -151,6 +151,147 @@ final class HostKeyPromptVerificationTests: XCTestCase {
     }
 
     @MainActor
+    func testHostKeyPromptCancellationDismissesChallengeAndFinishes() async throws {
+        let bridge = try makeBridge(connectionTimeoutSecs: 60)
+        let challenge = HostKeyChallenge(
+            host: "127.0.0.1",
+            port: 2222,
+            fingerprintSha256: "SHA256:cancelled-prompt",
+            expectedFingerprintSha256: nil
+        )
+        let completed = expectation(description: "Cancelled host key prompt finished")
+        let task = Task { @MainActor in
+            let accepted = await bridge.awaitHostKeyDecision(for: challenge)
+            XCTAssertFalse(accepted)
+            completed.fulfill()
+        }
+        // Release a stranded continuation if cancellation regresses, without
+        // making an unbounded await on the prompt task part of this test.
+        defer {
+            task.cancel()
+            bridge.respondToHostKeyChallenge(accepted: false)
+        }
+
+        try await waitForPendingHostKeyChallenge(on: bridge)
+        task.cancel()
+        await fulfillment(of: [completed], timeout: 2)
+        XCTAssertNil(bridge.pendingHostKeyChallenge)
+        XCTAssertNil(bridge.hostKeyContinuation)
+    }
+
+    @MainActor
+    func testKeyboardInteractiveCancellationDismissesChallengeAndFinishes() async throws {
+        let bridge = try makeBridge(connectionTimeoutSecs: 60)
+        let completed = expectation(description: "Cancelled keyboard-interactive prompt finished")
+        let task = Task { @MainActor in
+            let answers = await bridge.awaitKbdInteractiveAnswers(
+                name: "Authentication",
+                instructions: "",
+                prompts: [KbdInteractivePromptRecord(text: "Password:", echo: false)]
+            )
+            XCTAssertEqual(answers, [nil])
+            completed.fulfill()
+        }
+        defer {
+            task.cancel()
+            bridge.respondToKbdInteractiveChallenge(nil)
+        }
+
+        try await waitForPendingKbdInteractiveChallenge(on: bridge)
+        task.cancel()
+        await fulfillment(of: [completed], timeout: 2)
+        XCTAssertNil(bridge.pendingKbdInteractiveChallenge)
+        XCTAssertNil(bridge.kbdInteractiveContinuation)
+    }
+
+    @MainActor
+    func testKeyboardInteractiveAnswerStillSucceeds() async throws {
+        let bridge = try makeBridge(connectionTimeoutSecs: 60)
+        let completed = expectation(description: "Answered keyboard-interactive prompt finished")
+        let task = Task { @MainActor in
+            let answers = await bridge.awaitKbdInteractiveAnswers(
+                name: "Authentication",
+                instructions: "",
+                prompts: [KbdInteractivePromptRecord(text: "Code:", echo: true)]
+            )
+            XCTAssertEqual(answers, ["123456"])
+            completed.fulfill()
+        }
+        defer {
+            task.cancel()
+            bridge.respondToKbdInteractiveChallenge(nil)
+        }
+
+        try await waitForPendingKbdInteractiveChallenge(on: bridge)
+        bridge.respondToKbdInteractiveChallenge(["123456"])
+        await fulfillment(of: [completed], timeout: 2)
+        XCTAssertNil(bridge.pendingKbdInteractiveChallenge)
+        XCTAssertNil(bridge.kbdInteractiveContinuation)
+    }
+
+    @MainActor
+    func testKeyboardInteractiveTimesOutWhenUnanswered() async throws {
+        let bridge = try makeBridge(connectionTimeoutSecs: 1)
+        let completed = expectation(description: "Unanswered keyboard-interactive prompt timed out")
+        let task = Task { @MainActor in
+            let answers = await bridge.awaitKbdInteractiveAnswers(
+                name: "Authentication",
+                instructions: "",
+                prompts: [KbdInteractivePromptRecord(text: "Code:", echo: true)]
+            )
+            XCTAssertEqual(answers, [nil])
+            completed.fulfill()
+        }
+        defer {
+            task.cancel()
+            bridge.respondToKbdInteractiveChallenge(nil)
+        }
+
+        await fulfillment(of: [completed], timeout: 3)
+        XCTAssertNil(bridge.pendingKbdInteractiveChallenge)
+        XCTAssertNil(bridge.kbdInteractiveContinuation)
+    }
+
+    @MainActor
+    func testAlreadyCancelledPromptsFinishWithoutWaitingForAnswers() async throws {
+        let bridge = try makeBridge(connectionTimeoutSecs: 60)
+        let challenge = HostKeyChallenge(
+            host: "127.0.0.1",
+            port: 2222,
+            fingerprintSha256: "SHA256:already-cancelled-prompt",
+            expectedFingerprintSha256: nil
+        )
+        let completed = expectation(description: "Already cancelled prompts finished")
+        completed.expectedFulfillmentCount = 2
+        let hostKeyTask = Task { @MainActor in
+            let accepted = await bridge.awaitHostKeyDecision(for: challenge)
+            XCTAssertFalse(accepted)
+            completed.fulfill()
+        }
+        hostKeyTask.cancel()
+        let keyboardTask = Task { @MainActor in
+            let answers = await bridge.awaitKbdInteractiveAnswers(
+                name: "Authentication",
+                instructions: "",
+                prompts: [KbdInteractivePromptRecord(text: "Password:", echo: false)]
+            )
+            XCTAssertEqual(answers, [nil])
+            completed.fulfill()
+        }
+        keyboardTask.cancel()
+        defer {
+            bridge.respondToHostKeyChallenge(accepted: false)
+            bridge.respondToKbdInteractiveChallenge(nil)
+        }
+
+        await fulfillment(of: [completed], timeout: 2)
+        XCTAssertNil(bridge.pendingHostKeyChallenge)
+        XCTAssertNil(bridge.hostKeyContinuation)
+        XCTAssertNil(bridge.pendingKbdInteractiveChallenge)
+        XCTAssertNil(bridge.kbdInteractiveContinuation)
+    }
+
+    @MainActor
     func testBuildAppConfigRecordResolvesOpensshPathFromBookmark() throws {
         let defaults = UserDefaults(suiteName: "HostKeyPromptVerificationTests.\(UUID().uuidString)")!
         let settings = AppSettingsService(defaults: defaults)
@@ -248,6 +389,18 @@ final class HostKeyPromptVerificationTests: XCTestCase {
         while bridge.pendingHostKeyChallenge == nil {
             if ContinuousClock.now >= deadline {
                 XCTFail("Expected host key challenge to appear")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    @MainActor
+    private func waitForPendingKbdInteractiveChallenge(on bridge: RustBridgeService) async throws {
+        let deadline = ContinuousClock.now + .seconds(1)
+        while bridge.pendingKbdInteractiveChallenge == nil {
+            if ContinuousClock.now >= deadline {
+                XCTFail("Expected keyboard-interactive challenge to appear")
                 return
             }
             try await Task.sleep(for: .milliseconds(10))
