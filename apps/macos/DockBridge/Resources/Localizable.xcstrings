@@ -2824,6 +2824,22 @@
         }
       }
     },
+    "The connection profile was saved, but Keychain credentials could not be updated. Any entered credentials are available only for this session. %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The connection profile was saved, but Keychain credentials could not be updated. Any entered credentials are available only for this session. %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "接続プロファイルは保存されましたが、Keychainの資格情報を更新できませんでした。入力した資格情報は、このセッション内でのみ使用できます。%@"
+          }
+        }
+      }
+    },
     "The connection was closed. Reconnect and try again.": {
       "localizations": {
         "en": {

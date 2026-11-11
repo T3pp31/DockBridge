@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve entered credentials for the session when saving them to Keychain fails, and clarify that only the connection profile was saved (#1222)
 - Preserve the existing private-key selection when bookmark creation fails during reselection (#1223)
 - 新規セッションの接続失敗時に、最後に開いたセッションではなく直前のアクティブセッションへ戻るよう修正 (#1220)
 - Keep Quick Look's presenter in a non-preview window's responder chain when updating an already focused preview panel (#1221)
