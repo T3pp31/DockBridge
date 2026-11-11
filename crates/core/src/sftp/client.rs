@@ -325,7 +325,8 @@ impl<'a> SftpClient<'a> {
         .await
     }
 
-    /// Uploads a local file in chunks, checking `is_cancelled` before each chunk.
+    /// Uploads a local file in chunks, monitoring `is_cancelled` during resume
+    /// verification and before each chunk.
     pub async fn upload_cancellable(
         &self,
         local_path: &Path,
@@ -366,13 +367,21 @@ impl<'a> SftpClient<'a> {
 
         // Reuse a leftover deterministic partial from a previous attempt so an
         // interrupted upload continues instead of restarting from zero
-        // (issue #313). Cancellation deletes its partial, so cancelled tasks
-        // never resume.
+        // (issue #313). Once opened for transfer, cancellation deletes the
+        // partial. Cancellation during verification returns before opening it
+        // for writing.
         let local_size = local_metadata.as_ref().map(|metadata| metadata.len());
         let resume_offset = match local_size {
             Some(size) => {
-                self.find_resumable_upload_offset(size, &parent, &local, &remote)
-                    .await?
+                let offset = tokio::select! {
+                    biased;
+                    () = cancel_watch(&is_cancelled) => return Err(SftpError::Cancelled),
+                    offset = self.find_resumable_upload_offset(size, &parent, &local, &remote) => offset,
+                };
+                if is_cancelled() {
+                    return Err(SftpError::Cancelled);
+                }
+                offset?
             }
             None => None,
         };
@@ -6180,6 +6189,103 @@ mod tests {
             .unwrap();
         assert_eq!(contents, payload);
         assert!(server.remote_partial_paths().is_empty());
+    }
+
+    #[tokio::test]
+    async fn upload_cancels_while_resume_verification_is_waiting_for_read() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        let chunk = super::RESUME_VERIFICATION_BYTES as usize;
+        let payload = vec![b'A'; chunk * 3 + 17];
+        tokio::fs::write(&local_path, &payload).await.unwrap();
+        let remote = "/upload/file.bin";
+        let partial_path = format!(
+            "/upload/.dockbridge-{}.partial",
+            resume_partial_suffix(&local_path.display().to_string(), remote)
+        );
+        let saved_prefix = &payload[..chunk * 2 + 3];
+        server.write_remote_file(&partial_path, saved_prefix).await;
+        server.write_remote_file(remote, b"existing destination").await;
+        server
+            .failures
+            .read_delay_ms
+            .store(10_000, Ordering::SeqCst);
+        let cancelled = AtomicBool::new(false);
+        let transfer = client.upload_cancellable(
+            &local_path,
+            remote,
+            DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
+            TransferOverwritePolicy::Replace,
+            || cancelled.load(Ordering::SeqCst),
+            |_| panic!("verification must not upload bytes"),
+        );
+        let cancel_during_read = async {
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                server.failures.read_started.notified(),
+            )
+            .await
+            .expect("verification must reach the server READ handler");
+            cancelled.store(true, Ordering::SeqCst);
+        };
+        let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::join!(transfer, cancel_during_read)
+        })
+        .await
+        .expect("cancellation must interrupt the stalled verification READ");
+        assert!(matches!(result, Err(SftpError::Cancelled)));
+        let saved_partial = server.root.join(partial_path.trim_start_matches('/'));
+        assert_eq!(tokio::fs::read(&saved_partial).await.unwrap(), saved_prefix);
+        assert_eq!(
+            tokio::fs::read(server.root.join("upload/file.bin"))
+                .await
+                .unwrap(),
+            b"existing destination"
+        );
+        assert_eq!(server.remote_partial_paths(), vec![saved_partial]);
+    }
+
+    #[tokio::test]
+    async fn upload_cancelled_before_resume_verification_preserves_saved_partial() {
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("file.bin");
+        tokio::fs::write(&local_path, b"AAAABBBBCCCC").await.unwrap();
+        let remote = "/upload/file.bin";
+        let partial_path = format!(
+            "/upload/.dockbridge-{}.partial",
+            resume_partial_suffix(&local_path.display().to_string(), remote)
+        );
+        server.write_remote_file(&partial_path, b"AAAA").await;
+        server
+            .failures
+            .read_delay_ms
+            .store(10_000, Ordering::SeqCst);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.upload_cancellable(
+                &local_path,
+                remote,
+                DEFAULT_TRANSFER_CHUNK_SIZE_BYTES,
+                TransferOverwritePolicy::Replace,
+                || true,
+                |_| panic!("a cancelled upload must not report progress"),
+            ),
+        )
+        .await
+        .expect("an already-cancelled upload must not wait for verification");
+
+        assert!(matches!(result, Err(SftpError::Cancelled)));
+        assert!(!server.remote_file_exists(remote));
+        let saved_partial = server.root.join(partial_path.trim_start_matches('/'));
+        assert_eq!(tokio::fs::read(&saved_partial).await.unwrap(), b"AAAA");
+        assert_eq!(server.remote_partial_paths(), vec![saved_partial]);
     }
 
     #[tokio::test]
