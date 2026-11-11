@@ -6355,7 +6355,10 @@ mod tests {
             .unwrap();
 
             assert!(resumed.is_none(), "unknown size must not allow resume");
-            assert!(!failure.load(Ordering::SeqCst), "STAT injection was not used");
+            assert!(
+                !failure.load(Ordering::SeqCst),
+                "STAT injection was not used"
+            );
             assert_eq!(server.failures.remove_count.load(Ordering::SeqCst), 0);
             assert_eq!(
                 tokio::fs::read(server.root.join(partial_path.trim_start_matches('/')))
