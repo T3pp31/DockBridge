@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 保存済みの接続プロファイル削除を、後続の信頼エントリ削除エラーで失敗と誤報告しないよう修正 (#1181)
 - Reject local moves into self, the current parent, or descendants through symlinked ancestors while still allowing moves of symlinks themselves (#1178)
 - Preserve local directory types via a separate file-system lookup when resource metadata is unreadable (#1179)
+- Preserve expanded aliases and exclusions when reimporting matching `@revoked` or
+  `@cert-authority` known_hosts entries (#1159).
 - Preserve `@revoked` and `@cert-authority` markers on hashed known_hosts entries during OpenSSH export (#1158)
 - CLI `list --output json` now reports non-BrokenPipe write and flush failures instead of silently succeeding with truncated output (#1193).
 - Avoid retaining stdin passwords and passphrases in an unzeroized read-ahead buffer (#1194)
