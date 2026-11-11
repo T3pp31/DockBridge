@@ -380,6 +380,97 @@ extension AppUpdateServiceTests {
         XCTAssertNil(AppUpdateConfig.showExistingETag())
     }
 
+    func testMissingCachedReleaseBodyClearsETag() throws {
+        let cacheURL = Self.testCacheDirectory
+            .appendingPathComponent(AppUpdateConfig.releaseBodyCacheFileName)
+        XCTAssertTrue(AppUpdateConfig.persistReleaseBody(Data("cached release".utf8)))
+        AppUpdateConfig.persistETag("old-etag")
+        try FileManager.default.removeItem(at: cacheURL)
+
+        XCTAssertNil(AppUpdateConfig.showCachedReleaseBody())
+        XCTAssertNil(AppUpdateConfig.showExistingETag())
+    }
+
+    func testUnreadableCachedReleaseBodyClearsBodyAndETag() throws {
+        let cacheURL = Self.testCacheDirectory
+            .appendingPathComponent(AppUpdateConfig.releaseBodyCacheFileName)
+        // A directory at the file path reliably fails Data's file read without
+        // relying on permission bits or the privileges of the test runner.
+        try FileManager.default.createDirectory(at: cacheURL, withIntermediateDirectories: true)
+        AppUpdateConfig.persistETag("old-etag")
+        XCTAssertThrowsError(try Data(contentsOf: cacheURL))
+
+        XCTAssertNil(AppUpdateConfig.showCachedReleaseBody())
+        XCTAssertNil(AppUpdateConfig.showExistingETag())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
+    }
+
+    func testUndecodableCachedReleaseBodyClearsBodyAndETag() throws {
+        let cacheURL = Self.testCacheDirectory
+            .appendingPathComponent(AppUpdateConfig.releaseBodyCacheFileName)
+        // Corrupt the on-disk cache envelope, not just the inner release body.
+        try Data("not json".utf8).write(to: cacheURL)
+        AppUpdateConfig.persistETag("old-etag")
+
+        XCTAssertNil(AppUpdateConfig.showCachedReleaseBody())
+        XCTAssertNil(AppUpdateConfig.showExistingETag())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
+    }
+
+    func testValidCachedReleaseOn304IsReevaluatedWithoutClearingETag() async throws {
+        let body = Data("{\"tag_name\":\"v0.2.0\",\"html_url\":\"\(releasePageURL)\",\"assets\":[]}".utf8)
+        let session = SequenceURLSession(responses: [
+            (200, body, "valid-etag"),
+            (304, Data(), nil),
+            (304, Data(), nil),
+            (304, Data(), nil)
+        ])
+        let service = AppUpdateService(session: session)
+
+        let initial = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+        let pending = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+        let installed = try await service.checkForUpdate(currentVersion: "0.2.0", skippedVersion: nil)
+        let skipped = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: "0.2.0")
+
+        XCTAssertEqual(initial?.version, "0.2.0")
+        XCTAssertEqual(pending?.version, "0.2.0")
+        XCTAssertNil(installed)
+        XCTAssertNil(skipped)
+        let requestETags = await session.requestETags
+        XCTAssertEqual(requestETags, [nil, "valid-etag", "valid-etag", "valid-etag"])
+        XCTAssertEqual(AppUpdateConfig.showCachedReleaseBody(), body)
+        XCTAssertEqual(AppUpdateConfig.showExistingETag(), "valid-etag")
+    }
+
+    func testMissingBodyOn304WithFailedRetryLeavesNextCheckUnconditional() async throws {
+        let cacheURL = Self.testCacheDirectory
+            .appendingPathComponent(AppUpdateConfig.releaseBodyCacheFileName)
+        let body = Data("{\"tag_name\":\"v0.2.0\",\"html_url\":\"\(releasePageURL)\",\"assets\":[]}".utf8)
+        XCTAssertTrue(AppUpdateConfig.persistReleaseBody(body))
+        AppUpdateConfig.persistETag("old-etag")
+        try FileManager.default.removeItem(at: cacheURL)
+        let session = SequenceURLSession(responses: [
+            (304, Data(), nil), (500, Data(), nil), (200, body, "new-etag")
+        ])
+        let service = AppUpdateService(session: session)
+
+        do {
+            _ = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+            XCTFail("Expected invalidResponse error from the unconditional retry")
+        } catch {
+            XCTAssertEqual(error as? AppUpdateServiceError, .invalidResponse)
+        }
+        XCTAssertNil(AppUpdateConfig.showExistingETag())
+
+        let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
+
+        XCTAssertEqual(update?.version, "0.2.0")
+        let requestETags = await session.requestETags
+        XCTAssertEqual(requestETags, ["old-etag", nil, nil])
+        XCTAssertEqual(AppUpdateConfig.showCachedReleaseBody(), body)
+        XCTAssertEqual(AppUpdateConfig.showExistingETag(), "new-etag")
+    }
+
     func testMissingBodyOn304RetriesWithoutETagAndCachesFullResponse() async throws {
         AppUpdateConfig.clearReleaseBody()
         defer { AppUpdateConfig.clearReleaseBody() }
