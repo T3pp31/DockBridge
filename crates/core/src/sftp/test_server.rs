@@ -42,6 +42,8 @@ pub struct FailureConfig {
     pub fail_setstat: AtomicBool,
     pub fail_mkdir: AtomicBool,
     pub opendir_count: AtomicU64,
+    /// Repeat each READDIR entry to exercise directory-walk deduplication.
+    pub duplicate_readdir_entries: AtomicBool,
     /// Number of SSH_FXP_MKDIR requests handled, used to assert that
     /// directory mirrors issue at most one mkdir per directory (issue #312).
     pub mkdir_count: AtomicU64,
@@ -691,7 +693,14 @@ impl russh_sftp::server::Handler for SftpHandler {
         if dir.read_offset >= dir.entries.len() {
             return Err(StatusCode::Eof);
         }
-        let files = dir.entries[dir.read_offset..].to_vec();
+        let mut files = dir.entries[dir.read_offset..].to_vec();
+        if self
+            .failures
+            .duplicate_readdir_entries
+            .load(Ordering::Relaxed)
+        {
+            files.extend_from_within(..);
+        }
         dir.read_offset = dir.entries.len();
         Ok(Name { id, files })
     }
