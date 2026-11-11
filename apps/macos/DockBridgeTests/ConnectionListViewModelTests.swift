@@ -275,6 +275,71 @@ final class ConnectionListViewModelTests: XCTestCase {
     }
 
     #if DEBUG
+    func testCanDisconnectTracksConnectionLifecycle() async {
+        let bridge = RustBridgeService()
+        let viewModel = ConnectionListViewModel(
+            store: store,
+            keychain: keychain,
+            bridge: bridge
+        )
+        let profileID = UUID()
+
+        XCTAssertFalse(viewModel.canDisconnect)
+
+        bridge.applyConnectionStateForTesting(
+            status: .connecting(endpoint: "example.com:22"),
+            profileID: profileID
+        )
+        // A pending profile is active (and protected from deletion), but neither
+        // Disconnect action may offer cancellation that the bridge cannot perform.
+        XCTAssertEqual(viewModel.connectedProfileID, profileID)
+        XCTAssertFalse(viewModel.canDisconnect)
+
+        bridge.setSessionIdForTesting(42)
+        XCTAssertTrue(viewModel.canDisconnect)
+
+        // Toolbar Disconnect targets the active session, not the selected row.
+        viewModel.selectedProfileID = UUID()
+        XCTAssertTrue(viewModel.canDisconnect)
+
+        await viewModel.disconnect()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.connectedProfileID)
+        XCTAssertFalse(viewModel.canDisconnect)
+    }
+
+    func testConnectingSessionRejectsDisconnectAndKeepsActionDisabled() async throws {
+        let bridge = RustBridgeService()
+        let viewModel = ConnectionListViewModel(
+            store: store,
+            keychain: keychain,
+            bridge: bridge
+        )
+        bridge.applyConnectionStateForTesting(
+            status: .connecting(endpoint: "example.com:22"),
+            profileID: UUID()
+        )
+        let pendingSession = try XCTUnwrap(bridge.activeSession)
+        XCTAssertFalse(viewModel.canDisconnect)
+
+        await viewModel.disconnect()
+
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            DockBridgeError.Other(
+                message: String(localized: "A connection is still in progress.")
+            ).localizedDescription
+        )
+        XCTAssertTrue(bridge.activeSession === pendingSession)
+        XCTAssertTrue(viewModel.connectionStatus.isConnecting)
+        XCTAssertFalse(viewModel.canDisconnect)
+
+        // A failed connection returning to disconnected must not enable the action.
+        bridge.applyConnectionStateForTesting(status: .disconnected)
+        XCTAssertFalse(viewModel.canDisconnect)
+    }
+
     func testBridgeConnectionStateChangeNotifiesViewModel() {
         let bridge = RustBridgeService()
         let viewModel = ConnectionListViewModel(

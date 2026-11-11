@@ -47,7 +47,7 @@ struct ConnectionListView: View {
                 Button(String(localized: "Disconnect")) {
                     Task { await viewModel.disconnect() }
                 }
-                .disabled(!viewModel.connectionStatus.isConnected)
+                .disabled(!viewModel.canDisconnect)
 
                 Button(String(localized: "Reconnect")) {
                     viewModel.reconnect()
@@ -239,6 +239,7 @@ struct ConnectionListView: View {
                 Button(String(localized: "Disconnect")) {
                     Task { await viewModel.disconnect() }
                 }
+                .disabled(!viewModel.canDisconnect)
             } else {
                 Button(String(localized: "Connect")) {
                     viewModel.requestConnect(profile: profile)

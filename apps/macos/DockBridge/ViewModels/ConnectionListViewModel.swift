@@ -45,6 +45,10 @@ final class ConnectionListViewModel: ObservableObject {
     var connectionStatus: ConnectionStatus { bridge.connectionStatus }
     var connectedProfileID: UUID? { bridge.connectedProfileID }
 
+    // The bridge rejects disconnecting a session while it is being established.
+    // Share this availability rule across toolbar and context-menu actions.
+    var canDisconnect: Bool { connectionStatus.isConnected }
+
     var filteredProfiles: [ConnectionProfile] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return profiles }
