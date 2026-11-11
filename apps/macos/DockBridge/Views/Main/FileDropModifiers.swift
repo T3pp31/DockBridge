@@ -86,22 +86,44 @@ enum FileDropTransferKickoff {
     ) -> Bool {
         let destination = toRemoteDirectory ?? viewModel.remotePath
         let validURLs = urls.filter { FileDropValidation.canUploadExternalItem(at: $0) }
-        guard !validURLs.isEmpty else { return false }
+        guard !validURLs.isEmpty else {
+            viewModel.errorMessage = urls.isEmpty
+                ? FileDropError.emptyPayload.localizedDescription
+                : FileDropError.unreadableSource.localizedDescription
+            return false
+        }
 
         var scopedURLs: [URL] = []
         var urlsToUpload: [URL] = []
+        var skippedURLs: [URL] = []
         for url in validURLs {
             if bookmarkService.beginAccessing(url) {
                 scopedURLs.append(url)
                 urlsToUpload.append(url)
+            } else {
+                skippedURLs.append(url)
             }
         }
-        guard !urlsToUpload.isEmpty else { return false }
+        let skippedMessage = skippedURLs.isEmpty ? nil : (
+            [FileDropError.unreadableSource.localizedDescription]
+                + skippedURLs.map(\.lastPathComponent)
+        ).joined(separator: "\n")
+        guard !urlsToUpload.isEmpty else {
+            viewModel.errorMessage = skippedMessage
+            return false
+        }
 
         Task { @MainActor in
             defer {
                 for url in scopedURLs {
                     bookmarkService.stopAccessing(url)
+                }
+                // Uploads clear errorMessage when they start. Report skipped items
+                // after the batch so later uploads cannot erase this warning.
+                if let skippedMessage {
+                    viewModel.errorMessage = [viewModel.errorMessage, skippedMessage]
+                        .compactMap { $0 }
+                        .joined(separator: "\n\n")
                 }
             }
 
@@ -178,12 +200,20 @@ struct LocalPaneDropModifier: ViewModifier {
         return accepted
     }
 
-    private func acceptLocalMoves(_ items: [LocalFileDragPayload]) -> Bool {
+    func acceptLocalMoves(_ items: [LocalFileDragPayload]) -> Bool {
         var accepted = false
         var hasInvalidMove = false
         let target = viewModel.localPath
+        let targetPath = target.standardizedFileURL.resolvingSymlinksInPath().path
         for item in items {
             guard FileDropValidation.isDisplayedLocalItem(item, in: viewModel.localTableItems) else {
+                continue
+            }
+            // Dropping a displayed item back onto its own pane is a no-op.
+            // Resolve only the parent: a symlink entry must not be treated as its target.
+            let sourceParent = item.url.standardizedFileURL.deletingLastPathComponent()
+            if sourceParent.resolvingSymlinksInPath().path == targetPath {
+                accepted = true
                 continue
             }
             guard FileDropValidation.canMoveLocalItem(from: item.url, to: target) else {
@@ -260,13 +290,7 @@ struct RemotePaneDropModifier: ViewModifier {
     }
 
     private func acceptExternalUploads(_ urls: [URL]) -> Bool {
-        let accepted = FileDropTransferKickoff.acceptExternalUploads(urls: urls, viewModel: viewModel)
-        if !accepted {
-            viewModel.errorMessage = urls.isEmpty
-                ? FileDropError.emptyPayload.localizedDescription
-                : FileDropError.unreadableSource.localizedDescription
-        }
-        return accepted
+        FileDropTransferKickoff.acceptExternalUploads(urls: urls, viewModel: viewModel)
     }
 
     private func acceptRemoteMoves(_ items: [RemoteFileDragPayload]) -> Bool {

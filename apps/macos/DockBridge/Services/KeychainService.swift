@@ -36,7 +36,18 @@ enum KeychainServiceError: LocalizedError {
     }
 }
 
-final class KeychainService: @unchecked Sendable {
+/// Credential operations used by connection profiles, separate from encryption keys.
+protocol ProfileCredentialStoring: Sendable {
+    func keychainAccount(for profileID: UUID, kind: String) -> String
+    func savePassword(_ password: String, account: String) throws
+    func loadPassword(account: String) throws -> String?
+    func deletePassword(account: String) throws
+    func savePassphrase(_ passphrase: String, account: String) throws
+    func loadPassphrase(account: String) throws -> String?
+    func deletePassphrase(account: String) throws
+}
+
+final class KeychainService: ProfileCredentialStoring, @unchecked Sendable {
     static let shared = KeychainService()
 
     private let serviceName: String
