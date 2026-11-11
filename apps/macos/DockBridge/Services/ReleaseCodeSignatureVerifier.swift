@@ -46,8 +46,25 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
 
     private let policy: ReleaseVerificationPolicy
 
-    init(policy: ReleaseVerificationPolicy = .current) {
+    private let checkValidity: @Sendable (SecStaticCode, SecCSFlags, SecRequirement?) -> OSStatus
+    private let copySigningInformation: @Sendable (SecStaticCode) -> (OSStatus, CFDictionary?)
+
+    init(
+        policy: ReleaseVerificationPolicy = .current,
+        checkValidity: @escaping @Sendable (SecStaticCode, SecCSFlags, SecRequirement?) -> OSStatus = {
+            SecStaticCodeCheckValidity($0, $1, $2)
+        },
+        copySigningInformation: @escaping @Sendable (SecStaticCode) -> (OSStatus, CFDictionary?) = { code in
+            var information: CFDictionary?
+            let status = SecCodeCopySigningInformation(
+                code, SecCSFlags(rawValue: kSecCSSigningInformation), &information
+            )
+            return (status, information)
+        }
+    ) {
         self.policy = policy
+        self.checkValidity = checkValidity
+        self.copySigningInformation = copySigningInformation
     }
 
     func verifyAppBundle(at url: URL) throws {
@@ -96,7 +113,7 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
             throw ReleaseCodeSignatureVerifierError.unsignedBundle
         }
 
-        let validityStatus = SecStaticCodeCheckValidity(
+        let validityStatus = checkValidity(
             staticCode,
             Self.validityCheckFlags,
             nil
@@ -105,17 +122,26 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
             throw ReleaseCodeSignatureVerifierError.unsignedBundle
         }
 
-        var signingInfo: CFDictionary?
-        let copyStatus = SecCodeCopySigningInformation(
-            staticCode,
-            SecCSFlags(rawValue: kSecCSSigningInformation),
-            &signingInfo
-        )
+        let (copyStatus, signingInfo) = copySigningInformation(staticCode)
         guard copyStatus == errSecSuccess, let signingInfo else {
             throw ReleaseCodeSignatureVerifierError.unsignedBundle
         }
 
         try verifySigningInformation(signingInfo as NSDictionary)
+
+        if policy.requireNotarizedUpdates {
+            // Only Security's requirement evaluation proves notarization. Signing
+            // metadata and timestamps cannot substitute for a notarization ticket.
+            var requirement: SecRequirement?
+            let requirementStatus = SecRequirementCreateWithString(
+                "notarized" as CFString, [], &requirement
+            )
+            guard requirementStatus == errSecSuccess,
+                  let requirement,
+                  checkValidity(staticCode, Self.validityCheckFlags, requirement) == errSecSuccess else {
+                throw ReleaseCodeSignatureVerifierError.notarizationMissing
+            }
+        }
     }
 
     /// Evaluates metadata after static code validity and policy validation have succeeded.
@@ -127,12 +153,6 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
         } else if policy.requireNotarizedUpdates {
             // Notarization alone does not bind an update to the expected vendor.
             try verifyTeamIdentifier(signingInfo: info)
-        }
-
-        if policy.requireNotarizedUpdates {
-            guard info["NotarizationDate"] != nil else {
-                throw ReleaseCodeSignatureVerifierError.notarizationMissing
-            }
         }
     }
 
