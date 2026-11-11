@@ -26,15 +26,25 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
 
     private let serviceName: String
     private let account = "profile-trust.hmac-key"
+    private let copyMatching: @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
 
-    init(serviceName: String = "com.dockbridge") {
+    init(
+        serviceName: String = "com.dockbridge",
+        copyMatching: @escaping @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus = {
+            SecItemCopyMatching($0, $1)
+        }
+    ) {
         self.serviceName = serviceName
+        self.copyMatching = copyMatching
     }
 
+    /// Checks for a readable key without creating one; Keychain failures are propagated.
     var hasExistingKey: Bool {
-        Self.keychainLock.lock()
-        defer { Self.keychainLock.unlock() }
-        return (try? loadKeyData()) != nil
+        get throws {
+            Self.keychainLock.lock()
+            defer { Self.keychainLock.unlock() }
+            return try loadKeyData() != nil
+        }
     }
 
     func loadOrCreateKey() throws -> SymmetricKey {
@@ -72,7 +82,7 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        let status = copyMatching(query as CFDictionary, &item)
 
         switch status {
         case errSecSuccess:

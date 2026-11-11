@@ -40,8 +40,9 @@ if [[ ! "${INSTALL_EXIT_TIMEOUT_SECONDS:-}" =~ ^[1-9][0-9]*$ ||
   exit 1
 fi
 
-if [[ ! -w "/Applications" ]] || [[ -d "$INSTALL_PATH" && ! -w "$INSTALL_PATH" ]]; then
-  alert "インストールできません。/Applications または既存アプリに書き込み権限がありません。"
+# Replacement renames the existing bundle; it does not write into the bundle.
+if [[ ! -w "/Applications" ]]; then
+  alert "インストールできません。/Applications に書き込み権限がありません。"
   exit 1
 fi
 
