@@ -223,10 +223,11 @@ final class AppSettingsService: @unchecked Sendable {
     }
 
     func saveConfig(_ config: AppConfig) {
-        defaults.set(Int(config.connectionTimeoutSecs), forKey: AppSettingsKeys.connectionTimeoutSecs)
-        defaults.set(Int(config.sessionHealthCheckIntervalSecs), forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs)
+        // Saturate UInt64 values at the storage boundary; loadConfig applies field-specific limits.
+        defaults.set(Int(clamping: config.connectionTimeoutSecs), forKey: AppSettingsKeys.connectionTimeoutSecs)
+        defaults.set(Int(clamping: config.sessionHealthCheckIntervalSecs), forKey: AppSettingsKeys.sessionHealthCheckIntervalSecs)
         defaults.set(Int(config.transferRetryCount), forKey: AppSettingsKeys.transferRetryCount)
-        defaults.set(Int(config.transferChunkSizeBytes), forKey: AppSettingsKeys.transferChunkSizeBytes)
+        defaults.set(Int(clamping: config.transferChunkSizeBytes), forKey: AppSettingsKeys.transferChunkSizeBytes)
         defaults.set(
             Int(clamping: config.transferDownloadPipelineDepth),
             forKey: AppSettingsKeys.transferDownloadPipelineDepth
@@ -236,12 +237,12 @@ final class AppSettingsService: @unchecked Sendable {
             forKey: AppSettingsKeys.transferUploadPipelineDepth
         )
         if let inactivity = config.sshInactivityTimeoutSecs {
-            defaults.set(Int(inactivity), forKey: AppSettingsKeys.sshInactivityTimeoutSecs)
+            defaults.set(Int(clamping: inactivity), forKey: AppSettingsKeys.sshInactivityTimeoutSecs)
         } else {
             defaults.set(0, forKey: AppSettingsKeys.sshInactivityTimeoutSecs)
         }
         defaults.set(
-            Int(config.sshKeepaliveIntervalSecs),
+            Int(clamping: config.sshKeepaliveIntervalSecs),
             forKey: AppSettingsKeys.sshKeepaliveIntervalSecs
         )
         defaults.set(config.defaultLocalPath, forKey: AppSettingsKeys.defaultLocalPath)
@@ -253,9 +254,9 @@ final class AppSettingsService: @unchecked Sendable {
         defaults.set(config.opensshKnownHostsBookmark, forKey: AppSettingsKeys.opensshKnownHostsBookmark)
         defaults.set(config.knownHostsStrictMode, forKey: AppSettingsKeys.knownHostsStrictMode)
         defaults.set(config.failConnectOnOpensshMergeError, forKey: AppSettingsKeys.failConnectOnOpensshMergeError)
-        defaults.set(Int(config.directoryWalkMaxFiles), forKey: AppSettingsKeys.directoryWalkMaxFiles)
+        defaults.set(Int(clamping: config.directoryWalkMaxFiles), forKey: AppSettingsKeys.directoryWalkMaxFiles)
         defaults.set(Int(config.directoryWalkMaxDepth), forKey: AppSettingsKeys.directoryWalkMaxDepth)
-        defaults.set(Int(config.directoryWalkMaxTotalBytes), forKey: AppSettingsKeys.directoryWalkMaxTotalBytes)
+        defaults.set(Int(clamping: config.directoryWalkMaxTotalBytes), forKey: AppSettingsKeys.directoryWalkMaxTotalBytes)
         defaults.set(config.transferOverwritePolicy.rawValue, forKey: AppSettingsKeys.transferOverwritePolicy)
         defaults.set(config.notifyWhenTransfersFinish, forKey: AppSettingsKeys.notifyWhenTransfersFinish)
         defaults.set(config.playTransferNotificationSound, forKey: AppSettingsKeys.playTransferNotificationSound)

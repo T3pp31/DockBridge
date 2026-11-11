@@ -48,6 +48,100 @@ final class ConnectionListViewModelTests: XCTestCase {
         super.tearDown()
     }
 
+    func testHandleSFTPURLAddsAndSelectsNewProfileWithoutConnecting() throws {
+        let existing = ConnectionProfile(name: "Existing", host: "existing.example.com", username: "user")
+        try store.saveProfiles([existing])
+        viewModel.load()
+        let url = try XCTUnwrap(URL(string: "sftp://alice@new.example.com:2222/incoming"))
+
+        viewModel.handleSFTPURL(url)
+
+        let imported = try XCTUnwrap(viewModel.profiles.first { $0.host == "new.example.com" })
+        XCTAssertEqual(imported.username, "alice")
+        XCTAssertEqual(imported.port, 2222)
+        XCTAssertEqual(imported.initialRemotePath, "/incoming")
+        XCTAssertEqual(viewModel.profiles, [existing, imported])
+        XCTAssertEqual(try store.loadProfiles(), viewModel.profiles)
+        XCTAssertEqual(viewModel.selectedProfileID, imported.id)
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testHandleSFTPURLKeepsSavedSnapshotAndAvoidsDuplicatesWhenReloadFails() throws {
+        let existing = ConnectionProfile(name: "Existing", host: "existing.example.com", username: "user")
+        try store.saveProfiles([existing])
+        viewModel.load()
+        let url = try XCTUnwrap(URL(string: "sftp://alice@new.example.com:2222/incoming"))
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json")
+        // A malformed trust file makes loadProfiles throw, while upsert still
+        // succeeds because trust refresh is secondary to the encrypted save.
+        try Data("invalid trust store".utf8).write(to: trustURL)
+
+        viewModel.handleSFTPURL(url)
+
+        let imported = try XCTUnwrap(viewModel.profiles.first { $0.host == "new.example.com" })
+        XCTAssertEqual(viewModel.profiles, [existing, imported])
+        XCTAssertEqual(viewModel.selectedProfileID, imported.id)
+        XCTAssertEqual(imported.username, "alice")
+        XCTAssertEqual(imported.port, 2222)
+        XCTAssertEqual(imported.initialRemotePath, "/incoming")
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertThrowsError(try store.loadProfiles())
+
+        viewModel.handleSFTPURL(url)
+
+        XCTAssertEqual(viewModel.profiles, [existing, imported])
+        XCTAssertEqual(viewModel.selectedProfileID, imported.id)
+        // The matched-profile connection must still report the trust read error
+        // rather than bypassing the endpoint check or creating another profile.
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        try FileManager.default.removeItem(at: trustURL)
+        XCTAssertEqual(try store.loadProfiles(), [existing, imported])
+    }
+
+    func testHandleSFTPURLPreservesProfilesAndSelectionWhenUpsertFails() throws {
+        let existing = ConnectionProfile(name: "Existing", host: "existing.example.com", username: "user")
+        try store.saveProfiles([existing])
+        viewModel.load()
+        let url = try XCTUnwrap(URL(string: "sftp://alice@new.example.com/incoming"))
+        let profilesURL = baseDirectory.appendingPathComponent("profiles.json")
+        let invalidData = Data("invalid profiles".utf8)
+        try invalidData.write(to: profilesURL)
+
+        viewModel.handleSFTPURL(url)
+
+        XCTAssertEqual(viewModel.profiles, [existing])
+        XCTAssertEqual(viewModel.selectedProfileID, existing.id)
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertEqual(try Data(contentsOf: profilesURL), invalidData)
+    }
+
+    func testDeleteUpdatesListAndSelectionWhenTrustRemovalFails() throws {
+        let removed = ConnectionProfile(name: "Removed", host: "removed.example.com", username: "user")
+        let remaining = ConnectionProfile(name: "Remaining", host: "remaining.example.com", username: "user")
+        try store.saveProfiles([removed, remaining])
+        try store.seedInitialTrust(for: [removed, remaining])
+        viewModel.load()
+        viewModel.selectedProfileID = removed.id
+        let account = keychain.keychainAccount(for: removed.id, kind: "profile")
+        try keychain.savePassword("test-password", account: account)
+        defer { try? keychain.deletePassword(account: account) }
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        try Data("not-json".utf8).write(to: trustURL)
+
+        viewModel.requestDelete(profile: removed)
+        viewModel.delete(profile: removed)
+
+        XCTAssertEqual(viewModel.profiles, [remaining])
+        XCTAssertEqual(viewModel.selectedProfileID, remaining.id)
+        XCTAssertNil(viewModel.confirmDeleteProfile)
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertNil(try keychain.loadPassword(account: account))
+    }
+
     func testImportSSHConfigDeduplicatesAliasesCaseInsensitively() throws {
         viewModel.importSSHConfig(contents: """
         Host Server
