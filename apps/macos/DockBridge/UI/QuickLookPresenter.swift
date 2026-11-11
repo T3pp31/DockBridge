@@ -34,7 +34,11 @@ final class QuickLookPresenter: NSResponder, QLPreviewPanelDataSource, QLPreview
         guard !fileURLs.isEmpty else { return }
         previewURLs = fileURLs
 
-        guard let window = NSApp.keyWindow ?? NSApp.windows.first(where: \.isVisible),
+        guard let window = Self.previewHostWindow(
+            keyWindow: NSApp.keyWindow,
+            mainWindow: NSApp.mainWindow,
+            windows: NSApp.windows
+        ),
               let contentView = window.contentView,
               let panel = QLPreviewPanel.shared()
         else {
@@ -57,6 +61,22 @@ final class QuickLookPresenter: NSResponder, QLPreviewPanelDataSource, QLPreview
         panel.reloadData()
 
         panel.makeKeyAndOrderFront(nil)
+    }
+
+    static func previewHostWindow(
+        keyWindow: NSWindow?,
+        mainWindow: NSWindow?,
+        windows: [NSWindow]
+    ) -> NSWindow? {
+        // The preview panel becomes key while visible. Never insert this
+        // presenter into the panel's own responder chain, including on fallback.
+        if let keyWindow, !(keyWindow is QLPreviewPanel) {
+            return keyWindow
+        }
+        if let mainWindow, !(mainWindow is QLPreviewPanel) {
+            return mainWindow
+        }
+        return windows.first { !($0 is QLPreviewPanel) && $0.isVisible }
     }
 
     private func detachFromResponderChain() {
