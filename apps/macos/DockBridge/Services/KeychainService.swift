@@ -47,7 +47,14 @@ protocol ProfileCredentialStoring: Sendable {
     func deletePassphrase(account: String) throws
 }
 
-final class KeychainService: ProfileCredentialStoring, @unchecked Sendable {
+/// Master-key operations kept separate from profile credentials so read failures
+/// can be exercised without locking or changing the user's Keychain.
+protocol ProfileEncryptionKeyStoring: Sendable {
+    func saveKeyData(_ data: Data, account: String) throws
+    func loadKeyData(account: String) throws -> Data?
+}
+
+final class KeychainService: ProfileCredentialStoring, ProfileEncryptionKeyStoring, @unchecked Sendable {
     static let shared = KeychainService()
 
     private let serviceName: String
