@@ -162,8 +162,23 @@ final class ProfileTrustStore: @unchecked Sendable {
     }
 
     func updateTrust(for profile: ConnectionProfile) throws {
-        try mutateTrustedEndpoints { trusted in
+        try updateTrusts(for: [profile])
+    }
+
+    /// Refreshing saved profiles must not implicitly trust new profiles. Check
+    /// membership under the same lock as the merge to avoid stale snapshots.
+    func updateTrusts(for profiles: [ConnectionProfile], existingOnly: Bool = false) throws {
+        guard !profiles.isEmpty else { return }
+        trustLock.lock()
+        defer { trustLock.unlock() }
+        var trusted = try loadTrustedEndpoints()
+        var didUpdate = false
+        for profile in profiles where !existingOnly || trusted[profile.id] != nil {
             trusted[profile.id] = TrustedProfileEndpoint(profile: profile)
+            didUpdate = true
+        }
+        if didUpdate {
+            try saveTrustedEndpoints(trusted)
         }
     }
 

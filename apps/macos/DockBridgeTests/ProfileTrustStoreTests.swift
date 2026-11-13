@@ -97,6 +97,65 @@ final class ProfileTrustStoreTests: XCTestCase {
         XCTAssertEqual(trusted[replacement.id], TrustedProfileEndpoint(profile: replacement))
     }
 
+    func testUpdateTrustsMergesBatchAndLastDuplicateWins() throws {
+        let reads = TrustSigningKeyReadCounter()
+        let countingStore = ProfileTrustStore(
+            baseDirectory: baseDirectory,
+            signingKeyStore: ProfileTrustSigningKeyStore(copyMatching: { reads.copyMatching($0, $1) })
+        )
+        let existing = ConnectionProfile(name: "Existing", host: "old.example.com", username: "user")
+        let unrelated = ConnectionProfile(name: "Unrelated", host: "keep.example.com", username: "user")
+        let added = ConnectionProfile(name: "Added", host: "new.example.com", username: "user")
+        try countingStore.seedInitialTrust(from: [existing, unrelated])
+        var updated = existing
+        updated.host = "updated.example.com"
+        let readsBefore = reads.count
+
+        try countingStore.updateTrusts(for: [existing, added, updated])
+
+        // One verification and one signature, independent of batch size.
+        XCTAssertEqual(reads.count - readsBefore, 2)
+        XCTAssertEqual(try countingStore.loadTrustedEndpoints(), [
+            existing.id: TrustedProfileEndpoint(profile: updated),
+            unrelated.id: TrustedProfileEndpoint(profile: unrelated),
+            added.id: TrustedProfileEndpoint(profile: added),
+        ])
+    }
+
+    func testExistingOnlyBatchDoesNotCreateInitialTrust() throws {
+        let profile = ConnectionProfile(name: "New", host: "new.example.com", username: "user")
+
+        try trustStore.updateTrusts(for: [profile], existingOnly: true)
+
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: baseDirectory.appendingPathComponent("trusted_endpoints.json").path
+        ))
+        XCTAssertFalse(try signingKeyStore.hasExistingKey)
+    }
+
+    func testUpdateTrustsRejectsTamperedStoreWithoutOverwritingIt() throws {
+        let profile = ConnectionProfile(name: "Existing", host: "example.com", username: "user")
+        let added = ConnectionProfile(name: "Added", host: "new.example.com", username: "user")
+        try trustStore.seedInitialTrust(from: [profile])
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json")
+        var envelope = try JSONDecoder().decode(
+            SignedTrustedEndpointsEnvelopeForTests.self,
+            from: Data(contentsOf: trustURL)
+        )
+        envelope.endpoints[profile.id.uuidString]?.host = "evil.example.com"
+        let tamperedData = try JSONEncoder().encode(envelope)
+        try tamperedData.write(to: trustURL)
+
+        for existingOnly in [false, true] {
+            XCTAssertThrowsError(try trustStore.updateTrusts(
+                for: [profile, added], existingOnly: existingOnly
+            )) { error in
+                XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+            }
+            XCTAssertEqual(try Data(contentsOf: trustURL), tamperedData)
+        }
+    }
+
     func testDetectEndpointChangesRequiresInitialTrustConfirmation() throws {
         let profile = ConnectionProfile(
             name: "Test",
@@ -273,6 +332,27 @@ final class ProfileTrustStoreTests: XCTestCase {
             }
             XCTAssertEqual(message, String(localized: "Refusing to follow symbolic link."))
         }
+    }
+}
+
+// Shared by trust-store and connection-store tests. Returning a fixed test key
+// lets us count HMAC verification/signing work without accessing Keychain.
+final class TrustSigningKeyReadCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var readCount = 0
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return readCount
+    }
+
+    func copyMatching(_ query: CFDictionary, _ item: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
+        lock.lock()
+        defer { lock.unlock() }
+        readCount += 1
+        item?.pointee = Data(repeating: 0x42, count: 32) as CFData
+        return errSecSuccess
     }
 }
 

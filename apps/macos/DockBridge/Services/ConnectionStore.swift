@@ -138,9 +138,7 @@ final class ConnectionStore: @unchecked Sendable {
     }
 
     func trustProfiles(_ profiles: [ConnectionProfile]) throws {
-        for profile in profiles {
-            try trustStore.updateTrust(for: profile)
-        }
+        try trustStore.updateTrusts(for: profiles)
     }
 
     func restoreTrustedEndpoint(for change: ProfileEndpointChange) throws -> [ConnectionProfile] {
@@ -266,12 +264,7 @@ final class ConnectionStore: @unchecked Sendable {
             try setSecurePermissions(for: url)
             if updateTrust {
                 do {
-                    let existingTrust = try trustStore.loadTrustedEndpoints()
-                    if !existingTrust.isEmpty {
-                        for profile in sourceProfiles where existingTrust[profile.id] != nil {
-                            try trustStore.updateTrust(for: profile)
-                        }
-                    }
+                    try trustStore.updateTrusts(for: sourceProfiles, existingOnly: true)
                 } catch {
                     // The encrypted profile file is already saved. Trust-store
                     // refresh is a secondary operation: report success for the
