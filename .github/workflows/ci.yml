@@ -104,6 +104,8 @@ jobs:
         run: python3 scripts/test-website-install.py
       - name: Test hello-world documentation credential flow
         run: python3 scripts/test-hello-world-docs.py
+      - name: Test release security documentation consistency
+        run: python3 scripts/test-release-security-docs.py
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
