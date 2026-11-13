@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- SSH config インポートで正規化済みエイリアスの索引を使い、重複判定の線形探索とエイリアスごとの全 Host ブロック走査を削減 (#1339)。
 - Verify required macOS update notarization with Apple's `notarized` code requirement instead of a nonexistent signing-information key (#1150).
 - Pin the signer team for notarization-only update policies and reject missing expected team IDs (#1151)
 - Update code signature validation now explicitly checks certificate expiration and enforces revocation checks when signature or notarization verification is required (#1183)
