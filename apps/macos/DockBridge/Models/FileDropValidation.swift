@@ -1,25 +1,56 @@
 import Foundation
 
 enum FileDropValidation {
-    static func isDisplayedLocalItem(_ payload: LocalFileDragPayload, in items: [LocalFileItem]) -> Bool {
-        let payloadPath = normalizedLocalPath(payload.url)
-        return items.contains { item in
-            !item.isParentDirectory
-                && normalizedLocalPath(item.url) == payloadPath
-                && item.isDirectory == payload.isDirectory
+    private struct DisplayedItemKey: Hashable {
+        let path: String
+        let isDirectory: Bool
+    }
+
+    // Build a fresh index per validation batch, not per payload or across drops:
+    // both the displayed listing and local symlink targets may change.
+    struct DisplayedLocalItems {
+        private let keys: Set<DisplayedItemKey>
+        private let normalizePath: (URL) -> String
+
+        init(
+            _ items: [LocalFileItem],
+            normalizePath: @escaping (URL) -> String = FileDropValidation.normalizedLocalPath
+        ) {
+            self.normalizePath = normalizePath
+            var keys: Set<DisplayedItemKey> = []
+            keys.reserveCapacity(items.count)
+            for item in items where !item.isParentDirectory {
+                keys.insert(DisplayedItemKey(path: normalizePath(item.url), isDirectory: item.isDirectory))
+            }
+            self.keys = keys
+        }
+
+        func contains(_ payload: LocalFileDragPayload) -> Bool {
+            keys.contains(DisplayedItemKey(path: normalizePath(payload.url), isDirectory: payload.isDirectory))
         }
     }
 
-    static func isDisplayedRemoteItem(_ payload: RemoteFileDragPayload, in items: [RemoteFileRecord]) -> Bool {
-        guard let normalizedPayloadPath = try? RemotePath.normalize(payload.path) else {
-            return false
-        }
-        return items.contains { item in
-            guard !item.isParentDirectory,
-                  let normalizedItemPath = try? RemotePath.normalize(item.path) else {
-                return false
+    struct DisplayedRemoteItems {
+        private let keys: Set<DisplayedItemKey>
+        private let normalizePath: (String) throws -> String
+
+        init(
+            _ items: [RemoteFileRecord],
+            normalizePath: @escaping (String) throws -> String = RemotePath.normalize
+        ) {
+            self.normalizePath = normalizePath
+            var keys: Set<DisplayedItemKey> = []
+            keys.reserveCapacity(items.count)
+            for item in items where !item.isParentDirectory {
+                guard let path = try? normalizePath(item.path) else { continue }
+                keys.insert(DisplayedItemKey(path: path, isDirectory: item.isDirectory))
             }
-            return normalizedItemPath == normalizedPayloadPath && item.isDirectory == payload.isDirectory
+            self.keys = keys
+        }
+
+        func contains(_ payload: RemoteFileDragPayload) -> Bool {
+            guard let path = try? normalizePath(payload.path) else { return false }
+            return keys.contains(DisplayedItemKey(path: path, isDirectory: payload.isDirectory))
         }
     }
 
