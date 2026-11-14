@@ -1,5 +1,6 @@
-import XCTest
+import CryptoKit
 import Security
+import XCTest
 @testable import DockBridge
 
 final class ProfileTrustStoreTests: XCTestCase {
@@ -12,7 +13,8 @@ final class ProfileTrustStoreTests: XCTestCase {
         baseDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         signingKeyStore = ProfileTrustSigningKeyStore(
-            serviceName: "com.dockbridge.tests.\(UUID().uuidString)"
+            serviceName: "com.dockbridge.tests.\(UUID().uuidString)",
+            operations: InMemoryProfileTrustKeychain().operations
         )
         trustStore = ProfileTrustStore(
             baseDirectory: baseDirectory,
@@ -24,6 +26,110 @@ final class ProfileTrustStoreTests: XCTestCase {
         try? signingKeyStore.deleteKey()
         try? FileManager.default.removeItem(at: baseDirectory)
         super.tearDown()
+    }
+
+    func testLegacySigningKeyMigratesWithoutChangingSignatures() throws {
+        let backend = InMemoryProfileTrustKeychain()
+        let legacyKey = Data(repeating: 42, count: 32)
+        backend.legacyKey = legacyKey
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+        let message = Data("existing trusted endpoints".utf8)
+        let signature = HMAC<SHA256>.authenticationCode(
+            for: message, using: SymmetricKey(data: legacyKey)
+        )
+        XCTAssertTrue(try store.hasExistingKey)
+        let key = try store.loadOrCreateKey()
+        XCTAssertTrue(HMAC<SHA256>.isValidAuthenticationCode(signature, authenticating: message, using: key))
+        XCTAssertEqual(backend.protectedKey, legacyKey)
+        XCTAssertNil(backend.legacyKey)
+        XCTAssertEqual(backend.lastAccessibility, kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String)
+    }
+
+    func testNewSigningKeyUsesDataProtectionKeychainAndReloads() throws {
+        let backend = InMemoryProfileTrustKeychain()
+        let first = ProfileTrustSigningKeyStore(operations: backend.operations)
+        let second = ProfileTrustSigningKeyStore(operations: backend.operations)
+        let key = try first.loadOrCreateKey().withUnsafeBytes { Data($0) }
+        XCTAssertEqual(key.count, 32)
+        XCTAssertEqual(backend.protectedKey, key)
+        XCTAssertNil(backend.legacyKey)
+        XCTAssertEqual(try second.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+    }
+
+    func testFailedMigrationKeepsLegacySigningKey() {
+        let backend = InMemoryProfileTrustKeychain()
+        backend.legacyKey = Data(repeating: 42, count: 32)
+        backend.addStatus = errSecMissingEntitlement
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+        XCTAssertThrowsError(try store.loadOrCreateKey())
+        XCTAssertEqual(backend.legacyKey, Data(repeating: 42, count: 32))
+        XCTAssertNil(backend.protectedKey)
+    }
+
+    func testProtectedKeyReadErrorDoesNotFallBackOrReplaceKey() {
+        let backend = InMemoryProfileTrustKeychain()
+        backend.legacyKey = Data(repeating: 42, count: 32)
+        backend.readStatus = errSecInteractionNotAllowed
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+        XCTAssertThrowsError(try store.loadOrCreateKey())
+        XCTAssertEqual(backend.legacyKey, Data(repeating: 42, count: 32))
+        XCTAssertNil(backend.protectedKey)
+    }
+
+    func testMigrationDoesNotDeleteLegacyKeyWhenAnotherProcessStoresDifferentKey() {
+        let backend = InMemoryProfileTrustKeychain()
+        let legacyKey = Data(repeating: 42, count: 32)
+        backend.legacyKey = legacyKey
+        backend.competingKey = Data(repeating: 43, count: 32)
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+        XCTAssertThrowsError(try store.loadOrCreateKey())
+        XCTAssertEqual(backend.legacyKey, legacyKey)
+        XCTAssertEqual(backend.protectedKey, backend.competingKey)
+    }
+
+    func testHasExistingKeyDoesNotMigrateSigningKey() {
+        let backend = InMemoryProfileTrustKeychain()
+        let legacyKey = Data(repeating: 42, count: 32)
+        backend.legacyKey = legacyKey
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+        XCTAssertTrue(try store.hasExistingKey)
+        XCTAssertEqual(backend.legacyKey, legacyKey)
+        XCTAssertNil(backend.protectedKey)
+    }
+
+    func testExistingProtectedKeyCleansUpMatchingLegacyKey() {
+        let backend = InMemoryProfileTrustKeychain()
+        let key = Data(repeating: 42, count: 32)
+        backend.legacyKey = key
+        backend.protectedKey = key
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+        XCTAssertTrue(try store.hasExistingKey)
+        XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        XCTAssertNil(backend.legacyKey)
+        XCTAssertEqual(backend.protectedKey, key)
+    }
+
+    func testDataProtectionKeychainIntegrationWhenEntitled() throws {
+        let store = ProfileTrustSigningKeyStore(serviceName: "com.dockbridge.tests.\(UUID().uuidString)")
+        defer { try? store.deleteKey() }
+        do {
+            let key = try store.loadOrCreateKey().withUnsafeBytes { Data($0) }
+            XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        } catch ProfileTrustSigningKeyStoreError.unexpectedStatus(let status)
+            where status == errSecMissingEntitlement {
+            throw XCTSkip("Data Protection Keychain requires an entitled, signed test host.")
+        }
+    }
+
+    func testDeletingSigningKeyRemovesBothKeychains() throws {
+        let backend = InMemoryProfileTrustKeychain()
+        backend.legacyKey = Data(repeating: 42, count: 32)
+        backend.protectedKey = Data(repeating: 43, count: 32)
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+        try store.deleteKey()
+        XCTAssertNil(backend.legacyKey)
+        XCTAssertNil(backend.protectedKey)
+        XCTAssertFalse(try store.hasExistingKey)
     }
 
     func testDecodedLegacyEndpointComparesCanonicalHostsWithoutRewritingData() throws {
@@ -360,25 +466,38 @@ final class TrustSigningKeyReadCounter: @unchecked Sendable {
 final class ProfileTrustSigningKeyStoreTests: XCTestCase {
     func testHasExistingKeyReturnsTrueForReadableKey() throws {
         let data = Data(repeating: 0x42, count: 32)
-        let keyStore = ProfileTrustSigningKeyStore(copyMatching: { _, item in
-            item?.pointee = data as CFData
-            return errSecSuccess
-        })
+        let operations = ProfileTrustSigningKeyStore.KeychainOperations(
+            copyMatching: { _, item in
+                item?.pointee = data as CFData
+                return errSecSuccess
+            },
+            add: { _ in errSecSuccess },
+            delete: { _ in errSecSuccess }
+        )
+        let keyStore = ProfileTrustSigningKeyStore(operations: operations)
 
         XCTAssertTrue(try keyStore.hasExistingKey)
     }
 
     func testHasExistingKeyReturnsFalseForItemNotFound() throws {
-        let keyStore = ProfileTrustSigningKeyStore(copyMatching: { _, _ in
-            errSecItemNotFound
-        })
+        let operations = ProfileTrustSigningKeyStore.KeychainOperations(
+            copyMatching: { _, _ in errSecItemNotFound },
+            add: { _ in errSecSuccess },
+            delete: { _ in errSecSuccess }
+        )
+        let keyStore = ProfileTrustSigningKeyStore(operations: operations)
 
         XCTAssertFalse(try keyStore.hasExistingKey)
     }
 
     func testHasExistingKeyPropagatesKeychainErrors() {
         for status in [errSecInteractionNotAllowed, errSecAuthFailed, errSecNotAvailable, errSecParam] {
-            let keyStore = ProfileTrustSigningKeyStore(copyMatching: { _, _ in status })
+            let operations = ProfileTrustSigningKeyStore.KeychainOperations(
+                copyMatching: { _, _ in status },
+                add: { _ in errSecSuccess },
+                delete: { _ in errSecSuccess }
+            )
+            let keyStore = ProfileTrustSigningKeyStore(operations: operations)
 
             XCTAssertThrowsError(try keyStore.hasExistingKey) { error in
                 guard case ProfileTrustSigningKeyStoreError.unexpectedStatus(let actualStatus) = error else {
@@ -408,5 +527,52 @@ extension ProfileTrustStoreError: Equatable {
         default:
             return false
         }
+    }
+}
+
+/// Each test owns its backend; production query routing and migration still run.
+final class InMemoryProfileTrustKeychain: @unchecked Sendable {
+    var legacyKey: Data?
+    var protectedKey: Data?
+    var readStatus: OSStatus = errSecSuccess
+    var addStatus: OSStatus = errSecSuccess
+    var lastAccessibility: String?
+    var competingKey: Data?
+
+    var operations: ProfileTrustSigningKeyStore.KeychainOperations {
+        .init(
+            copyMatching: { [self] query, item in
+                if readStatus != errSecSuccess { return readStatus }
+                let attributes = query as NSDictionary
+                let data = attributes[kSecUseDataProtectionKeychain] as? Bool == true
+                    ? protectedKey : legacyKey
+                guard let data else { return errSecItemNotFound }
+                item?.pointee = data as CFData
+                return errSecSuccess
+            },
+            add: { [self] query in
+                if addStatus != errSecSuccess { return addStatus }
+                let attributes = query as NSDictionary
+                guard attributes[kSecUseDataProtectionKeychain] as? Bool == true,
+                      let data = attributes[kSecValueData] as? Data else { return errSecParam }
+                if let competingKey {
+                    protectedKey = competingKey
+                    return errSecDuplicateItem
+                }
+                if protectedKey != nil { return errSecDuplicateItem }
+                protectedKey = data
+                lastAccessibility = attributes[kSecAttrAccessible] as? String
+                return errSecSuccess
+            },
+            delete: { [self] query in
+                let attributes = query as NSDictionary
+                if attributes[kSecUseDataProtectionKeychain] as? Bool == true {
+                    protectedKey = nil
+                } else {
+                    legacyKey = nil
+                }
+                return errSecSuccess
+            }
+        )
     }
 }

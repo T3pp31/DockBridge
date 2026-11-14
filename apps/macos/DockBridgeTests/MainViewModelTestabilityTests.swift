@@ -27,7 +27,19 @@ final class MainViewModelTestabilityTests: XCTestCase {
         try? FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         keychain = KeychainService(serviceName: "com.dockbridge.tests.\(UUID().uuidString)")
         let encryptionService = ProfileEncryptionService(keychain: keychain)
-        store = ConnectionStore(baseDirectory: baseDirectory, encryptionService: encryptionService)
+        let signingKeyStore = ProfileTrustSigningKeyStore(
+            serviceName: "com.dockbridge.tests.\(UUID().uuidString)",
+            operations: InMemoryProfileTrustKeychain().operations
+        )
+        let trustStore = ProfileTrustStore(
+            baseDirectory: baseDirectory,
+            signingKeyStore: signingKeyStore
+        )
+        store = ConnectionStore(
+            baseDirectory: baseDirectory,
+            trustStore: trustStore,
+            encryptionService: encryptionService
+        )
         userDefaults = makeIsolatedDefaults()
         settings = AppSettingsService(defaults: userDefaults)
         bridge = FakeBridge()
