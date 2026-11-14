@@ -90,17 +90,12 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           NOTES_FILE="${RUNNER_TEMP}/release-notes.md"
-          if awk -v ver="${VERSION}" '
+          awk -v ver="${VERSION}" '
             index($0, "## [" ver "]") == 1 { found=1; next }
             found && /^## \[/ { exit }
             found { print }
-          ' CHANGELOG.md | grep -q .; then
-            awk -v ver="${VERSION}" '
-              index($0, "## [" ver "]") == 1 { found=1; next }
-              found && /^## \[/ { exit }
-              found { print }
-            ' CHANGELOG.md > "$NOTES_FILE"
-          else
+          ' CHANGELOG.md > "$NOTES_FILE"
+          if ! grep -q . "$NOTES_FILE"; then
             echo "error: no [${VERSION}] section found in CHANGELOG.md; add a section like:" >&2
             echo "## [${VERSION}] - YYYY-MM-DD" >&2
             echo "### Added" >&2
