@@ -19,19 +19,19 @@ async-trait = "0.1"
 base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
 hmac = "0.13"
-dirs = "5.0.1"
+dirs = "7.0.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.11"
 subtle = "2"
-ssh-key = "=0.7.0-rc.10"
+ssh-key = "=0.7.0-rc.11"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zeroize = { version = "1", features = ["derive"] }
-russh = { version = "0.61", features = ["async-trait"] }
+russh = "0.65"
 # bssh-russh-sftp is a temporary fork of russh-sftp that adds pipelined
 # SFTP file I/O (read_to_writer_pipelined / write_all_pipelined), used for
 # high-throughput downloads. The crate alias `russh-sftp` keeps source
@@ -44,3 +44,4 @@ uniffi = { version = "0.32", features = ["cli"] }
 # Keep in sync with the pinned =2.4.0 registry sources; see vendor/README.md.
 [patch.crates-io]
 bssh-russh-sftp = { path = "vendor/bssh-russh-sftp" }
+basic-toml = { path = "vendor/basic-toml-shim" }

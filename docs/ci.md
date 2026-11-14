@@ -79,6 +79,21 @@ Docker / SSH を使用する E2E テスト（`ManualTestPlanVerificationTests` �
 
 失敗時は `xcresulttool` で `.xcresult` 内の失敗テスト一覧もコンソールに出します。
 
+## E2E runner の誤合格回帰（#839 / F49）
+
+[調査対象の main（31f5b562）](https://github.com/T3pp31/DockBridge/blob/31f5b56271f97919d5695b2233a80998e905a17e/scripts/e2e-verify.sh) には、`check` 内の `if "$@"` が Bash の `errexit` を無効にし、途中の失敗を最後の成功で隠す経路が残っていました。check 関数とその準備 helper は、必須コマンドの失敗を明示的に return する必要があります。
+
+| 監査対象 | 回帰テストで観測する保証 |
+|---|---|
+| C001 / C002: host key reject / accept | reject は終了コード3とtrust未保存の両方が必須。accept は有効なtrustファイルが残ってもCLI失敗ならFAIL |
+| C006 / C007: mkdir・rename・delete / recursive transfer | 各CLI操作と両方の比較が必須。途中失敗後に同じcheckの後続操作を行わず、summaryを失敗・終了コードを非0にする |
+| C013: corrupted known_hosts | エラー文の検査前に、正常なtrust作成が成功していることが必須 |
+| 同じ原因の周辺経路 | private-key authのtrust作成、downloadのCLI成功、設定・鍵生成helperの失敗伝播 |
+
+`python3 scripts/test-e2e-verify.py -v` は、外部CLI・比較結果等を制御するfixtureと本物の `main` / `check` を使います。既存CIの `Test E2E log cleanup` ステップで実行されます。修正前には11の失敗注入ケースで誤った成功を検出し、修正後は既存のログ保持・cleanupを含む13テストが成功しました。`bash -n scripts/e2e-verify.sh` と `shellcheck -x scripts/*.sh` も成功しています。
+
+この検証はrunnerの判定契約に限ります。実Docker/SFTP、Swift/Xcode、Rustの転送動作はここでは未実行です。#839 の全監査台帳の再構築や、F49以外の項目の完了判定は含みません。
+
 ## 関連する GitHub Issue
 
 - #264: リトライ判定の盲点（`.xcresult` の失敗数を一次情報源にして対処）

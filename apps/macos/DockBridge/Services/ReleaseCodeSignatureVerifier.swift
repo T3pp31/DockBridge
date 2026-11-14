@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import Security
 
@@ -27,7 +28,7 @@ enum ReleaseCodeSignatureVerifierError: Error, Equatable {
     case teamIdentifierMismatch(expected: String, actual: String)
     case certificateFingerprintMismatch(expected: String, actual: String)
     case notarizationMissing
-    /// `requireSignedUpdates` is enabled but team ID or certificate fingerprint is empty.
+    /// Signature or notarization verification requires a team ID; signed updates also require a certificate fingerprint.
     case misconfiguredSignaturePolicy
 }
 
@@ -36,33 +37,71 @@ protocol AppBundleSignatureVerifying: Sendable {
 }
 
 struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
+    // Pinning the signing identity does not replace certificate lifetime and revocation checks.
+    static let validityCheckFlags = SecCSFlags(
+        rawValue: kSecCSCheckAllArchitectures
+            | kSecCSStrictValidate
+            | kSecCSCheckNestedCode
+    ).union([.considerExpiration, .enforceRevocationChecks])
+
     private let policy: ReleaseVerificationPolicy
-    private let fileManager: FileManager
+
+    private let checkValidity: @Sendable (SecStaticCode, SecCSFlags, SecRequirement?) -> OSStatus
+    private let copySigningInformation: @Sendable (SecStaticCode) -> (OSStatus, CFDictionary?)
 
     init(
         policy: ReleaseVerificationPolicy = .current,
-        fileManager: FileManager = .default
+        checkValidity: @escaping @Sendable (SecStaticCode, SecCSFlags, SecRequirement?) -> OSStatus = {
+            SecStaticCodeCheckValidity($0, $1, $2)
+        },
+        copySigningInformation: @escaping @Sendable (SecStaticCode) -> (OSStatus, CFDictionary?) = { code in
+            var information: CFDictionary?
+            let status = SecCodeCopySigningInformation(
+                code, SecCSFlags(rawValue: kSecCSSigningInformation), &information
+            )
+            return (status, information)
+        }
     ) {
         self.policy = policy
-        self.fileManager = fileManager
+        self.checkValidity = checkValidity
+        self.copySigningInformation = copySigningInformation
     }
 
     func verifyAppBundle(at url: URL) throws {
-        let bundleIdentifier = try readBundleIdentifier(from: url)
+        let infoPlistURL = url.appendingPathComponent("Contents/Info.plist")
+        // Do not follow links or block opening a FIFO. Validate the opened file,
+        // not path metadata that could change before the read.
+        let fileDescriptor = open(infoPlistURL.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard fileDescriptor >= 0 else {
+            throw ReleaseCodeSignatureVerifierError.unsignedBundle
+        }
+        defer { close(fileDescriptor) }
+
+        var fileStat = stat()
+        guard fstat(fileDescriptor, &fileStat) == 0,
+              (fileStat.st_mode & S_IFMT) == S_IFREG,
+              fileStat.st_size >= 0,
+              fileStat.st_size <= AppUpdateConfig.maxInfoPlistSizeBytes else {
+            throw ReleaseCodeSignatureVerifierError.unsignedBundle
+        }
+
+        // Reject unsafe metadata before Security can consume it, but only parse
+        // the bundle identifier after the required signature checks have passed.
+        if policy.requireSignedUpdates || policy.requireNotarizedUpdates {
+            try verifySignature(at: url)
+        }
+
+        let bundleIdentifier = try readBundleIdentifier(from: fileDescriptor)
         guard bundleIdentifier == policy.expectedBundleIdentifier else {
             throw ReleaseCodeSignatureVerifierError.bundleIdentifierMismatch(
                 expected: policy.expectedBundleIdentifier,
                 actual: bundleIdentifier
             )
         }
+    }
 
-        guard policy.requireSignedUpdates || policy.requireNotarizedUpdates else {
-            return
-        }
-
-        if policy.requireSignedUpdates {
-            try validateSignedUpdatePolicy()
-        }
+    private func verifySignature(at url: URL) throws {
+        try validateSignaturePolicy()
 
         var staticCode: SecStaticCode?
         let createStatus = SecStaticCodeCreateWithPath(
@@ -74,51 +113,72 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
             throw ReleaseCodeSignatureVerifierError.unsignedBundle
         }
 
-        let validityStatus = SecStaticCodeCheckValidity(
+        let validityStatus = checkValidity(
             staticCode,
-            SecCSFlags(
-                rawValue: kSecCSCheckAllArchitectures
-                    | kSecCSStrictValidate
-                    | kSecCSCheckNestedCode
-            ),
+            Self.validityCheckFlags,
             nil
         )
         guard validityStatus == errSecSuccess else {
             throw ReleaseCodeSignatureVerifierError.unsignedBundle
         }
 
-        var signingInfo: CFDictionary?
-        let copyStatus = SecCodeCopySigningInformation(
-            staticCode,
-            SecCSFlags(rawValue: kSecCSSigningInformation),
-            &signingInfo
-        )
+        let (copyStatus, signingInfo) = copySigningInformation(staticCode)
         guard copyStatus == errSecSuccess, let signingInfo else {
             throw ReleaseCodeSignatureVerifierError.unsignedBundle
         }
 
-        let info = signingInfo as NSDictionary
-
-        if policy.requireSignedUpdates {
-            try verifyDeveloperIDSignature(signingInfo: info)
-            try verifyTeamIdentifier(signingInfo: info)
-            try verifyCertificateFingerprint(signingInfo: info)
-        }
+        try verifySigningInformation(signingInfo as NSDictionary)
 
         if policy.requireNotarizedUpdates {
-            guard info["NotarizationDate"] != nil else {
+            // Only Security's requirement evaluation proves notarization. Signing
+            // metadata and timestamps cannot substitute for a notarization ticket.
+            var requirement: SecRequirement?
+            let requirementStatus = SecRequirementCreateWithString(
+                "notarized" as CFString, [], &requirement
+            )
+            guard requirementStatus == errSecSuccess,
+                  let requirement,
+                  checkValidity(staticCode, Self.validityCheckFlags, requirement) == errSecSuccess else {
                 throw ReleaseCodeSignatureVerifierError.notarizationMissing
             }
         }
     }
 
-    private func readBundleIdentifier(from bundleURL: URL) throws -> String {
-        let infoPlistURL = bundleURL.appendingPathComponent("Contents/Info.plist")
-        guard fileManager.fileExists(atPath: infoPlistURL.path) else {
-            throw ReleaseCodeSignatureVerifierError.unsignedBundle
+    /// Evaluates metadata after static code validity and policy validation have succeeded.
+    func verifySigningInformation(_ info: NSDictionary) throws {
+        if policy.requireSignedUpdates {
+            try verifyDeveloperIDSignature(signingInfo: info)
+            try verifyTeamIdentifier(signingInfo: info)
+            try verifyCertificateFingerprint(signingInfo: info)
+        } else if policy.requireNotarizedUpdates {
+            // Notarization alone does not bind an update to the expected vendor.
+            try verifyTeamIdentifier(signingInfo: info)
+        }
+    }
+
+    private func readBundleIdentifier(from fileDescriptor: Int32) throws -> String {
+        let sizeLimit = AppUpdateConfig.maxInfoPlistSizeBytes
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            // Read at most one byte beyond the limit to detect files growing
+            // after fstat without allocating or reading an unbounded amount.
+            let bytesRead = read(fileDescriptor, &buffer, min(buffer.count, sizeLimit - data.count + 1))
+            if bytesRead < 0 {
+                if errno == EINTR {
+                    continue
+                }
+                throw ReleaseCodeSignatureVerifierError.unsignedBundle
+            }
+            if bytesRead == 0 {
+                break
+            }
+            guard data.count + bytesRead <= sizeLimit else {
+                throw ReleaseCodeSignatureVerifierError.unsignedBundle
+            }
+            data.append(buffer, count: bytesRead)
         }
 
-        let data = try Data(contentsOf: infoPlistURL)
         let plist = try PropertyListSerialization.propertyList(from: data, format: nil)
         guard let dictionary = plist as? [String: Any],
               let bundleIdentifier = dictionary["CFBundleIdentifier"] as? String else {
@@ -127,9 +187,9 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
         return bundleIdentifier
     }
 
-    private func validateSignedUpdatePolicy() throws {
+    private func validateSignaturePolicy() throws {
         guard !policy.expectedTeamIdentifier.isEmpty,
-              !policy.signingCertificateFingerprintSHA256.isEmpty else {
+              !policy.requireSignedUpdates || !policy.signingCertificateFingerprintSHA256.isEmpty else {
             throw ReleaseCodeSignatureVerifierError.misconfiguredSignaturePolicy
         }
     }
