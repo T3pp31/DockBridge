@@ -13,7 +13,21 @@ SCP support may be considered after v1.0.
 Pre-built macOS releases are available on the [download site](https://t3pp31.github.io/DockBridge/) and [GitHub Releases](https://github.com/T3pp31/DockBridge/releases).
 
 - Requires macOS 15 Sequoia or later
-- Public releases are signed and notarized by Developer ID; verify downloads with the published SHA-256 checksum and [`gh attestation verify`](docs/security.md#supply-chain-provenance-attestation).
+- The current release workflow requires Developer ID signing and notarization before publishing; this does not establish the signing status of older releases. See [code signing and distribution](docs/security.md#code-signing-and-distribution) for release prerequisites.
+
+### Verify a download
+
+Download the DMG and its matching `.dmg.sha256` file from the **same GitHub Release** into the same directory. In that directory, replace `X.Y.Z` below with the downloaded version (without the leading `v`). Install a [GitHub CLI](https://cli.github.com/) version that supports `gh attestation verify` to check provenance:
+
+```bash
+VERSION="X.Y.Z"
+shasum -a 256 -c "DockBridge-${VERSION}-macOS.dmg.sha256" &&
+  gh attestation verify "DockBridge-${VERSION}-macOS.dmg" --repo T3pp31/DockBridge
+```
+
+The checksum must report `OK`, and attestation verification must succeed before you open the DMG. If either check fails, stop; do not bypass Gatekeeper to work around a verification failure. Older releases may not have attestations; a missing attestation is not a successful verification.
+
+SHA-256 checks file integrity against the published checksum; GitHub attestation checks build provenance for this repository. Neither replaces Developer ID signature or Apple notarization checks. See [supply chain provenance](docs/security.md#supply-chain-provenance-attestation) for CLI and SBOM verification examples.
 
 ## Requirements
 

@@ -114,6 +114,8 @@ jobs:
         run: python3 scripts/test-ci-xcodebuild.py -v
       - name: Test macOS Rust test coverage
         run: python3 scripts/test-ci-macos-rust.py -v
+      - name: Test release download verification instructions (offline)
+        run: python3 scripts/test-release-download-docs.py
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |

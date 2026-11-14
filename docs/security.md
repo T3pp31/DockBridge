@@ -240,14 +240,16 @@ Entitlements not granted include `network.server`, `temporary-exception.files.ab
 
 ### Code signing and distribution
 
-- Hardened Runtime enabled in the Xcode project; it takes effect once release builds are signed
+- Hardened Runtime is enabled for Release in the Xcode project and applied by the signing script with `--options runtime`; unsigned builds produced with `CODE_SIGNING_ALLOWED=NO` do not have this protection
 - GitHub Release workflow (`.github/workflows/release.yml`) imports a Developer ID certificate, creates a `notarytool` profile, and sets `SIGN_AND_NOTARIZE=true`
-- Developer ID signing, Apple Notarization, and Gatekeeper verification run for public releases; release secrets must be configured before a release can publish
+- The current workflow requires Developer ID signing, Apple Notarization, and Gatekeeper verification of the app before publishing. This describes the pipeline, not the verified signing status of previously published artifacts
 - **In-app update installation** (`Download update` in the app) is gated at runtime by `AppUpdateConfig.swift` (`requireSignedUpdates` / `requireNotarizedUpdates`). Keep those flags in sync with `config/release.toml`. Until either flag is enabled, the app opens the GitHub release page only (intentional short-term killswitch). When verification is disabled, `ReleaseCodeSignatureVerifier` checks only `CFBundleIdentifier`, which is **not** sufficient to prove authenticity — an attacker could ship a DMG with a matching bundle ID. Enabling either flag requires a non-empty `expectedTeamIdentifier`, and both policies verify the signer's team against that value: notarization alone does not identify the expected vendor. `requireSignedUpdates` additionally requires a non-empty `signingCertificateFingerprintSHA256` and verifies the Developer ID signature and certificate pin. Missing required values are rejected as a misconfigured policy (those checks are not silently skipped).
 
 #### Release signing pipeline
 
-When signing is enabled, the release workflow will require these repository secrets:
+The signing pipeline is implemented, but publication also requires release configuration: packaging with `SIGN_AND_NOTARIZE=true` rejects disabled `require_signed_updates` or `require_notarized_updates` policies in `config/release.toml`. Configure those policies, the expected team ID / certificate fingerprint, and the matching `AppUpdateConfig.swift` values described above before publishing; do not disable signing to bypass this gate. Distribution documentation is tracked in [#393](https://github.com/T3pp31/DockBridge/issues/393) (duplicate: [#463](https://github.com/T3pp31/DockBridge/issues/463)).
+
+The release workflow also requires these repository secrets:
 
 | Secret | Purpose |
 |--------|---------|
