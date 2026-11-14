@@ -229,14 +229,16 @@ impl russh::server::Handler for ServerImpl {
     async fn channel_open_session(
         &mut self,
         channel: Channel<Msg>,
+        reply: russh::server::ChannelOpenHandle,
         _session: &mut Session,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<(), Self::Error> {
         if self.failures.hang_channel_open.load(Ordering::SeqCst) {
             self.failures.connection_phase_started.notify_one();
             std::future::pending::<()>().await;
         }
         self.channels.insert(channel.id(), channel);
-        Ok(true)
+        reply.accept().await;
+        Ok(())
     }
 
     async fn subsystem_request(
@@ -1309,7 +1311,7 @@ mod tests {
 
         async fn check_server_key(
             &mut self,
-            _: &russh::keys::PublicKey,
+            _: &russh::keys::PublicKeyOrCertificate,
         ) -> Result<bool, Self::Error> {
             Ok(true)
         }
