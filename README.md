@@ -13,7 +13,7 @@ SCP support may be considered after v1.0.
 Pre-built macOS releases are available on the [download site](https://t3pp31.github.io/DockBridge/) and [GitHub Releases](https://github.com/T3pp31/DockBridge/releases).
 
 - Requires macOS 15 Sequoia or later
-- The current release workflow requires Developer ID signing and notarization before publishing; this does not establish the signing status of older releases. See [code signing and distribution](docs/security.md#code-signing-and-distribution) for release prerequisites.
+- For release security policy and verification prerequisites, see [release security policy](docs/security.md#code-signing-and-distribution).
 
 ### Verify a download
 
@@ -27,7 +27,7 @@ shasum -a 256 -c "DockBridge-${VERSION}-macOS.dmg.sha256" &&
 
 The checksum must report `OK`, and attestation verification must succeed before you open the DMG. If either check fails, stop; do not bypass Gatekeeper to work around a verification failure. Older releases may not have attestations; a missing attestation is not a successful verification.
 
-SHA-256 checks file integrity against the published checksum; GitHub attestation checks build provenance for this repository. Neither replaces Developer ID signature or Apple notarization checks. See [supply chain provenance](docs/security.md#supply-chain-provenance-attestation) for CLI and SBOM verification examples.
+SHA-256 checks file integrity against the published checksum; GitHub attestation checks build provenance for this repository. See [release security policy](docs/security.md#code-signing-and-distribution) for the complete policy and [supply chain provenance](docs/security.md#supply-chain-provenance-attestation) for CLI and SBOM verification examples.
 
 ## Requirements
 
