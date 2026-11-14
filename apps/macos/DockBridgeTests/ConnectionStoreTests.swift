@@ -196,7 +196,13 @@ final class ConnectionStoreTests: XCTestCase {
 
     private func configureCountingTrustStore() -> TrustSigningKeyReadCounter {
         let reads = TrustSigningKeyReadCounter()
-        let countingKeyStore = ProfileTrustSigningKeyStore(copyMatching: { reads.copyMatching($0, $1) })
+        let countingKeyStore = ProfileTrustSigningKeyStore(
+            operations: .init(
+                copyMatching: { reads.copyMatching($0, $1) },
+                add: { _ in errSecSuccess },
+                delete: { _ in errSecSuccess }
+            )
+        )
         trustStore = ProfileTrustStore(baseDirectory: baseDirectory, signingKeyStore: countingKeyStore)
         store = ConnectionStore(
             baseDirectory: baseDirectory,

@@ -207,7 +207,13 @@ final class ProfileTrustStoreTests: XCTestCase {
         let reads = TrustSigningKeyReadCounter()
         let countingStore = ProfileTrustStore(
             baseDirectory: baseDirectory,
-            signingKeyStore: ProfileTrustSigningKeyStore(copyMatching: { reads.copyMatching($0, $1) })
+            signingKeyStore: ProfileTrustSigningKeyStore(
+                operations: .init(
+                    copyMatching: { reads.copyMatching($0, $1) },
+                    add: { _ in errSecSuccess },
+                    delete: { _ in errSecSuccess }
+                )
+            )
         )
         let existing = ConnectionProfile(name: "Existing", host: "old.example.com", username: "user")
         let unrelated = ConnectionProfile(name: "Unrelated", host: "keep.example.com", username: "user")
@@ -456,6 +462,10 @@ final class TrustSigningKeyReadCounter: @unchecked Sendable {
     func copyMatching(_ query: CFDictionary, _ item: UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus {
         lock.lock()
         defer { lock.unlock() }
+        let attributes = query as NSDictionary
+        guard attributes[kSecUseDataProtectionKeychain] as? Bool == true else {
+            return errSecItemNotFound
+        }
         readCount += 1
         item?.pointee = Data(repeating: 0x42, count: 32) as CFData
         return errSecSuccess
