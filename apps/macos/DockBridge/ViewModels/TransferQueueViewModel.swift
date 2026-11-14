@@ -148,7 +148,10 @@ final class TransferQueueViewModel: ObservableObject {
             }
         } catch {
             guard generation == refreshGeneration else { return }
-            errorMessage = error.dockBridgeUserMessage
+            let message = error.dockBridgeUserMessage
+            if errorMessage != message {
+                errorMessage = message
+            }
         }
     }
 

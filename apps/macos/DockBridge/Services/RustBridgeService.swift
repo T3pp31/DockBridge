@@ -202,7 +202,6 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
                 overwritePolicy: rustOverwritePolicy
             )
         }
-        await refreshTransferQueue()
     }
 
     func download(
@@ -219,7 +218,6 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
                 overwritePolicy: rustOverwritePolicy
             )
         }
-        await refreshTransferQueue()
     }
 
     func deleteRemote(path: String) async throws {
@@ -454,10 +452,6 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         connectedUsername = nil
         connectionStatus = .disconnected
         connectedProfileID = nil
-    }
-
-    private func refreshTransferQueue() async {
-        _ = try? await fetchTransferTasks()
     }
 
     private func resolveWorkingDirectory(
