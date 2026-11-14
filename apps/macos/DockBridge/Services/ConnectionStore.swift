@@ -198,7 +198,7 @@ final class ConnectionStore: @unchecked Sendable {
                     // Signature verified; the payload shape is unexpected —
                     // do not recommend deleting a possibly-newer valid file.
                     throw ConnectionStoreError.incompatibleSchema(message)
-                case .encryptionFailed(let message):
+                case .keyReadDenied(let message), .encryptionFailed(let message):
                     throw ConnectionStoreError.readFailed(message)
                 }
             } catch {

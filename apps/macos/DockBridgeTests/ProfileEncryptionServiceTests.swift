@@ -1,3 +1,4 @@
+import Security
 import XCTest
 @testable import DockBridge
 
@@ -52,6 +53,29 @@ final class ProfileEncryptionServiceTests: XCTestCase {
         }
     }
 
+    func testDecryptPreservesKeyReadDeniedAndAllowsRetryWithOriginalKey() throws {
+        let profile = StoredConnectionProfile(
+            from: ConnectionProfile(name: "Retry", host: "example.com", username: "user")
+        )
+        let envelope = try service.encrypt([profile])
+        let statuses: [OSStatus] = [
+            errSecAuthFailed, errSecInteractionNotAllowed, errSecMissingEntitlement, errSecNotAvailable,
+        ]
+
+        for status in statuses {
+            let deniedService = ProfileEncryptionService(
+                keychain: ReadDeniedProfileEncryptionKeyStore(status: status)
+            )
+            let message = KeychainServiceError.keyReadDenied(status).localizedDescription
+            XCTAssertThrowsError(try deniedService.decrypt(envelope)) { error in
+                XCTAssertEqual(error as? ProfileEncryptionError, .keyReadDenied(message))
+                XCTAssertEqual(error.localizedDescription, message)
+            }
+        }
+
+        XCTAssertEqual(try service.decrypt(envelope), [profile])
+    }
+
     func testDecryptRejectsUnsupportedFormat() throws {
         let badJSON = """
         {"format":"unsupported","payload":"dGVzdA=="}
@@ -63,6 +87,21 @@ final class ProfileEncryptionServiceTests: XCTestCase {
     }
 }
 
+/// Shared by encryption-service and connection-store tests; never touches Keychain.
+struct ReadDeniedProfileEncryptionKeyStore: ProfileEncryptionKeyStoring {
+    let status: OSStatus
+
+    func loadKeyData(account: String) throws -> Data? {
+        XCTAssertEqual(account, ProfileEncryptionService.masterKeyAccount)
+        throw KeychainServiceError.keyReadDenied(status)
+    }
+
+    func saveKeyData(_ data: Data, account: String) throws {
+        XCTFail("Reading profiles must not replace an inaccessible master key")
+        throw KeychainServiceError.keyReadDenied(status)
+    }
+}
+
 extension ProfileEncryptionError: Equatable {
     public static func == (lhs: ProfileEncryptionError, rhs: ProfileEncryptionError) -> Bool {
         switch (lhs, rhs) {
@@ -71,6 +110,8 @@ extension ProfileEncryptionError: Equatable {
         case (.encryptionFailed(let left), .encryptionFailed(let right)):
             return left == right
         case (.decryptionFailed(let left), .decryptionFailed(let right)):
+            return left == right
+        case (.keyReadDenied(let left), .keyReadDenied(let right)):
             return left == right
         case (.decodeFailed(let left), .decodeFailed(let right)):
             return left == right

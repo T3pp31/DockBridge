@@ -49,6 +49,12 @@ final class ConnectionListViewModel: ObservableObject {
     // Share this availability rule across toolbar and context-menu actions.
     var canDisconnect: Bool { connectionStatus.isConnected }
 
+    func isActiveProfile(_ profile: ConnectionProfile) -> Bool {
+        // A pending connection must also protect its profile from deletion (#783).
+        connectedProfileID == profile.id
+            && (connectionStatus.isConnected || connectionStatus.isConnecting)
+    }
+
     var filteredProfiles: [ConnectionProfile] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return profiles }
@@ -272,11 +278,14 @@ final class ConnectionListViewModel: ObservableObject {
     /// Asks the user to confirm before deleting a profile (and its Keychain
     /// credentials). The actual `delete(profile:)` runs only after approval.
     func requestDelete(profile: ConnectionProfile) {
+        guard !isActiveProfile(profile) else { return }
         confirmDeleteProfile = profile
     }
 
     func delete(profile: ConnectionProfile) {
         defer { confirmDeleteProfile = nil }
+        // The connection may have started while the confirmation dialog was open.
+        guard !isActiveProfile(profile) else { return }
         do {
             profiles = try store.delete(id: profile.id)
             transientCredentials.removeValue(forKey: profile.id)
