@@ -67,6 +67,145 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertTrue(onDisk.contains(EncryptedProfilesEnvelope.formatIdentifier))
     }
 
+    func testSaveProfilesRefreshesExistingTrustInOneBatchAndKeepsUnrelatedTrust() throws {
+        for count in [1, 16] {
+            let reads = configureCountingTrustStore()
+            let profiles = (0..<count).map {
+                ConnectionProfile(name: "Profile \($0)", host: "old\($0).example.com", username: "user")
+            }
+            let unrelated = ConnectionProfile(name: "Unrelated", host: "keep.example.com", username: "user")
+            let added = ConnectionProfile(name: "New", host: "new.example.com", username: "user")
+            try store.seedInitialTrust(for: profiles + [unrelated])
+            let updated = profiles.map { profile in
+                var profile = profile
+                profile.host = "updated-\(profile.host)"
+                return profile
+            }
+            let readsBefore = reads.count
+
+            try store.saveProfiles(updated + [added])
+
+            XCTAssertEqual(reads.count - readsBefore, 2, "Batch size: \(count)")
+            XCTAssertEqual(try trustStore.loadTrustedEndpoints(), Dictionary(
+                uniqueKeysWithValues: (updated + [unrelated]).map { ($0.id, TrustedProfileEndpoint(profile: $0)) }
+            ))
+            let result = try store.loadProfilesWithEndpointCheck()
+            XCTAssertEqual(result.profiles, updated + [added])
+            XCTAssertTrue(result.endpointChanges.isEmpty)
+            XCTAssertEqual(result.pendingNewProfileTrust, [added])
+        }
+    }
+
+    func testUpsertRefreshesTrustOnceRegardlessOfProfileCount() throws {
+        for count in [1, 16] {
+            let reads = configureCountingTrustStore()
+            var profiles = (0..<count).map {
+                ConnectionProfile(name: "Profile \($0)", host: "host\($0).example.com", username: "user")
+            }
+            try store.saveProfiles(profiles, updateTrust: false)
+            try store.seedInitialTrust(for: profiles)
+            profiles[0].port = 2222
+            let readsBefore = reads.count
+
+            XCTAssertEqual(try store.upsert(profiles[0]), profiles)
+
+            XCTAssertEqual(reads.count - readsBefore, 2, "Profile count: \(count)")
+            XCTAssertEqual(try trustStore.loadTrustedEndpoints(), Dictionary(
+                uniqueKeysWithValues: profiles.map { ($0.id, TrustedProfileEndpoint(profile: $0)) }
+            ))
+        }
+    }
+
+    func testTrustProfilesMergesBatchWithOneVerificationAndSignature() throws {
+        for count in [1, 16] {
+            let reads = configureCountingTrustStore()
+            let existing = ConnectionProfile(name: "Existing", host: "old.example.com", username: "user")
+            let unrelated = ConnectionProfile(name: "Unrelated", host: "keep.example.com", username: "user")
+            try store.seedInitialTrust(for: [existing, unrelated])
+            var updated = existing
+            updated.username = "new-user"
+            let added = (0..<count).map {
+                ConnectionProfile(name: "New \($0)", host: "new\($0).example.com", username: "user")
+            }
+            let readsBefore = reads.count
+
+            try store.trustProfiles(added + [updated])
+
+            XCTAssertEqual(reads.count - readsBefore, 2, "Batch size: \(count)")
+            XCTAssertEqual(try trustStore.loadTrustedEndpoints(), Dictionary(
+                uniqueKeysWithValues: (added + [updated, unrelated]).map { ($0.id, TrustedProfileEndpoint(profile: $0)) }
+            ))
+        }
+    }
+
+    func testEmptyTrustBatchAndDisabledRefreshDoNotReadTrustStore() throws {
+        let reads = configureCountingTrustStore()
+        let profile = ConnectionProfile(name: "Test", host: "example.com", username: "user")
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json")
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        let corruptTrust = Data("not-json".utf8)
+        try corruptTrust.write(to: trustURL)
+
+        try store.trustProfiles([])
+        try store.saveProfiles([profile], updateTrust: false)
+
+        XCTAssertEqual(reads.count, 0)
+        XCTAssertEqual(try Data(contentsOf: trustURL), corruptTrust)
+    }
+
+    func testSaveProfilesDoesNotRewriteTrustWhenNoProfilesMatch() throws {
+        let reads = configureCountingTrustStore()
+        let unrelated = ConnectionProfile(name: "Unrelated", host: "keep.example.com", username: "user")
+        let added = ConnectionProfile(name: "New", host: "new.example.com", username: "user")
+        try store.seedInitialTrust(for: [unrelated])
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json")
+        let originalTrust = try Data(contentsOf: trustURL)
+        let readsBefore = reads.count
+
+        try store.saveProfiles([added])
+
+        XCTAssertEqual(reads.count - readsBefore, 1)
+        XCTAssertEqual(try Data(contentsOf: trustURL), originalTrust)
+        XCTAssertEqual(try trustStore.loadTrustedEndpoints(), [unrelated.id: TrustedProfileEndpoint(profile: unrelated)])
+    }
+
+    func testTrustBatchFailurePropagatesButDoesNotFailProfileSave() throws {
+        let profiles = [
+            ConnectionProfile(name: "First", host: "first.example.com", username: "user"),
+            ConnectionProfile(name: "Second", host: "second.example.com", username: "user"),
+        ]
+        try store.seedInitialTrust(for: profiles)
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json")
+        let corruptTrust = Data("not-json".utf8)
+        try corruptTrust.write(to: trustURL)
+
+        XCTAssertThrowsError(try store.trustProfiles(profiles)) { error in
+            guard case ProfileTrustStoreError.readFailed = error else {
+                return XCTFail("Expected readFailed, got \(error)")
+            }
+        }
+        try store.saveProfiles(profiles)
+
+        let envelope = try JSONDecoder().decode(
+            EncryptedProfilesEnvelope.self,
+            from: Data(contentsOf: URL(fileURLWithPath: storeProfilesPath))
+        )
+        XCTAssertEqual(try encryptionService.decrypt(envelope).map { $0.toConnectionProfile() }, profiles)
+        XCTAssertEqual(try Data(contentsOf: trustURL), corruptTrust)
+    }
+
+    private func configureCountingTrustStore() -> TrustSigningKeyReadCounter {
+        let reads = TrustSigningKeyReadCounter()
+        let countingKeyStore = ProfileTrustSigningKeyStore(copyMatching: { reads.copyMatching($0, $1) })
+        trustStore = ProfileTrustStore(baseDirectory: baseDirectory, signingKeyStore: countingKeyStore)
+        store = ConnectionStore(
+            baseDirectory: baseDirectory,
+            trustStore: trustStore,
+            encryptionService: encryptionService
+        )
+        return reads
+    }
+
     func testDeleteRemovesProfileAndOnlyItsTrust() throws {
         let removed = ConnectionProfile(name: "Removed", host: "removed.example.com", username: "user")
         let remaining = ConnectionProfile(name: "Remaining", host: "remaining.example.com", username: "user")
