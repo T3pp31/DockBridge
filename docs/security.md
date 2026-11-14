@@ -240,14 +240,24 @@ Entitlements not granted include `network.server`, `temporary-exception.files.ab
 
 ### Code signing and distribution
 
+This section is the single source of truth for release signing and distribution policy.
+The pipeline requirements below do not establish the signing or notarization status
+of already-published downloads. Check the specific release and artifact rather than
+assuming that all public DMGs have the same status. Verify downloads with the
+published SHA-256 checksum and [GitHub provenance attestation](#supply-chain-provenance-attestation);
+neither replaces Apple code-signature or notarization verification. Do not disable
+Gatekeeper checks for downloads from untrusted sources.
+
 - Hardened Runtime enabled in the Xcode project; it takes effect once release builds are signed
 - GitHub Release workflow (`.github/workflows/release.yml`) imports a Developer ID certificate, creates a `notarytool` profile, and sets `SIGN_AND_NOTARIZE=true`
-- Developer ID signing, Apple Notarization, and Gatekeeper verification run for public releases; release secrets must be configured before a release can publish
+- Public release packaging requires Developer ID signing, Apple Notarization, and Gatekeeper verification of the `.app`; release secrets must be configured before a release can publish. `scripts/package-macos-release.sh` also rejects signing-enabled packaging unless both `require_signed_updates` and `require_notarized_updates` in `config/release.toml` are `true`.
 - **In-app update installation** (`Download update` in the app) is gated at runtime by `AppUpdateConfig.swift` (`requireSignedUpdates` / `requireNotarizedUpdates`). Keep those flags in sync with `config/release.toml`. Until either flag is enabled, the app opens the GitHub release page only (intentional short-term killswitch). When verification is disabled, `ReleaseCodeSignatureVerifier` checks only `CFBundleIdentifier`, which is **not** sufficient to prove authenticity — an attacker could ship a DMG with a matching bundle ID. Enabling either flag requires a non-empty `expectedTeamIdentifier`, and both policies verify the signer's team against that value: notarization alone does not identify the expected vendor. `requireSignedUpdates` additionally requires a non-empty `signingCertificateFingerprintSHA256` and verifies the Developer ID signature and certificate pin. Missing required values are rejected as a misconfigured policy (those checks are not silently skipped).
 
 #### Release signing pipeline
 
-When signing is enabled, the release workflow will require these repository secrets:
+The signing pipeline is implemented, but publication also requires release configuration: packaging with `SIGN_AND_NOTARIZE=true` rejects disabled `require_signed_updates` or `require_notarized_updates` policies in `config/release.toml`. Configure those policies, the expected team ID / certificate fingerprint, and the matching `AppUpdateConfig.swift` values described above before publishing; do not disable signing to bypass this gate. Distribution documentation is tracked in [#393](https://github.com/T3pp31/DockBridge/issues/393) (duplicate: [#463](https://github.com/T3pp31/DockBridge/issues/463)).
+
+The public release workflow requires these repository secrets:
 
 | Secret | Purpose |
 |--------|---------|
@@ -264,6 +274,10 @@ With `SIGN_AND_NOTARIZE=true`, release packaging runs `scripts/sign-and-notarize
 3. Staples the notarization ticket to the app bundle (`stapler staple`).
 4. Verifies Gatekeeper acceptance (`spctl -a -vv -t execute`).
 5. When `DMG_PATH` is provided, **also signs the DMG** (`codesign --timestamp`), notarizes and staples it, and validates it with `spctl -a -vv -t open` so the mounted image is accepted by Gatekeeper.
+
+The packaging script currently invokes this helper for the `.app` before creating
+the DMG; it does not pass `DMG_PATH` for a separate DMG signing/notarization step.
+A signed app bundle and a signed DMG are distinct guarantees.
 
 If signing or notarization fails, the release workflow must stop before publishing assets.
 
@@ -296,7 +310,7 @@ DockBridge publishes a CycloneDX JSON SBOM for each release and verifies SBOM ge
 Generate an SBOM locally:
 
 ```bash
-cargo install cargo-cyclonedx --version "$(awk -F'"' '/^cargo_cyclonedx_version / { print $2; exit }' config/release.toml)" --locked
+cargo install cargo-cyclonedx --version "$(bash scripts/release-config.sh cargo_cyclonedx_version)" --locked
 ./scripts/generate-sbom.sh --out dist
 ```
 

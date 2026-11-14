@@ -16,7 +16,7 @@ DockBridge is a macOS-native SFTP client. It has two parts:
 
 - Format check: `cargo fmt --all -- --check`
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`
-- Tests: `cargo test --workspace` (core has the bulk; CI runs `cargo test -p dockbridge-core`)
+- Tests: `cargo test --workspace --all-targets` (CI runs `cargo test --workspace --all-targets`)
 - Build: `cargo build --workspace`
 
 A full clean `cargo build`/`clippy` compiles the whole dependency tree (~1–2 min each). The update

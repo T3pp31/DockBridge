@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - ドロップ検証で表示一覧の正規化済みパスと種別を索引化し、複数項目ドロップ時の全件走査とパス正規化の繰り返しを削減 (#1341)。
+- Clarify release signing prerequisites and unsigned-build Hardened Runtime limitations, and add copyable SHA-256 / attestation verification instructions to the README (#463; duplicate of #393).
 - Verify required macOS update notarization with Apple's `notarized` code requirement instead of a nonexistent signing-information key (#1150).
 - Pin the signer team for notarization-only update policies and reject missing expected team IDs (#1151)
 - Update code signature validation now explicitly checks certificate expiration and enforces revocation checks when signature or notarization verification is required (#1183)

@@ -15,7 +15,7 @@
 - [x] OpenSSH known_hosts compatibility (import/export/merge; see #302, #303)
 - [x] Drag and drop (see #153, #337)
 - [x] Encrypted connection-profile storage (AES-GCM envelope + Keychain master key); see [security.md](security.md#connection-profiles-profilesjson)
-- [ ] Security: Enable Developer ID signing and notarization for release DMGs; see [security.md](security.md#code-signing-and-distribution)
+- [ ] Security: Complete release signing setup (Developer ID credentials and update-verification policy). The app signing/notarization pipeline is implemented and required by the release workflow; publication depends on configuration, not a promised version. See [security.md](security.md#code-signing-and-distribution) and [#393](https://github.com/T3pp31/DockBridge/issues/393) (documentation tracking; #463 is a duplicate).
 - [ ] External editor integration (#361): change monitoring, recovery-safe temp cleanup, and visible stop/retry controls implemented; editor selection remains
 - [x] Auto-upload on save (part of #361)
 - [x] Get Info sheets for local and remote entries (#363)
