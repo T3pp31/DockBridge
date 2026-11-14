@@ -110,6 +110,8 @@ jobs:
         run: python3 scripts/test-hello-world-docs.py
       - name: Test Rust test documentation consistency
         run: python3 scripts/test-rust-test-docs.py
+      - name: Test shared xcodebuild settings (mocked tools)
+        run: python3 scripts/test-ci-xcodebuild.py -v
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
@@ -202,6 +204,15 @@ jobs:
     # Guard against xcodebuild test hangs (observed: no test output for 6h until
     # the default job timeout in run 34044968127). Normal duration is ~13 min.
     timeout-minutes: 45
+    env:
+      # Keep build-for-testing and test-without-building settings in sync.
+      XCODEBUILD_SCHEME: "DockBridge"
+      XCODEBUILD_DESTINATION: "platform=macOS"
+      XCODEBUILD_CONFIGURATION: "Debug"
+      XCODEBUILD_CODE_SIGN_IDENTITY: "-"
+      XCODEBUILD_CODE_SIGNING_REQUIRED: "NO"
+      XCODEBUILD_CODE_SIGNING_ALLOWED: "NO"
+      XCODEBUILD_DEVELOPMENT_TEAM: ""
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -302,14 +313,14 @@ jobs:
         # 34044968127 / 34207249969 froze before "Testing started").
         run: |
           xcodebuild \
-            -scheme DockBridge \
-            -destination 'platform=macOS' \
-            -configuration Debug \
+            -scheme "$XCODEBUILD_SCHEME" \
+            -destination "$XCODEBUILD_DESTINATION" \
+            -configuration "$XCODEBUILD_CONFIGURATION" \
             build-for-testing \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            DEVELOPMENT_TEAM=""
+            CODE_SIGN_IDENTITY="$XCODEBUILD_CODE_SIGN_IDENTITY" \
+            CODE_SIGNING_REQUIRED="$XCODEBUILD_CODE_SIGNING_REQUIRED" \
+            CODE_SIGNING_ALLOWED="$XCODEBUILD_CODE_SIGNING_ALLOWED" \
+            DEVELOPMENT_TEAM="$XCODEBUILD_DEVELOPMENT_TEAM"
 
       - name: Test macOS app
         # Kill hung test runs early instead of burning the job timeout:
@@ -368,17 +379,17 @@ jobs:
             # grep sees them (see issue #264).
             perl -e 'alarm 420; exec @ARGV or exit 127' -- \
               xcodebuild \
-              -scheme DockBridge \
-              -destination 'platform=macOS' \
-              -configuration Debug \
+              -scheme "$XCODEBUILD_SCHEME" \
+              -destination "$XCODEBUILD_DESTINATION" \
+              -configuration "$XCODEBUILD_CONFIGURATION" \
               test-without-building \
               -test-timeouts-enabled YES \
               -default-test-execution-time-allowance 300 \
               -resultBundlePath "$xcresult" \
-              CODE_SIGN_IDENTITY="-" \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=NO \
-              DEVELOPMENT_TEAM="" 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
+              CODE_SIGN_IDENTITY="$XCODEBUILD_CODE_SIGN_IDENTITY" \
+              CODE_SIGNING_REQUIRED="$XCODEBUILD_CODE_SIGNING_REQUIRED" \
+              CODE_SIGNING_ALLOWED="$XCODEBUILD_CODE_SIGNING_ALLOWED" \
+              DEVELOPMENT_TEAM="$XCODEBUILD_DEVELOPMENT_TEAM" 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
             echo "::endgroup::"
             if [ "$rc" -eq 0 ]; then
               exit 0
