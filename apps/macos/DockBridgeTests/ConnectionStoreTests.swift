@@ -15,7 +15,8 @@ final class ConnectionStoreTests: XCTestCase {
         baseDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         signingKeyStore = ProfileTrustSigningKeyStore(
-            serviceName: "com.dockbridge.tests.\(UUID().uuidString)"
+            serviceName: "com.dockbridge.tests.\(UUID().uuidString)",
+            operations: InMemoryProfileTrustKeychain().operations
         )
         trustStore = ProfileTrustStore(
             baseDirectory: baseDirectory,
@@ -195,7 +196,13 @@ final class ConnectionStoreTests: XCTestCase {
 
     private func configureCountingTrustStore() -> TrustSigningKeyReadCounter {
         let reads = TrustSigningKeyReadCounter()
-        let countingKeyStore = ProfileTrustSigningKeyStore(copyMatching: { reads.copyMatching($0, $1) })
+        let countingKeyStore = ProfileTrustSigningKeyStore(
+            operations: .init(
+                copyMatching: { reads.copyMatching($0, $1) },
+                add: { _ in errSecSuccess },
+                delete: { _ in errSecSuccess }
+            )
+        )
         trustStore = ProfileTrustStore(baseDirectory: baseDirectory, signingKeyStore: countingKeyStore)
         store = ConnectionStore(
             baseDirectory: baseDirectory,
