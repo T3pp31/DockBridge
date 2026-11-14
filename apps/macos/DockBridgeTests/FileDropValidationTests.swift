@@ -140,18 +140,57 @@ final class FileDropValidationTests: XCTestCase {
 
     func testCanUploadLocalItemRequiresExistingReadableFile() throws {
         let directory = FileManager.default.temporaryDirectory
-        let fileURL = directory.appendingPathComponent("file-drop-upload-validation.txt")
-        FileManager.default.createFile(atPath: fileURL.path, contents: Data("upload".utf8))
-        defer {
-            try? FileManager.default.removeItem(at: fileURL)
-        }
+            .appendingPathComponent("file-drop-upload-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("upload.txt")
+        try Data("upload".utf8).write(to: fileURL)
 
         XCTAssertTrue(FileDropValidation.canUploadLocalItem(at: fileURL))
+        XCTAssertTrue(FileDropValidation.canUploadLocalItem(at: directory))
         XCTAssertFalse(
             FileDropValidation.canUploadLocalItem(
                 at: directory.appendingPathComponent("missing-upload-file.txt")
             )
         )
+    }
+
+    func testCanUploadLocalItemRejectsExistingUnreadableFile() throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("file-drop-unreadable-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("unreadable.txt")
+        try Data("upload".utf8).write(to: fileURL)
+        try fileManager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+
+        XCTAssertTrue(fileManager.fileExists(atPath: fileURL.path))
+        XCTAssertFalse(FileDropValidation.canUploadLocalItem(at: fileURL))
+        XCTAssertFalse(FileDropValidation.canUploadExternalItem(at: fileURL))
+    }
+
+    func testCanUploadLocalItemFollowsSymlinksAndRejectsDanglingLinks() throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("file-drop-upload-links-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("upload.txt")
+        let folderURL = directory.appendingPathComponent("folder", isDirectory: true)
+        try Data("upload".utf8).write(to: fileURL)
+        try fileManager.createDirectory(at: folderURL, withIntermediateDirectories: true)
+
+        for target in [fileURL, folderURL] {
+            let link = directory.appendingPathComponent(target.lastPathComponent + "-link")
+            try fileManager.createSymbolicLink(at: link, withDestinationURL: target)
+            XCTAssertTrue(FileDropValidation.canUploadLocalItem(at: link))
+            XCTAssertTrue(FileDropValidation.canUploadExternalItem(at: link))
+
+            try fileManager.removeItem(at: target)
+            XCTAssertFalse(FileDropValidation.canUploadLocalItem(at: link))
+            XCTAssertFalse(FileDropValidation.canUploadExternalItem(at: link))
+        }
     }
 
     func testCanUploadExternalItemRequiresFileURL() throws {

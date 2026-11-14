@@ -19,6 +19,9 @@ final class FakeBridge: RemoteBridging {
     private(set) var listedDirectories: [String] = []
     /// Transfer tasks returned by `fetchTransferTasks`.
     var transferTasks: [TransferTaskRecord] = []
+    var fetchTransferTasksError: Error?
+    var onFetchTransferTasks: (() -> Void)?
+    private(set) var fetchTransferTasksCallCount = 0
     /// Upload destinations recorded during `upload`.
     private(set) var uploaded: [(
         localPath: String,
@@ -129,7 +132,10 @@ final class FakeBridge: RemoteBridging {
     }
 
     func fetchTransferTasks() async throws -> [TransferTaskRecord] {
-        transferTasks
+        fetchTransferTasksCallCount += 1
+        onFetchTransferTasks?()
+        if let fetchTransferTasksError { throw fetchTransferTasksError }
+        return transferTasks
     }
 
     func cancelTransfer(taskId: UInt64) async throws {

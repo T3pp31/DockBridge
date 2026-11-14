@@ -1,3 +1,4 @@
+import Security
 import XCTest
 @testable import DockBridge
 
@@ -153,6 +154,81 @@ final class ConnectionStoreTests: XCTestCase {
             try trustStore.loadTrustedEndpoints(),
             [profile.id: TrustedProfileEndpoint(profile: profile)]
         )
+    }
+
+    func testLoadProfilesReportsKeyReadDeniedWithoutCorruptionGuidanceAndCanRetry() throws {
+        let profile = ConnectionProfile(name: "Retry", host: "example.com", username: "user")
+        try store.saveProfiles([profile])
+        let profilesURL = URL(fileURLWithPath: storeProfilesPath)
+        let originalData = try Data(contentsOf: profilesURL)
+        let originalKey = try XCTUnwrap(keychain.loadKeyData(account: ProfileEncryptionService.masterKeyAccount))
+        let statuses: [OSStatus] = [
+            errSecAuthFailed, errSecInteractionNotAllowed, errSecMissingEntitlement, errSecNotAvailable,
+        ]
+
+        for status in statuses {
+            let deniedStore = ConnectionStore(
+                baseDirectory: baseDirectory,
+                trustStore: trustStore,
+                encryptionService: ProfileEncryptionService(
+                    keychain: ReadDeniedProfileEncryptionKeyStore(status: status)
+                )
+            )
+            let expectedMessage = KeychainServiceError.keyReadDenied(status).localizedDescription
+            XCTAssertThrowsError(try deniedStore.loadProfiles()) { error in
+                guard case ConnectionStoreError.readFailed(let message) = error else {
+                    return XCTFail("Expected readFailed, got \(error)")
+                }
+                XCTAssertEqual(message, expectedMessage)
+                XCTAssertEqual(
+                    error.localizedDescription,
+                    ConnectionStoreError.readFailed(expectedMessage).localizedDescription
+                )
+                XCTAssertNotEqual(error.localizedDescription, ConnectionStoreError.corruptEncryptedStore.localizedDescription)
+            }
+            XCTAssertEqual(try Data(contentsOf: profilesURL), originalData)
+            XCTAssertEqual(try keychain.loadKeyData(account: ProfileEncryptionService.masterKeyAccount), originalKey)
+        }
+
+        XCTAssertEqual(try store.loadProfiles(), [profile])
+    }
+
+    func testLoadProfilesStillReportsCorruptionForMissingMasterKey() throws {
+        let profile = ConnectionProfile(name: "Missing key", host: "example.com", username: "user")
+        try store.saveProfiles([profile])
+        let profilesURL = URL(fileURLWithPath: storeProfilesPath)
+        let originalData = try Data(contentsOf: profilesURL)
+        try keychain.deleteKeyData(account: ProfileEncryptionService.masterKeyAccount)
+
+        XCTAssertThrowsError(try store.loadProfiles()) { error in
+            guard case ConnectionStoreError.corruptEncryptedStore = error else {
+                return XCTFail("Expected corruptEncryptedStore, got \(error)")
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: profilesURL), originalData)
+        XCTAssertNil(try keychain.loadKeyData(account: ProfileEncryptionService.masterKeyAccount))
+    }
+
+    func testLoadProfilesStillReportsCorruptionForTamperedCiphertext() throws {
+        let profile = ConnectionProfile(name: "Tampered", host: "example.com", username: "user")
+        try store.saveProfiles([profile])
+        let profilesURL = URL(fileURLWithPath: storeProfilesPath)
+        let envelope = try JSONDecoder().decode(
+            EncryptedProfilesEnvelope.self, from: Data(contentsOf: profilesURL)
+        )
+        var tamperedPayload = envelope.payload
+        // Alter the authentication tag while keeping the envelope and sealed-box format valid.
+        let lastIndex = try XCTUnwrap(tamperedPayload.indices.last)
+        tamperedPayload[lastIndex] ^= 0x01
+        let tamperedData = try JSONEncoder().encode(EncryptedProfilesEnvelope(payload: tamperedPayload))
+        try tamperedData.write(to: profilesURL)
+
+        XCTAssertThrowsError(try store.loadProfiles()) { error in
+            guard case ConnectionStoreError.corruptEncryptedStore = error else {
+                return XCTFail("Expected corruptEncryptedStore, got \(error)")
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: profilesURL), tamperedData)
     }
 
     func testLoadProfilesMigratesLegacyPlaintextFile() throws {

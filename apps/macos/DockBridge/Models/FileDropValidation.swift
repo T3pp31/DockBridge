@@ -55,10 +55,7 @@ enum FileDropValidation {
     }
 
     static func canUploadLocalItem(at url: URL) -> Bool {
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
-            return false
-        }
+        // Missing paths are also unreadable, so a separate existence check is unnecessary.
         return FileManager.default.isReadableFile(atPath: url.path)
     }
 

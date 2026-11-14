@@ -235,7 +235,7 @@ struct ConnectionListView: View {
     @ViewBuilder
     private func profileContextMenu(for ids: Set<UUID>) -> some View {
         if let profile = singleSelectedProfile(from: ids) {
-            if isConnectedProfile(profile) {
+            if viewModel.isActiveProfile(profile) {
                 Button(String(localized: "Disconnect")) {
                     Task { await viewModel.disconnect() }
                 }
@@ -257,7 +257,7 @@ struct ConnectionListView: View {
             Button(String(localized: "Delete"), role: .destructive) {
                 viewModel.requestDelete(profile: profile)
             }
-            .disabled(isConnectedProfile(profile))
+            .disabled(viewModel.isActiveProfile(profile))
         }
     }
 
@@ -284,13 +284,6 @@ struct ConnectionListView: View {
     private func singleSelectedProfile(from ids: Set<UUID>) -> ConnectionProfile? {
         guard ids.count == 1, let id = ids.first else { return nil }
         return viewModel.profiles.first { $0.id == id }
-    }
-
-    private func isConnectedProfile(_ profile: ConnectionProfile) -> Bool {
-        // Treat a pending connection as active so Delete cannot remove a
-        // profile whose session is still being established (issue #783).
-        viewModel.connectedProfileID == profile.id
-            && (viewModel.connectionStatus.isConnected || viewModel.connectionStatus.isConnecting)
     }
 
     private func isRowActive(_ profile: ConnectionProfile) -> Bool {
