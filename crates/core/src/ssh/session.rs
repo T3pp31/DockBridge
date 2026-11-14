@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use russh::client::{self, AuthResult, Handle, KeyboardInteractiveAuthResponse};
-use russh::keys::{PrivateKeyWithHashAlg, PublicKey};
+use russh::keys::PrivateKeyWithHashAlg;
 use russh::MethodKind;
 use russh_sftp::client::{Config as SftpConfig, SftpSession};
 use tokio::sync::Mutex;
@@ -186,8 +186,10 @@ impl client::Handler for SshClientHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        let server_public_key = server_key.public_key();
+        let server_public_key = &server_public_key;
         let fingerprint = fingerprint_sha256(server_public_key);
         let check = {
             let manager = self.known_hosts.lock().await;
