@@ -223,6 +223,105 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertEqual(hosts.first?.port, 2200)
     }
 
+    func testNormalizedAliasesApplyEachBlockOnceAndMergeDefaultsInFileOrder() {
+        let hosts = SSHConfigParser.parse("""
+        IdentityFile /keys/global
+        Host "  Beta  " beta BETA alpha
+            HostName first.example.com
+            User specific
+            IdentityFile /keys/shared
+        Host *
+            User default
+            Port 2200
+            IdentityFile /keys/middle
+        Host ALPHA " beta "
+            HostName ignored.example.com
+            Port 2222
+            IdentityFile /keys/repeated
+        Host *
+            IdentityFile /keys/final
+        """)
+
+        XCTAssertEqual(hosts, ["  Beta  ", "alpha"].map { alias in
+            SSHConfigHost(
+                alias: alias,
+                hostName: "first.example.com",
+                user: "specific",
+                port: 2200,
+                identityFiles: ["/keys/global", "/keys/shared", "/keys/middle", "/keys/repeated", "/keys/final"]
+            )
+        })
+    }
+
+    func testInvalidBlocksOnlyRejectMatchingAliasesBeforeLaterDefaults() {
+        let hosts = SSHConfigParser.parse("""
+        Host valid
+            HostName valid.example.com
+        Host broken SHARED
+            Port invalid
+        Host shared
+            User cannot-rescue
+        Host *.example.com !valid
+            Port invalid
+        Match host valid
+            Port invalid
+        Host "unterminated
+            Port invalid
+        Host recovered
+            User recovered-user
+        Host *
+            Port 2200
+        """)
+
+        XCTAssertEqual(hosts, [
+            SSHConfigHost(alias: "valid", hostName: "valid.example.com", port: 2200),
+            SSHConfigHost(alias: "recovered", user: "recovered-user", port: 2200),
+        ])
+    }
+
+    func testLargeConfigPreservesAliasAndDirectiveOrder() {
+        let hostCount = 1_000
+        var sections = ["IdentityFile /keys/global", "Host *\n    User default-user"]
+        for index in 0..<hostCount {
+            sections.append("""
+            Host Node-\(index) NODE-\(index)
+                HostName node-\(index).example.com
+                IdentityFile /keys/node-\(index)
+            Match host Node-\(index)
+                User ignored
+            """)
+        }
+        sections.append("""
+        Host *
+            Port 2200
+            IdentityFile /keys/middle
+        """)
+        for index in (0..<hostCount).reversed() {
+            sections.append("""
+            Host node-\(index)
+                Port 2222
+                IdentityFile /keys/repeated-\(index)
+            """)
+        }
+        let contents = sections.joined(separator: "\n")
+        var hosts: [SSHConfigHost] = []
+
+        // Record parsing cost without a machine-dependent wall-clock limit.
+        measure {
+            hosts = SSHConfigParser.parse(contents)
+        }
+
+        XCTAssertEqual(hosts, (0..<hostCount).map { index in
+            SSHConfigHost(
+                alias: "Node-\(index)",
+                hostName: "node-\(index).example.com",
+                user: "default-user",
+                port: 2200,
+                identityFiles: ["/keys/global", "/keys/node-\(index)", "/keys/middle", "/keys/repeated-\(index)"]
+            )
+        })
+    }
+
     func testQuotedEmptyValuesDoNotBlockLaterValidValues() {
         let hosts = SSHConfigParser.parse("""
         Host empty

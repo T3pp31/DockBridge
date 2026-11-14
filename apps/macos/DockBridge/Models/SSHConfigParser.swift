@@ -22,45 +22,68 @@ enum SSHConfigParser {
         // Gather importable aliases, then evaluate applicable blocks in file
         // order for each alias, just as OpenSSH does for a selected host.
         struct Block {
-            var aliases: [String]
-            var appliesToAll: Bool
             var directives: [Directive] = []
         }
-        var blocks = [Block(aliases: [], appliesToAll: true)]
-        var aliases: [String] = []
+        var blocks = [Block()]
+        var defaultBlockIndices = [0]
+        var blockIndicesByAlias: [String: [Int]] = [:]
+        var aliases: [(original: String, normalized: String)] = []
+        var seenAliases = Set<String>()
         for rawLine in contents.components(separatedBy: .newlines) {
             let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard let directive = parseDirective(rawLine) else {
                 if trimmed.hasPrefix("host") || trimmed.hasPrefix("match") {
-                    blocks.append(Block(aliases: [], appliesToAll: false))
+                    blocks.append(Block())
                 }
                 continue
             }
             switch directive.key {
             case "host":
-                let exactAliases = directive.arguments.filter(isImportableAlias)
-                for alias in exactAliases where !aliases.contains(where: {
-                    normalizedAlias($0) == normalizedAlias(alias)
-                }) {
-                    aliases.append(alias)
+                let blockIndex = blocks.count
+                var blockAliases = Set<String>()
+                for alias in directive.arguments where isImportableAlias(alias) {
+                    let normalized = normalizedAlias(alias)
+                    if seenAliases.insert(normalized).inserted {
+                        aliases.append((original: alias, normalized: normalized))
+                    }
+                    // A block applies once even when its header repeats an alias.
+                    if blockAliases.insert(normalized).inserted {
+                        blockIndicesByAlias[normalized, default: []].append(blockIndex)
+                    }
                 }
                 // Only an unconditional Host * is supported as a default;
                 // other patterns keep the parser's existing import policy.
-                blocks.append(Block(aliases: exactAliases, appliesToAll: directive.arguments == ["*"]))
+                if directive.arguments == ["*"] {
+                    defaultBlockIndices.append(blockIndex)
+                }
+                blocks.append(Block())
             case "match":
-                blocks.append(Block(aliases: [], appliesToAll: false))
+                blocks.append(Block())
             default:
                 blocks[blocks.count - 1].directives.append(directive)
             }
         }
 
         return aliases.compactMap { alias in
-            var candidates = [SSHConfigHost(alias: alias)]
-            for block in blocks where block.appliesToAll || block.aliases.contains(where: {
-                normalizedAlias($0) == normalizedAlias(alias)
-            }) {
+            var candidates = [SSHConfigHost(alias: alias.original)]
+            let matchingBlockIndices = blockIndicesByAlias[alias.normalized, default: []]
+            var defaultIndex = 0
+            var matchingIndex = 0
+            // Both index lists are already in file order. Merge them so defaults
+            // and exact blocks retain first-value wins and cumulative key order.
+            while defaultIndex < defaultBlockIndices.count || matchingIndex < matchingBlockIndices.count {
+                let blockIndex: Int
+                if matchingIndex == matchingBlockIndices.count
+                    || (defaultIndex < defaultBlockIndices.count
+                        && defaultBlockIndices[defaultIndex] < matchingBlockIndices[matchingIndex]) {
+                    blockIndex = defaultBlockIndices[defaultIndex]
+                    defaultIndex += 1
+                } else {
+                    blockIndex = matchingBlockIndices[matchingIndex]
+                    matchingIndex += 1
+                }
                 var valid = true
-                for directive in block.directives {
+                for directive in blocks[blockIndex].directives {
                     apply(directive: directive, to: &candidates, currentBlockIsValid: &valid)
                     if !valid { return nil }
                 }
