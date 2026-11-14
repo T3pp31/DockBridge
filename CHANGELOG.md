@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Keychain の暗号化キー読み取り拒否をプロファイル破損と区別し、復旧可能な profiles.json の削除を促さないよう修正 (#1345)。
+- 接続確立中・接続済みプロフィールの削除抑止を ViewModel に集約し、削除確認後に接続が始まった場合もプロフィールと認証情報を保持するよう修正 (#1350)
 - Verify required macOS update notarization with Apple's `notarized` code requirement instead of a nonexistent signing-information key (#1150).
 - Pin the signer team for notarization-only update policies and reject missing expected team IDs (#1151)
 - Update code signature validation now explicitly checks certificate expiration and enforces revocation checks when signature or notarization verification is required (#1183)
