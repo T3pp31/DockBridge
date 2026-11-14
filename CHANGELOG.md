@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - プロファイル保存・一括信頼更新で信頼ストアをまとめて更新し、件数分の全件読み書きとKeychain参照を削減 (#1347)
+- Clarify release signing prerequisites and unsigned-build Hardened Runtime limitations, and add copyable SHA-256 / attestation verification instructions to the README (#463; duplicate of #393).
 - Verify required macOS update notarization with Apple's `notarized` code requirement instead of a nonexistent signing-information key (#1150).
 - Pin the signer team for notarization-only update policies and reject missing expected team IDs (#1151)
 - Update code signature validation now explicitly checks certificate expiration and enforces revocation checks when signature or notarization verification is required (#1183)
