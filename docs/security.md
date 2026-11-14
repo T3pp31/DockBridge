@@ -348,6 +348,9 @@ gh attestation verify DockBridge-<version>.cdx.json --repo T3pp31/DockBridge
 | RUSTSEC-2026-0154 | russh | High (7.5) | Same as above |
 | RUSTSEC-2026-0385 | ctutils | Timing side channel | Fixed in `ctutils 0.4.6` via the `crypto-bigint 0.7.6` update |
 | RUSTSEC-2026-0387 | crypto-bigint | Timing side channel | Fixed in `crypto-bigint 0.7.6` |
+| RUSTSEC-2026-0486 | rustix | Unsoundness | Fixed by upgrading to `rustix 1.1.6` |
+| RUSTSEC-2026-0492 | russh | Channel state confusion (High) | Fixed by upgrading to `russh 0.65.1` |
+| RUSTSEC-2026-0495 | russh | SSH agent confirmation bypass (High) | Fixed by upgrading to `russh 0.65.1` |
 
 ### RSA Marvin Attack (RUSTSEC-2023-0071)
 
@@ -378,7 +381,7 @@ cargo audit
   `dtolnay/rust-toolchain`, then `cargo check --workspace --all-targets`) so an
   unintentional MSRV bump fails the build. `rust-toolchain.toml` keeps `stable` for
   local/CI primary builds; the MSRV job pins the floor.
-- **`ssh-key` is pinned to the 0.7.0 release candidate** (`=0.7.0-rc.10`). The stable
+- **`ssh-key` is pinned to the 0.7.0 release candidate** (`=0.7.0-rc.11`). The stable
   0.6.x line lacks features DockBridge relies on; rc releases are reviewed before the
   pin is advanced. When 0.7.0 stable ships, upgrade to it and drop `rsa`
   (0.10.0-rc.18, currently transitive via `ssh-key`/`russh`) if its patch also lands.
