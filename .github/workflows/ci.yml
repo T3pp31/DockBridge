@@ -33,6 +33,19 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  website:
+    name: Website download
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test website download behavior (offline)
+        run: node --test scripts/test-website-download.cjs
+
   rust:
     name: Rust
     runs-on: ubuntu-latest
@@ -71,10 +84,45 @@ jobs:
             shellcheck -x scripts/*.sh
           fi
 
+      - name: Test demo host-key setup
+        run: python3 scripts/test-demo-host-key.py
+      - name: Test E2E log cleanup
+        run: python3 scripts/test-e2e-verify.py
+      - name: Test SBOM publication
+        run: python3 scripts/test-generate-sbom.py
+      - name: Test release notes extraction
+        run: python3 scripts/test-release-notes.py
+      - name: Test release configuration reader and workflow guards
+        run: python3 scripts/test-release-config.py
+      - name: Test signing identity resolution (mocked macOS commands)
+        run: python3 scripts/test-sign-and-notarize-macos.py
+      - name: Test transfer-cancel verification diagnostics
+        run: python3 scripts/test-verify-transfer-cancel.py
+      - name: Test app icon generation script
+        run: python3 scripts/test-generate-app-icon-icns.py -v
+      - name: Test development installer
+        run: python3 scripts/test-dev-install-unsigned.py -v
+      - name: Test UniFFI generation scripts (mocked tools)
+        run: python3 scripts/test-generate-uniffi.py
+      - name: Test website install instructions
+        run: python3 scripts/test-website-install.py
+      - name: Test hello-world documentation credential flow
+        run: python3 scripts/test-hello-world-docs.py
+      - name: Test Rust test documentation consistency
+        run: python3 scripts/test-rust-test-docs.py
+      - name: Test shared xcodebuild settings (mocked tools)
+        run: python3 scripts/test-ci-xcodebuild.py -v
+      - name: Test macOS Rust test coverage
+        run: python3 scripts/test-ci-macos-rust.py -v
+      - name: Test release download verification instructions (offline)
+        run: python3 scripts/test-release-download-docs.py
+      - name: Test release security documentation consistency
+        run: python3 scripts/test-release-security-docs.py
+
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
           cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
-          release_version="$(awk -F'"' '/^version = / { print $2; exit }' config/release.toml)"
+          release_version="$(bash scripts/release-config.sh version)"
           if [[ "$cargo_version" != "$release_version" ]]; then
             echo "error: Cargo.toml version ($cargo_version) != config/release.toml version ($release_version)" >&2
             exit 1
@@ -99,7 +147,7 @@ jobs:
       - name: Resolve cargo-cyclonedx version
         id: cyclonedx
         run: |
-          VERSION="$(awk -F'"' '/^cargo_cyclonedx_version / { print $2; exit }' config/release.toml)"
+          VERSION="$(bash scripts/release-config.sh cargo_cyclonedx_version)"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Cache cargo-cyclonedx
@@ -162,11 +210,29 @@ jobs:
     # Guard against xcodebuild test hangs (observed: no test output for 6h until
     # the default job timeout in run 34044968127). Normal duration is ~13 min.
     timeout-minutes: 45
+    env:
+      # Keep build-for-testing and test-without-building settings in sync.
+      XCODEBUILD_SCHEME: "DockBridge"
+      XCODEBUILD_DESTINATION: "platform=macOS"
+      XCODEBUILD_CONFIGURATION: "Debug"
+      XCODEBUILD_CODE_SIGN_IDENTITY: "-"
+      XCODEBUILD_CODE_SIGNING_REQUIRED: "NO"
+      XCODEBUILD_CODE_SIGNING_ALLOWED: "NO"
+      XCODEBUILD_DEVELOPMENT_TEAM: ""
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Test app icon generation script
+        run: python3 scripts/test-generate-app-icon-icns.py -v
+
+      - name: Test development installer
+        run: python3 scripts/test-dev-install-unsigned.py -v
+
+      - name: Test release configuration reader and workflow guards
+        run: python3 scripts/test-release-config.py
 
       - name: Pin Xcode 16.4
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90  # v1.7.0
@@ -193,6 +259,9 @@ jobs:
       - name: Verify localization catalog (en + ja)
         run: ./scripts/verify-localization.sh
 
+      - name: Guard Settings scene state wiring
+        run: python3 scripts/test-settings-scene.py
+
       - name: Build x86_64 (Intel) Rust static library
         run: |
           rustup target add x86_64-apple-darwin
@@ -200,10 +269,13 @@ jobs:
           lipo target/x86_64-apple-darwin/release/libdockbridge_uniffi.a \
             -verify_arch x86_64
 
+      - name: Test Rust workspace (all targets)
+        run: cargo test --workspace --all-targets
+
       - name: Install pinned XcodeGen
         run: |
-          version="$(awk -F'"' '/^xcodegen_version / { print $2; exit }' config/release.toml)"
-          checksum="$(awk -F'"' '/^xcodegen_sha256 / { print $2; exit }' config/release.toml)"
+          version="$(bash scripts/release-config.sh xcodegen_version)"
+          checksum="$(bash scripts/release-config.sh xcodegen_sha256)"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Invalid xcodegen_version in config/release.toml"
             exit 1
@@ -250,14 +322,14 @@ jobs:
         # 34044968127 / 34207249969 froze before "Testing started").
         run: |
           xcodebuild \
-            -scheme DockBridge \
-            -destination 'platform=macOS' \
-            -configuration Debug \
+            -scheme "$XCODEBUILD_SCHEME" \
+            -destination "$XCODEBUILD_DESTINATION" \
+            -configuration "$XCODEBUILD_CONFIGURATION" \
             build-for-testing \
-            CODE_SIGN_IDENTITY="-" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            DEVELOPMENT_TEAM=""
+            CODE_SIGN_IDENTITY="$XCODEBUILD_CODE_SIGN_IDENTITY" \
+            CODE_SIGNING_REQUIRED="$XCODEBUILD_CODE_SIGNING_REQUIRED" \
+            CODE_SIGNING_ALLOWED="$XCODEBUILD_CODE_SIGNING_ALLOWED" \
+            DEVELOPMENT_TEAM="$XCODEBUILD_DEVELOPMENT_TEAM"
 
       - name: Test macOS app
         # Kill hung test runs early instead of burning the job timeout:
@@ -316,17 +388,17 @@ jobs:
             # grep sees them (see issue #264).
             perl -e 'alarm 420; exec @ARGV or exit 127' -- \
               xcodebuild \
-              -scheme DockBridge \
-              -destination 'platform=macOS' \
-              -configuration Debug \
+              -scheme "$XCODEBUILD_SCHEME" \
+              -destination "$XCODEBUILD_DESTINATION" \
+              -configuration "$XCODEBUILD_CONFIGURATION" \
               test-without-building \
               -test-timeouts-enabled YES \
               -default-test-execution-time-allowance 300 \
               -resultBundlePath "$xcresult" \
-              CODE_SIGN_IDENTITY="-" \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGNING_ALLOWED=NO \
-              DEVELOPMENT_TEAM="" 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
+              CODE_SIGN_IDENTITY="$XCODEBUILD_CODE_SIGN_IDENTITY" \
+              CODE_SIGNING_REQUIRED="$XCODEBUILD_CODE_SIGNING_REQUIRED" \
+              CODE_SIGNING_ALLOWED="$XCODEBUILD_CODE_SIGNING_ALLOWED" \
+              DEVELOPMENT_TEAM="$XCODEBUILD_DEVELOPMENT_TEAM" 2>&1 | tee "$log" || rc=${PIPESTATUS[0]}
             echo "::endgroup::"
             if [ "$rc" -eq 0 ]; then
               exit 0

@@ -18,23 +18,31 @@ protocol DMGImageMounting: Sendable {
 }
 
 struct HdiutilDMGImageMounter: DMGImageMounting {
+    private let executableURL: URL
+
+    init(executableURL: URL = URL(fileURLWithPath: "/usr/bin/hdiutil")) {
+        self.executableURL = executableURL
+    }
+
     func mount(dmgURL: URL) throws -> URL {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        process.executableURL = executableURL
         process.arguments = ["attach", "-nobrowse", "-plist", dmgURL.path]
 
         let outputPipe = Pipe()
         process.standardOutput = outputPipe
-        process.standardError = Pipe()
+        // Diagnostics are not used; an unread stderr pipe could block hdiutil.
+        process.standardError = FileHandle.nullDevice
 
         try process.run()
+        // Drain stdout while hdiutil is running, before waiting for its exit.
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
 
         guard process.terminationStatus == 0 else {
             throw AppUpdateDownloadError.mountFailed
         }
 
-        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
         let plist = try? PropertyListSerialization.propertyList(from: outputData, format: nil)
         let systemEntities = (plist as? [String: Any])?["system-entities"] as? [[String: Any]]
 
@@ -58,10 +66,11 @@ struct HdiutilDMGImageMounter: DMGImageMounting {
 
     func unmount(mountPoint: URL) throws {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        process.executableURL = executableURL
         process.arguments = ["detach", mountPoint.path, "-quiet"]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
+        // Neither stream is used for detach, including failure-path cleanup.
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
 
         try process.run()
         process.waitUntilExit()
@@ -79,6 +88,7 @@ enum AppUpdateDownloadError: Error, Equatable {
     case checksumMismatch
     case mountFailed
     case unmountFailed
+    case revealFailed
     case appBundleNotFound
     case signatureVerificationFailed(ReleaseCodeSignatureVerifierError)
 }
@@ -98,6 +108,8 @@ extension AppUpdateDownloadError: LocalizedError {
             return String(localized: "The update disk image could not be opened.")
         case .unmountFailed:
             return String(localized: "The update disk image could not be closed.")
+        case .revealFailed:
+            return String(localized: "The update could not be shown in Finder. Try again or download the update manually from the release page.")
         case .appBundleNotFound:
             return String(localized: "The update disk image does not contain the DockBridge app.")
         case .signatureVerificationFailed(let error):
@@ -120,7 +132,7 @@ extension AppUpdateDownloadError: LocalizedError {
         case .notarizationMissing:
             return String(localized: "The update is not notarized by Apple.")
         case .misconfiguredSignaturePolicy:
-            return String(localized: "Update signature policy is misconfigured. Expected team identifier and certificate fingerprint must both be set when signed updates are required.")
+            return String(localized: "Update signature policy is misconfigured. Expected team identifier must be set for signed or notarized updates; certificate fingerprint is also required for signed updates.")
         }
     }
 }
@@ -136,19 +148,22 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
     private let signatureVerifier: AppBundleSignatureVerifying
     private let dmgMounter: DMGImageMounting
     private let fileManager: FileManager
+    private let revealInFinder: @MainActor @Sendable (URL) -> Bool
 
     init(
         downloadSession: URLSessionDownloadProviding = URLSession.shared,
         dataSession: URLSessionDataProviding = URLSession.shared,
         signatureVerifier: AppBundleSignatureVerifying = ReleaseCodeSignatureVerifier(),
         dmgMounter: DMGImageMounting = HdiutilDMGImageMounter(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        revealInFinder: @escaping @MainActor @Sendable (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) {
         self.downloadSession = downloadSession
         self.dataSession = dataSession
         self.signatureVerifier = signatureVerifier
         self.dmgMounter = dmgMounter
         self.fileManager = fileManager
+        self.revealInFinder = revealInFinder
     }
 
     func downloadVerifyAndReveal(update: AppUpdateInfo) async throws {
@@ -185,12 +200,13 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
             throw AppUpdateDownloadError.signatureVerificationFailed(.unsignedBundle)
         }
 
-        if NSWorkspace.shared.open(mountPoint) {
-            // Finder needs the mounted volume for the user's manual copy.
-            // Removing the backing pathname is safe while the image remains
-            // mounted, and avoids leaving the downloaded DMG in temporary files.
-            shouldUnmount = false
+        guard await revealInFinder(mountPoint) else {
+            throw AppUpdateDownloadError.revealFailed
         }
+        // Finder needs the mounted volume for the user's manual copy.
+        // Removing the backing pathname is safe while the image remains
+        // mounted, and avoids leaving the downloaded DMG in temporary files.
+        shouldUnmount = false
     }
 
     private func downloadDMG(from url: URL) async throws -> URL {

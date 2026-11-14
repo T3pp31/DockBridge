@@ -28,16 +28,12 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
     private static let keychainLock = NSLock()
 
     struct KeychainOperations: Sendable {
-        var copyMatching: @Sendable (CFDictionary) -> (OSStatus, Data?)
+        var copyMatching: @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
         var add: @Sendable (CFDictionary) -> OSStatus
         var delete: @Sendable (CFDictionary) -> OSStatus
 
         static let live = KeychainOperations(
-            copyMatching: { query in
-                var item: CFTypeRef?
-                let status = SecItemCopyMatching(query, &item)
-                return (status, item as? Data)
-            },
+            copyMatching: { SecItemCopyMatching($0, $1) },
             add: { SecItemAdd($0, nil) },
             delete: { SecItemDelete($0) }
         )
@@ -52,10 +48,14 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
         self.operations = operations
     }
 
+    /// Checks for a readable key without creating one; Keychain failures are propagated.
     var hasExistingKey: Bool {
-        Self.keychainLock.lock()
-        defer { Self.keychainLock.unlock() }
-        return keyExists(usingDataProtection: true) || keyExists(usingDataProtection: false)
+        get throws {
+            Self.keychainLock.lock()
+            defer { Self.keychainLock.unlock() }
+            return try keyExists(usingDataProtection: true)
+                || keyExists(usingDataProtection: false)
+        }
     }
 
     func loadOrCreateKey() throws -> SymmetricKey {
@@ -124,12 +124,19 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
         try? deleteKey(usingDataProtection: false)
     }
 
-    private func keyExists(usingDataProtection: Bool) -> Bool {
+    private func keyExists(usingDataProtection: Bool) throws -> Bool {
         var query = makeQuery(usingDataProtection: usingDataProtection)
         query[kSecReturnData as String] = false
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-        let (status, _) = operations.copyMatching(query as CFDictionary)
-        return status == errSecSuccess
+        let status = operations.copyMatching(query as CFDictionary, nil)
+        switch status {
+        case errSecSuccess:
+            return true
+        case errSecItemNotFound:
+            return false
+        default:
+            throw ProfileTrustSigningKeyStoreError.unexpectedStatus(status)
+        }
     }
 
     private func loadKeyData(usingDataProtection: Bool) throws -> Data? {
@@ -137,11 +144,12 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
-        let (status, data) = operations.copyMatching(query as CFDictionary)
+        var item: CFTypeRef?
+        let status = operations.copyMatching(query as CFDictionary, &item)
 
         switch status {
         case errSecSuccess:
-            guard let data else {
+            guard let data = item as? Data else {
                 throw ProfileTrustSigningKeyStoreError.unexpectedStatus(errSecDecode)
             }
             return data

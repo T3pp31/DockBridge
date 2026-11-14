@@ -66,6 +66,96 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertTrue(onDisk.contains(EncryptedProfilesEnvelope.formatIdentifier))
     }
 
+    func testDeleteRemovesProfileAndOnlyItsTrust() throws {
+        let removed = ConnectionProfile(name: "Removed", host: "removed.example.com", username: "user")
+        let remaining = ConnectionProfile(name: "Remaining", host: "remaining.example.com", username: "user")
+        try store.saveProfiles([removed, remaining])
+        try store.seedInitialTrust(for: [removed, remaining])
+
+        XCTAssertEqual(try store.delete(id: removed.id), [remaining])
+        XCTAssertEqual(try store.loadProfiles(), [remaining])
+        XCTAssertEqual(
+            try trustStore.loadTrustedEndpoints(),
+            [remaining.id: TrustedProfileEndpoint(profile: remaining)]
+        )
+
+        XCTAssertTrue(try store.delete(id: remaining.id).isEmpty)
+        XCTAssertTrue(try store.loadProfiles().isEmpty)
+        XCTAssertTrue(try trustStore.loadTrustedEndpoints().isEmpty)
+    }
+
+    func testDeleteSucceedsWhenTrustRemovalFailsAndCanRetryAfterRecovery() throws {
+        let removed = ConnectionProfile(name: "Removed", host: "removed.example.com", username: "user")
+        let remaining = ConnectionProfile(name: "Remaining", host: "remaining.example.com", username: "user")
+        try store.saveProfiles([removed, remaining])
+        try store.seedInitialTrust(for: [removed, remaining])
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        let originalTrust = try Data(contentsOf: trustURL)
+        let corruptTrust = Data("not-json".utf8)
+        try corruptTrust.write(to: trustURL)
+        XCTAssertThrowsError(try trustStore.removeTrust(for: removed.id))
+
+        let profiles = try store.delete(id: removed.id)
+
+        XCTAssertEqual(profiles, [remaining])
+        // Check the committed profiles independently of the broken trust store.
+        let envelope = try JSONDecoder().decode(
+            EncryptedProfilesEnvelope.self,
+            from: Data(contentsOf: URL(fileURLWithPath: storeProfilesPath))
+        )
+        let persisted = try encryptionService.decrypt(envelope).map { $0.toConnectionProfile() }
+        XCTAssertEqual(persisted, [remaining])
+        XCTAssertEqual(try Data(contentsOf: trustURL), corruptTrust)
+
+        // Restoring the trust store allows an explicit retry even though the
+        // profile was already removed by the first call.
+        try originalTrust.write(to: trustURL)
+        XCTAssertEqual(try store.delete(id: removed.id), [remaining])
+        XCTAssertEqual(
+            try trustStore.loadTrustedEndpoints(),
+            [remaining.id: TrustedProfileEndpoint(profile: remaining)]
+        )
+    }
+
+    func testDeleteStillThrowsWhenProfilesCannotBeSavedAndKeepsTrust() throws {
+        let profile = ConnectionProfile(name: "Test", host: "example.com", username: "user")
+        try store.seedInitialTrust(for: [profile])
+        // A regular file in place of the base directory deterministically
+        // prevents saving profiles without relying on filesystem permissions.
+        let blockedDirectory = baseDirectory.appendingPathComponent("not-a-directory", isDirectory: false)
+        try Data("blocked".utf8).write(to: blockedDirectory)
+        let blockedStore = ConnectionStore(
+            baseDirectory: blockedDirectory,
+            trustStore: trustStore,
+            encryptionService: encryptionService
+        )
+
+        XCTAssertThrowsError(try blockedStore.delete(id: profile.id))
+        XCTAssertEqual(
+            try trustStore.loadTrustedEndpoints(),
+            [profile.id: TrustedProfileEndpoint(profile: profile)]
+        )
+    }
+
+    func testDeleteStillThrowsWhenProfilesCannotBeReadAndKeepsTrust() throws {
+        let profile = ConnectionProfile(name: "Test", host: "example.com", username: "user")
+        try store.saveProfiles([profile])
+        try store.seedInitialTrust(for: [profile])
+        let corruptProfiles = Data("not-json".utf8)
+        try corruptProfiles.write(to: URL(fileURLWithPath: storeProfilesPath))
+
+        XCTAssertThrowsError(try store.delete(id: profile.id)) { error in
+            guard case ConnectionStoreError.readFailed = error else {
+                return XCTFail("Expected readFailed, got \(error)")
+            }
+        }
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: storeProfilesPath)), corruptProfiles)
+        XCTAssertEqual(
+            try trustStore.loadTrustedEndpoints(),
+            [profile.id: TrustedProfileEndpoint(profile: profile)]
+        )
+    }
+
     func testLoadProfilesMigratesLegacyPlaintextFile() throws {
         let profileID = UUID()
         let legacyJSON = """

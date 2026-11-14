@@ -73,7 +73,7 @@ jobs:
       - name: Verify release.toml / Cargo.toml match the tag version
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          release_version="$(awk -F'"' '/^version = / { print $2; exit }' config/release.toml)"
+          release_version="$(bash scripts/release-config.sh version)"
           cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
           if [[ "$release_version" != "$VERSION" ]]; then
             echo "error: config/release.toml ($release_version) != tag version ($VERSION)" >&2
@@ -90,17 +90,12 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           NOTES_FILE="${RUNNER_TEMP}/release-notes.md"
-          if awk -v ver="${VERSION}" '
+          awk -v ver="${VERSION}" '
             index($0, "## [" ver "]") == 1 { found=1; next }
             found && /^## \[/ { exit }
             found { print }
-          ' CHANGELOG.md | grep -q .; then
-            awk -v ver="${VERSION}" '
-              index($0, "## [" ver "]") == 1 { found=1; next }
-              found && /^## \[/ { exit }
-              found { print }
-            ' CHANGELOG.md > "$NOTES_FILE"
-          else
+          ' CHANGELOG.md > "$NOTES_FILE"
+          if ! grep -q . "$NOTES_FILE"; then
             echo "error: no [${VERSION}] section found in CHANGELOG.md; add a section like:" >&2
             echo "## [${VERSION}] - YYYY-MM-DD" >&2
             echo "### Added" >&2
@@ -124,16 +119,69 @@ jobs:
             -output "dist/${CLI_NAME}"
           (cd dist && shasum -a 256 "${CLI_NAME}" > "${CLI_NAME}.sha256")
 
+      - name: Import signing certificate and notary profile
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for required in APPLE_CERTIFICATE_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!required}" ]]; then
+              echo "error: missing release secret: ${required}" >&2
+              exit 1
+            fi
+          done
+
+          KEYCHAIN_PATH="${RUNNER_TEMP}/dockbridge-signing.keychain-db"
+          CERT_PATH="${RUNNER_TEMP}/certificate.p12"
+          KEYCHAIN_PASSWORD_PATH="${RUNNER_TEMP}/dockbridge-keychain-password"
+          IMPORT_COMPLETED=false
+
+          cleanup() {
+            rm -f "$CERT_PATH" "$KEYCHAIN_PASSWORD_PATH"
+            if [[ "$IMPORT_COMPLETED" != "true" ]]; then
+              security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          echo -n "$APPLE_CERTIFICATE_BASE64" | base64 --decode -o "$CERT_PATH"
+
+          openssl rand -hex 32 > "$KEYCHAIN_PASSWORD_PATH"
+          KEYCHAIN_PASSWORD="$(cat "$KEYCHAIN_PASSWORD_PATH")"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+          xcrun notarytool store-credentials AC_NOTARY \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID"
+
+          rm -f "$CERT_PATH" "$KEYCHAIN_PASSWORD_PATH"
+          IMPORT_COMPLETED=true
+
       - name: Package macOS app
         env:
           VERSION: ${{ steps.version.outputs.version }}
           BUILD_NUMBER: ${{ github.run_number }}
-          SIGN_AND_NOTARIZE: "false"
+          SIGN_AND_NOTARIZE: "true"
         run: ./scripts/package-macos-release.sh
 
       - name: Install cargo-cyclonedx
         run: |
-          VERSION="$(awk -F'"' '/^cargo_cyclonedx_version / { print $2; exit }' config/release.toml)"
+          VERSION="$(bash scripts/release-config.sh cargo_cyclonedx_version)"
           cargo install cargo-cyclonedx --version "${VERSION}" --locked
 
       - name: Generate SBOM
@@ -145,9 +193,9 @@ jobs:
         id: assets
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          APP_NAME="$(awk -F'"' '/^app_name / { print $2; exit }' config/release.toml)"
-          ASSET_TEMPLATE="$(awk -F'"' '/^asset_name_template / { print $2; exit }' config/release.toml)"
-          SBOM_TEMPLATE="$(awk -F'"' '/^sbom_name_template / { print $2; exit }' config/release.toml)"
+          APP_NAME="$(bash scripts/release-config.sh app_name)"
+          ASSET_TEMPLATE="$(bash scripts/release-config.sh asset_name_template)"
+          SBOM_TEMPLATE="$(bash scripts/release-config.sh sbom_name_template)"
           ASSET_NAME="${ASSET_TEMPLATE//\{app_name\}/${APP_NAME}}"
           ASSET_NAME="${ASSET_NAME//\{version\}/${VERSION}}"
           SBOM_NAME="${SBOM_TEMPLATE//\{app_name\}/${APP_NAME}}"

@@ -47,7 +47,7 @@ struct ConnectionListView: View {
                 Button(String(localized: "Disconnect")) {
                     Task { await viewModel.disconnect() }
                 }
-                .disabled(!viewModel.connectionStatus.isConnected)
+                .disabled(!viewModel.canDisconnect)
 
                 Button(String(localized: "Reconnect")) {
                     viewModel.reconnect()
@@ -139,8 +139,8 @@ struct ConnectionListView: View {
             CredentialPromptSheet(
                 profileName: item.profile.displayName,
                 kind: item.kind,
-                onConfirm: { text, save in
-                    viewModel.confirmCredentialPrompt(text: text, saveToKeychain: save)
+                onConfirm: { credential, save in
+                    viewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: save)
                 },
                 onCancel: viewModel.cancelCredentialPrompt
             )
@@ -239,6 +239,7 @@ struct ConnectionListView: View {
                 Button(String(localized: "Disconnect")) {
                     Task { await viewModel.disconnect() }
                 }
+                .disabled(!viewModel.canDisconnect)
             } else {
                 Button(String(localized: "Connect")) {
                     viewModel.requestConnect(profile: profile)

@@ -1,9 +1,11 @@
 /// Strips quoted path-like segments before disconnect heuristics so a path
 /// containing a phrase cannot falsely indicate connection loss (issue #662).
 fn strip_quoted_paths(message: &str) -> String {
-    // First expose Debug error payloads, then remove paths nested inside them.
-    // Two bounded passes avoid recursively parsing server-controlled text.
-    strip_quoted_segments(&strip_quoted_segments(message, true), false)
+    // Expose up to two layers of Debug error payloads before removing paths
+    // nested inside them. Keep the passes bounded for server-controlled text.
+    let exposed = strip_quoted_segments(message, true);
+    let exposed = strip_quoted_segments(&exposed, true);
+    strip_quoted_segments(&exposed, false)
 }
 
 fn strip_quoted_segments(message: &str, preserve_error_text: bool) -> String {
@@ -34,9 +36,11 @@ fn strip_quoted_segments(message: &str, preserve_error_text: bool) -> String {
                     || prefix.ends_with("error:")
                     || prefix.ends_with("io("))
             {
-                // Debug escapes nested double quotes. Expose them to the
-                // second pass so quoted filenames are still removed.
-                result.push_str(&after_open[..end].replace("\\\"", "\""));
+                // Unescape one Debug layer so later passes can distinguish
+                // nested error fields from quoted filenames. Decode escaped
+                // backslashes too, preserving escapes in the next layer.
+                let unescaped = after_open[..end].replace("\\\\", "\\");
+                result.push_str(&unescaped.replace("\\\"", "\""));
             } else {
                 result.push_str(" \"path\" ");
             }
@@ -64,6 +68,7 @@ pub fn is_connection_lost_message(message: &str) -> bool {
     let stripped = strip_quoted_paths(connection_error_detail(message));
     let lower = stripped.to_lowercase();
     if lower.contains("session closed")
+        || lower.contains("connection lost")
         || lower.contains("connection reset")
         || lower.contains("broken pipe")
         || lower.contains("connection refused")
@@ -219,6 +224,57 @@ mod tests {
     }
 
     #[test]
+    fn detects_nested_debug_formatted_error_messages() {
+        for detail in [
+            "Connection reset by peer",
+            "channel closed",
+            "unexpected eof",
+        ] {
+            // The IO wrapper adds a second Debug layer around io::Error's
+            // quoted `error:` field.
+            let error = std::io::Error::other(detail);
+            let error = russh_sftp::client::error::Error::IO(format!("{error:?}"));
+            let message = format!("{error:?}");
+            assert!(is_connection_lost_message(&message), "{message}");
+            let message = format!("failed to download '/tmp/file': {message}");
+            assert!(is_connection_lost_message(&message), "{message}");
+
+            // Also cover the nested `message:` fields used by Os errors.
+            let message =
+                format!(r#"IO {{ message: "read failed: Os {{ message: \"{detail}\" }}" }}"#);
+            assert!(is_connection_lost_message(&message), "{message}");
+        }
+    }
+
+    #[test]
+    fn ignores_unrelated_nested_debug_formatted_errors() {
+        for detail in ["permission denied", "no such file", "temporary failure"] {
+            let error = std::io::Error::other(detail);
+            let error = russh_sftp::client::error::Error::IO(format!("{error:?}"));
+            assert!(
+                !is_connection_lost_message(&format!("{error:?}")),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn detects_nested_debug_eof_despite_suppressive_paths() {
+        for path in ["not found", "permission denied", "no such file"] {
+            for quote in ['\'', '"'] {
+                let error = std::io::Error::other(format!(
+                    "read of {quote}{path}{quote} failed with unexpected eof"
+                ));
+                let error = russh_sftp::client::error::Error::IO(format!("{error:?}"));
+                assert!(
+                    is_connection_lost_message(&format!("{error:?}")),
+                    "{error:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn detects_russh_disconnect_displays() {
         for error in [russh::Error::Disconnect, russh::Error::HUP] {
             assert!(is_connection_lost_message(&error.to_string()), "{error}");
@@ -247,13 +303,17 @@ mod tests {
     fn ignores_paths_inside_debug_formatted_error_messages() {
         for path in ["session closed", "broken pipe", "unexpected eof"] {
             for quote in ['\'', '"'] {
-                let error = russh_sftp::client::error::Error::IO(format!(
-                    "failed to delete {quote}{path}{quote}: failure"
-                ));
-                assert!(
-                    !is_connection_lost_message(&format!("{error:?}")),
-                    "{error:?}"
-                );
+                let detail = format!("failed to delete {quote}{path}{quote}: failure");
+                let nested = std::io::Error::other(detail.clone());
+                for error in [
+                    russh_sftp::client::error::Error::IO(detail),
+                    russh_sftp::client::error::Error::IO(format!("{nested:?}")),
+                ] {
+                    assert!(
+                        !is_connection_lost_message(&format!("{error:?}")),
+                        "{error:?}"
+                    );
+                }
             }
         }
     }

@@ -2,8 +2,8 @@ pub mod client;
 pub mod path;
 pub mod tree;
 
-#[cfg(test)]
-pub(crate) mod test_server;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_server;
 
 pub use client::{RemoteFile, SftpClient};
 pub use path::parent_remote_path;

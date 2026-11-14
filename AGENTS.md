@@ -16,7 +16,7 @@ DockBridge is a macOS-native SFTP client. It has two parts:
 
 - Format check: `cargo fmt --all -- --check`
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`
-- Tests: `cargo test --workspace` (core has the bulk; CI runs `cargo test -p dockbridge-core`)
+- Tests: `cargo test --workspace --all-targets` (CI runs `cargo test --workspace --all-targets`)
 - Build: `cargo build --workspace`
 
 A full clean `cargo build`/`clippy` compiles the whole dependency tree (~1–2 min each). The update
@@ -25,38 +25,59 @@ script only runs `cargo fetch`, so the first build of a session still does the a
 ### Running the CLI against a real SFTP server (hello-world)
 
 Docker is **not** preinstalled. `scripts/e2e-verify.sh` expects a Docker `atmoz/sftp` container; on
-this VM run a local OpenSSH server instead:
+this VM run a local OpenSSH server instead. Run setup and the password-authenticated upload below
+in **one shell invocation** so the generated `DEMO_PASS` remains available without saving or
+printing it. Replace `<cfg.toml>` and `./file.txt` with your config and upload file before running.
+Host-key prompts are read from `/dev/tty` (never stdin), so use `--host-key-policy accept-new` to
+make the first connection non-interactive and keep stdin exclusively for the password:
 
 ```bash
 sudo apt-get update -qq && sudo apt-get install -y openssh-server
 sudo mkdir -p /run/sshd
 mkdir -p /tmp/sftpdemo
-ssh-keygen -t ed25519 -f /tmp/sftpdemo/ssh_host_ed25519_key -N ""
-sudo chown root:root /tmp/sftpdemo/ssh_host_ed25519_key
+if [ ! -f /tmp/sftpdemo/ssh_host_ed25519_key ]; then
+  ssh-keygen -t ed25519 -f /tmp/sftpdemo/ssh_host_ed25519_key -N "" &&
+    sudo chown root:root /tmp/sftpdemo/ssh_host_ed25519_key
+fi
 sudo useradd --create-home --shell /bin/bash dockbridge-demo
 sudo install -d -o dockbridge-demo -g dockbridge-demo /home/dockbridge-demo/upload
 DEMO_PASS="$(openssl rand -base64 24)"
 echo "dockbridge-demo:$DEMO_PASS" | sudo chpasswd
 printf 'Port 2222\nListenAddress 127.0.0.1\nHostKey /tmp/sftpdemo/ssh_host_ed25519_key\nPidFile /tmp/sftpdemo/sshd.pid\nAllowUsers dockbridge-demo\nUsePAM yes\nPasswordAuthentication yes\nSubsystem sftp internal-sftp\n' > /tmp/sftpdemo/sshd_config
 sudo /usr/sbin/sshd -f /tmp/sftpdemo/sshd_config
-```
 
-Use a disposable environment; stop the demo daemon after testing with
-`sudo kill "$(cat /tmp/sftpdemo/sshd.pid)"`, then remove the dedicated account
-with `sudo userdel --remove dockbridge-demo` and delete `/tmp/sftpdemo`.
-
-Then drive the CLI. Host-key prompts are read from `/dev/tty` (never stdin), so use
-`--host-key-policy accept-new` to make the first connection non-interactive and keep
-stdin exclusively for the password:
-
-```bash
 # First connect: trust the new host key automatically; stdin carries only the password
 printf '%s\n' "$DEMO_PASS" | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
   upload --host 127.0.0.1 --port 2222 --user dockbridge-demo --password-stdin \
   --host-key-policy accept-new \
   --local ./file.txt --remote /home/dockbridge-demo/upload/hello.txt
+```
 
-# private-key auth (key-only servers): --identity expands ~; --passphrase-stdin unlocks encrypted keys
+The host-key step reuses an existing private key, including a root-owned `0600` key,
+without reading or overwriting it. This preserves the key trusted by `accept-new`
+and used by an already-running demo daemon. The other steps are for initial setup:
+if the demo account already exists, skip `useradd`; if the demo daemon is already
+running, reuse it instead of starting a second instance.
+
+If you intentionally regenerate the host key, first stop the demo daemon using
+its PID file, then remove the demo key pair before repeating the key-generation
+step. Also reset only the disposable `known_hosts_path` file dedicated to this
+demo (see below); `accept-new` rejects changed keys. Do not delete your normal
+known-hosts store.
+
+Use a disposable environment; stop the demo daemon after testing with
+`sudo kill "$(cat /tmp/sftpdemo/sshd.pid)"`, then remove the dedicated account
+with `sudo userdel --remove dockbridge-demo` and delete `/tmp/sftpdemo`.
+
+Optional private-key authentication: the setup above only provisions password authentication.
+Before using this example, authorize your public key for the account and set `KEY_PASSPHRASE`
+to your encrypted private key's passphrase in the **same shell invocation** as the command below.
+The check rejects an unset or empty value before running the CLI. For an unencrypted key, omit
+the check, the `printf` pipe, and `--passphrase-stdin` instead.
+
+```bash
+# --identity expands ~; --passphrase-stdin unlocks encrypted keys
+: "${KEY_PASSPHRASE:?Set KEY_PASSPHRASE to the passphrase for your encrypted private key in this shell}"
 printf '%s\n' "$KEY_PASSPHRASE" | cargo run -q -p dockbridge-cli -- --config <cfg.toml> \
   list --host 127.0.0.1 --port 2222 --user dockbridge-demo \
   --identity ~/.ssh/id_ed25519 --passphrase-stdin \

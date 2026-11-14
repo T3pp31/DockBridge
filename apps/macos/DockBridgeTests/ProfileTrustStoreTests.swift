@@ -37,7 +37,7 @@ final class ProfileTrustStoreTests: XCTestCase {
         let signature = HMAC<SHA256>.authenticationCode(
             for: message, using: SymmetricKey(data: legacyKey)
         )
-        XCTAssertTrue(store.hasExistingKey)
+        XCTAssertTrue(try store.hasExistingKey)
         let key = try store.loadOrCreateKey()
         XCTAssertTrue(HMAC<SHA256>.isValidAuthenticationCode(signature, authenticating: message, using: key))
         XCTAssertEqual(backend.protectedKey, legacyKey)
@@ -92,7 +92,7 @@ final class ProfileTrustStoreTests: XCTestCase {
         let legacyKey = Data(repeating: 42, count: 32)
         backend.legacyKey = legacyKey
         let store = ProfileTrustSigningKeyStore(operations: backend.operations)
-        XCTAssertTrue(store.hasExistingKey)
+        XCTAssertTrue(try store.hasExistingKey)
         XCTAssertEqual(backend.legacyKey, legacyKey)
         XCTAssertNil(backend.protectedKey)
     }
@@ -103,7 +103,7 @@ final class ProfileTrustStoreTests: XCTestCase {
         backend.legacyKey = key
         backend.protectedKey = key
         let store = ProfileTrustSigningKeyStore(operations: backend.operations)
-        XCTAssertTrue(store.hasExistingKey)
+        XCTAssertTrue(try store.hasExistingKey)
         XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
         XCTAssertNil(backend.legacyKey)
         XCTAssertEqual(backend.protectedKey, key)
@@ -129,7 +129,7 @@ final class ProfileTrustStoreTests: XCTestCase {
         try store.deleteKey()
         XCTAssertNil(backend.legacyKey)
         XCTAssertNil(backend.protectedKey)
-        XCTAssertFalse(store.hasExistingKey)
+        XCTAssertFalse(try store.hasExistingKey)
     }
 
     func testDecodedLegacyEndpointComparesCanonicalHostsWithoutRewritingData() throws {
@@ -159,6 +159,18 @@ final class ProfileTrustStoreTests: XCTestCase {
         XCTAssertTrue(detection.endpointChanges.isEmpty)
         XCTAssertTrue(detection.pendingInitialTrust.isEmpty)
         XCTAssertTrue(detection.pendingNewProfileTrust.isEmpty)
+    }
+
+    func testHasExistingKeyTracksKeyCreationAndDeletion() throws {
+        XCTAssertFalse(try signingKeyStore.hasExistingKey)
+
+        let key = try signingKeyStore.loadOrCreateKey()
+        XCTAssertTrue(try signingKeyStore.hasExistingKey)
+        let reloadedKey = try signingKeyStore.loadOrCreateKey()
+        XCTAssertEqual(key.withUnsafeBytes { Data($0) }, reloadedKey.withUnsafeBytes { Data($0) })
+
+        try signingKeyStore.deleteKey()
+        XCTAssertFalse(try signingKeyStore.hasExistingKey)
     }
 
     func testConcurrentKeyCreationReturnsSameKey() async throws {
@@ -342,7 +354,7 @@ final class ProfileTrustStoreTests: XCTestCase {
         XCTAssertThrowsError(try trustStore.loadTrustedEndpoints()) { error in
             XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
         }
-        XCTAssertFalse(signingKeyStore.hasExistingKey)
+        XCTAssertFalse(try signingKeyStore.hasExistingKey)
 
         let detection = try trustStore.detectEndpointChanges(in: [profile])
         XCTAssertEqual(detection.pendingInitialTrust, [profile])
@@ -366,6 +378,53 @@ final class ProfileTrustStoreTests: XCTestCase {
                 return XCTFail("Expected readFailed, got \(error)")
             }
             XCTAssertEqual(message, String(localized: "Refusing to follow symbolic link."))
+        }
+    }
+}
+
+// Exercise Keychain read outcomes without locking or changing the user's Keychain.
+final class ProfileTrustSigningKeyStoreTests: XCTestCase {
+    func testHasExistingKeyReturnsTrueForReadableKey() throws {
+        let data = Data(repeating: 0x42, count: 32)
+        let operations = ProfileTrustSigningKeyStore.KeychainOperations(
+            copyMatching: { _, item in
+                item?.pointee = data as CFData
+                return errSecSuccess
+            },
+            add: { _ in errSecSuccess },
+            delete: { _ in errSecSuccess }
+        )
+        let keyStore = ProfileTrustSigningKeyStore(operations: operations)
+
+        XCTAssertTrue(try keyStore.hasExistingKey)
+    }
+
+    func testHasExistingKeyReturnsFalseForItemNotFound() throws {
+        let operations = ProfileTrustSigningKeyStore.KeychainOperations(
+            copyMatching: { _, _ in errSecItemNotFound },
+            add: { _ in errSecSuccess },
+            delete: { _ in errSecSuccess }
+        )
+        let keyStore = ProfileTrustSigningKeyStore(operations: operations)
+
+        XCTAssertFalse(try keyStore.hasExistingKey)
+    }
+
+    func testHasExistingKeyPropagatesKeychainErrors() {
+        for status in [errSecInteractionNotAllowed, errSecAuthFailed, errSecNotAvailable, errSecParam] {
+            let operations = ProfileTrustSigningKeyStore.KeychainOperations(
+                copyMatching: { _, _ in status },
+                add: { _ in errSecSuccess },
+                delete: { _ in errSecSuccess }
+            )
+            let keyStore = ProfileTrustSigningKeyStore(operations: operations)
+
+            XCTAssertThrowsError(try keyStore.hasExistingKey) { error in
+                guard case ProfileTrustSigningKeyStoreError.unexpectedStatus(let actualStatus) = error else {
+                    return XCTFail("Expected unexpectedStatus(\(status)), got \(error)")
+                }
+                XCTAssertEqual(actualStatus, status)
+            }
         }
     }
 }
@@ -402,12 +461,14 @@ final class InMemoryProfileTrustKeychain: @unchecked Sendable {
 
     var operations: ProfileTrustSigningKeyStore.KeychainOperations {
         .init(
-            copyMatching: { [self] query in
-                if readStatus != errSecSuccess { return (readStatus, nil) }
+            copyMatching: { [self] query, item in
+                if readStatus != errSecSuccess { return readStatus }
                 let attributes = query as NSDictionary
                 let data = attributes[kSecUseDataProtectionKeychain] as? Bool == true
                     ? protectedKey : legacyKey
-                return (data == nil ? errSecItemNotFound : errSecSuccess, data)
+                guard let data else { return errSecItemNotFound }
+                item?.pointee = data as CFData
+                return errSecSuccess
             },
             add: { [self] query in
                 if addStatus != errSecSuccess { return addStatus }

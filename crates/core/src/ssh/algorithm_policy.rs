@@ -87,6 +87,7 @@ pub fn secure_client_preferred() -> Preferred {
     Preferred {
         kex: Cow::Borrowed(ALLOWED_KEX),
         key: Cow::Owned(ALLOWED_HOST_KEY.clone()),
+        host_key_certificates: Cow::Borrowed(&[]),
         cipher: Cow::Borrowed(ALLOWED_CIPHER),
         mac: Cow::Borrowed(ALLOWED_MAC),
         compression: Cow::Borrowed(ALLOWED_COMPRESSION),

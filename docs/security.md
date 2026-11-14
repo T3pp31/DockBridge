@@ -5,7 +5,7 @@
 - First-connection host key fingerprint display (SHA256)
 - User accept/reject for unknown host keys
 - Trusted keys stored in DockBridge `known_hosts.json` (written `0600`; on Unix, load rejects files that are not owner-only `0600`/`0400`, owned by the current user, or accessed through a symlink)
-- Hostname/IP alias normalization: same port and fingerprint are trusted across identifiers (OpenSSH-style comma-separated hosts)
+- Hostname/IP aliases: default strict mode (`known_hosts_strict_mode = true`) trusts matching keys only for exact host/port or stored aliases (including imported OpenSSH comma-separated hosts). Trust across other identifiers based only on the same port and fingerprint requires `known_hosts_strict_mode = false` (see [Host key trust policy](#host-key-trust-policy)).
 - OpenSSH `known_hosts` import/export helpers on `KnownHostsManager`
 - Automatic merge with OpenSSH `known_hosts` on connect (configurable; see macOS Settings)
 - Hashed host entry (`|1|...`) import and matching
@@ -18,7 +18,7 @@
 - CLI `--password-stdin` read buffers use `Zeroizing<String>` so stdin input is zeroized on drop
 - UniFFI credentials use a `SecretCredential` custom type that zeroizes on drop after lift
 - Swift clears password/passphrase and `ConnectionProfileRecord` credentials after connect
-- Delete confirmation for destructive operations
+- Mandatory confirmation before remote deletion in the macOS app (cannot be disabled; legacy `confirmBeforeDelete` settings are ignored). Local Move to Trash remains recoverable and unchanged.
 - Warning when connecting as root
 - **FileVault (or equivalent full-disk encryption) recommended** on the boot volume — see [Connection profiles](#connection-profiles-profilesjson)
 
@@ -216,8 +216,8 @@ Uploads and downloads write to temporary partial files before renaming to the fi
 |-------|---------------|----------------|
 | Create | `create_new(true)` + `O_NOFOLLOW` (Unix) | `CREATE \| EXCLUDE \| WRITE` |
 | Name | `.dockbridge-<32-hex>.partial` (cryptographic random) | same pattern in destination directory |
-| Cancel / failure | partial file removed; destination untouched | partial file removed; destination untouched |
-| Success | rename partial → final | delete existing destination when policy is `Replace`, then rename |
+| Cancel / failure | partial file removed; destination untouched | partial file removed; destination untouched (final rename failure or unsupported overwrite keeps the completed partial for recovery) |
+| Success | rename partial → final | rename partial → final; `Replace` atomically overwrites an existing destination via `posix-rename@openssh.com` (without it, fail and preserve both destination and partial; an absent destination can still use plain rename) |
 
 `TransferOverwritePolicy` controls final-destination behavior:
 
@@ -240,14 +240,24 @@ Entitlements not granted include `network.server`, `temporary-exception.files.ab
 
 ### Code signing and distribution
 
-- Hardened Runtime enabled in the Xcode project; it takes effect once release builds are signed (current public builds are unsigned, so it is not active)
-- GitHub Release workflow (`.github/workflows/release.yml`) sets `SIGN_AND_NOTARIZE=false` and publishes unsigned DMGs (`CODE_SIGNING_ALLOWED=NO` during the Xcode build)
-- Developer ID signing, Apple Notarization, and Gatekeeper verification are not currently enabled; the scripts below are ready when repository secrets are configured
-- **In-app update installation** (`Download update` in the app) is gated at runtime by `AppUpdateConfig.swift` (`requireSignedUpdates` / `requireNotarizedUpdates`). Keep those flags in sync with `config/release.toml`. Until either flag is enabled, the app opens the GitHub release page only (intentional short-term killswitch). When verification is disabled, `ReleaseCodeSignatureVerifier` checks only `CFBundleIdentifier`, which is **not** sufficient to prove authenticity — an attacker could ship a DMG with a matching bundle ID. Enabling `requireSignedUpdates` without a non-empty `expectedTeamIdentifier` and `signingCertificateFingerprintSHA256` is rejected as a misconfigured policy (those checks are not silently skipped).
+This section is the single source of truth for release signing and distribution policy.
+The pipeline requirements below do not establish the signing or notarization status
+of already-published downloads. Check the specific release and artifact rather than
+assuming that all public DMGs have the same status. Verify downloads with the
+published SHA-256 checksum and [GitHub provenance attestation](#supply-chain-provenance-attestation);
+neither replaces Apple code-signature or notarization verification. Do not disable
+Gatekeeper checks for downloads from untrusted sources.
 
-#### Release signing pipeline (not currently enabled)
+- Hardened Runtime enabled in the Xcode project; it takes effect once release builds are signed
+- GitHub Release workflow (`.github/workflows/release.yml`) imports a Developer ID certificate, creates a `notarytool` profile, and sets `SIGN_AND_NOTARIZE=true`
+- Public release packaging requires Developer ID signing, Apple Notarization, and Gatekeeper verification of the `.app`; release secrets must be configured before a release can publish. `scripts/package-macos-release.sh` also rejects signing-enabled packaging unless both `require_signed_updates` and `require_notarized_updates` in `config/release.toml` are `true`.
+- **In-app update installation** (`Download update` in the app) is gated at runtime by `AppUpdateConfig.swift` (`requireSignedUpdates` / `requireNotarizedUpdates`). Keep those flags in sync with `config/release.toml`. Until either flag is enabled, the app opens the GitHub release page only (intentional short-term killswitch). When verification is disabled, `ReleaseCodeSignatureVerifier` checks only `CFBundleIdentifier`, which is **not** sufficient to prove authenticity — an attacker could ship a DMG with a matching bundle ID. Enabling either flag requires a non-empty `expectedTeamIdentifier`, and both policies verify the signer's team against that value: notarization alone does not identify the expected vendor. `requireSignedUpdates` additionally requires a non-empty `signingCertificateFingerprintSHA256` and verifies the Developer ID signature and certificate pin. Missing required values are rejected as a misconfigured policy (those checks are not silently skipped).
 
-When signing is enabled, the release workflow will require these repository secrets:
+#### Release signing pipeline
+
+The signing pipeline is implemented, but publication also requires release configuration: packaging with `SIGN_AND_NOTARIZE=true` rejects disabled `require_signed_updates` or `require_notarized_updates` policies in `config/release.toml`. Configure those policies, the expected team ID / certificate fingerprint, and the matching `AppUpdateConfig.swift` values described above before publishing; do not disable signing to bypass this gate. Distribution documentation is tracked in [#393](https://github.com/T3pp31/DockBridge/issues/393) (duplicate: [#463](https://github.com/T3pp31/DockBridge/issues/463)).
+
+The public release workflow requires these repository secrets:
 
 | Secret | Purpose |
 |--------|---------|
@@ -265,9 +275,13 @@ With `SIGN_AND_NOTARIZE=true`, release packaging runs `scripts/sign-and-notarize
 4. Verifies Gatekeeper acceptance (`spctl -a -vv -t execute`).
 5. When `DMG_PATH` is provided, **also signs the DMG** (`codesign --timestamp`), notarizes and staples it, and validates it with `spctl -a -vv -t open` so the mounted image is accepted by Gatekeeper.
 
+The packaging script currently invokes this helper for the `.app` before creating
+the DMG; it does not pass `DMG_PATH` for a separate DMG signing/notarization step.
+A signed app bundle and a signed DMG are distinct guarantees.
+
 If signing or notarization fails, the release workflow must stop before publishing assets.
 
-Local unsigned builds for development and current public releases:
+Local unsigned builds for development only:
 
 ```bash
 SIGN_AND_NOTARIZE=false ./scripts/package-macos-release.sh
@@ -296,7 +310,7 @@ DockBridge publishes a CycloneDX JSON SBOM for each release and verifies SBOM ge
 Generate an SBOM locally:
 
 ```bash
-cargo install cargo-cyclonedx --version "$(awk -F'"' '/^cargo_cyclonedx_version / { print $2; exit }' config/release.toml)" --locked
+cargo install cargo-cyclonedx --version "$(bash scripts/release-config.sh cargo_cyclonedx_version)" --locked
 ./scripts/generate-sbom.sh --out dist
 ```
 
@@ -348,6 +362,9 @@ gh attestation verify DockBridge-<version>.cdx.json --repo T3pp31/DockBridge
 | RUSTSEC-2026-0154 | russh | High (7.5) | Same as above |
 | RUSTSEC-2026-0385 | ctutils | Timing side channel | Fixed in `ctutils 0.4.6` via the `crypto-bigint 0.7.6` update |
 | RUSTSEC-2026-0387 | crypto-bigint | Timing side channel | Fixed in `crypto-bigint 0.7.6` |
+| RUSTSEC-2026-0486 | rustix | Unsoundness | Fixed by upgrading to `rustix 1.1.6` |
+| RUSTSEC-2026-0492 | russh | Channel state confusion (High) | Fixed by upgrading to `russh 0.65.1` |
+| RUSTSEC-2026-0495 | russh | SSH agent confirmation bypass (High) | Fixed by upgrading to `russh 0.65.1` |
 
 ### RSA Marvin Attack (RUSTSEC-2023-0071)
 
@@ -378,7 +395,7 @@ cargo audit
   `dtolnay/rust-toolchain`, then `cargo check --workspace --all-targets`) so an
   unintentional MSRV bump fails the build. `rust-toolchain.toml` keeps `stable` for
   local/CI primary builds; the MSRV job pins the floor.
-- **`ssh-key` is pinned to the 0.7.0 release candidate** (`=0.7.0-rc.10`). The stable
+- **`ssh-key` is pinned to the 0.7.0 release candidate** (`=0.7.0-rc.11`). The stable
   0.6.x line lacks features DockBridge relies on; rc releases are reviewed before the
   pin is advanced. When 0.7.0 stable ships, upgrade to it and drop `rsa`
   (0.10.0-rc.18, currently transitive via `ssh-key`/`russh`) if its patch also lands.
