@@ -4733,6 +4733,23 @@
         }
       }
     },
+    "Profile trust signing key migration found a conflicting protected key.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Profile trust signing key migration found a conflicting protected key."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "プロファイル信頼用署名鍵の移行中に、競合する保護済み鍵が見つかりました。"
+          }
+        }
+      }
+    },
     "Refusing to follow symbolic link.": {
       "extractionState": "manual",
       "localizations": {
