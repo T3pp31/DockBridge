@@ -61,6 +61,8 @@ check() {
   local name="$1"
   shift
   log "CHECK: $name"
+  # Bash disables errexit throughout functions called as an if condition.
+  # Each check (including its helpers) must explicitly return on required failures.
   if "$@" >>"$LOG" 2>&1; then
     log "PASS: $name"
     pass=$((pass + 1))
@@ -71,14 +73,14 @@ check() {
 }
 
 prepare_config() {
-  rm -f "$KNOWN_HOSTS"
+  rm -f "$KNOWN_HOSTS" || return 1
   # AppConfig has no serde(default) on most fields, so the generated TOML must
   # contain every field. Base it on the committed default and override the
   # test-specific paths / merge flag.
   # Keep TOML string literals quoted: the outer double quotes around the
   # replacement would be stripped by the shell before sed sees them.
-  sed     -e "s|^known_hosts_path = .*|known_hosts_path = \"$KNOWN_HOSTS\"|"     -e "s|^merge_openssh_known_hosts_on_connect = .*|merge_openssh_known_hosts_on_connect = false|"     -e "s|^openssh_known_hosts_path = .*|openssh_known_hosts_path = \"$WORKDIR/openssh_known_hosts\"|"     config/default.toml >"$CONFIG"
-  : >"$WORKDIR/openssh_known_hosts"
+  sed     -e "s|^known_hosts_path = .*|known_hosts_path = \"$KNOWN_HOSTS\"|"     -e "s|^merge_openssh_known_hosts_on_connect = .*|merge_openssh_known_hosts_on_connect = false|"     -e "s|^openssh_known_hosts_path = .*|openssh_known_hosts_path = \"$WORKDIR/openssh_known_hosts\"|"     config/default.toml >"$CONFIG" || return 1
+  : >"$WORKDIR/openssh_known_hosts" || return 1
   echo "e2e upload $(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$LOCAL_FILE"
 }
 
@@ -88,8 +90,8 @@ ensure_key() {
   # /home/$USER/.ssh/keys directory so atmoz/sftp appends them to
   # authorized_keys at startup.
   if [[ ! -f "$KEYFILE" ]]; then
-    ssh-keygen -q -t ed25519 -N "" -f "$KEYFILE" >/dev/null 2>&1
-    ssh-keygen -q -t ed25519 -N "$KEY_PASSPHRASE" -f "$KEYFILE_ENC" >/dev/null 2>&1
+    ssh-keygen -q -t ed25519 -N "" -f "$KEYFILE" >/dev/null 2>&1 || return 1
+    ssh-keygen -q -t ed25519 -N "$KEY_PASSPHRASE" -f "$KEYFILE_ENC" >/dev/null 2>&1 || return 1
   fi
 }
 
@@ -112,7 +114,7 @@ ensure_container() {
 }
 
 host_key_reject() {
-  prepare_config
+  prepare_config || return 1
   # strict: an unknown host key must be rejected non-interactively, before any
   # credential is consumed, and with the documented host-key exit code (3).
   set +e
@@ -132,12 +134,12 @@ host_key_reject() {
 }
 
 host_key_accept() {
-  prepare_config
+  prepare_config || return 1
   # accept-new: trust the unknown key non-interactively; stdin carries only $PASSWORD
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --path upload
-  test -s "$KNOWN_HOSTS"
+    --host-key-policy accept-new --path upload || return 1
+  test -s "$KNOWN_HOSTS" || return 1
   grep -q '"entries"' "$KNOWN_HOSTS"
 }
 
@@ -148,7 +150,7 @@ host_key_no_reprompt() {
 }
 
 json_output() {
-  prepare_config
+  prepare_config || return 1
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
     --host-key-policy accept-new --output json --path upload | \
@@ -164,14 +166,14 @@ pwd_command() {
 mkdir_rename_delete() {
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" mkdir \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --remote "upload/rename-test"
+    --host-key-policy accept-new --remote "upload/rename-test" || return 1
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" rename \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --from "upload/rename-test" --to "upload/rename-test-2"
+    --host-key-policy accept-new --from "upload/rename-test" --to "upload/rename-test-2" || return 1
   # delete is a file-only command; exercise it on a file in the renamed directory.
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" upload \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --local "$LOCAL_FILE" --remote "upload/rename-test-2/file.txt"
+    --host-key-policy accept-new --local "$LOCAL_FILE" --remote "upload/rename-test-2/file.txt" || return 1
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" delete \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
     --host-key-policy accept-new --remote "upload/rename-test-2/file.txt"
@@ -179,27 +181,27 @@ mkdir_rename_delete() {
 
 recursive_upload_download() {
   local tree="$WORKDIR/tree"
-  mkdir -p "$tree/sub"
-  echo one >"$tree/a.txt"
-  echo two >"$tree/sub/b.txt"
+  mkdir -p "$tree/sub" || return 1
+  echo one >"$tree/a.txt" || return 1
+  echo two >"$tree/sub/b.txt" || return 1
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" upload \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --local "$tree" --remote "upload" --recursive
+    --host-key-policy accept-new --local "$tree" --remote "upload" --recursive || return 1
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" download \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --remote "upload/tree" --local "$WORKDIR/dl" --recursive
-  cmp -s "$tree/a.txt" "$WORKDIR/dl/tree/a.txt"
+    --host-key-policy accept-new --remote "upload/tree" --local "$WORKDIR/dl" --recursive || return 1
+  cmp -s "$tree/a.txt" "$WORKDIR/dl/tree/a.txt" || return 1
   cmp -s "$tree/sub/b.txt" "$WORKDIR/dl/tree/sub/b.txt"
 }
 
 private_key_auth_plain() {
-  ensure_key
-  prepare_config
+  ensure_key || return 1
+  prepare_config || return 1
   # Seed the store with the host key first so the actual key-only run below
   # never needs an interactive host-key prompt.
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --path upload >/dev/null
+    --host-key-policy accept-new --path upload >/dev/null || return 1
   # Now authenticate with the key (host key already trusted)
   "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" \
@@ -222,11 +224,11 @@ upload_file() {
 }
 
 download_file() {
-  rm -f "$DOWNLOAD_FILE"
+  rm -f "$DOWNLOAD_FILE" || return 1
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" download \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
     --host-key-policy accept-new \
-    --remote "$REMOTE_FILE" --local "$DOWNLOAD_FILE"
+    --remote "$REMOTE_FILE" --local "$DOWNLOAD_FILE" || return 1
   cmp -s "$LOCAL_FILE" "$DOWNLOAD_FILE"
 }
 
@@ -235,11 +237,11 @@ transfer_queue_states() {
 }
 
 corrupted_known_hosts_errors() {
-  prepare_config
+  prepare_config || return 1
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new >/dev/null
-  echo '{}' >"$KNOWN_HOSTS"
+    --host-key-policy accept-new >/dev/null || return 1
+  echo '{}' >"$KNOWN_HOSTS" || return 1
   local output
   set +e
   output=$(printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
@@ -255,7 +257,7 @@ corrupted_known_hosts_errors() {
 }
 
 swift_corrupted_known_hosts_message() {
-  cd "$ROOT/apps/macos"
+  cd "$ROOT/apps/macos" || return 1
   xcodebuild \
     -scheme DockBridge \
     -destination 'platform=macOS' \

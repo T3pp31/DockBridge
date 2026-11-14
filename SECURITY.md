@@ -45,9 +45,7 @@ Full details live in [`docs/security.md`](docs/security.md).
 - Host keys are verified against a DockBridge store (and optionally merged from
   OpenSSH `known_hosts`). Key changes must be explicitly accepted per host.
 - Credentials are stored in the macOS Keychain and zeroized in memory.
-- Current public DMGs are **unsigned / not notarized**; do not disable
-  Gatekeeper checks for downloads from untrusted sources. Signed and notarized
-  builds are planned.
+- For release signing policy and download verification, see [Code signing and distribution](docs/security.md#code-signing-and-distribution).
 - Release artifacts are attested with GitHub provenance and published with a
   CycloneDX SBOM.
 
@@ -55,5 +53,3 @@ Full details live in [`docs/security.md`](docs/security.md).
 
 - `known_hosts.json` is owner-only (`0600`); a drifted permission prevents the
   app from trusting hosts until repaired from Settings.
-- Early releases are unsigned; see the download site and `docs/security.md` for
-  verification steps.
