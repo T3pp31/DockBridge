@@ -276,6 +276,101 @@ final class ConnectionListViewModelTests: XCTestCase {
     }
 
     #if DEBUG
+    func testActiveProfileDeletionPolicyAcrossConnectionStatesAndProfileIDs() throws {
+        let profile = ConnectionProfile(name: "Target", host: "example.com", username: "user")
+        let other = ConnectionProfile(name: "Other", host: "other.example.com", username: "user")
+        let states: [(ConnectionStatus, Bool)] = [
+            (.disconnected, false),
+            (.connecting(endpoint: "example.com:22"), true),
+            (.connected(endpoint: "example.com:22"), true),
+        ]
+        let profileIDs: [UUID?] = [profile.id, other.id, nil]
+
+        for (status, hasActiveConnection) in states {
+            for profileID in profileIDs {
+                let context = "status: \(status), profileID: \(String(describing: profileID))"
+                let bridge = RustBridgeService()
+                let model = ConnectionListViewModel(store: store, keychain: keychain, bridge: bridge)
+                try store.saveProfiles([profile, other])
+                model.load()
+                // Deletion follows the session profile, not the selected row.
+                model.selectedProfileID = profile.id
+                let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+                try keychain.savePassword("stored-password", account: account)
+                try keychain.savePassphrase("stored-passphrase", account: account)
+                defer {
+                    try? keychain.deletePassword(account: account)
+                    try? keychain.deletePassphrase(account: account)
+                }
+                bridge.applyConnectionStateForTesting(status: status, profileID: profileID)
+                // The bridge clears connectedProfileID for disconnected sessions.
+                let originalStatus = model.connectionStatus
+                let originalProfileID = model.connectedProfileID
+                let isProtected = hasActiveConnection && profileID == profile.id
+
+                XCTAssertEqual(model.isActiveProfile(profile), isProtected, context)
+                model.requestDelete(profile: profile)
+                XCTAssertEqual(model.confirmDeleteProfile, isProtected ? nil : profile, context)
+                XCTAssertEqual(try store.loadProfiles(), [profile, other], context)
+
+                // Even callers bypassing requestDelete must obey the same rule.
+                model.delete(profile: profile)
+
+                let expectedProfiles = isProtected ? [profile, other] : [other]
+                XCTAssertEqual(model.profiles, expectedProfiles, context)
+                XCTAssertEqual(try store.loadProfiles(), expectedProfiles, context)
+                XCTAssertEqual(model.selectedProfileID, isProtected ? profile.id : other.id, context)
+                XCTAssertNil(model.confirmDeleteProfile, context)
+                XCTAssertNil(model.errorMessage, context)
+                XCTAssertEqual(try keychain.loadPassword(account: account), isProtected ? "stored-password" : nil, context)
+                XCTAssertEqual(try keychain.loadPassphrase(account: account), isProtected ? "stored-passphrase" : nil, context)
+                XCTAssertEqual(model.connectionStatus, originalStatus, context)
+                XCTAssertEqual(model.connectedProfileID, originalProfileID, context)
+            }
+        }
+    }
+
+    func testDeleteRechecksConnectionStartedAfterConfirmationRequest() throws {
+        let states: [ConnectionStatus] = [
+            .connecting(endpoint: "example.com:22"),
+            .connected(endpoint: "example.com:22"),
+        ]
+        for status in states {
+            let profile = ConnectionProfile(name: "Target", host: "example.com", username: "user")
+            let bridge = RustBridgeService()
+            let model = ConnectionListViewModel(store: store, keychain: keychain, bridge: bridge)
+            try store.saveProfiles([profile])
+            model.save(profile, password: "session-password", passphrase: nil, saveSecrets: false)
+            XCTAssertNil(model.errorMessage)
+            model.requestDelete(profile: profile)
+            XCTAssertEqual(model.confirmDeleteProfile, profile)
+            bridge.applyConnectionStateForTesting(status: status, profileID: profile.id)
+            let session = try XCTUnwrap(bridge.activeSession)
+
+            model.delete(profile: profile)
+
+            XCTAssertEqual(model.profiles, [profile])
+            XCTAssertEqual(try store.loadProfiles(), [profile])
+            XCTAssertEqual(model.selectedProfileID, profile.id)
+            XCTAssertEqual(try model.credentialsForConnection(profile: profile).password, "session-password")
+            XCTAssertNil(model.confirmDeleteProfile)
+            XCTAssertNil(model.errorMessage)
+            XCTAssertTrue(bridge.activeSession === session)
+            XCTAssertTrue(model.isActiveProfile(profile))
+
+            bridge.applyConnectionStateForTesting(status: .disconnected)
+            model.requestDelete(profile: profile)
+            XCTAssertEqual(model.confirmDeleteProfile, profile)
+            model.delete(profile: profile)
+            XCTAssertTrue(model.profiles.isEmpty)
+            XCTAssertTrue(try store.loadProfiles().isEmpty)
+            XCTAssertNil(model.selectedProfileID)
+            XCTAssertNil(model.confirmDeleteProfile)
+            XCTAssertNil(try model.credentialsForConnection(profile: profile).password)
+            XCTAssertNil(model.errorMessage)
+        }
+    }
+
     func testCanDisconnectTracksConnectionLifecycle() async {
         let bridge = RustBridgeService()
         let viewModel = ConnectionListViewModel(

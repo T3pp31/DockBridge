@@ -4,6 +4,8 @@ import Foundation
 enum ProfileEncryptionError: LocalizedError {
     case encryptionFailed(String)
     case decryptionFailed(String)
+    /// Access can be restored without replacing the key or deleting profiles.
+    case keyReadDenied(String)
     /// The AES-GCM tag verified but the decrypted payload failed to decode as
     /// `[StoredConnectionProfile]`. Usually means the file was written by a
     /// NEWER app version (schema drift) or is otherwise structurally invalid —
@@ -18,6 +20,8 @@ enum ProfileEncryptionError: LocalizedError {
             return String(format: String(localized: "Failed to encrypt connection profiles: %@"), message)
         case .decryptionFailed(let message):
             return String(format: String(localized: "Failed to decrypt connection profiles: %@"), message)
+        case .keyReadDenied(let message):
+            return message
         case .decodeFailed(let message):
             return String(format: String(localized: "Connection profiles could not be decoded: %@"), message)
         case .invalidEnvelope:
@@ -41,11 +45,11 @@ struct EncryptedProfilesEnvelope: Codable, Equatable, Sendable {
 final class ProfileEncryptionService: @unchecked Sendable {
     static let masterKeyAccount = "profiles.master-key"
 
-    private let keychain: KeychainService
+    private let keychain: any ProfileEncryptionKeyStoring
     // Multiple windows can create services sharing the same Keychain item.
     private static let masterKeyLock = NSLock()
 
-    init(keychain: KeychainService = .shared) {
+    init(keychain: any ProfileEncryptionKeyStoring = KeychainService.shared) {
         self.keychain = keychain
     }
 
@@ -96,6 +100,11 @@ final class ProfileEncryptionService: @unchecked Sendable {
             }
         } catch let error as ProfileEncryptionError {
             throw error
+        } catch KeychainServiceError.keyReadDenied(let status) {
+            // A temporarily inaccessible key does not mean the ciphertext is corrupt.
+            throw ProfileEncryptionError.keyReadDenied(
+                KeychainServiceError.keyReadDenied(status).localizedDescription
+            )
         } catch {
             throw ProfileEncryptionError.decryptionFailed(error.localizedDescription)
         }
