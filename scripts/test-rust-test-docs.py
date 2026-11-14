@@ -15,11 +15,15 @@ class RustTestDocsTests(unittest.TestCase):
         cls.workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     def ci_test_commands(self):
-        # CI currently uses a single inline cargo test step. Fail rather than
-        # silently passing if it is removed or changed to a different YAML form.
+        # CI runs the same inline command on Linux and macOS. Fail rather than
+        # silently passing if a step is removed or changes to a different form.
         commands = re.findall(r"^\s+run: (cargo test [^\n]+)$", self.workflow, re.MULTILINE)
-        self.assertEqual(len(commands), 1, "Expected one inline CI cargo test command")
-        return commands
+        self.assertTrue(commands, "Expected inline CI cargo test commands")
+        self.assertEqual(
+            set(commands), {commands[0]},
+            "CI must use the same cargo test command on every runner",
+        )
+        return [commands[0]]
 
     def test_recommended_command_matches_ci(self):
         commands = re.findall(r"^- Tests: `(cargo test [^`]+)`", self.doc, re.MULTILINE)
