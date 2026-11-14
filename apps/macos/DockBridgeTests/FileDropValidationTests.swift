@@ -215,10 +215,13 @@ final class FileDropValidationTests: XCTestCase {
 
     func testLocalDisplayedIndexNormalizesListingOnceAndEachPayloadOnce() {
         let directory = URL(fileURLWithPath: "/tmp/file-drop-index", isDirectory: true)
-        var values = URLResourceValues()
-        values.isDirectory = false
         let items = (0..<512).map {
-            LocalFileItem(url: directory.appendingPathComponent("file-\($0)"), resourceValues: values)
+            LocalFileItem(
+                url: directory.appendingPathComponent("file-\($0)"),
+                resourceValuesProvider: { _, _ in
+                    throw CocoaError(.fileReadNoPermission)
+                }
+            )
         }
         var normalizationCount = 0
         let displayedItems = FileDropValidation.DisplayedLocalItems(
@@ -305,22 +308,28 @@ final class FileDropValidationTests: XCTestCase {
         XCTAssertFalse(FileDropValidation.DisplayedRemoteItems([]).contains(payloads[0]))
     }
 
-    func testDisplayedIndexesKeepDirectoryFlagInNormalizedKey() {
-        let url = URL(fileURLWithPath: "/tmp/file-drop-index/shared")
-        var fileValues = URLResourceValues()
-        fileValues.isDirectory = false
-        var directoryValues = URLResourceValues()
-        directoryValues.isDirectory = true
+    func testDisplayedIndexesKeepDirectoryFlagInNormalizedKey() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("file-drop-index-file-\(UUID().uuidString)")
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("file-drop-index-directory-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: directoryURL)
+        }
+        try Data().write(to: fileURL)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         let localItems = FileDropValidation.DisplayedLocalItems([
-            LocalFileItem(url: url, resourceValues: fileValues),
-            LocalFileItem(url: url, resourceValues: directoryValues),
+            LocalFileItem(url: fileURL),
+            LocalFileItem(url: directoryURL),
         ])
         let remoteItems = FileDropValidation.DisplayedRemoteItems([
             remoteItem(path: "/remote/shared"),
             remoteItem(path: "//remote/./shared/", isDirectory: true),
         ])
         for isDirectory in [false, true] {
-            XCTAssertTrue(localItems.contains(LocalFileDragPayload(url: url, isDirectory: isDirectory)))
+            XCTAssertEqual(localItems.contains(LocalFileDragPayload(url: fileURL, isDirectory: isDirectory)), !isDirectory)
+            XCTAssertEqual(localItems.contains(LocalFileDragPayload(url: directoryURL, isDirectory: isDirectory)), isDirectory)
             XCTAssertTrue(remoteItems.contains(RemoteFileDragPayload(path: "/remote/shared", isDirectory: isDirectory)))
         }
     }
