@@ -140,18 +140,57 @@ final class FileDropValidationTests: XCTestCase {
 
     func testCanUploadLocalItemRequiresExistingReadableFile() throws {
         let directory = FileManager.default.temporaryDirectory
-        let fileURL = directory.appendingPathComponent("file-drop-upload-validation.txt")
-        FileManager.default.createFile(atPath: fileURL.path, contents: Data("upload".utf8))
-        defer {
-            try? FileManager.default.removeItem(at: fileURL)
-        }
+            .appendingPathComponent("file-drop-upload-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("upload.txt")
+        try Data("upload".utf8).write(to: fileURL)
 
         XCTAssertTrue(FileDropValidation.canUploadLocalItem(at: fileURL))
+        XCTAssertTrue(FileDropValidation.canUploadLocalItem(at: directory))
         XCTAssertFalse(
             FileDropValidation.canUploadLocalItem(
                 at: directory.appendingPathComponent("missing-upload-file.txt")
             )
         )
+    }
+
+    func testCanUploadLocalItemRejectsExistingUnreadableFile() throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("file-drop-unreadable-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("unreadable.txt")
+        try Data("upload".utf8).write(to: fileURL)
+        try fileManager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fileURL.path)
+
+        XCTAssertTrue(fileManager.fileExists(atPath: fileURL.path))
+        XCTAssertFalse(FileDropValidation.canUploadLocalItem(at: fileURL))
+        XCTAssertFalse(FileDropValidation.canUploadExternalItem(at: fileURL))
+    }
+
+    func testCanUploadLocalItemFollowsSymlinksAndRejectsDanglingLinks() throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("file-drop-upload-links-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("upload.txt")
+        let folderURL = directory.appendingPathComponent("folder", isDirectory: true)
+        try Data("upload".utf8).write(to: fileURL)
+        try fileManager.createDirectory(at: folderURL, withIntermediateDirectories: true)
+
+        for target in [fileURL, folderURL] {
+            let link = directory.appendingPathComponent(target.lastPathComponent + "-link")
+            try fileManager.createSymbolicLink(at: link, withDestinationURL: target)
+            XCTAssertTrue(FileDropValidation.canUploadLocalItem(at: link))
+            XCTAssertTrue(FileDropValidation.canUploadExternalItem(at: link))
+
+            try fileManager.removeItem(at: target)
+            XCTAssertFalse(FileDropValidation.canUploadLocalItem(at: link))
+            XCTAssertFalse(FileDropValidation.canUploadExternalItem(at: link))
+        }
     }
 
     func testCanUploadExternalItemRequiresFileURL() throws {
@@ -187,15 +226,9 @@ final class FileDropValidationTests: XCTestCase {
         let displayedItem = LocalFileItem(url: displayedFile)
         let spoofedPayload = LocalFileDragPayload(url: spoofedFile, isDirectory: false)
 
-        XCTAssertTrue(
-            FileDropValidation.isDisplayedLocalItem(
-                LocalFileDragPayload(url: displayedFile, isDirectory: false),
-                in: [displayedItem]
-            )
-        )
-        XCTAssertFalse(
-            FileDropValidation.isDisplayedLocalItem(spoofedPayload, in: [displayedItem])
-        )
+        let displayedItems = FileDropValidation.DisplayedLocalItems([displayedItem])
+        XCTAssertTrue(displayedItems.contains(LocalFileDragPayload(url: displayedFile, isDirectory: false)))
+        XCTAssertFalse(displayedItems.contains(spoofedPayload))
     }
 
     func testRejectsSpoofedRemotePayloadNotInDisplayedItems() {
@@ -214,14 +247,137 @@ final class FileDropValidationTests: XCTestCase {
         )
         let spoofedPayload = RemoteFileDragPayload(path: "/remote/secret.txt", isDirectory: false)
 
-        XCTAssertTrue(
-            FileDropValidation.isDisplayedRemoteItem(
-                RemoteFileDragPayload(path: "/remote/visible.txt", isDirectory: false),
-                in: [displayedItem]
+        let displayedItems = FileDropValidation.DisplayedRemoteItems([displayedItem])
+        XCTAssertTrue(displayedItems.contains(RemoteFileDragPayload(path: "/remote/visible.txt", isDirectory: false)))
+        XCTAssertFalse(displayedItems.contains(spoofedPayload))
+    }
+
+    func testLocalDisplayedIndexNormalizesListingOnceAndEachPayloadOnce() {
+        let directory = URL(fileURLWithPath: "/tmp/file-drop-index", isDirectory: true)
+        let items = (0..<512).map {
+            LocalFileItem(
+                url: directory.appendingPathComponent("file-\($0)"),
+                resourceValuesProvider: { _, _ in
+                    throw CocoaError(.fileReadNoPermission)
+                }
             )
+        }
+        var normalizationCount = 0
+        let displayedItems = FileDropValidation.DisplayedLocalItems(
+            [LocalFileItem(parentOf: directory)] + items,
+            normalizePath: {
+                normalizationCount += 1
+                return $0.standardizedFileURL.path
+            }
         )
-        XCTAssertFalse(
-            FileDropValidation.isDisplayedRemoteItem(spoofedPayload, in: [displayedItem])
+        XCTAssertEqual(normalizationCount, items.count, "The parent row must not be indexed")
+
+        // Include late hits, misses, and type mismatches without timing-dependent assertions.
+        let payloads = (0..<128).flatMap { _ in
+            [
+                LocalFileDragPayload(url: items[511].url, isDirectory: false),
+                LocalFileDragPayload(url: directory.appendingPathComponent("missing"), isDirectory: false),
+                LocalFileDragPayload(url: items[511].url, isDirectory: true),
+                LocalFileDragPayload(url: directory.deletingLastPathComponent(), isDirectory: true),
+            ]
+        }
+        let accepted = payloads.filter { displayedItems.contains($0) }
+        XCTAssertEqual(accepted, payloads.enumerated().compactMap { $0.offset % 4 == 0 ? $0.element : nil })
+        XCTAssertEqual(normalizationCount, items.count + payloads.count)
+        XCTAssertFalse(FileDropValidation.DisplayedLocalItems([]).contains(payloads[0]))
+    }
+
+    func testLocalDisplayedIndexRebuildObservesSymlinkTargetAndListingChanges() throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("file-drop-index-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("first.txt")
+        let second = directory.appendingPathComponent("second.txt")
+        try Data().write(to: first)
+        try Data().write(to: second)
+        let link = directory.appendingPathComponent("link.txt")
+        try fileManager.createSymbolicLink(at: link, withDestinationURL: first)
+        let items = [LocalFileItem(url: link)]
+        let firstPayload = LocalFileDragPayload(url: first, isDirectory: false)
+        let secondPayload = LocalFileDragPayload(url: second, isDirectory: false)
+        let displayedItems = FileDropValidation.DisplayedLocalItems(items)
+        XCTAssertTrue(displayedItems.contains(firstPayload))
+        XCTAssertTrue(displayedItems.contains(LocalFileDragPayload(url: link, isDirectory: false)))
+        XCTAssertFalse(displayedItems.contains(secondPayload))
+
+        try fileManager.removeItem(at: link)
+        try fileManager.createSymbolicLink(at: link, withDestinationURL: second)
+        let nextDropItems = FileDropValidation.DisplayedLocalItems(items)
+        XCTAssertFalse(nextDropItems.contains(firstPayload))
+        XCTAssertTrue(nextDropItems.contains(secondPayload))
+        let refreshedListing = FileDropValidation.DisplayedLocalItems([LocalFileItem(url: first)])
+        XCTAssertTrue(refreshedListing.contains(firstPayload))
+        XCTAssertFalse(refreshedListing.contains(secondPayload))
+    }
+
+    func testRemoteDisplayedIndexNormalizesListingOnceAndEachPayloadOnce() {
+        let items = (0..<512).map { remoteItem(path: "/remote/file-\($0)") }
+        let invalidItems = [remoteItem(path: "/remote/../invalid"), remoteItem(path: "/remote/null\0")]
+        let parent = remoteItem(path: "/remote", isDirectory: true, name: "..")
+        var normalizationCount = 0
+        let displayedItems = FileDropValidation.DisplayedRemoteItems(
+            [parent] + items + invalidItems,
+            normalizePath: {
+                normalizationCount += 1
+                return try RemotePath.normalize($0)
+            }
+        )
+        XCTAssertEqual(normalizationCount, items.count + invalidItems.count)
+
+        let payloads = (0..<128).flatMap { _ in
+            [
+                RemoteFileDragPayload(path: "//remote/./file-511/", isDirectory: false),
+                RemoteFileDragPayload(path: "/remote/missing", isDirectory: false),
+                RemoteFileDragPayload(path: "/remote/file-511", isDirectory: true),
+                RemoteFileDragPayload(path: "/remote", isDirectory: true),
+                RemoteFileDragPayload(path: "/remote/../invalid", isDirectory: false),
+                RemoteFileDragPayload(path: "/remote/null\0", isDirectory: false),
+            ]
+        }
+        let accepted = payloads.filter { displayedItems.contains($0) }
+        XCTAssertEqual(accepted, payloads.enumerated().compactMap { $0.offset % 6 == 0 ? $0.element : nil })
+        XCTAssertEqual(normalizationCount, items.count + invalidItems.count + payloads.count)
+        XCTAssertFalse(FileDropValidation.DisplayedRemoteItems([]).contains(payloads[0]))
+    }
+
+    func testDisplayedIndexesKeepDirectoryFlagInNormalizedKey() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("file-drop-index-file-\(UUID().uuidString)")
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("file-drop-index-directory-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            try? FileManager.default.removeItem(at: directoryURL)
+        }
+        try Data().write(to: fileURL)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        let localItems = FileDropValidation.DisplayedLocalItems([
+            LocalFileItem(url: fileURL),
+            LocalFileItem(url: directoryURL),
+        ])
+        let remoteItems = FileDropValidation.DisplayedRemoteItems([
+            remoteItem(path: "/remote/shared"),
+            remoteItem(path: "//remote/./shared/", isDirectory: true),
+        ])
+        for isDirectory in [false, true] {
+            XCTAssertEqual(localItems.contains(LocalFileDragPayload(url: fileURL, isDirectory: isDirectory)), !isDirectory)
+            XCTAssertEqual(localItems.contains(LocalFileDragPayload(url: directoryURL, isDirectory: isDirectory)), isDirectory)
+            XCTAssertTrue(remoteItems.contains(RemoteFileDragPayload(path: "/remote/shared", isDirectory: isDirectory)))
+        }
+    }
+
+    private func remoteItem(path: String, isDirectory: Bool = false, name: String = "item") -> RemoteFileRecord {
+        RemoteFileRecord(
+            name: name, path: path, isDirectory: isDirectory, isSymlink: false, size: 0,
+            modifiedAtSecs: nil, permissions: nil, uid: nil, gid: nil,
+            symlinkTarget: nil, symlinkTargetIsDir: nil
         )
     }
 
