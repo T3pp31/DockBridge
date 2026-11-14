@@ -73,7 +73,7 @@ jobs:
       - name: Verify release.toml / Cargo.toml match the tag version
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          release_version="$(awk -F'"' '/^version = / { print $2; exit }' config/release.toml)"
+          release_version="$(bash scripts/release-config.sh version)"
           cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
           if [[ "$release_version" != "$VERSION" ]]; then
             echo "error: config/release.toml ($release_version) != tag version ($VERSION)" >&2
@@ -181,7 +181,7 @@ jobs:
 
       - name: Install cargo-cyclonedx
         run: |
-          VERSION="$(awk -F'"' '/^cargo_cyclonedx_version / { print $2; exit }' config/release.toml)"
+          VERSION="$(bash scripts/release-config.sh cargo_cyclonedx_version)"
           cargo install cargo-cyclonedx --version "${VERSION}" --locked
 
       - name: Generate SBOM
@@ -193,9 +193,9 @@ jobs:
         id: assets
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          APP_NAME="$(awk -F'"' '/^app_name / { print $2; exit }' config/release.toml)"
-          ASSET_TEMPLATE="$(awk -F'"' '/^asset_name_template / { print $2; exit }' config/release.toml)"
-          SBOM_TEMPLATE="$(awk -F'"' '/^sbom_name_template / { print $2; exit }' config/release.toml)"
+          APP_NAME="$(bash scripts/release-config.sh app_name)"
+          ASSET_TEMPLATE="$(bash scripts/release-config.sh asset_name_template)"
+          SBOM_TEMPLATE="$(bash scripts/release-config.sh sbom_name_template)"
           ASSET_NAME="${ASSET_TEMPLATE//\{app_name\}/${APP_NAME}}"
           ASSET_NAME="${ASSET_NAME//\{version\}/${VERSION}}"
           SBOM_NAME="${SBOM_TEMPLATE//\{app_name\}/${APP_NAME}}"

@@ -296,7 +296,7 @@ DockBridge publishes a CycloneDX JSON SBOM for each release and verifies SBOM ge
 Generate an SBOM locally:
 
 ```bash
-cargo install cargo-cyclonedx --version "$(awk -F'"' '/^cargo_cyclonedx_version / { print $2; exit }' config/release.toml)" --locked
+cargo install cargo-cyclonedx --version "$(bash scripts/release-config.sh cargo_cyclonedx_version)" --locked
 ./scripts/generate-sbom.sh --out dist
 ```
 
