@@ -102,9 +102,19 @@ enum AppUpdateConfig {
     static let requireNotarizedUpdates = true
 
     /// In-app update installation (download → verify → mount DMG) is only allowed when
-    /// Developer ID signature and/or notarization verification is enabled.
+    /// the required signature policy is complete. Until the signing identity values
+    /// are configured, keep the release-page fallback and fail closed.
     static var inAppUpdateInstallationEnabled: Bool {
-        requireSignedUpdates || requireNotarizedUpdates
+        isInAppUpdateInstallationEnabled(for: ReleaseVerificationPolicy.current)
+    }
+
+    static func isInAppUpdateInstallationEnabled(for policy: ReleaseVerificationPolicy) -> Bool {
+        guard policy.requireSignedUpdates || policy.requireNotarizedUpdates,
+              !policy.expectedTeamIdentifier.isEmpty,
+              !policy.requireSignedUpdates || !policy.signingCertificateFingerprintSHA256.isEmpty else {
+            return false
+        }
+        return true
     }
 
     static func expectedAssetName(for version: String) -> String {
