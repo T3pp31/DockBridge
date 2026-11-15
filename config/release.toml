@@ -8,8 +8,8 @@ bundle_identifier = "com.dockbridge.app"
 # Set when SIGN_AND_NOTARIZE=true in the release workflow.
 team_id = ""
 signing_certificate_fingerprint_sha256 = ""
-require_signed_updates = false
-require_notarized_updates = false
+require_signed_updates = true
+require_notarized_updates = true
 # SBOM (CycloneDX JSON, source SBOM from Cargo.lock via cargo-cyclonedx)
 sbom_name_template = "{app_name}-{version}.cdx.json"
 sbom_manifest_path = "crates/uniffi/Cargo.toml"

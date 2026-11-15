@@ -168,6 +168,50 @@ final class UpdateCheckViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.isDownloadingUpdate)
     }
 
+    func testInAppInstallationRequiresCompleteSignaturePolicy() {
+        let cases: [(team: String, fingerprint: String, signed: Bool, notarized: Bool)] = [
+            ("", "", true, true),
+            ("TEAMID1234", "", true, true),
+            ("", "abc123", true, true),
+            ("TEAMID1234", "abc123", false, false),
+        ]
+
+        for policy in cases {
+            let enabled = ReleaseVerificationPolicy(
+                expectedBundleIdentifier: AppUpdateConfig.bundleIdentifier,
+                expectedTeamIdentifier: policy.team,
+                signingCertificateFingerprintSHA256: policy.fingerprint,
+                requireSignedUpdates: policy.signed,
+                requireNotarizedUpdates: policy.notarized
+            )
+            XCTAssertFalse(
+                AppUpdateConfig.isInAppUpdateInstallationEnabled(for: enabled),
+                "team=\(policy.team.debugDescription) fingerprint=\(policy.fingerprint.debugDescription) signed=\(policy.signed) notarized=\(policy.notarized)"
+            )
+        }
+    }
+
+    func testInAppInstallationEnabledOnlyWithCompletePolicy() {
+        for policy in [
+            ReleaseVerificationPolicy(
+                expectedBundleIdentifier: AppUpdateConfig.bundleIdentifier,
+                expectedTeamIdentifier: "TEAMID1234",
+                signingCertificateFingerprintSHA256: "abc123",
+                requireSignedUpdates: true,
+                requireNotarizedUpdates: false
+            ),
+            ReleaseVerificationPolicy(
+                expectedBundleIdentifier: AppUpdateConfig.bundleIdentifier,
+                expectedTeamIdentifier: "TEAMID1234",
+                signingCertificateFingerprintSHA256: "",
+                requireSignedUpdates: false,
+                requireNotarizedUpdates: true
+            ),
+        ] {
+            XCTAssertTrue(AppUpdateConfig.isInAppUpdateInstallationEnabled(for: policy))
+        }
+    }
+
     private var newerReleaseJSON: String {
         """
         {
