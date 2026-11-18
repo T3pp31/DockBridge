@@ -424,6 +424,87 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertEqual(host.port, 2200)
     }
 
+    func testWildcardHostBlockProvidesDefaultsForMatchingAliases() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host prod-*
+            User deploy
+            Port 2222
+            IdentityFile ~/.ssh/id_prod
+        Host prod-web
+            HostName prod-web.example.com
+        Host prod-db
+            HostName prod-db.example.com
+        """)
+
+        XCTAssertEqual(hosts.map(\.alias), ["prod-web", "prod-db"])
+        XCTAssertTrue(hosts.allSatisfy { $0.user == "deploy" })
+        XCTAssertTrue(hosts.allSatisfy { $0.port == 2222 })
+        XCTAssertTrue(hosts.allSatisfy { $0.identityFile == NSHomeDirectory() + "/.ssh/id_prod" })
+    }
+
+    func testNegatedWildcardHostBlockDoesNotApplyToMatchingAlias() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host prod-* !prod-web
+            User deploy
+            Port 2222
+        Host prod-web
+            HostName prod-web.example.com
+        Host prod-db
+            HostName prod-db.example.com
+        """)
+
+        let web = try XCTUnwrap(hosts.first { $0.alias == "prod-web" })
+        XCTAssertNil(web.user)
+        XCTAssertNil(web.port)
+        let db = try XCTUnwrap(hosts.first { $0.alias == "prod-db" })
+        XCTAssertEqual(db.user, "deploy")
+        XCTAssertEqual(db.port, 2222)
+    }
+
+    func testQuestionMarkPatternMatchesSingleCharacterAliases() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host web-?
+            User web
+        Host web-1
+            HostName web1.example.com
+        Host web-12
+            HostName web12.example.com
+        """)
+
+        let single = try XCTUnwrap(hosts.first { $0.alias == "web-1" })
+        XCTAssertEqual(single.user, "web")
+        let longer = try XCTUnwrap(hosts.first { $0.alias == "web-12" })
+        XCTAssertNil(longer.user)
+    }
+
+    func testWildcardDefaultsUseFirstObtainedValueAcrossFileOrder() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host *
+            User any
+        Host prod-*
+            User prod
+        Host prod-web
+            HostName web.example.com
+            User exact
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(host.user, "any")
+    }
+
+    func testWildcardAndExactPatternsOnOneHeaderApplyOnce() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host prod-web prod-*
+            User deploy
+        Host prod-web
+            HostName web.example.com
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(host.user, "deploy")
+        XCTAssertEqual(host.identityFiles, [])
+    }
+
     func testMatchValuesDoNotBecomeGlobalDefaults() throws {
         let hosts = SSHConfigParser.parse("""
         Match user unrelated
