@@ -56,11 +56,35 @@ final class ProfileTrustStore: @unchecked Sendable {
         baseDirectory.appendingPathComponent(fileName, isDirectory: false)
     }
 
+    /// Sets `0600` on `url` without following a symbolic link.
+    ///
+    /// `FileManager.setAttributes` resolves links, so a symlink planted at the
+    /// store path would chmod its target (a directory target even loses its
+    /// search bit). Reject links with `lstat` and change the mode on a
+    /// no-follow descriptor instead (issue #1377).
     func setSecurePermissions(for url: URL) throws {
-        try FileManager.default.setAttributes(
-            [.posixPermissions: NSNumber(value: Int16(0o600))],
-            ofItemAtPath: url.path
-        )
+        let path = url.path
+
+        var linkStat = stat()
+        guard lstat(path, &linkStat) == 0 else {
+            throw ProfileTrustStoreError.readFailed(String(cString: strerror(errno)))
+        }
+        guard (linkStat.st_mode & S_IFMT) != S_IFLNK else {
+            throw ProfileTrustStoreError.readFailed(
+                String(localized: "Refusing to follow symbolic link.")
+            )
+        }
+
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard fd >= 0 else {
+            let openError = errno
+            throw ProfileTrustStoreError.readFailed(String(cString: strerror(openError)))
+        }
+        defer { close(fd) }
+
+        guard fchmod(fd, mode_t(0o600)) == 0 else {
+            throw ProfileTrustStoreError.readFailed(String(cString: strerror(errno)))
+        }
     }
 
     func loadTrustedEndpoints() throws -> [UUID: TrustedProfileEndpoint] {
@@ -69,9 +93,12 @@ final class ProfileTrustStore: @unchecked Sendable {
             return [:]
         }
 
-        try setSecurePermissions(for: url)
-
         do {
+            // Repair loose permissions before reading (SecureLocalFileReader
+            // rejects anything but 0600/0400). setSecurePermissions refuses
+            // symlinks, so a planted link cannot redirect the chmod
+            // (issue #1377).
+            try setSecurePermissions(for: url)
             let data = try SecureLocalFileReader.readData(from: url)
             return try decodeTrustedEndpoints(from: data)
         } catch let error as ProfileTrustStoreError {

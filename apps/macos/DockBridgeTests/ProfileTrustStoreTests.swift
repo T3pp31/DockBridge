@@ -445,6 +445,55 @@ final class ProfileTrustStoreTests: XCTestCase {
             XCTAssertEqual(message, String(localized: "Refusing to follow symbolic link."))
         }
     }
+
+    func testLoadTrustedEndpointsDoesNotChangeSymlinkTargetPermissions() throws {
+        // Given: the store path replaced by a symlink to a permissive file
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+        try trustStore.seedInitialTrust(from: [profile])
+
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        let targetURL = baseDirectory.appendingPathComponent("target.json", isDirectory: false)
+        try FileManager.default.copyItem(at: trustURL, to: targetURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o644))],
+            ofItemAtPath: targetURL.path
+        )
+        try FileManager.default.removeItem(at: trustURL)
+        try FileManager.default.createSymbolicLink(at: trustURL, withDestinationURL: targetURL)
+
+        // When: loading the store fails on the symlink
+        XCTAssertThrowsError(try trustStore.loadTrustedEndpoints())
+
+        // Then: the link target keeps its original permissions (issue #1377)
+        let attributes = try FileManager.default.attributesOfItem(atPath: targetURL.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
+        XCTAssertEqual(permissions, Int(0o644))
+    }
+
+    func testSetSecurePermissionsDoesNotFollowDirectorySymlink() throws {
+        // Given: a directory symlink at the store path
+        let directory = baseDirectory.appendingPathComponent("real-dir", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let linkURL = baseDirectory.appendingPathComponent("link-dir", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: directory)
+
+        // When: applying secure permissions
+        // Then: it refuses instead of chmod-ing the target directory, which
+        // would lose its search bit
+        XCTAssertThrowsError(try trustStore.setSecurePermissions(for: linkURL)) { error in
+            guard case ProfileTrustStoreError.readFailed(let message) = error else {
+                return XCTFail("Expected readFailed, got \(error)")
+            }
+            XCTAssertEqual(message, String(localized: "Refusing to follow symbolic link."))
+        }
+        let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
+        XCTAssertEqual(permissions, Int(0o755))
+    }
 }
 
 // Shared by trust-store and connection-store tests. Returning a fixed test key
