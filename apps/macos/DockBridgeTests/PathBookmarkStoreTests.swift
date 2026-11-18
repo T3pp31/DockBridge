@@ -54,4 +54,38 @@ final class PathBookmarkStoreTests: XCTestCase {
         XCTAssertEqual(loaded.first?.name, "Home")
         XCTAssertNil(loaded.first?.securityScopedBookmark)
     }
+
+    func testCachedBookmarksAreReusedUntilTheStoredDataChanges() {
+        // Given: bookmarks loaded once and cached
+        let profileID = UUID()
+        store.add(PathBookmark(name: "Home", path: "/home/user", pane: .remote, profileID: profileID))
+        XCTAssertEqual(store.bookmarks(for: .remote, profileID: profileID).map(\.name), ["Home"])
+
+        // When: the underlying data is replaced by another writer
+        let external = """
+        [{"id":"00000000-0000-0000-0000-000000000002","name":"External","path":"/external","pane":"remote","profileID":null}]
+        """.data(using: .utf8)!
+        defaults.set(external, forKey: "pathBookmarks")
+
+        // Then: the cache is invalidated and the new contents are returned
+        let loaded = store.load()
+        XCTAssertEqual(loaded.map(\.name), ["External"])
+        XCTAssertTrue(store.bookmarks(for: .remote, profileID: profileID).isEmpty)
+    }
+
+    func testAddUpdatesTheCacheWithoutReReadingStoredData() {
+        // Given: a store whose cache already reflects the stored data
+        let profileID = UUID()
+        store.add(PathBookmark(name: "Home", path: "/home/user", pane: .remote, profileID: profileID))
+        _ = store.load()
+
+        // When: adding another bookmark
+        store.add(PathBookmark(name: "Logs", path: "/var/log", pane: .remote, profileID: profileID))
+
+        // Then: both are visible without a stale read
+        XCTAssertEqual(
+            store.bookmarks(for: .remote, profileID: profileID).map(\.name),
+            ["Home", "Logs"]
+        )
+    }
 }
