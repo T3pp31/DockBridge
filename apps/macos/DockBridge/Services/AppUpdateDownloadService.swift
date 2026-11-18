@@ -91,6 +91,9 @@ enum AppUpdateDownloadError: Error, Equatable {
     case revealFailed
     case appBundleNotFound
     case signatureVerificationFailed(ReleaseCodeSignatureVerifierError)
+    /// The signed bundle's version does not match the release version the app
+    /// offered, so installing it could downgrade to an older release (issue #1372).
+    case versionMismatch(expected: String, actual: String)
 }
 
 extension AppUpdateDownloadError: LocalizedError {
@@ -114,6 +117,11 @@ extension AppUpdateDownloadError: LocalizedError {
             return String(localized: "The update disk image does not contain the DockBridge app.")
         case .signatureVerificationFailed(let error):
             return signatureVerificationMessage(for: error)
+        case .versionMismatch(let expected, let actual):
+            let format = String(
+                localized: "The update app bundle version (%@) does not match the offered release version (%@). Download the update manually from the release page."
+            )
+            return String(format: format, actual, expected)
         }
     }
 
@@ -200,6 +208,18 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
             throw AppUpdateDownloadError.signatureVerificationFailed(.unsignedBundle)
         }
 
+        // A signature only proves the bundle is an authentic DockBridge build,
+        // not that it is the release the app offered. Without this check a
+        // validly signed older release could be served under the expected
+        // asset names and downgrade the installation (issue #1372).
+        let bundleVersion = try readBundleShortVersion(at: appBundleURL)
+        guard VersionComparator.compare(bundleVersion, update.version) == .orderedSame else {
+            throw AppUpdateDownloadError.versionMismatch(
+                expected: VersionComparator.normalize(update.version),
+                actual: bundleVersion
+            )
+        }
+
         guard await revealInFinder(mountPoint) else {
             throw AppUpdateDownloadError.revealFailed
         }
@@ -274,5 +294,55 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
             return nil
         }
         return expectedBundleURL
+    }
+
+    /// Reads `CFBundleShortVersionString` from the bundle's `Info.plist`.
+    ///
+    /// Mirrors the signature verifier's hardened read: no symlink following,
+    /// no FIFO blocking, and a bounded size. A missing or unreadable value is
+    /// reported as an app-bundle failure rather than a version mismatch.
+    private func readBundleShortVersion(at bundleURL: URL) throws -> String {
+        let infoPlistURL = bundleURL.appendingPathComponent("Contents/Info.plist")
+        let fileDescriptor = open(infoPlistURL.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard fileDescriptor >= 0 else {
+            throw AppUpdateDownloadError.appBundleNotFound
+        }
+        defer { close(fileDescriptor) }
+
+        var fileStat = stat()
+        let sizeLimit = AppUpdateConfig.maxInfoPlistSizeBytes
+        guard fstat(fileDescriptor, &fileStat) == 0,
+              (fileStat.st_mode & S_IFMT) == S_IFREG,
+              fileStat.st_size >= 0,
+              fileStat.st_size <= sizeLimit else {
+            throw AppUpdateDownloadError.appBundleNotFound
+        }
+
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let bytesRead = read(fileDescriptor, &buffer, min(buffer.count, sizeLimit - data.count + 1))
+            if bytesRead < 0 {
+                if errno == EINTR {
+                    continue
+                }
+                throw AppUpdateDownloadError.appBundleNotFound
+            }
+            if bytesRead == 0 {
+                break
+            }
+            guard data.count + bytesRead <= sizeLimit else {
+                throw AppUpdateDownloadError.appBundleNotFound
+            }
+            data.append(buffer, count: bytesRead)
+        }
+
+        let plist = try PropertyListSerialization.propertyList(from: data, format: nil)
+        guard let dictionary = plist as? [String: Any],
+              let version = dictionary["CFBundleShortVersionString"] as? String,
+              !version.isEmpty else {
+            throw AppUpdateDownloadError.appBundleNotFound
+        }
+        return version
     }
 }
