@@ -230,6 +230,8 @@ impl AppConfig {
             1..=u64::MAX,
             "must be at least 1",
         )?;
+        ensure_config_path_resolved("known_hosts_path", &self.known_hosts_path)?;
+        ensure_config_path_resolved("openssh_known_hosts_path", &self.openssh_known_hosts_path)?;
         Ok(self)
     }
 
@@ -246,6 +248,21 @@ impl AppConfig {
             max_total_bytes: self.directory_walk_max_total_bytes,
         }
     }
+}
+
+/// Rejects a config path whose leading component is still a literal `~`.
+///
+/// [`expand_tilde`] leaves the path unchanged when the home directory cannot
+/// be resolved. Accepting it here would make callers create a `~` directory
+/// under the current working directory (issue #745).
+fn ensure_config_path_resolved(field: &'static str, path: &Path) -> Result<(), ConfigError> {
+    if path.components().next().map(|c| c.as_os_str()) == Some(std::ffi::OsStr::new("~")) {
+        return Err(ConfigError::InvalidPath {
+            path: path.display().to_string(),
+            reason: format!("{field} cannot be expanded: the home directory could not be resolved"),
+        });
+    }
+    Ok(())
 }
 
 /// Validates that `value` falls within `range`, returning an
@@ -341,6 +358,9 @@ pub fn clamp_transfer_upload_pipeline_depth(depth: usize) -> usize {
 ///
 /// `HOME` must be an absolute path; relative values are ignored to avoid
 /// redirecting config paths (e.g. `known_hosts`) to unexpected locations.
+/// A `~` path is rejected when the home directory cannot be resolved instead
+/// of being returned unchanged: callers would otherwise create a literal `~`
+/// directory under the current working directory (issue #745).
 /// The `~/` remainder is rejected if it contains `..` segments to prevent
 /// traversal outside the home directory.
 pub fn expand_tilde(path: &Path) -> Result<PathBuf, ConfigError> {
@@ -357,24 +377,33 @@ fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> Result<PathBuf, C
     let home = home.filter(|h| h.is_absolute());
 
     if let Some(rest) = path_str.strip_prefix("~/") {
-        if let Some(home) = home {
-            if rest.split('/').any(|segment| segment == "..") {
-                return Err(ConfigError::InvalidPath {
-                    path: path.display().to_string(),
-                    reason: "`~/` paths cannot contain `..` segments".to_string(),
-                });
-            }
-            return Ok(home.join(rest));
+        let Some(home) = home else {
+            return Err(unresolved_home_error(path));
+        };
+        if rest.split('/').any(|segment| segment == "..") {
+            return Err(ConfigError::InvalidPath {
+                path: path.display().to_string(),
+                reason: "`~/` paths cannot contain `..` segments".to_string(),
+            });
         }
+        return Ok(home.join(rest));
     }
 
     if path_str == "~" {
-        if let Some(home) = home {
-            return Ok(home.to_path_buf());
-        }
+        let Some(home) = home else {
+            return Err(unresolved_home_error(path));
+        };
+        return Ok(home.to_path_buf());
     }
 
     Ok(path.to_path_buf())
+}
+
+fn unresolved_home_error(path: &Path) -> ConfigError {
+    ConfigError::InvalidPath {
+        path: path.display().to_string(),
+        reason: "cannot expand `~`: the home directory could not be resolved".to_string(),
+    }
 }
 
 fn normalize_home(home: Option<PathBuf>) -> Option<PathBuf> {
@@ -385,14 +414,26 @@ fn home_dir() -> Option<PathBuf> {
     normalize_home(system_home_dir())
 }
 
+fn default_home_relative_path(relative: &Path) -> PathBuf {
+    default_home_relative_path_with_home(relative, home_dir().as_deref())
+}
+
+/// Keeps the `~` prefix when the home directory is unresolved so `validate()`
+/// reports a configuration error instead of a path under a literal `~`
+/// directory in the working directory (issue #745).
+fn default_home_relative_path_with_home(relative: &Path, home: Option<&Path>) -> PathBuf {
+    match home.filter(|path| path.is_absolute()) {
+        Some(home) => home.join(relative),
+        None => Path::new("~").join(relative),
+    }
+}
+
 fn default_known_hosts_path() -> PathBuf {
-    expand_tilde(Path::new("~/.dockbridge/known_hosts.json"))
-        .expect("the default known hosts path is a safe tilde path")
+    default_home_relative_path(Path::new(".dockbridge/known_hosts.json"))
 }
 
 fn default_openssh_known_hosts_path() -> PathBuf {
-    expand_tilde(Path::new("~/.ssh/known_hosts"))
-        .expect("the default OpenSSH known hosts path is a safe tilde path")
+    default_home_relative_path(Path::new(".ssh/known_hosts"))
 }
 
 fn default_ssh_inactivity_timeout_secs() -> Option<u64> {
@@ -504,12 +545,65 @@ mod tests {
     }
 
     #[test]
-    fn expand_tilde_ignores_relative_home() {
-        // A relative HOME should not be used to expand ~.
+    fn expand_tilde_rejects_relative_home() {
+        // Given: a relative HOME
+        // When: expanding a tilde path
+        // Then: it fails instead of returning a literal `~` path
         let relative = PathBuf::from("relative/path");
+        let err =
+            expand_tilde_with_home(Path::new("~/known_hosts.json"), Some(&relative)).unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidPath { .. }));
+    }
+
+    #[test]
+    fn expand_tilde_rejects_unresolved_home() {
+        // Given: no resolvable home directory
+        // When: expanding a tilde path
+        // Then: it fails instead of returning a literal `~` path
+        let err =
+            expand_tilde_with_home(Path::new("~/.dockbridge/known_hosts.json"), None).unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidPath { .. }));
+
+        let err = expand_tilde_with_home(Path::new("~"), None).unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidPath { .. }));
+    }
+
+    #[test]
+    fn expand_tilde_keeps_non_tilde_paths_without_home() {
+        // Given: no resolvable home directory
+        // When: expanding a path that does not start with `~`
+        // Then: the path is returned unchanged
+        let path = Path::new("/etc/known_hosts");
+        assert_eq!(expand_tilde_with_home(path, None).unwrap(), path);
+    }
+
+    #[test]
+    fn default_home_relative_path_uses_absolute_home() {
+        let home = PathBuf::from("/tmp/home");
         assert_eq!(
-            expand_tilde_with_home(Path::new("~/known_hosts.json"), Some(&relative)).unwrap(),
-            PathBuf::from("~/known_hosts.json")
+            default_home_relative_path_with_home(
+                Path::new(".dockbridge/known_hosts.json"),
+                Some(&home)
+            ),
+            PathBuf::from("/tmp/home/.dockbridge/known_hosts.json")
+        );
+    }
+
+    #[test]
+    fn default_home_relative_path_keeps_tilde_when_home_unresolved() {
+        // Given: no resolvable home directory
+        // When: building a default path
+        // Then: the `~` prefix is kept so validate() can reject it
+        assert_eq!(
+            default_home_relative_path_with_home(Path::new(".ssh/known_hosts"), None),
+            PathBuf::from("~/.ssh/known_hosts")
+        );
+        assert_eq!(
+            default_home_relative_path_with_home(
+                Path::new(".dockbridge/known_hosts.json"),
+                Some(Path::new("relative/home"))
+            ),
+            PathBuf::from("~/.dockbridge/known_hosts.json")
         );
     }
 
@@ -923,6 +1017,42 @@ mod tests {
             config.directory_walk_max_files,
             DEFAULT_DIRECTORY_WALK_MAX_FILES
         );
+    }
+
+    #[test]
+    fn validate_rejects_unresolved_known_hosts_paths() {
+        // Given: known_hosts paths still starting with a literal `~`
+        // (the shape produced when the home directory cannot be resolved)
+        let config = AppConfig {
+            known_hosts_path: PathBuf::from("~/.dockbridge/known_hosts.json"),
+            ..AppConfig::default()
+        };
+        assert!(matches!(
+            config.validate().unwrap_err(),
+            ConfigError::InvalidPath { .. }
+        ));
+
+        let config = AppConfig {
+            openssh_known_hosts_path: PathBuf::from("~/.ssh/known_hosts"),
+            ..AppConfig::default()
+        };
+        assert!(matches!(
+            config.validate().unwrap_err(),
+            ConfigError::InvalidPath { .. }
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_relative_config_paths() {
+        // Given: a deliberately relative path (e.g. config/test.toml)
+        // When: validating
+        // Then: it is accepted; only unresolved `~` paths are rejected
+        let config = AppConfig {
+            known_hosts_path: PathBuf::from("target/test-known_hosts.json"),
+            openssh_known_hosts_path: PathBuf::from("target/test-openssh-known_hosts"),
+            ..AppConfig::default()
+        };
+        assert!(config.validate().is_ok());
     }
 
     #[test]
