@@ -212,6 +212,30 @@ final class ConnectionStoreTests: XCTestCase {
         return reads
     }
 
+    func testDeleteRewritesTrustOnceRegardlessOfProfileCount() throws {
+        for count in [1, 16] {
+            let reads = configureCountingTrustStore()
+            let profiles = (0..<count).map {
+                ConnectionProfile(name: "Profile \($0)", host: "host\($0).example.com", username: "user")
+            }
+            try store.saveProfiles(profiles, updateTrust: false)
+            try store.seedInitialTrust(for: profiles)
+            let readsBefore = reads.count
+
+            _ = try store.delete(id: profiles[0].id)
+
+            // One verification read plus one signature read for the single
+            // removeTrust rewrite, not the extra batch refresh (issue #1374).
+            XCTAssertEqual(reads.count - readsBefore, 2, "Profile count: \(count)")
+            XCTAssertEqual(
+                try trustStore.loadTrustedEndpoints(),
+                Dictionary(uniqueKeysWithValues: profiles.dropFirst().map {
+                    ($0.id, TrustedProfileEndpoint(profile: $0))
+                })
+            )
+        }
+    }
+
     func testDeleteRemovesProfileAndOnlyItsTrust() throws {
         let removed = ConnectionProfile(name: "Removed", host: "removed.example.com", username: "user")
         let remaining = ConnectionProfile(name: "Remaining", host: "remaining.example.com", username: "user")

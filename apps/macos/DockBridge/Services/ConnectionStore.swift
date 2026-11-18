@@ -116,7 +116,11 @@ final class ConnectionStore: @unchecked Sendable {
         defer { mutationLock.unlock() }
         var profiles = try readProfilesFromDisk()
         profiles.removeAll { $0.id == id }
-        try saveProfiles(profiles)
+        // Skip the batch trust refresh here: the removed profile is gone from
+        // `profiles`, so `updateTrusts` would only re-verify the remaining
+        // entries, and `removeTrust` below already rewrites the store once
+        // (issue #1374).
+        try saveProfiles(profiles, updateTrust: false)
         do {
             try trustStore.removeTrust(for: id)
         } catch {
