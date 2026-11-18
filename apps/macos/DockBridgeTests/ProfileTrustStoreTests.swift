@@ -424,6 +424,28 @@ final class ProfileTrustStoreTests: XCTestCase {
         let detection = try trustStore.detectEndpointChanges(in: [profile])
         XCTAssertEqual(detection.pendingInitialTrust, [profile])
     }
+    func testMalformedTrustStoreRequiresExplicitTrust() throws {
+        // Given: an existing store that is neither a signed envelope nor a
+        // legacy dictionary (truncated JSON)
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        try Data("{\"endpoints\":".utf8).write(to: trustURL)
+
+        // When: loading and detecting changes
+        // Then: the malformed store is treated as unverified, not unreadable,
+        // so the user can re-confirm trust instead of failing the connection
+        XCTAssertThrowsError(try trustStore.loadTrustedEndpoints()) { error in
+            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+        }
+        let detection = try trustStore.detectEndpointChanges(in: [profile])
+        XCTAssertEqual(detection.pendingInitialTrust, [profile])
+    }
+
     func testLoadTrustedEndpointsRejectsSymlinkedStoreFile() throws {
         let profile = ConnectionProfile(
             name: "Test",

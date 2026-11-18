@@ -228,9 +228,11 @@ final class ProfileTrustStore: @unchecked Sendable {
             throw ProfileTrustStoreError.verificationFailed
         }
 
-        throw ProfileTrustStoreError.readFailed(
-            String(localized: "Unrecognized trusted endpoints file format.")
-        )
+        // A malformed, truncated, or unknown-format store cannot be verified
+        // and is recoverable by re-confirming trust, so treat it like a failed
+        // verification. File-system failures (unreadable, symlink, permissions)
+        // still surface as readFailed from SecureLocalFileReader (issue #1378).
+        throw ProfileTrustStoreError.verificationFailed
     }
 
     private func parseEndpointRecords(
