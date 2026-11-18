@@ -223,4 +223,20 @@ final class RustBridgeServiceSessionTests: XCTestCase {
         XCTAssertTrue(bridge.activeSession === registeredSession)
         XCTAssertEqual(bridge.connectedProfileID, profileID)
     }
+
+    func testEmptyKbdInteractivePromptsAnswerImmediately() async {
+        // Given: a server challenge with no prompts
+        let bridge = RustBridgeService()
+
+        // When: awaiting answers
+        let answers = await bridge.awaitKbdInteractiveAnswers(
+            name: "empty",
+            instructions: "",
+            prompts: []
+        )
+
+        // Then: an empty answer is returned without leaving a pending challenge
+        XCTAssertEqual(answers, [])
+        XCTAssertNil(bridge.pendingKbdInteractiveChallenge)
+    }
 }
