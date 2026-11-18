@@ -1,12 +1,13 @@
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::error::Error;
 
 pub(crate) fn unix(time: SystemTime) -> u32 {
-    DateTime::<Utc>::from(time).timestamp() as u32
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as u32)
+        .unwrap_or(0)
 }
 
 pub(crate) async fn read_packet<S: AsyncRead + Unpin>(

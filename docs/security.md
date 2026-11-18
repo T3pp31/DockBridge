@@ -353,6 +353,7 @@ gh attestation verify DockBridge-<version>.cdx.json --repo T3pp31/DockBridge
 | Advisory | Crate | Severity | Status |
 |----------|-------|----------|--------|
 | RUSTSEC-2023-0071 | rsa | Medium (5.9) | No fixed upgrade available; see [RSA Marvin Attack](#rsa-marvin-attack-rustsec-2023-0071) |
+| RUSTSEC-2026-0543 | chrono | Unmaintained | Only reached through `russh-util`'s `wasm32`-only dependency; DockBridge does not build for wasm32. The vendored `bssh-russh-sftp` fork now uses `time` instead of `chrono` (#1382) |
 
 ### Recently resolved advisories
 

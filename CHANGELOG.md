@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Replace `chrono` with `time` in the vendored `bssh-russh-sftp` fork, since
+  `chrono` is unmaintained (RUSTSEC-2026-0543). The remaining `chrono` entry in
+  `Cargo.lock` is a `wasm32`-only dependency of `russh-util`, which DockBridge
+  does not build; it is tracked as an expiring audit exception (#1382).
 - Upgrade `russh` to 0.65.1 and `ssh-key` to 0.7.0-rc.11, and patch `rustix`
   to 1.1.6, resolving RUSTSEC-2026-0486, RUSTSEC-2026-0492, and
   RUSTSEC-2026-0495. Keep the client from advertising host-certificate
