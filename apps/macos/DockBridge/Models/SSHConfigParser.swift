@@ -38,12 +38,17 @@ enum SSHConfigParser {
         var seenAliases = Set<String>()
         for rawLine in contents.components(separatedBy: .newlines) {
             guard let directive = parseDirective(rawLine) else {
-                // Preserve the existing handling of malformed Host headers: the
-                // block is never registered, so following directives are dropped
-                // rather than applied to the previous alias.
-                let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                if trimmed.hasPrefix("host") || trimmed.hasPrefix("match") {
+                // A malformed or argument-less Host/Match header still ends the
+                // current block; its directives must not leak into the previous
+                // alias. Match the keyword exactly so directives such as
+                // HostName or HostKeyAlgorithms that fail to parse do not start
+                // an orphan block and drop their block's later values
+                // (issue #1371).
+                switch leadingKeyword(rawLine) {
+                case "host", "match":
                     blocks.append(Block(patterns: []))
+                default:
+                    break
                 }
                 continue
             }
@@ -276,6 +281,19 @@ enum SSHConfigParser {
             return nil
         }
         return Directive(key: key, arguments: arguments)
+    }
+
+    /// Returns the lowercased keyword before the first whitespace or `=`.
+    ///
+    /// Used only to recognize block headers on lines that
+    /// [`parseDirective`] rejected, so it must match the keyword exactly:
+    /// a prefix test would also match `HostName`, `HostKeyAlgorithms`, and
+    /// similar directives (issue #1371).
+    private static func leadingKeyword(_ rawLine: String) -> String {
+        let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { return "" }
+        let end = trimmed.firstIndex(where: { $0 == "=" || $0.isWhitespace }) ?? trimmed.endIndex
+        return trimmed[..<end].lowercased()
     }
 
     /// Tokenizes the small OpenSSH subset used above, preserving quoted or

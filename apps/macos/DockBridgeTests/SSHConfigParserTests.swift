@@ -603,4 +603,69 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertNil(try XCTUnwrap(hosts.first).user)
     }
 
+    func testHostNameWithoutArgumentsDoesNotStartAnOrphanBlock() throws {
+        // Given: a Host block whose HostName has no value
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostName
+            User alice
+            Port 2222
+        """)
+
+        // Then: the following directives stay in the same block
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertNil(host.hostName)
+        XCTAssertEqual(host.user, "alice")
+        XCTAssertEqual(host.port, 2222)
+    }
+
+    func testHostNameWithCommentOnlyDoesNotStartAnOrphanBlock() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostName # placeholder
+            User alice
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertNil(host.hostName)
+        XCTAssertEqual(host.user, "alice")
+    }
+
+    func testHostNameWithUnterminatedQuoteDoesNotStartAnOrphanBlock() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostName "example.com
+            User alice
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertNil(host.hostName)
+        XCTAssertEqual(host.user, "alice")
+    }
+
+    func testHostKeyAlgorithmsWithoutArgumentsDoesNotStartAnOrphanBlock() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostKeyAlgorithms
+            HostName server.example.com
+        """)
+
+        XCTAssertEqual(try XCTUnwrap(hosts.first).hostName, "server.example.com")
+    }
+
+    func testMalformedHostNameInUniversalBlockKeepsDefaults() throws {
+        // Given: a `Host *` block whose HostName fails to parse
+        let hosts = SSHConfigParser.parse("""
+        Host *
+            HostName # placeholder
+            User default-user
+        Host server
+            HostName server.example.com
+        """)
+
+        // Then: later directives in the universal block still apply
+        XCTAssertEqual(try XCTUnwrap(hosts.first).user, "default-user")
+    }
+
 }
