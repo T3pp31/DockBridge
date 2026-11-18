@@ -339,6 +339,71 @@ final class ConnectionFormPrivateKeySelectionTests: XCTestCase {
     }
 }
 
+@MainActor
+final class ConnectionFormCredentialResolutionTests: XCTestCase {
+    func testPasswordIsPassedWhenKeychainSavingIsDisabled() {
+        // Given: typed password input with Keychain saving turned off
+        let credentials = ConnectionFormView.resolveCredentials(
+            saveSecrets: false,
+            authType: .password,
+            password: "secret",
+            passphrase: ""
+        )
+
+        // Then: the session still receives the password (issue #782)
+        XCTAssertEqual(credentials.password, "secret")
+        XCTAssertNil(credentials.passphrase)
+    }
+
+    func testEmptyPasswordRemainsNilWhenKeychainSavingIsDisabled() {
+        let credentials = ConnectionFormView.resolveCredentials(
+            saveSecrets: false,
+            authType: .password,
+            password: "",
+            passphrase: ""
+        )
+
+        // Then: empty input must not clear an existing stored value
+        XCTAssertNil(credentials.password)
+        XCTAssertNil(credentials.passphrase)
+    }
+
+    func testPasswordIsIgnoredForPrivateKeyAuthentication() {
+        let credentials = ConnectionFormView.resolveCredentials(
+            saveSecrets: true,
+            authType: .privateKey,
+            password: "unused",
+            passphrase: ""
+        )
+
+        XCTAssertNil(credentials.password)
+        XCTAssertNil(credentials.passphrase)
+    }
+
+    func testPassphraseIsPassedWhenKeychainSavingIsDisabled() {
+        let credentials = ConnectionFormView.resolveCredentials(
+            saveSecrets: false,
+            authType: .privateKey,
+            password: "",
+            passphrase: "key-pass"
+        )
+
+        XCTAssertNil(credentials.password)
+        XCTAssertEqual(credentials.passphrase, "key-pass")
+    }
+
+    func testEmptyPassphraseRemainsNilWhenKeychainSavingIsEnabled() {
+        let credentials = ConnectionFormView.resolveCredentials(
+            saveSecrets: true,
+            authType: .privateKey,
+            password: "",
+            passphrase: ""
+        )
+
+        XCTAssertNil(credentials.passphrase)
+    }
+}
+
 private final class SecurityScopeCallRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var startCount = 0
