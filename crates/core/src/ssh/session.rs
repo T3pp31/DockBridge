@@ -111,20 +111,37 @@ impl ConnectionProfile {
 }
 
 /// Password wrapper that avoids accidental logging.
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct SecretPassword(String);
+///
+/// Holds the plaintext in `Zeroizing`, which wipes the String's buffer on
+/// drop; this covers the value moved across the FFI boundary as well as
+/// locally constructed ones (issue #1144).
+#[derive(Clone)]
+pub struct SecretPassword(zeroize::Zeroizing<String>);
 
 impl SecretPassword {
     /// Creates a new secret password value.
     pub fn new(password: impl Into<String>) -> Self {
-        Self(password.into())
+        Self(zeroize::Zeroizing::new(password.into()))
+    }
+
+    /// Takes ownership of a zeroizing buffer without copying the plaintext.
+    pub fn from_zeroizing(password: zeroize::Zeroizing<String>) -> Self {
+        Self(password)
     }
 
     /// Returns the password for authentication.
     pub fn expose(&self) -> &str {
-        &self.0
+        self.0.as_str()
     }
 }
+
+impl Zeroize for SecretPassword {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for SecretPassword {}
 
 impl std::fmt::Debug for SecretPassword {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -688,6 +705,23 @@ async fn keyboard_interactive_auth(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secret_password_zeroizes_when_zeroize_is_called() {
+        // `ZeroizeOnDrop` delegates to `Zeroize::zeroize`, so exercising it
+        // directly proves the buffer is wiped without reading freed memory.
+        let mut password = SecretPassword::new("a-much-longer-secret-password-value");
+        password.zeroize();
+        assert_eq!(password.expose(), "");
+    }
+
+    #[test]
+    fn secret_password_from_zeroizing_takes_ownership() {
+        let password = SecretPassword::from_zeroizing(zeroize::Zeroizing::new(
+            "ffi-secret-value".to_string(),
+        ));
+        assert_eq!(password.expose(), "ffi-secret-value");
+    }
 
     #[test]
     fn preserve_connection_error_keeps_host_key_rejection() {
