@@ -31,7 +31,9 @@ struct StoredConnectionProfile: Identifiable, Codable, Equatable, Sendable {
         initialLocalPath = profile.initialLocalPath
     }
 
-    func toConnectionProfile() -> ConnectionProfile {
+    /// Returns the runtime profile and, when `refreshStaleBookmark` is set,
+    /// replaces a stale private-key bookmark from its resolved URL.
+    func toConnectionProfile(refreshStaleBookmark: Bool = false) -> ConnectionProfile {
         var profile = ConnectionProfile(
             id: id,
             name: name,
@@ -46,14 +48,23 @@ struct StoredConnectionProfile: Identifiable, Codable, Equatable, Sendable {
             initialRemotePath: initialRemotePath,
             initialLocalPath: initialLocalPath
         )
-        profile.hydrateDisplayKeyPathFromBookmark()
+        if refreshStaleBookmark {
+            profile.refreshStalePrivateKeyBookmark()
+        } else {
+            profile.hydrateDisplayKeyPathFromBookmark()
+        }
         return profile
     }
 }
 
 extension ConnectionProfile {
-    mutating func hydrateDisplayKeyPathFromBookmark() {
-        guard privateKeyPath == nil, let bookmark = privateKeyBookmark else { return }
+    /// Resolves the display-only key path and reports whether the stored
+    /// bookmark is stale. Callers that persist profiles must recreate and save
+    /// the bookmark on stale, otherwise a later move can make it unresolvable
+    /// (issue #1146).
+    @discardableResult
+    mutating func hydrateDisplayKeyPathFromBookmark() -> Bool {
+        guard privateKeyPath == nil, let bookmark = privateKeyBookmark else { return false }
 
         var isStale = false
         guard let url = try? URL(
@@ -62,9 +73,37 @@ extension ConnectionProfile {
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
         ) else {
-            return
+            return false
         }
 
         privateKeyPath = url.path
+        return isStale
+    }
+
+    /// Recreates a stale security-scoped bookmark from the resolved URL.
+    /// Returns `true` when the bookmark was replaced.
+    mutating func refreshStalePrivateKeyBookmark(
+        createBookmark: (URL, Bool) throws -> Data = {
+            try SecurityScopedBookmarkService.shared.createBookmark(for: $0, readOnly: $1)
+        }
+    ) -> Bool {
+        guard privateKeyPath == nil, let bookmark = privateKeyBookmark else { return false }
+
+        var isStale = false
+        guard let url = try? URL(
+            resolvingBookmarkData: bookmark,
+            options: .withSecurityScope,
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        ) else {
+            return false
+        }
+
+        privateKeyPath = url.path
+        guard isStale, let refreshed = try? createBookmark(url, true) else {
+            return false
+        }
+        privateKeyBookmark = refreshed
+        return true
     }
 }

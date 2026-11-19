@@ -258,6 +258,75 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
     }
 }
 
+final class StalePrivateKeyBookmarkTests: XCTestCase {
+    func testFreshBookmarkIsNotRecreated() throws {
+        // Given: a real, non-stale bookmark for a temporary file
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let keyURL = directory.appendingPathComponent("id_test")
+        try Data("key".utf8).write(to: keyURL)
+        let bookmark = try SecurityScopedBookmarkService.shared.createBookmark(for: keyURL, readOnly: true)
+        var profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyBookmark: bookmark
+        )
+        var createCalls = 0
+
+        // When: refreshing stale bookmarks
+        let refreshed = profile.refreshStalePrivateKeyBookmark { _, _ in
+            createCalls += 1
+            return bookmark
+        }
+
+        // Then: a fresh bookmark is left untouched. The resolved URL may be
+        // canonicalized (/var -> /private/var), so compare the file name.
+        XCTAssertFalse(refreshed)
+        XCTAssertEqual(createCalls, 0)
+        XCTAssertEqual(profile.privateKeyBookmark, bookmark)
+        XCTAssertEqual(
+            profile.privateKeyPath.map { URL(fileURLWithPath: $0).lastPathComponent },
+            keyURL.lastPathComponent
+        )
+    }
+
+    func testUnresolvableBookmarkIsNotRecreated() {
+        var profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyBookmark: Data([1, 2, 3])
+        )
+        var createCalls = 0
+
+        let refreshed = profile.refreshStalePrivateKeyBookmark { _, _ in
+            createCalls += 1
+            return Data([4, 5, 6])
+        }
+
+        XCTAssertFalse(refreshed)
+        XCTAssertEqual(createCalls, 0)
+        XCTAssertEqual(profile.privateKeyBookmark, Data([1, 2, 3]))
+    }
+
+    func testHydrateReportsStalenessForUnresolvableBookmark() {
+        var profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyBookmark: Data([1, 2, 3])
+        )
+        XCTAssertFalse(profile.hydrateDisplayKeyPathFromBookmark())
+        XCTAssertNil(profile.privateKeyPath)
+    }
+}
+
 @MainActor
 final class ConnectionFormPrivateKeySelectionTests: XCTestCase {
     private let selectedURL = URL(fileURLWithPath: "/keys/replacement")
