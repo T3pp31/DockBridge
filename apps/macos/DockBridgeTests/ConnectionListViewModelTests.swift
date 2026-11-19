@@ -75,10 +75,10 @@ final class ConnectionListViewModelTests: XCTestCase {
         viewModel.load()
         let url = try XCTUnwrap(URL(string: "sftp://alice@new.example.com:2222/incoming"))
         let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json")
-        // A malformed trust file is recoverable (verificationFailed), so the
-        // load reports initial-trust confirmation instead of throwing, while
-        // upsert still succeeds because trust refresh is secondary to the
-        // encrypted save (issue #1378).
+        // A malformed trust file fails verification, so loads report an error
+        // instead of being downgraded to initial trust (issue #1375). upsert
+        // still succeeds because trust refresh is secondary to the encrypted
+        // save.
         try Data("invalid trust store".utf8).write(to: trustURL)
 
         viewModel.handleSFTPURL(url)
@@ -91,9 +91,9 @@ final class ConnectionListViewModelTests: XCTestCase {
         XCTAssertEqual(imported.initialRemotePath, "/incoming")
         XCTAssertNil(viewModel.pendingConnectProfile)
         XCTAssertNil(viewModel.errorMessage)
-        let result = try store.loadProfilesWithEndpointCheck()
-        XCTAssertEqual(result.profiles, [existing, imported])
-        XCTAssertEqual(result.pendingInitialTrust, [existing, imported])
+        XCTAssertThrowsError(try store.loadProfilesWithEndpointCheck()) { error in
+            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+        }
 
         viewModel.handleSFTPURL(url)
 

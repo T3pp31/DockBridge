@@ -491,12 +491,12 @@ final class ConnectionStoreTests: XCTestCase {
         let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
         try JSONEncoder().encode(matchingTrust).write(to: trustURL)
 
-        let result = try store.loadProfilesWithEndpointCheck()
-
-        XCTAssertEqual(result.profiles.first?.host, "evil.example.com")
-        XCTAssertTrue(result.endpointChanges.isEmpty)
-        XCTAssertEqual(result.pendingInitialTrust, [tampered])
-        XCTAssertTrue(result.pendingNewProfileTrust.isEmpty)
+        // Replacing the signed store with an unsigned one must fail
+        // verification instead of being downgraded to initial trust, which
+        // would hide the endpoint change (issue #1375).
+        XCTAssertThrowsError(try store.loadProfilesWithEndpointCheck()) { error in
+            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+        }
     }
 
     func testLoadProfilesRejectsSymlinkedStoreFile() throws {

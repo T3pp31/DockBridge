@@ -102,23 +102,13 @@ final class ProfileTrustStore: @unchecked Sendable {
     }
 
     func detectEndpointChanges(in profiles: [ConnectionProfile]) throws -> ProfileTrustDetectionResult {
-        let trusted: [UUID: TrustedProfileEndpoint]
-        do {
-            trusted = try loadTrustedEndpoints()
-        } catch ProfileTrustStoreError.verificationFailed {
-            guard !profiles.isEmpty else {
-                return ProfileTrustDetectionResult(
-                    endpointChanges: [],
-                    pendingInitialTrust: [],
-                    pendingNewProfileTrust: []
-                )
-            }
-            return ProfileTrustDetectionResult(
-                endpointChanges: [],
-                pendingInitialTrust: profiles,
-                pendingNewProfileTrust: []
-            )
-        }
+        // An absent store is the legitimate first-run state; a store that
+        // exists but fails verification (corrupt, tampered, or legacy
+        // unsigned) must not be downgraded to "first trust", because that
+        // would silently re-register changed endpoints without the warning
+        // path (issue #1375). Propagate verificationFailed so the UI can
+        // report it explicitly.
+        let trusted = try loadTrustedEndpoints()
 
         if trusted.isEmpty, !profiles.isEmpty {
             return ProfileTrustDetectionResult(
