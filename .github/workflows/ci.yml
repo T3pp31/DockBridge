@@ -118,6 +118,12 @@ jobs:
         run: python3 scripts/test-release-download-docs.py
       - name: Test release security documentation consistency
         run: python3 scripts/test-release-security-docs.py
+      - name: Test localization verification script
+        run: python3 scripts/test-verify-localization.py
+      - name: Test UI/UX tracking document consistency
+        run: python3 scripts/test-ui-ux-tracking.py
+      - name: Test Settings scene wiring guard
+        run: python3 scripts/test-settings-scene.py
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
