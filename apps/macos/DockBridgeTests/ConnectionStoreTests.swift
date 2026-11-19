@@ -409,6 +409,57 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertTrue(onDisk.contains(EncryptedProfilesEnvelope.formatIdentifier))
     }
 
+    func testConcurrentLegacyMigrationBacksUpWithoutColliding() throws {
+        // Given: a legacy plaintext store and many concurrent readers, all of
+        // which may enter the one-way migration in the same second
+        let profileID = UUID()
+        let legacyJSON = """
+        [{"id": "\(profileID.uuidString)", "name": "Legacy",
+          "host": "legacy.example.com", "port": 22, "username": "legacy-user",
+          "authType": "password"}]
+        """
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        try legacyJSON.write(
+            to: URL(fileURLWithPath: storeProfilesPath),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let errors = Errors()
+        DispatchQueue.concurrentPerform(iterations: 8) { _ in
+            do {
+                let loaded = try self.store.loadProfiles()
+                if loaded.map(\.id) != [profileID] {
+                    errors.append("unexpected profiles: \(loaded.map(\.id))")
+                }
+            } catch {
+                errors.append(error.localizedDescription)
+            }
+        }
+
+        // Then: no reader fails on a backup-name collision and the store is
+        // migrated exactly once.
+        XCTAssertEqual(errors.values, [])
+        let onDisk = try String(contentsOf: URL(fileURLWithPath: storeProfilesPath), encoding: .utf8)
+        XCTAssertTrue(onDisk.contains(EncryptedProfilesEnvelope.formatIdentifier))
+        XCTAssertFalse(onDisk.contains("legacy.example.com"))
+        let backups = try FileManager.default
+            .contentsOfDirectory(atPath: baseDirectory.path)
+            .filter { $0.hasPrefix("profiles.json.bak-") }
+        XCTAssertEqual(backups.count, 1)
+    }
+
+    private final class Errors: @unchecked Sendable {
+        private let lock = NSLock()
+        private var messages: [String] = []
+
+        var values: [String] { lock.withLock { messages } }
+
+        func append(_ message: String) {
+            lock.withLock { messages.append(message) }
+        }
+    }
+
     func testLoadProfilesMigratesExistingFilePermissionsTo0600() throws {
         try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         try Data("[]".utf8).write(to: URL(fileURLWithPath: storeProfilesPath))

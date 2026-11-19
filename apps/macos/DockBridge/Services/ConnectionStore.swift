@@ -83,7 +83,13 @@ final class ConnectionStore: @unchecked Sendable {
     }
 
     func loadProfilesWithEndpointCheck() throws -> ProfileLoadResult {
-        let profiles = try readProfilesFromDisk()
+        // A legacy plaintext store is migrated (backed up and rewritten) on
+        // read, so reads must serialize with upsert/delete too; otherwise a
+        // concurrent mutation can be overwritten by the migration write
+        // (issue #1149).
+        mutationLock.lock()
+        defer { mutationLock.unlock() }
+        let profiles = try readProfilesFromDiskLocked()
         let detection = try trustStore.detectEndpointChanges(in: profiles)
         return ProfileLoadResult(
             profiles: profiles,
@@ -101,7 +107,7 @@ final class ConnectionStore: @unchecked Sendable {
     func upsert(_ profile: ConnectionProfile) throws -> [ConnectionProfile] {
         mutationLock.lock()
         defer { mutationLock.unlock() }
-        var profiles = try readProfilesFromDisk()
+        var profiles = try readProfilesFromDiskLocked()
         if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[index] = profile
         } else {
@@ -114,7 +120,7 @@ final class ConnectionStore: @unchecked Sendable {
     func delete(id: UUID) throws -> [ConnectionProfile] {
         mutationLock.lock()
         defer { mutationLock.unlock() }
-        var profiles = try readProfilesFromDisk()
+        var profiles = try readProfilesFromDiskLocked()
         profiles.removeAll { $0.id == id }
         try saveProfiles(profiles)
         do {
@@ -144,7 +150,7 @@ final class ConnectionStore: @unchecked Sendable {
     func restoreTrustedEndpoint(for change: ProfileEndpointChange) throws -> [ConnectionProfile] {
         mutationLock.lock()
         defer { mutationLock.unlock() }
-        var profiles = try readProfilesFromDisk()
+        var profiles = try readProfilesFromDiskLocked()
         guard let index = profiles.firstIndex(where: { $0.id == change.profileID }) else {
             return profiles
         }
@@ -170,7 +176,7 @@ final class ConnectionStore: @unchecked Sendable {
         )
     }
 
-    private func readProfilesFromDisk() throws -> [ConnectionProfile] {
+    private func readProfilesFromDiskLocked() throws -> [ConnectionProfile] {
         let url = profilesURL
         guard FileManager.default.fileExists(atPath: url.path) else {
             return []
@@ -241,8 +247,21 @@ final class ConnectionStore: @unchecked Sendable {
         let stamp = formatter.string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
             .replacingOccurrences(of: "+", with: "-")
-        let backup = url.deletingLastPathComponent()
-            .appendingPathComponent("profiles.json.bak-\(stamp)", isDirectory: false)
+        let directory = url.deletingLastPathComponent()
+        var backup = directory.appendingPathComponent(
+            "profiles.json.bak-\(stamp)",
+            isDirectory: false
+        )
+        // Two migrations within the same second would collide on the stamp and
+        // fail with fileExists; add a suffix until the name is free.
+        var suffix = 1
+        while FileManager.default.fileExists(atPath: backup.path) {
+            backup = directory.appendingPathComponent(
+                "profiles.json.bak-\(stamp)-\(suffix)",
+                isDirectory: false
+            )
+            suffix += 1
+        }
         try FileManager.default.copyItem(at: url, to: backup)
     }
 
