@@ -10,13 +10,15 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 KEYS = (
-    "version", "app_name", "asset_name_template", "sbom_name_template",
-    "cargo_cyclonedx_version", "xcodegen_version", "xcodegen_sha256",
+    "version", "app_name", "asset_name_template", "cli_name_template",
+    "sbom_name_template", "cargo_cyclonedx_version", "xcodegen_version",
+    "xcodegen_sha256",
 )
 CONFIG = '''[release]
 version = "1.2.3"
 app_name = "Fixture App"
 asset_name_template = "{app_name}-{version}-macOS.dmg"
+cli_name_template = "dockbridge-{version}-macOS"
 sbom_name_template = "{app_name}-{version}.cdx.json"
 cargo_cyclonedx_version = "0.5.9"
 xcodegen_version = "2.45.4"
@@ -62,12 +64,20 @@ class ReleaseConfigTests(unittest.TestCase):
             capture_output=True, text=True, timeout=5,
         )
 
-    def run_step(self, workflow, name, version="1.2.3", preamble=""):
+    def run_step(self, workflow, name, version="1.2.3", preamble="", cli_name=None,
+                 event_name="push"):
         block = workflow_block(workflow, name).replace(
             "${{ steps.version.outputs.version }}", version)
+        block = block.replace(
+            "${{ steps.version.outputs.cli_name }}",
+            cli_name if cli_name is not None else f"dockbridge-{version}-macOS")
+        block = block.replace("${{ github.event_name }}", event_name)
+        env = dict(self.env)
+        # `Resolve version` derives the version from the tag on a tag push.
+        env.setdefault("GITHUB_REF_NAME", f"v{version}")
         return subprocess.run(
             ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", preamble + block],
-            cwd=self.root, env=self.env, capture_output=True, text=True, timeout=5,
+            cwd=self.root, env=env, capture_output=True, text=True, timeout=5,
         )
 
     def assert_failure(self, result):
@@ -168,6 +178,7 @@ class ReleaseConfigTests(unittest.TestCase):
         cli = f"dist/dockbridge-{version}-macOS"
         sbom = f"dist/Fixture App-{version}.cdx.json"
         self.assertEqual(self.output.read_text().splitlines(), [
+            "app_name=Fixture App",
             f"dmg={dmg}", f"sha256={dmg}.sha256", f"cli={cli}",
             f"cli_sha256={cli}.sha256", f"sbom={sbom}", f"sbom_sha256={sbom}.sha256",
         ])
@@ -178,6 +189,9 @@ class ReleaseConfigTests(unittest.TestCase):
             ("cargo_cyclonedx_version", "release.yml", "Install cargo-cyclonedx"),
             ("app_name", "release.yml", "Resolve asset paths"),
             ("asset_name_template", "release.yml", "Resolve asset paths"),
+            # Resolved once in `Resolve version`; downstream steps read the
+            # output instead of re-reading the template (issue #1363).
+            ("cli_name_template", "release.yml", "Resolve version"),
             ("sbom_name_template", "release.yml", "Resolve asset paths"),
         ):
             with self.subTest(key=key, workflow=workflow):
