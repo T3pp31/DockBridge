@@ -179,9 +179,11 @@ final class ConnectionStoreTests: XCTestCase {
         let corruptTrust = Data("not-json".utf8)
         try corruptTrust.write(to: trustURL)
 
+        // A malformed store is reported as verificationFailed so the trust
+        // flow can re-confirm it (issue #1378); the batch still propagates.
         XCTAssertThrowsError(try store.trustProfiles(profiles)) { error in
-            guard case ProfileTrustStoreError.readFailed = error else {
-                return XCTFail("Expected readFailed, got \(error)")
+            guard case ProfileTrustStoreError.verificationFailed = error else {
+                return XCTFail("Expected verificationFailed, got \(error)")
             }
         }
         try store.saveProfiles(profiles)
