@@ -544,6 +544,11 @@ final class ConnectionListViewModel: ObservableObject {
                 errorMessage = error.localizedDescription
                 return
             }
+            // The Keychain now holds the value the user just confirmed. Drop
+            // any session-only credentials so later connections in this
+            // session read the saved value instead of a stale transient one
+            // (issue #1154).
+            transientCredentials.removeValue(forKey: prompt.profile.id)
         }
 
         pendingCredentialPrompt = nil

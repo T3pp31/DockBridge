@@ -779,6 +779,66 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertNil(viewModel.errorMessage)
     }
 
+    func testConfirmCredentialPromptSaveToKeychainDropsSessionOnlyCredentials() async throws {
+        // Given: an empty Keychain so connecting stops at the credential
+        // prompt before any network I/O
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .password
+        )
+        viewModel.save(profile, password: nil, passphrase: nil)
+        await viewModel.connect(profile: profile)
+        XCTAssertEqual(viewModel.pendingCredentialPrompt?.kind, .password)
+
+        // And: session-only credentials recorded for the same profile
+        viewModel.save(profile, password: "session-only", passphrase: nil, saveSecrets: false)
+        XCTAssertEqual(
+            try viewModel.credentialsForConnection(profile: profile).password,
+            "session-only"
+        )
+
+        // When: the prompt is confirmed with Keychain saving
+        let credential = SensitiveString()
+        credential.text = "saved-secret"
+        viewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: true)
+
+        // Then: lookups read the saved value, not the stale session one
+        XCTAssertEqual(
+            try viewModel.credentialsForConnection(profile: profile).password,
+            "saved-secret"
+        )
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        XCTAssertEqual(try keychain.loadPassword(account: account), "saved-secret")
+    }
+
+    func testConfirmCredentialPromptWithoutKeychainKeepsSessionOnlyCredentials() async throws {
+        // Given: an empty Keychain so connecting stops at the credential prompt
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .password
+        )
+        viewModel.save(profile, password: nil, passphrase: nil)
+        await viewModel.connect(profile: profile)
+
+        // And: session-only credentials recorded for the same profile
+        viewModel.save(profile, password: "session-only", passphrase: nil, saveSecrets: false)
+
+        // When: the prompt is confirmed without saving to Keychain
+        let credential = SensitiveString()
+        credential.text = "one-time"
+        viewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: false)
+
+        // Then: the session-only value remains the lookup source
+        XCTAssertEqual(
+            try viewModel.credentialsForConnection(profile: profile).password,
+            "session-only"
+        )
+    }
+
     func testConfirmCredentialPromptClearsInputWithoutPendingPrompt() {
         let credential = SensitiveString()
         credential.text = "unused-secret"
