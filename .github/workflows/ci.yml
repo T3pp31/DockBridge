@@ -118,6 +118,8 @@ jobs:
         run: python3 scripts/test-release-download-docs.py
       - name: Test release security documentation consistency
         run: python3 scripts/test-release-security-docs.py
+      - name: Test advisory expiry check
+        run: python3 scripts/test-check-advisory-expiry.py
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
