@@ -215,6 +215,16 @@ class ReleaseConfigTests(unittest.TestCase):
             self.assertNotRegex(text, r"awk[^\n]*config/release\.toml")
         self.assertEqual(used_keys, set(KEYS))
 
+    def test_release_concurrency_normalizes_the_version(self):
+        # A dispatch for 1.0.0 must share the concurrency group of a v1.0.0
+        # tag push, or the two runs publish concurrently (issue #1364).
+        text = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+        self.assertRegex(
+            text,
+            r"concurrency:\s*\n\s*group: release-\$\{\{[^\n]*format\('v\{0\}', "
+            r"github\.event\.inputs\.version\)[^\n]*github\.ref_name[^\n]*\}\}",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
