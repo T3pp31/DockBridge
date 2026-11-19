@@ -606,6 +606,10 @@ final class FileDropAcceptanceTests: XCTestCase {
     }
 
     private static func isDockerE2EAvailable() -> Bool {
+        // `docker ps` has no built-in timeout and blocks until the daemon
+        // answers; this runs on the main actor, so a hung daemon would freeze
+        // the rest of the test run. Poll with a deadline and terminate the
+        // child instead of waiting indefinitely (issue #1156).
         let process = Process()
         process.executableURL = URL(fileURLWithPath: dockerExecutable)
         process.arguments = [
@@ -617,11 +621,31 @@ final class FileDropAcceptanceTests: XCTestCase {
         let pipe = Pipe()
         process.standardOutput = pipe
         guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
+
+        let deadline = Date().addingTimeInterval(dockerProbeTimeout)
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        if process.isRunning {
+            process.terminate()
+            // Give termination a moment, then force-kill a child that ignores it.
+            let killDeadline = Date().addingTimeInterval(1)
+            while process.isRunning, Date() < killDeadline {
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+            }
+            _ = pipe.fileHandleForReading.readDataToEndOfFile()
+            return false
+        }
+
         guard process.terminationStatus == 0 else { return false }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         let output = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return output == "dockbridge-e2e"
     }
+
+    private static let dockerProbeTimeout: TimeInterval = 5
 }
