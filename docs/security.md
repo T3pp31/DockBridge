@@ -297,6 +297,24 @@ Do not remove Gatekeeper quarantine on public release DMGs. The dev-only helper 
 - **Scheduled audit**: `.github/workflows/security-audit.yml` runs `cargo audit` daily (03:00 UTC) and on `workflow_dispatch`, so newly published RustSec advisories are detected even when the repository has no recent commits. It also enforces that every entry in `.cargo/audit.toml` carries an `# expires: YYYY-MM-DD` comment and fails once an expiry passes (forcing a re-review).
 - **Dependabot**: Weekly pull requests for `cargo` and `github-actions` dependency updates (see `.github/dependabot.yml`).
 
+### Dependency build scripts (user script sandboxing)
+
+The Xcode preBuild phase runs `scripts/build-rust.sh` and
+`scripts/generate-uniffi.sh`, which invoke `cargo`. Cargo reaches the registry
+cache, git checkouts, and build-script temporary files outside any declared
+Xcode inputs, so `ENABLE_USER_SCRIPT_SANDBOXING` is disabled in
+`apps/macos/project.yml`; enabling it rejects those accesses and breaks every
+build (issue #1227). The consequence is that dependency `build.rs` files run
+with the developer's or CI runner's full permissions. Mitigations:
+
+- Dependency updates arrive through Dependabot pull requests and are reviewed
+  as code before merge; `Cargo.lock` pins the exact versions that run.
+- Release signing and notarization secrets are only imported in the release
+  workflow's signing step, after the build completes, and are not present in
+  the Rust build environment.
+- Do not run untrusted dependency sources locally; keep `cargo` configured to
+  crates.io and the reviewed vendored forks listed below.
+
 ### Software Bill of Materials (SBOM)
 
 DockBridge publishes a CycloneDX JSON SBOM for each release and verifies SBOM generation in CI.
