@@ -539,19 +539,41 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Returns true for Unicode format characters that can reorder or hide text
+/// in bidi-aware terminals.
+///
+/// `char::is_control` covers only the Cc category, so U+202E (right-to-left
+/// override) and the surrounding bidi controls can make a file name render
+/// with a different extension than it actually has (issue #1356).
+fn is_bidi_format_character(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061C}'                  // Arabic letter mark
+            | '\u{200E}'            // left-to-right mark
+            | '\u{200F}'            // right-to-left mark
+            | '\u{202A}'..='\u{202E}' // embeddings and overrides
+            | '\u{2066}'..='\u{2069}' // isolates
+    )
+}
+
+fn is_terminal_unsafe(character: char) -> bool {
+    character.is_control() || is_bidi_format_character(character)
+}
+
 /// Makes server-provided text safe for line-oriented terminal output.
 ///
 /// Control characters can change cursor position or emit terminal escape
-/// sequences, so they are rendered as visible Unicode escapes. This preserves
-/// normal UTF-8 paths while keeping text output structurally stable.
+/// sequences, and bidi format characters can reorder displayed text, so both
+/// are rendered as visible Unicode escapes. This preserves normal UTF-8 paths
+/// while keeping text output structurally stable.
 fn terminal_safe_text(value: &str) -> String {
-    if !value.chars().any(char::is_control) {
+    if !value.chars().any(is_terminal_unsafe) {
         return value.to_string();
     }
 
     let mut sanitized = String::with_capacity(value.len());
     for character in value.chars() {
-        if character.is_control() {
+        if is_terminal_unsafe(character) {
             use std::fmt::Write;
             let _ = write!(sanitized, "\\u{{{:04x}}}", character as u32);
         } else {
@@ -760,6 +782,34 @@ mod tests {
             terminal_safe_text("\u{1b}[31m/path\u{a}\t"),
             "\\u{001b}[31m/path\\u{000a}\\u{0009}"
         );
+    }
+
+    #[test]
+    fn terminal_safe_text_escapes_bidi_format_characters() {
+        // Given: a file name that uses a right-to-left override to make
+        // "txt.exe" render as "exe.txt"
+        // When: rendering for text output
+        // Then: the bidi controls are visible escapes, not display order
+        assert_eq!(
+            terminal_safe_text("invoice\u{202e}txt.exe"),
+            "invoice\\u{202e}txt.exe"
+        );
+
+        for character in [
+            '\u{061c}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}',
+            '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}',
+        ] {
+            let input = format!("a{character}b");
+            let escaped = terminal_safe_text(&input);
+            assert!(
+                escaped.contains(&format!("\\u{{{:04x}}}", character as u32)),
+                "expected U+{:04X} to be escaped, got {escaped}",
+                character as u32
+            );
+        }
+
+        // Ordinary format characters that do not reorder text stay intact.
+        assert_eq!(terminal_safe_text("a\u{200d}b"), "a\u{200d}b");
     }
 
     #[test]
