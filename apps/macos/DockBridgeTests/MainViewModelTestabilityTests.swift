@@ -1367,6 +1367,73 @@ final class QuickLookPresenterTests: XCTestCase {
         XCTAssertTrue(host === panel)
     }
 
+    func testPreviewFallsBackToOpeningFilesWhenPanelIsUnavailable() {
+        // Given: a presenter with no panel and a recording opener
+        var opened: [URL] = []
+        let presenter = QuickLookPresenter(dependencies: .init(
+            previewPanel: { nil },
+            openFile: { opened.append($0) },
+            fileExists: { _ in true },
+            hostWindow: { nil }
+        ))
+        let urls = [
+            URL(fileURLWithPath: "/tmp/a.txt"),
+            URL(fileURLWithPath: "/tmp/b.txt"),
+        ]
+
+        // When: previewing
+        presenter.preview(urls: urls)
+
+        // Then: every valid file is opened by the fallback
+        XCTAssertEqual(opened, urls)
+        XCTAssertEqual(presenter.numberOfPreviewItems(in: nil), urls.count)
+    }
+
+    func testPreviewOpensOnlyExistingRegularFiles() {
+        var opened: [URL] = []
+        let existing = URL(fileURLWithPath: "/tmp/keep.txt")
+        let missing = URL(fileURLWithPath: "/tmp/missing.txt")
+        let presenter = QuickLookPresenter(dependencies: .init(
+            previewPanel: { nil },
+            openFile: { opened.append($0) },
+            fileExists: { $0 == existing },
+            hostWindow: { nil }
+        ))
+
+        presenter.preview(urls: [existing, missing])
+
+        XCTAssertEqual(opened, [existing])
+        XCTAssertEqual(presenter.numberOfPreviewItems(in: nil), 1)
+    }
+
+    func testPreviewDoesNothingWhenNoFileIsPreviewable() {
+        var opened: [URL] = []
+        let presenter = QuickLookPresenter(dependencies: .init(
+            previewPanel: { nil },
+            openFile: { opened.append($0) },
+            fileExists: { _ in false },
+            hostWindow: { nil }
+        ))
+
+        presenter.preview(urls: [URL(fileURLWithPath: "/tmp/dir")])
+
+        XCTAssertTrue(opened.isEmpty)
+        XCTAssertEqual(presenter.numberOfPreviewItems(in: nil), 0)
+    }
+
+    func testPreviewItemAtRejectsStaleIndex() {
+        let presenter = QuickLookPresenter(dependencies: .init(
+            previewPanel: { nil },
+            openFile: { _ in },
+            fileExists: { _ in true },
+            hostWindow: { nil }
+        ))
+        presenter.preview(urls: [URL(fileURLWithPath: "/tmp/a.txt")])
+
+        XCTAssertNil(presenter.previewPanel(nil, previewItemAt: 1))
+        XCTAssertNotNil(presenter.previewPanel(nil, previewItemAt: 0))
+    }
+
     private func makeWindow(isVisible: Bool = true) -> QuickLookHostTestWindow {
         let window = QuickLookHostTestWindow(
             contentRect: .zero, styleMask: [], backing: .buffered, defer: true

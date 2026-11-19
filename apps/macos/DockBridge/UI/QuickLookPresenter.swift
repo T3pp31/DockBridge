@@ -8,11 +8,37 @@ import Quartz
 final class QuickLookPresenter: NSResponder, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
     static let shared = QuickLookPresenter()
 
+    /// AppKit entry points, injectable so the fallback and panel-update paths
+    /// can be tested without a real panel or launching apps.
+    struct Dependencies {
+        var previewPanel: () -> QLPreviewPanel? = { QLPreviewPanel.shared() }
+        var openFile: (URL) -> Void = { NSWorkspace.shared.open($0) }
+        var fileExists: (URL) -> Bool = { url in
+            var isDirectory: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+            return exists && !isDirectory.boolValue
+        }
+        var hostWindow: () -> NSWindow? = {
+            QuickLookPresenter.previewHostWindow(
+                keyWindow: NSApp.keyWindow,
+                mainWindow: NSApp.mainWindow,
+                windows: NSApp.windows
+            )
+        }
+    }
+
+    private let dependencies: Dependencies
     private var previewURLs: [URL] = []
     private weak var hostContentView: NSView?
     private var previousNextResponder: NSResponder?
 
     private override init() {
+        dependencies = Dependencies()
+        super.init()
+    }
+
+    init(dependencies: Dependencies) {
+        self.dependencies = dependencies
         super.init()
     }
 
@@ -26,24 +52,16 @@ final class QuickLookPresenter: NSResponder, QLPreviewPanelDataSource, QLPreview
     }
 
     func preview(urls: [URL]) {
-        let fileURLs = urls.filter { url in
-            var isDirectory: ObjCBool = false
-            let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
-            return exists && !isDirectory.boolValue
-        }
+        let fileURLs = urls.filter(dependencies.fileExists)
         guard !fileURLs.isEmpty else { return }
         previewURLs = fileURLs
 
-        guard let window = Self.previewHostWindow(
-            keyWindow: NSApp.keyWindow,
-            mainWindow: NSApp.mainWindow,
-            windows: NSApp.windows
-        ),
+        guard let window = dependencies.hostWindow(),
               let contentView = window.contentView,
-              let panel = QLPreviewPanel.shared()
+              let panel = dependencies.previewPanel()
         else {
             // Responder-chain insertion failed; fall back to opening in the default app.
-            fileURLs.forEach { NSWorkspace.shared.open($0) }
+            fileURLs.forEach(dependencies.openFile)
             return
         }
 
