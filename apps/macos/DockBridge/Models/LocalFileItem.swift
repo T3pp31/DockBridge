@@ -7,6 +7,11 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
     let size: Int64
     let modificationDate: Date?
 
+    /// Case- and diacritic-folded name, computed once at construction so the
+    /// directory listing's sort compares plain strings instead of paying for a
+    /// locale-aware comparison on every comparison (issue #1369).
+    private let sortKey: String
+
     var id: String { url.path }
 
     init(
@@ -26,6 +31,7 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
         self.isDirectory = values?.isDirectory ?? Self.isDirectoryOnFileSystem(at: url)
         self.size = Int64(values?.fileSize ?? 0)
         self.modificationDate = values?.contentModificationDate
+        self.sortKey = Self.sortKey(for: self.name)
     }
 
     init(url: URL, resourceValues values: URLResourceValues) {
@@ -34,6 +40,7 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
         self.isDirectory = values.isDirectory ?? Self.isDirectoryOnFileSystem(at: url)
         self.size = Int64(values.fileSize ?? 0)
         self.modificationDate = values.contentModificationDate
+        self.sortKey = Self.sortKey(for: self.name)
     }
 
     init(parentOf directory: URL) {
@@ -43,9 +50,30 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
         self.isDirectory = true
         self.size = 0
         self.modificationDate = nil
+        self.sortKey = Self.sortKey(for: self.name)
     }
 
     var isParentDirectory: Bool { name == ".." }
+
+    private static func sortKey(for name: String) -> String {
+        name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+
+    static func == (lhs: LocalFileItem, rhs: LocalFileItem) -> Bool {
+        lhs.url == rhs.url
+            && lhs.name == rhs.name
+            && lhs.isDirectory == rhs.isDirectory
+            && lhs.size == rhs.size
+            && lhs.modificationDate == rhs.modificationDate
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(url)
+        hasher.combine(name)
+        hasher.combine(isDirectory)
+        hasher.combine(size)
+        hasher.combine(modificationDate)
+    }
 
     /// POSIX permission bits (e.g. "rwxr-xr-x") from the file system, or nil
     /// when they cannot be read.
@@ -96,11 +124,18 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
             return LocalFileItem(url: url, resourceValues: values)
         }
 
+        // Sort on the precomputed folded key: a plain string comparison
+        // instead of localizedCaseInsensitiveCompare per comparison
+        // (issue #1369). The name tie-break keeps the order deterministic when
+        // two names fold to the same key.
         return items.sorted { lhs, rhs in
-                if lhs.isDirectory != rhs.isDirectory {
-                    return lhs.isDirectory && !rhs.isDirectory
-                }
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            if lhs.isDirectory != rhs.isDirectory {
+                return lhs.isDirectory && !rhs.isDirectory
             }
+            if lhs.sortKey != rhs.sortKey {
+                return lhs.sortKey < rhs.sortKey
+            }
+            return lhs.name < rhs.name
+        }
     }
 }

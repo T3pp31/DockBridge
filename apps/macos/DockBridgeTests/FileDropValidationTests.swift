@@ -451,6 +451,22 @@ final class FileDropValidationTests: XCTestCase {
         }
     }
 
+    func testLocalListingSortsCaseAndDiacriticInsensitively() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("local-list-sort-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for name in ["Banana.txt", "apple.txt", "Ápple.txt", "cherry.txt"] {
+            try Data().write(to: directory.appendingPathComponent(name))
+        }
+
+        let items = try LocalFileItem.list(directory: directory, showHiddenFiles: false)
+
+        // Folded keys compare case- and diacritic-insensitively: apple and
+        // Ápple share the same key, so the raw name breaks the tie.
+        XCTAssertEqual(items.map(\.name), ["apple.txt", "Ápple.txt", "Banana.txt", "cherry.txt"])
+    }
+
     func testLocalItemInitializerRecoversDirectoryTypeWhenResourceValuesFail() {
         let directory = FileManager.default.temporaryDirectory
         let item = LocalFileItem(url: directory, resourceValuesProvider: { _, _ in
