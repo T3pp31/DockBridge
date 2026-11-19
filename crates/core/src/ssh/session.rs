@@ -717,9 +717,8 @@ mod tests {
 
     #[test]
     fn secret_password_from_zeroizing_takes_ownership() {
-        let password = SecretPassword::from_zeroizing(zeroize::Zeroizing::new(
-            "ffi-secret-value".to_string(),
-        ));
+        let password =
+            SecretPassword::from_zeroizing(zeroize::Zeroizing::new("ffi-secret-value".to_string()));
         assert_eq!(password.expose(), "ffi-secret-value");
     }
 
