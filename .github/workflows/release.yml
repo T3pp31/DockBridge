@@ -17,8 +17,72 @@ concurrency:
 permissions: {}
 
 jobs:
+  # Gate publishing on the same test suites CI runs. A tag push does not run
+  # ci.yml (it only triggers on main/pull_request), so without this job a
+  # release could publish artifacts from an untested commit (issue #1365).
+  test:
+    name: Test before release
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Pin Xcode 16.4
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90  # v1.7.0
+        with:
+          xcode-version: '16.4'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87  # stable (tag via rust-toolchain.toml)
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0  # v2.9.3
+        with:
+          shared-key: release-test
+          cache-bin: false
+
+      - name: Test Rust workspace (all targets)
+        run: cargo test --workspace --all-targets
+
+      - name: Build Rust static library
+        run: ./scripts/build-rust.sh
+
+      - name: Generate UniFFI bindings
+        run: ./scripts/generate-uniffi.sh
+
+      # build/test are split deliberately: combined `build test` hit the
+      # Xcode testmanagerd readiness hang on macos runners (see docs/ci.md).
+      - name: Build macOS app for testing
+        working-directory: apps/macos
+        env:
+          # Bindings and the static library were generated above.
+          DOCKBRIDGE_SKIP_HOST_BUILD: "1"
+        run: |
+          xcodebuild \
+            -scheme DockBridge \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            build-for-testing
+
+      - name: Test macOS app
+        working-directory: apps/macos
+        env:
+          DOCKBRIDGE_SKIP_HOST_BUILD: "1"
+        run: |
+          xcodebuild \
+            -scheme DockBridge \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            test-without-building
+
   release:
     name: Build and publish release
+    needs: test
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
