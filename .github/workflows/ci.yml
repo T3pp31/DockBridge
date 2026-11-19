@@ -118,6 +118,11 @@ jobs:
         run: python3 scripts/test-release-download-docs.py
       - name: Test release security documentation consistency
         run: python3 scripts/test-release-security-docs.py
+      - name: Test vendored SFTP fork version check
+        run: python3 scripts/test-verify-vendored-sftp-fork.py
+
+      - name: Verify the vendored SFTP fork is resolved
+        run: python3 scripts/verify-vendored-sftp-fork.py
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
