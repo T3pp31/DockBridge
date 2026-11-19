@@ -898,6 +898,28 @@ impl<'a> SftpClient<'a> {
             })
     }
 
+    /// Renames `from` to `to` without replacing an existing destination.
+    ///
+    /// Uses plain `SSH_FXP_RENAME` (never `posix-rename@openssh.com`, which
+    /// replaces atomically): POSIX-style servers fail when the destination
+    /// exists, and OpenSSH's `sftp-server` implements the request as
+    /// `link()` + `unlink()`, which also fails when the target exists. This
+    /// closes the check-then-rename race where a file created by another
+    /// writer between the existence check and the rename would be silently
+    /// overwritten (issue #1155).
+    pub async fn rename_no_overwrite(&self, from: &str, to: &str) -> Result<(), SftpError> {
+        let from = normalize_remote_path(from)?;
+        let to = normalize_remote_path(to)?;
+        self.sftp()
+            .rename(&from, &to)
+            .await
+            .map_err(|err| SftpError::RenameFailed {
+                from,
+                to,
+                message: err.to_string(),
+            })
+    }
+
     /// Renames `from` to `to`, atomically replacing an existing destination
     /// via the `posix-rename@openssh.com` extension. Returns `Ok(false)` when
     /// the server does not advertise the extension.
@@ -4631,6 +4653,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(contents, b"new");
+    }
+
+    #[tokio::test]
+    async fn rename_no_overwrite_refuses_existing_destination() {
+        // Given: source and a destination created by another writer
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/rename/src.txt", b"new").await;
+        server
+            .write_remote_file("/rename/dst.txt", b"existing")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // When: renaming without overwrite
+        let err = client
+            .rename_no_overwrite("/rename/src.txt", "/rename/dst.txt")
+            .await
+            .unwrap_err();
+
+        // Then: it fails and leaves both files untouched, unlike `rename`
+        // which replaces through posix-rename (issue #1155).
+        assert!(matches!(err, SftpError::RenameFailed { .. }), "{err:?}");
+        assert!(server.remote_file_exists("/rename/src.txt"));
+        let contents = tokio::fs::read(server.root.join("rename/dst.txt"))
+            .await
+            .unwrap();
+        assert_eq!(contents, b"existing");
+    }
+
+    #[tokio::test]
+    async fn rename_no_overwrite_moves_when_destination_is_absent() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/rename/src.txt", b"payload")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        client
+            .rename_no_overwrite("/rename/src.txt", "/rename/dst.txt")
+            .await
+            .unwrap();
+
+        assert!(!server.remote_file_exists("/rename/src.txt"));
+        let contents = tokio::fs::read(server.root.join("rename/dst.txt"))
+            .await
+            .unwrap();
+        assert_eq!(contents, b"payload");
     }
 
     #[tokio::test]

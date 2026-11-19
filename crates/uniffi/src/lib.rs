@@ -812,6 +812,34 @@ impl DockBridgeClient {
         Ok(())
     }
 
+    /// Renames without replacing an existing destination, so a concurrent
+    /// writer cannot be silently overwritten between a pre-check and the
+    /// rename (issue #1155).
+    fn rename_no_overwrite(
+        &self,
+        session_id: u64,
+        from: String,
+        to: String,
+    ) -> Result<(), DockBridgeError> {
+        let sessions = Arc::clone(&self.sessions);
+        self.handle_session_result(
+            session_id,
+            block_on(async move {
+                let session = {
+                    let sessions = sessions.lock().await;
+                    sessions.get(&session_id).cloned().ok_or_else(|| {
+                        map_error_string(format!("session {session_id} not found"))
+                    })?
+                };
+                SftpClient::new(session.as_ref())
+                    .rename_no_overwrite(&from, &to)
+                    .await
+                    .map_err(map_error)
+            })?,
+        )?;
+        Ok(())
+    }
+
     fn create_directory(
         &self,
         session_id: u64,

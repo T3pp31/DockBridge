@@ -38,6 +38,8 @@ protocol RemoteBridging {
     ) async throws
     func deleteRemote(path: String) async throws
     func renameRemote(from: String, to: String) async throws
+    /// Renames without replacing an existing destination (issue #1155).
+    func renameRemoteNoOverwrite(from: String, to: String) async throws
     func mkdirRemote(path: String) async throws
     func fetchTransferTasks() async throws -> [TransferTaskRecord]
     func cancelTransfer(taskId: UInt64) async throws
