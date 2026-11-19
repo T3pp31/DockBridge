@@ -121,6 +121,21 @@ final class ConnectionListViewModelTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: profilesURL), invalidData)
     }
 
+    func testHandleSFTPURLDoesNotDecodePercentEscapesTwice() throws {
+        // Given: a URL whose user name and path contain a literal "%20"
+        // (encoded as %2520) plus a real space (%20)
+        let url = try XCTUnwrap(
+            URL(string: "sftp://user%2520name@host.example.com/Q1%2520reports/a%20b")
+        )
+
+        viewModel.handleSFTPURL(url)
+
+        // Then: the literal "%20" stays literal; only the real space decodes
+        let imported = try XCTUnwrap(viewModel.profiles.first)
+        XCTAssertEqual(imported.username, "user%20name")
+        XCTAssertEqual(imported.initialRemotePath, "/Q1%20reports/a b")
+    }
+
     func testDeleteUpdatesListAndSelectionWhenTrustRemovalFails() throws {
         let removed = ConnectionProfile(name: "Removed", host: "removed.example.com", username: "user")
         let remaining = ConnectionProfile(name: "Remaining", host: "remaining.example.com", username: "user")

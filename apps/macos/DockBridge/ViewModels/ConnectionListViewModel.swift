@@ -752,7 +752,10 @@ final class ConnectionListViewModel: ObservableObject {
     /// a prefilled profile when none matches (Issue #371).
     func handleSFTPURL(_ url: URL) {
         guard url.scheme?.lowercased() == "sftp", let host = url.host else { return }
-        let username = url.user.map { $0.removingPercentEncoding ?? $0 } ?? ""
+        // URL.user and URL.path are already percent-decoded. Decoding again
+        // would turn a literal "%20" in a name (encoded as %2520 in the URL)
+        // into a space (issue #1153).
+        let username = url.user ?? ""
         // A profile cannot be connected without a username (the form also
         // requires one), so keep the unsaved prefill out of the store.
         guard !username.isEmpty else { return }
@@ -770,12 +773,12 @@ final class ConnectionListViewModel: ObservableObject {
         }
 
         // sftp URLs carry a remote path; normalize it to an absolute path.
+        // URL.path is already percent-decoded (issue #1153).
         let remotePath: String?
         if url.path.isEmpty || url.path == "/" {
             remotePath = nil
         } else {
-            let decoded = url.path.removingPercentEncoding ?? url.path
-            remotePath = decoded.hasPrefix("/") ? decoded : "/" + decoded
+            remotePath = url.path.hasPrefix("/") ? url.path : "/" + url.path
         }
 
         if let profile = profiles.first(where: {
