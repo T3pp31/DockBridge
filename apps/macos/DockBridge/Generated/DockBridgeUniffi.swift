@@ -651,6 +651,13 @@ public protocol DockBridgeClientProtocol: AnyObject, Sendable {
     
     func rename(sessionId: UInt64, from: String, to: String) throws 
     
+    /**
+     * Renames without replacing an existing destination, so a concurrent
+     * writer cannot be silently overwritten between a pre-check and the
+     * rename (issue #1155).
+     */
+    func renameNoOverwrite(sessionId: UInt64, from: String, to: String) throws 
+    
     func retryTransfer(sessionId: UInt64, taskId: UInt64) throws 
     
     /**
@@ -947,6 +954,22 @@ open func readLink(sessionId: UInt64, path: String)throws  -> String  {
 open func rename(sessionId: UInt64, from: String, to: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
         uniffiCallStatus in
     uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_rename(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt64.lower(sessionId),
+        FfiConverterString.lower(from),
+        FfiConverterString.lower(to),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Renames without replacing an existing destination, so a concurrent
+     * writer cannot be silently overwritten between a pre-check and the
+     * rename (issue #1155).
+     */
+open func renameNoOverwrite(sessionId: UInt64, from: String, to: String)throws   {try rustCallWithError(FfiConverterTypeDockBridgeError_lift) {
+        uniffiCallStatus in
+    uniffi_dockbridge_uniffi_fn_method_dockbridgeclient_rename_no_overwrite(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(sessionId),
         FfiConverterString.lower(from),
@@ -3223,6 +3246,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_rename() != 64839) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_rename_no_overwrite() != 60317) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_dockbridge_uniffi_checksum_method_dockbridgeclient_retry_transfer() != 32174) {

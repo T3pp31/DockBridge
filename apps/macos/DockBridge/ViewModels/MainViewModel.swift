@@ -1638,7 +1638,10 @@ final class MainViewModel: ObservableObject {
                 errorMessage = String(localized: "A file already exists at the destination.")
                 return false
             }
-            try await bridge.renameRemote(from: source, to: destination)
+            // The pre-check is not atomic with the rename; a no-overwrite
+            // rename rejects a destination created in the meantime instead of
+            // silently replacing it (issue #1155).
+            try await bridge.renameRemoteNoOverwrite(from: source, to: destination)
             await reloadRemote()
             return true
         } catch {
@@ -1702,7 +1705,9 @@ final class MainViewModel: ObservableObject {
                 errorMessage = String(localized: "A file already exists at the destination.")
                 return
             }
-            try await bridge.renameRemote(from: target.path, to: newPath)
+            // Same non-atomic check-then-rename window as moveRemoteItem;
+            // reject a concurrently created destination (issue #1155).
+            try await bridge.renameRemoteNoOverwrite(from: target.path, to: newPath)
             renameTarget = nil
             renameText = ""
             await reloadRemote()

@@ -38,6 +38,10 @@ final class FakeBridge: RemoteBridging {
     private(set) var deleted: [String] = []
     /// Rename pairs recorded during `renameRemote`.
     private(set) var renamed: [(from: String, to: String)] = []
+    /// Rename pairs recorded during `renameRemoteNoOverwrite`.
+    private(set) var renamedNoOverwrite: [(from: String, to: String)] = []
+    /// Set to make `renameRemoteNoOverwrite` fail as if the destination exists.
+    var renameNoOverwriteFails = false
     /// mkdir paths recorded during `mkdirRemote`.
     private(set) var createdDirectories: [String] = []
     /// Set to fake a remote mutation failure for rename and mkdir calls.
@@ -121,6 +125,16 @@ final class FakeBridge: RemoteBridging {
         renamed.append((from, to))
         if failTransfers {
             throw DockBridgeError.Other(message: "simulated rename failure")
+        }
+    }
+
+    func renameRemoteNoOverwrite(from: String, to: String) async throws {
+        renamedNoOverwrite.append((from, to))
+        if failTransfers {
+            throw DockBridgeError.Other(message: "simulated rename failure")
+        }
+        if renameNoOverwriteFails {
+            throw DockBridgeError.Other(message: "destination exists")
         }
     }
 
