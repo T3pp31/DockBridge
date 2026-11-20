@@ -47,6 +47,17 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
 
     var isParentDirectory: Bool { name == ".." }
 
+    /// Listing sort key: the name with case and diacritics folded using
+    /// locale-independent Unicode folding (`locale: nil`), so the result does
+    /// not depend on the user's locale (e.g. Turkish dotless-i folding) and is
+    /// consistent with the plain code-point comparison in `list`.
+    ///
+    /// Ordering contract for `list`: folders first, then ascending folded key,
+    /// then ascending raw name as a deterministic tie-break.
+    static func listingSortKey(for name: String) -> String {
+        name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+
     /// POSIX permission bits (e.g. "rwxr-xr-x") from the file system, or nil
     /// when they cannot be read.
     static func posixPermissionsString(for url: URL) -> String? {
@@ -96,11 +107,21 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
             return LocalFileItem(url: url, resourceValues: values)
         }
 
-        return items.sorted { lhs, rhs in
-                if lhs.isDirectory != rhs.isDirectory {
-                    return lhs.isDirectory && !rhs.isDirectory
+        // Fold each name once and sort on plain string comparisons instead of
+        // calling localizedCaseInsensitiveCompare per comparison (issue #1369).
+        // The key lives only for this sort, so the model keeps its synthesized
+        // Equatable/Hashable. See `listingSortKey(for:)` for the order contract.
+        return items
+            .map { (key: listingSortKey(for: $0.name), item: $0) }
+            .sorted { lhs, rhs in
+                if lhs.item.isDirectory != rhs.item.isDirectory {
+                    return lhs.item.isDirectory
                 }
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+                if lhs.key != rhs.key {
+                    return lhs.key < rhs.key
+                }
+                return lhs.item.name < rhs.item.name
             }
+            .map { $0.item }
     }
 }
