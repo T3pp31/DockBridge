@@ -212,6 +212,59 @@ final class ConnectionStoreTests: XCTestCase {
         return reads
     }
 
+    func testDeleteRewritesTrustOnceRegardlessOfProfileCount() throws {
+        var deleteReadsByCount: [Int: Int] = [:]
+        for count in [1, 16] {
+            let reads = configureCountingTrustStore()
+            let profiles = (0..<count).map {
+                ConnectionProfile(name: "Profile \($0)", host: "host\($0).example.com", username: "user")
+            }
+            try store.saveProfiles(profiles, updateTrust: false)
+            try store.seedInitialTrust(for: profiles)
+
+            // Baseline: the cost of the single trust-store rewrite that
+            // delete is expected to perform, measured rather than hard-coded.
+            let baselineStart = reads.count
+            try trustStore.removeTrust(for: UUID())
+            let removeTrustReads = reads.count - baselineStart
+
+            let readsBefore = reads.count
+            _ = try store.delete(id: profiles[0].id)
+            let deleteReads = reads.count - readsBefore
+
+            XCTAssertEqual(deleteReads, removeTrustReads, "Profile count: \(count)")
+            deleteReadsByCount[count] = deleteReads
+            XCTAssertEqual(
+                try trustStore.loadTrustedEndpoints(),
+                Dictionary(uniqueKeysWithValues: profiles.dropFirst().map {
+                    ($0.id, TrustedProfileEndpoint(profile: $0))
+                })
+            )
+        }
+        XCTAssertEqual(deleteReadsByCount[1], deleteReadsByCount[16], "reads must not depend on profile count")
+    }
+
+    func testDeleteLeavesPendingEndpointChangesOfOtherProfilesUntouched() throws {
+        let pending = ConnectionProfile(name: "Pending", host: "trusted.example.com", username: "user")
+        let removed = ConnectionProfile(name: "Removed", host: "removed.example.com", username: "user")
+        try store.saveProfiles([pending, removed], updateTrust: false)
+        try store.seedInitialTrust(for: [pending, removed])
+
+        // The stored profile now points at a new host, but its trust entry still
+        // records the old one: an endpoint change awaiting user confirmation.
+        var moved = pending
+        moved.host = "moved.example.com"
+        try store.saveProfiles([moved, removed], updateTrust: false)
+
+        _ = try store.delete(id: removed.id)
+
+        // Deleting an unrelated profile must neither accept nor drop the change.
+        XCTAssertEqual(
+            try trustStore.loadTrustedEndpoints(),
+            [pending.id: TrustedProfileEndpoint(profile: pending)]
+        )
+    }
+
     func testDeleteRemovesProfileAndOnlyItsTrust() throws {
         let removed = ConnectionProfile(name: "Removed", host: "removed.example.com", username: "user")
         let remaining = ConnectionProfile(name: "Remaining", host: "remaining.example.com", username: "user")
