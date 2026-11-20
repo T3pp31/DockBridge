@@ -83,7 +83,14 @@ final class ConnectionStore: @unchecked Sendable {
     }
 
     func loadProfilesWithEndpointCheck() throws -> ProfileLoadResult {
-        let profiles = try readProfilesFromDisk()
+        // Reading may persist refreshed bookmarks (issue #1146), so serialize
+        // it with upsert/delete to avoid writing back a stale snapshot.
+        let profiles: [ConnectionProfile]
+        mutationLock.lock()
+        do {
+            defer { mutationLock.unlock() }
+            profiles = try readProfilesFromDisk()
+        }
         let detection = try trustStore.detectEndpointChanges(in: profiles)
         return ProfileLoadResult(
             profiles: profiles,
@@ -189,7 +196,30 @@ final class ConnectionStore: @unchecked Sendable {
            envelope.format == EncryptedProfilesEnvelope.formatIdentifier {
             do {
                 let stored = try encryptionService.decrypt(envelope)
-                return stored.map { $0.toConnectionProfile() }
+                let profiles = stored.map { $0.toConnectionProfile(refreshStaleBookmark: true) }
+                // Persist refreshed bookmarks so a later move cannot leave
+                // them unresolvable. Compare bookmark bytes only, because the
+                // display-only privateKeyPath always differs from disk. Best
+                // effort: a save failure must not make profiles unreadable
+                // (issue #1146).
+                let refreshed = profiles.map(StoredConnectionProfile.init(from:))
+                let bookmarksChanged = zip(refreshed, stored).contains {
+                    $0.privateKeyBookmark != $1.privateKeyBookmark
+                }
+                if bookmarksChanged {
+                    do {
+                        try writeEncryptedProfiles(
+                            refreshed,
+                            updateTrust: false,
+                            sourceProfiles: profiles
+                        )
+                    } catch {
+                        AppLogging.connection.error(
+                            "refreshed bookmark save failed: \(error.localizedDescription, privacy: .public)"
+                        )
+                    }
+                }
+                return profiles
             } catch let error as ProfileEncryptionError {
                 switch error {
                 case .invalidEnvelope, .decryptionFailed:
@@ -213,15 +243,21 @@ final class ConnectionStore: @unchecked Sendable {
             // migration so the plaintext is recoverable if the master key is
             // later lost.
             try backupProfilesFileIfPresent()
-            let stored = legacyProfiles.map(StoredConnectionProfile.init(from:))
+            // Refresh stale private-key bookmarks before the one-way migration
+            // so the encrypted store starts with usable bookmark data
+            // (issue #1146).
+            let migrated = legacyProfiles.map { profile -> ConnectionProfile in
+                var profile = profile
+                profile.refreshStalePrivateKeyBookmark()
+                return profile
+            }
+            let stored = migrated.map(StoredConnectionProfile.init(from:))
             do {
-                try writeEncryptedProfiles(stored, updateTrust: false, sourceProfiles: legacyProfiles)
+                try writeEncryptedProfiles(stored, updateTrust: false, sourceProfiles: migrated)
             } catch {
                 throw ConnectionStoreError.writeFailed(error.localizedDescription)
             }
-            return legacyProfiles.map { profile in
-                StoredConnectionProfile(from: profile).toConnectionProfile()
-            }
+            return stored.map { $0.toConnectionProfile() }
         }
 
         throw ConnectionStoreError.readFailed(
