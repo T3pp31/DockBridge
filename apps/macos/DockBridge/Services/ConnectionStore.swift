@@ -83,7 +83,14 @@ final class ConnectionStore: @unchecked Sendable {
     }
 
     func loadProfilesWithEndpointCheck() throws -> ProfileLoadResult {
-        let profiles = try readProfilesFromDisk()
+        // Reading may persist refreshed bookmarks (issue #1146), so serialize
+        // it with upsert/delete to avoid writing back a stale snapshot.
+        let profiles: [ConnectionProfile]
+        mutationLock.lock()
+        do {
+            defer { mutationLock.unlock() }
+            profiles = try readProfilesFromDisk()
+        }
         let detection = try trustStore.detectEndpointChanges(in: profiles)
         return ProfileLoadResult(
             profiles: profiles,
@@ -200,11 +207,17 @@ final class ConnectionStore: @unchecked Sendable {
                     $0.privateKeyBookmark != $1.privateKeyBookmark
                 }
                 if bookmarksChanged {
-                    try? writeEncryptedProfiles(
-                        refreshed,
-                        updateTrust: false,
-                        sourceProfiles: profiles
-                    )
+                    do {
+                        try writeEncryptedProfiles(
+                            refreshed,
+                            updateTrust: false,
+                            sourceProfiles: profiles
+                        )
+                    } catch {
+                        AppLogging.connection.error(
+                            "refreshed bookmark save failed: \(error.localizedDescription, privacy: .public)"
+                        )
+                    }
                 }
                 return profiles
             } catch let error as ProfileEncryptionError {

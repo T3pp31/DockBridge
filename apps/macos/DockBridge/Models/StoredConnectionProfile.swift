@@ -64,46 +64,54 @@ extension ConnectionProfile {
     /// (issue #1146).
     @discardableResult
     mutating func hydrateDisplayKeyPathFromBookmark() -> Bool {
-        guard privateKeyPath == nil, let bookmark = privateKeyBookmark else { return false }
-
-        var isStale = false
-        guard let url = try? URL(
-            resolvingBookmarkData: bookmark,
-            options: .withSecurityScope,
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        ) else {
-            return false
-        }
-
-        privateKeyPath = url.path
-        return isStale
+        // Never overwrite an already-known display path.
+        guard privateKeyPath == nil, let resolved = resolvePrivateKeyBookmark() else { return false }
+        privateKeyPath = resolved.url.path
+        return resolved.isStale
     }
 
     /// Recreates a stale security-scoped bookmark from the resolved URL.
+    /// Runs whenever a bookmark exists, even if a display path is already set
+    /// (e.g. legacy profiles that persisted `privateKeyPath`). The resolved
+    /// URL's security scope is entered while recreating, because a key outside
+    /// the sandbox container is not accessible after relaunch until then.
     /// Returns `true` when the bookmark was replaced.
+    @discardableResult
     mutating func refreshStalePrivateKeyBookmark(
         createBookmark: (URL, Bool) throws -> Data = {
             try SecurityScopedBookmarkService.shared.createBookmark(for: $0, readOnly: $1)
-        }
+        },
+        startAccess: (URL) -> Bool = { $0.startAccessingSecurityScopedResource() },
+        stopAccess: (URL) -> Void = { $0.stopAccessingSecurityScopedResource() }
     ) -> Bool {
-        guard privateKeyPath == nil, let bookmark = privateKeyBookmark else { return false }
+        guard let resolved = resolvePrivateKeyBookmark() else { return false }
 
-        var isStale = false
-        guard let url = try? URL(
-            resolvingBookmarkData: bookmark,
-            options: .withSecurityScope,
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale
-        ) else {
-            return false
+        // The bookmark is authoritative for private-key auth; keep the path in sync.
+        privateKeyPath = resolved.url.path
+        guard resolved.isStale else { return false }
+
+        let accessing = startAccess(resolved.url)
+        defer {
+            if accessing { stopAccess(resolved.url) }
         }
-
-        privateKeyPath = url.path
-        guard isStale, let refreshed = try? createBookmark(url, true) else {
+        guard let refreshed = try? createBookmark(resolved.url, true) else {
             return false
         }
         privateKeyBookmark = refreshed
         return true
+    }
+
+    private func resolvePrivateKeyBookmark() -> (url: URL, isStale: Bool)? {
+        guard let bookmark = privateKeyBookmark else { return nil }
+        var isStale = false
+        guard let url = try? URL(
+            resolvingBookmarkData: bookmark,
+            options: .withSecurityScope,
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        ) else {
+            return nil
+        }
+        return (url, isStale)
     }
 }

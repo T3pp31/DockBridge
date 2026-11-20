@@ -314,7 +314,35 @@ final class StalePrivateKeyBookmarkTests: XCTestCase {
         XCTAssertEqual(profile.privateKeyBookmark, Data([1, 2, 3]))
     }
 
-    func testHydrateReportsStalenessForUnresolvableBookmark() {
+    func testRefreshResolvesBookmarkEvenWhenLegacyPathIsSet() throws {
+        // Given: a legacy profile that persisted an outdated display path
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let keyURL = directory.appendingPathComponent("id_legacy")
+        try Data("key".utf8).write(to: keyURL)
+        let bookmark = try SecurityScopedBookmarkService.shared.createBookmark(for: keyURL, readOnly: true)
+        var profile = ConnectionProfile(
+            name: "Legacy",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyBookmark: bookmark
+        )
+        profile.privateKeyPath = "/old/location/id_legacy_old"
+
+        // When: refreshing
+        _ = profile.refreshStalePrivateKeyBookmark { _, _ in bookmark }
+
+        // Then: the bookmark was resolved (not skipped) and the path follows it
+        XCTAssertEqual(
+            profile.privateKeyPath.map { URL(fileURLWithPath: $0).lastPathComponent },
+            keyURL.lastPathComponent
+        )
+    }
+
+    func testHydrateReturnsFalseForUnresolvableBookmark() {
         var profile = ConnectionProfile(
             name: "Test",
             host: "example.com",
