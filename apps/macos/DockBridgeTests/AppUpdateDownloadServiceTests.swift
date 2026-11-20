@@ -176,8 +176,10 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
     }
 
     func testDownloadVerifyAndRevealRejectsNonSuccessChecksumStatus() async throws {
-        // Given: the checksum request returns a 500 error page
+        // Given: the checksum request returns a 500 whose body is a well-formed,
+        // matching checksum, so only the HTTP status check can reject it
         let contents = Data("dmg-contents".utf8)
+        let checksum = SHA256.hash(data: contents).map { String(format: "%02x", $0) }.joined()
         let dmgURL = temporaryDirectory.appendingPathComponent("update.dmg")
         try contents.write(to: dmgURL)
         let mountPoint = temporaryDirectory.appendingPathComponent("mount", isDirectory: true)
@@ -187,7 +189,7 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         let service = AppUpdateDownloadService(
             downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 200),
             dataSession: MockChecksumURLSession(
-                checksumLine: "<html>server error</html>",
+                checksumLine: "\(checksum) update.dmg",
                 statusCode: 500
             ),
             signatureVerifier: MockSignatureVerifier(),
