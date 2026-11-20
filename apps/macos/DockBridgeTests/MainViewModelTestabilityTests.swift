@@ -1368,13 +1368,19 @@ final class QuickLookPresenterTests: XCTestCase {
     }
 
     func testPreviewFallsBackToOpeningFilesWhenPanelIsUnavailable() {
-        // Given: a presenter with no panel and a recording opener
+        // Given: a usable host window, no panel, and a recording opener
         var opened: [URL] = []
+        var panelRequested = false
+        let window = makeWindow()
+        XCTAssertNotNil(window.contentView)
         let presenter = QuickLookPresenter(dependencies: .init(
-            previewPanel: { nil },
+            previewPanel: {
+                panelRequested = true
+                return nil
+            },
             openFile: { opened.append($0) },
-            fileExists: { _ in true },
-            hostWindow: { nil }
+            isPreviewableFile: { _ in true },
+            hostWindow: { window }
         ))
         let urls = [
             URL(fileURLWithPath: "/tmp/a.txt"),
@@ -1384,8 +1390,10 @@ final class QuickLookPresenterTests: XCTestCase {
         // When: previewing
         presenter.preview(urls: urls)
 
-        // Then: every valid file is opened by the fallback
+        // Then: the panel lookup ran, failed, and every valid file is opened by the fallback
+        XCTAssertTrue(panelRequested)
         XCTAssertEqual(opened, urls)
+        XCTAssertFalse(window.contentView?.nextResponder === presenter)
         XCTAssertEqual(presenter.numberOfPreviewItems(in: nil), urls.count)
     }
 
@@ -1396,7 +1404,7 @@ final class QuickLookPresenterTests: XCTestCase {
         let presenter = QuickLookPresenter(dependencies: .init(
             previewPanel: { nil },
             openFile: { opened.append($0) },
-            fileExists: { $0 == existing },
+            isPreviewableFile: { $0 == existing },
             hostWindow: { nil }
         ))
 
@@ -1407,31 +1415,63 @@ final class QuickLookPresenterTests: XCTestCase {
     }
 
     func testPreviewDoesNothingWhenNoFileIsPreviewable() {
+        // Given: a presenter that already previews one file
+        var opened: [URL] = []
+        let valid = URL(fileURLWithPath: "/tmp/a.txt")
+        let presenter = QuickLookPresenter(dependencies: .init(
+            previewPanel: { nil },
+            openFile: { opened.append($0) },
+            isPreviewableFile: { $0 == valid },
+            hostWindow: { nil }
+        ))
+        presenter.preview(urls: [valid])
+        XCTAssertEqual(opened, [valid])
+
+        // When: previewing only unpreviewable paths
+        presenter.preview(urls: [URL(fileURLWithPath: "/tmp/dir")])
+
+        // Then: nothing is opened and the previous preview items are kept
+        XCTAssertEqual(opened, [valid])
+        XCTAssertEqual(presenter.numberOfPreviewItems(in: nil), 1)
+    }
+
+    func testPreviewItemAtMapsIndexesAndRejectsStaleIndex() {
+        let first = URL(fileURLWithPath: "/tmp/a.txt")
+        let second = URL(fileURLWithPath: "/tmp/b.txt")
+        let presenter = QuickLookPresenter(dependencies: .init(
+            previewPanel: { nil },
+            openFile: { _ in },
+            isPreviewableFile: { _ in true },
+            hostWindow: { nil }
+        ))
+        presenter.preview(urls: [first, second])
+
+        XCTAssertEqual(presenter.previewPanel(nil, previewItemAt: 0) as? URL, first)
+        XCTAssertEqual(presenter.previewPanel(nil, previewItemAt: 1) as? URL, second)
+        XCTAssertNil(presenter.previewPanel(nil, previewItemAt: 2))
+    }
+
+    func testDefaultPreviewRuleExcludesDirectoriesAndMissingFiles() throws {
+        // Given: a real file and directory, using the default preview rule
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quicklook-\(UUID().uuidString)", isDirectory: true)
+        let directory = root.appendingPathComponent("folder", isDirectory: true)
+        let file = root.appendingPathComponent("file.txt")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: root) }
         var opened: [URL] = []
         let presenter = QuickLookPresenter(dependencies: .init(
             previewPanel: { nil },
             openFile: { opened.append($0) },
-            fileExists: { _ in false },
             hostWindow: { nil }
         ))
 
-        presenter.preview(urls: [URL(fileURLWithPath: "/tmp/dir")])
+        // When: previewing a directory, a missing path, and a file
+        presenter.preview(urls: [directory, root.appendingPathComponent("missing.txt"), file])
 
-        XCTAssertTrue(opened.isEmpty)
-        XCTAssertEqual(presenter.numberOfPreviewItems(in: nil), 0)
-    }
-
-    func testPreviewItemAtRejectsStaleIndex() {
-        let presenter = QuickLookPresenter(dependencies: .init(
-            previewPanel: { nil },
-            openFile: { _ in },
-            fileExists: { _ in true },
-            hostWindow: { nil }
-        ))
-        presenter.preview(urls: [URL(fileURLWithPath: "/tmp/a.txt")])
-
-        XCTAssertNil(presenter.previewPanel(nil, previewItemAt: 1))
-        XCTAssertNotNil(presenter.previewPanel(nil, previewItemAt: 0))
+        // Then: only the regular file is opened
+        XCTAssertEqual(opened, [file])
     }
 
     private func makeWindow(isVisible: Bool = true) -> QuickLookHostTestWindow {

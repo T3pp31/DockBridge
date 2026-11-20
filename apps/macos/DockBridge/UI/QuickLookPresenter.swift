@@ -13,7 +13,9 @@ final class QuickLookPresenter: NSResponder, QLPreviewPanelDataSource, QLPreview
     struct Dependencies {
         var previewPanel: () -> QLPreviewPanel? = { QLPreviewPanel.shared() }
         var openFile: (URL) -> Void = { NSWorkspace.shared.open($0) }
-        var fileExists: (URL) -> Bool = { url in
+        /// Preview rule, not a plain existence check: only existing regular
+        /// files are previewable; directories are excluded.
+        var isPreviewableFile: (URL) -> Bool = { url in
             var isDirectory: ObjCBool = false
             let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
             return exists && !isDirectory.boolValue
@@ -37,6 +39,9 @@ final class QuickLookPresenter: NSResponder, QLPreviewPanelDataSource, QLPreview
         super.init()
     }
 
+    /// Test-only seam. Production code must use `shared`: each instance keeps
+    /// its own responder-chain state, so a second instance attached to a real
+    /// host window could corrupt the chain `shared` installed.
     init(dependencies: Dependencies) {
         self.dependencies = dependencies
         super.init()
@@ -52,7 +57,7 @@ final class QuickLookPresenter: NSResponder, QLPreviewPanelDataSource, QLPreview
     }
 
     func preview(urls: [URL]) {
-        let fileURLs = urls.filter(dependencies.fileExists)
+        let fileURLs = urls.filter(dependencies.isPreviewableFile)
         guard !fileURLs.isEmpty else { return }
         previewURLs = fileURLs
 
