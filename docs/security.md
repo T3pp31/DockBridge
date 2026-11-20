@@ -309,15 +309,18 @@ with the developer's or CI runner's full permissions. Mitigations:
 
 - Dependency updates arrive through Dependabot pull requests and are reviewed
   as code before merge; `Cargo.lock` pins the exact versions that run.
-- Known gap: build scripts are **not** isolated from release credentials. The
-  release workflow imports the signing certificate and notary profile into a
-  runner keychain before `scripts/package-macos-release.sh` builds the app's
-  Rust libraries with `cargo`, so dependency `build.rs` files and proc macros
-  run on the same runner while that keychain and notary profile exist.
-  Isolating them would require building the Rust artifacts (or the whole
-  unsigned app) in a separate job that holds no secrets, and only signing and
-  notarizing in a later job; until then, dependency review and `Cargo.lock`
-  pinning are the controls.
+- The release workflow compiles the CLI, both `libdockbridge_uniffi.a` targets
+  and `uniffi-bindgen` in a step that runs **before** the signing certificate
+  and notary profile are imported. When `scripts/package-macos-release.sh`
+  later invokes `cargo`, the artifacts are already fresh, so dependency
+  `build.rs` files and proc macros do not execute while release credentials
+  are on the runner.
+- Residual gap: this relies on cargo freshness on the same runner, not on
+  isolation. Code that ran during the prebuild could leave something behind
+  that acts after the import. Full isolation requires building the Rust
+  artifacts (or the whole unsigned app) in a separate job that holds no
+  secrets and only signing and notarizing in a later job; until then,
+  dependency review and `Cargo.lock` pinning remain the primary controls.
 - Do not run untrusted dependency sources locally; keep `cargo` configured to
   crates.io and the reviewed vendored forks listed below.
 

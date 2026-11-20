@@ -119,6 +119,17 @@ jobs:
             -output "dist/${CLI_NAME}"
           (cd dist && shasum -a 256 "${CLI_NAME}" > "${CLI_NAME}.sha256")
 
+      # Compile every Rust artifact the app packaging needs while no release
+      # secret is present on the runner (issue #1227). The cargo invocations in
+      # scripts/package-macos-release.sh then find fresh artifacts and do not
+      # re-run dependency build scripts or proc macros after the import below.
+      - name: Prebuild Rust app libraries before importing secrets
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            ./scripts/build-rust.sh "$target" release
+          done
+          cargo build -p dockbridge-uniffi --features cli --bin uniffi-bindgen --release
+
       - name: Import signing certificate and notary profile
         env:
           APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
