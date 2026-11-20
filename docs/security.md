@@ -297,6 +297,30 @@ Do not remove Gatekeeper quarantine on public release DMGs. The dev-only helper 
 - **Scheduled audit**: `.github/workflows/security-audit.yml` runs `cargo audit` daily (03:00 UTC) and on `workflow_dispatch`, so newly published RustSec advisories are detected even when the repository has no recent commits. It also enforces that every entry in `.cargo/audit.toml` carries an `# expires: YYYY-MM-DD` comment and fails once an expiry passes (forcing a re-review).
 - **Dependabot**: Weekly pull requests for `cargo` and `github-actions` dependency updates (see `.github/dependabot.yml`).
 
+### Dependency build scripts (user script sandboxing)
+
+The Xcode preBuild phase runs `scripts/build-rust.sh` and
+`scripts/generate-uniffi.sh`, which invoke `cargo`. Cargo reaches the registry
+cache, git checkouts, and build-script temporary files outside any declared
+Xcode inputs, so `ENABLE_USER_SCRIPT_SANDBOXING` is disabled in
+`apps/macos/project.yml`; enabling it rejects those accesses and breaks every
+build (issue #1227). The consequence is that dependency `build.rs` files run
+with the developer's or CI runner's full permissions. Mitigations:
+
+- Dependency updates arrive through Dependabot pull requests and are reviewed
+  as code before merge; `Cargo.lock` pins the exact versions that run.
+- Known gap: build scripts are **not** isolated from release credentials. The
+  release workflow imports the signing certificate and notary profile into a
+  runner keychain before `scripts/package-macos-release.sh` builds the app's
+  Rust libraries with `cargo`, so dependency `build.rs` files and proc macros
+  run on the same runner while that keychain and notary profile exist.
+  Isolating them would require building the Rust artifacts (or the whole
+  unsigned app) in a separate job that holds no secrets, and only signing and
+  notarizing in a later job; until then, dependency review and `Cargo.lock`
+  pinning are the controls.
+- Do not run untrusted dependency sources locally; keep `cargo` configured to
+  crates.io and the reviewed vendored forks listed below.
+
 ### Software Bill of Materials (SBOM)
 
 DockBridge publishes a CycloneDX JSON SBOM for each release and verifies SBOM generation in CI.
