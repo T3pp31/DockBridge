@@ -708,11 +708,47 @@ mod tests {
 
     #[test]
     fn secret_password_zeroizes_when_zeroize_is_called() {
-        // `ZeroizeOnDrop` delegates to `Zeroize::zeroize`, so exercising it
-        // directly proves the buffer is wiped without reading freed memory.
+        // This only verifies explicit `zeroize()` delegation. Drop-time wiping
+        // is guaranteed structurally by holding `Zeroizing<String>` (and the
+        // marker assertions below); byte-level wiping after drop cannot be
+        // observed safely in a unit test.
         let mut password = SecretPassword::new("a-much-longer-secret-password-value");
         password.zeroize();
         assert_eq!(password.expose(), "");
+    }
+
+    #[test]
+    fn secret_types_implement_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: Zeroize + ZeroizeOnDrop>() {}
+        fn assert_zeroizing_inner(_: &zeroize::Zeroizing<String>) {}
+        assert_zeroize_on_drop::<SecretPassword>();
+        assert_zeroize_on_drop::<AuthType>();
+        assert_zeroize_on_drop::<ConnectionProfile>();
+        // Fails to compile if the inner representation stops being `Zeroizing`.
+        assert_zeroizing_inner(&SecretPassword::new("x").0);
+    }
+
+    #[test]
+    fn connection_profile_zeroize_wipes_password_and_passphrase() {
+        let mut profile = ConnectionProfile::with_password("h", 22, "u", "profile-secret");
+        profile.zeroize();
+        match &profile.auth {
+            AuthType::Password { password } => assert_eq!(password.expose(), ""),
+            AuthType::PrivateKey { .. } => panic!("expected password auth"),
+        }
+
+        let mut auth = AuthType::PrivateKey {
+            key_path: PathBuf::from("/tmp/id"),
+            passphrase: Some(SecretPassword::new("passphrase-secret")),
+        };
+        auth.zeroize();
+        if let AuthType::PrivateKey {
+            passphrase: Some(passphrase),
+            ..
+        } = &auth
+        {
+            assert_eq!(passphrase.expose(), "");
+        }
     }
 
     #[test]

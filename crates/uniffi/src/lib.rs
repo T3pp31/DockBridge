@@ -1185,6 +1185,12 @@ mod tests {
     use super::*;
     use dockbridge_core::sftp::test_server::TestSftpServer;
 
+    #[test]
+    fn secret_credential_into_inner_preserves_value() {
+        let inner = SecretCredential("ffi-secret".to_string()).into_inner();
+        assert_eq!(inner.as_str(), "ffi-secret");
+    }
+
     #[derive(Default)]
     struct RecordingDisconnectHandler {
         events: std::sync::Mutex<Vec<(u64, String)>>,
