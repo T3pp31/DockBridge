@@ -339,68 +339,46 @@ final class ConnectionFormPrivateKeySelectionTests: XCTestCase {
     }
 }
 
+// Tests for ConnectionFormView.resolveCredentials (issues #782, #1381).
 @MainActor
 final class ConnectionFormCredentialResolutionTests: XCTestCase {
-    func testPasswordIsPassedWhenKeychainSavingIsDisabled() {
-        // Given: typed password input with Keychain saving turned off
-        let credentials = ConnectionFormView.resolveCredentials(
-            saveSecrets: false,
-            authType: .password,
-            password: "secret",
-            passphrase: ""
-        )
+    func testResolveCredentialsMapsTypedValuesForEachAuthType() {
+        struct Case {
+            let authType: AuthType
+            let password: String
+            let passphrase: String
+            let expectedPassword: String?
+            let expectedPassphrase: String?
+        }
+        let cases: [Case] = [
+            // Password auth: typed password is passed, empty stays nil, and a
+            // leftover passphrase is ignored.
+            Case(authType: .password, password: "secret", passphrase: "",
+                 expectedPassword: "secret", expectedPassphrase: nil),
+            Case(authType: .password, password: "", passphrase: "",
+                 expectedPassword: nil, expectedPassphrase: nil),
+            Case(authType: .password, password: "secret", passphrase: "leftover",
+                 expectedPassword: "secret", expectedPassphrase: nil),
+            // Private-key auth: typed passphrase is passed, empty stays nil,
+            // and a leftover password is ignored.
+            Case(authType: .privateKey, password: "", passphrase: "key-pass",
+                 expectedPassword: nil, expectedPassphrase: "key-pass"),
+            Case(authType: .privateKey, password: "", passphrase: "",
+                 expectedPassword: nil, expectedPassphrase: nil),
+            Case(authType: .privateKey, password: "unused", passphrase: "key-pass",
+                 expectedPassword: nil, expectedPassphrase: "key-pass"),
+        ]
 
-        // Then: the session still receives the password (issue #782)
-        XCTAssertEqual(credentials.password, "secret")
-        XCTAssertNil(credentials.passphrase)
-    }
-
-    func testEmptyPasswordRemainsNilWhenKeychainSavingIsDisabled() {
-        let credentials = ConnectionFormView.resolveCredentials(
-            saveSecrets: false,
-            authType: .password,
-            password: "",
-            passphrase: ""
-        )
-
-        // Then: empty input must not clear an existing stored value
-        XCTAssertNil(credentials.password)
-        XCTAssertNil(credentials.passphrase)
-    }
-
-    func testPasswordIsIgnoredForPrivateKeyAuthentication() {
-        let credentials = ConnectionFormView.resolveCredentials(
-            saveSecrets: true,
-            authType: .privateKey,
-            password: "unused",
-            passphrase: ""
-        )
-
-        XCTAssertNil(credentials.password)
-        XCTAssertNil(credentials.passphrase)
-    }
-
-    func testPassphraseIsPassedWhenKeychainSavingIsDisabled() {
-        let credentials = ConnectionFormView.resolveCredentials(
-            saveSecrets: false,
-            authType: .privateKey,
-            password: "",
-            passphrase: "key-pass"
-        )
-
-        XCTAssertNil(credentials.password)
-        XCTAssertEqual(credentials.passphrase, "key-pass")
-    }
-
-    func testEmptyPassphraseRemainsNilWhenKeychainSavingIsEnabled() {
-        let credentials = ConnectionFormView.resolveCredentials(
-            saveSecrets: true,
-            authType: .privateKey,
-            password: "",
-            passphrase: ""
-        )
-
-        XCTAssertNil(credentials.passphrase)
+        for testCase in cases {
+            let credentials = ConnectionFormView.resolveCredentials(
+                authType: testCase.authType,
+                password: testCase.password,
+                passphrase: testCase.passphrase
+            )
+            let label = "\(testCase.authType) password=\(testCase.password) passphrase=\(testCase.passphrase)"
+            XCTAssertEqual(credentials.password, testCase.expectedPassword, label)
+            XCTAssertEqual(credentials.passphrase, testCase.expectedPassphrase, label)
+        }
     }
 }
 

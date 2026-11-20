@@ -124,7 +124,6 @@ struct ConnectionFormView: View {
 
     private func save() {
         let credentials = Self.resolveCredentials(
-            saveSecrets: saveSecrets,
             authType: profile.authType,
             password: password.text,
             passphrase: passphrase.text
@@ -135,34 +134,24 @@ struct ConnectionFormView: View {
 
     /// Resolves the credentials handed to `onSave` from the typed values.
     ///
-    /// When Keychain storage is disabled, the typed values are still passed to
-    /// the caller so the session can authenticate without persisting them
-    /// (issue #782). Empty input stays nil so an existing stored value is
-    /// untouched when saving is enabled. Extracted from the view so this
-    /// mapping is unit-testable (issue #1381).
+    /// The mapping does not depend on the Keychain setting: typed values are
+    /// always passed so the session can authenticate even when they are not
+    /// persisted (issue #782), and `saveSecrets` is forwarded to `onSave`
+    /// separately. Empty input stays nil so an existing stored value is
+    /// untouched, and only the credential for the selected auth type is
+    /// returned. Extracted from the view so this mapping is unit-testable
+    /// (issue #1381).
     static func resolveCredentials(
-        saveSecrets: Bool,
         authType: AuthType,
         password: String,
         passphrase: String
     ) -> (password: String?, passphrase: String?) {
-        let resolvedPassword: String?
-        switch (saveSecrets, authType) {
-        case (true, .password), (false, .password):
-            resolvedPassword = password.isEmpty ? nil : password
-        default:
-            resolvedPassword = nil
+        switch authType {
+        case .password:
+            return (password.isEmpty ? nil : password, nil)
+        case .privateKey:
+            return (nil, passphrase.isEmpty ? nil : passphrase)
         }
-
-        let resolvedPassphrase: String?
-        switch (saveSecrets, authType) {
-        case (true, .privateKey), (false, .privateKey):
-            resolvedPassphrase = passphrase.isEmpty ? nil : passphrase
-        default:
-            resolvedPassphrase = nil
-        }
-
-        return (resolvedPassword, resolvedPassphrase)
     }
 
     private func closeForm() {
