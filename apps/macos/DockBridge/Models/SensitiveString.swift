@@ -15,16 +15,15 @@ final class SensitiveString: Equatable {
     /// so `resetBytes` would copy-on-write and zeroize a fresh copy instead of
     /// the buffer holding the plaintext (issue #1145).
     ///
-    /// Internal rather than private so tests can assert that the bytes are
-    /// actually overwritten; it is not part of the app-facing API.
-    @ObservationIgnored var storage = Data()
+    /// Readable (not writable) outside the class so tests can assert that the
+    /// bytes are overwritten in place; writes must go through `text` or
+    /// `clear()` so the old buffer is zeroized and observers are notified.
+    @ObservationIgnored private(set) var storage = Data()
 
     deinit {
         // `clear()` is not guaranteed before release (e.g. an abandoned
         // prompt); zeroize on the way out too.
-        if !storage.isEmpty {
-            storage.resetBytes(in: 0..<storage.count)
-        }
+        zeroizeInPlace()
     }
 
     static func == (lhs: SensitiveString, rhs: SensitiveString) -> Bool {
@@ -47,6 +46,9 @@ final class SensitiveString: Equatable {
         }
     }
 
+    /// Zeroizes and empties the secret. Like any Observation mutation,
+    /// `onChange` observers fire before the change is applied, so they must
+    /// re-read `text` later (as SwiftUI does) rather than inside the callback.
     func clear() {
         _$observationRegistrar.withMutation(of: self, keyPath: \.text) {
             zeroizeStorage()
@@ -54,12 +56,18 @@ final class SensitiveString: Equatable {
     }
 
     private func zeroizeStorage() {
+        zeroizeInPlace()
+        storage.removeAll(keepingCapacity: false)
+    }
+
+    /// Overwrites the current buffer with zeros without reallocating it.
+    /// Internal so tests can verify the same buffer is overwritten.
+    func zeroizeInPlace() {
         if !storage.isEmpty {
             // Data exposes supported mutable storage; resetBytes overwrites
             // that storage without casting away constness from a String.
             storage.resetBytes(in: 0..<storage.count)
         }
-        storage.removeAll(keepingCapacity: false)
     }
 
     static func clear(_ value: inout String) {
