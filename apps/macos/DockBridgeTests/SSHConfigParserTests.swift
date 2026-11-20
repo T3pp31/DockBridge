@@ -543,13 +543,44 @@ final class SSHConfigParserTests: XCTestCase {
         let hosts = SSHConfigParser.parse("""
         Host prod-web prod-*
             User deploy
+            IdentityFile ~/.ssh/id_deploy
         Host prod-web
             HostName web.example.com
         """)
 
         let host = try XCTUnwrap(hosts.first)
         XCTAssertEqual(host.user, "deploy")
-        XCTAssertEqual(host.identityFiles, [])
+        XCTAssertEqual(host.identityFiles, [NSHomeDirectory() + "/.ssh/id_deploy"])
+    }
+
+    func testWildcardAndNegatedPatternsAreCaseSensitive() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host PROD-*
+            User deploy
+        Host * !PROD-WEB
+            Port 2222
+        Host prod-web
+            HostName web.example.com
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertNil(host.user)
+        XCTAssertEqual(host.port, 2222)
+    }
+
+    func testQuestionMarkMatchesOneUTF8Byte() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host srv-?
+            Port 2222
+        Host srv-??
+            User twobytes
+        Host srv-\u{00E9}
+            HostName example.com
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertNil(host.port)
+        XCTAssertEqual(host.user, "twobytes")
     }
 
     func testMatchValuesDoNotBecomeGlobalDefaults() throws {
