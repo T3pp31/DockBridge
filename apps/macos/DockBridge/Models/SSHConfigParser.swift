@@ -50,15 +50,10 @@ enum SSHConfigParser {
             switch directive.key {
             case "host":
                 let blockIndex = blocks.count
-                let patterns = directive.arguments.map { pattern in
-                    HostPattern(
-                        negated: pattern.hasPrefix("!"),
-                        pattern: normalizedAlias(pattern.hasPrefix("!") ? String(pattern.dropFirst()) : pattern)
-                    )
-                }
+                let patterns = directive.arguments.map(HostPattern.init(argument:))
                 // Wildcard and negated headers cannot become profiles, but their
                 // directives still apply to matching aliases as defaults.
-                if patterns.contains(where: { $0.pattern.contains("*") || $0.pattern.contains("?") }) {
+                if patterns.contains(where: \.isWildcard) {
                     wildcardBlockIndices.append(blockIndex)
                 }
                 var blockAliases = Set<String>()
@@ -125,6 +120,28 @@ enum SSHConfigParser {
         let negated: Bool
         let pattern: String
 
+        /// OpenSSH lowercases the target host name but compares Host patterns
+        /// case-sensitively. Plain positive aliases keep the existing
+        /// case-insensitive exact-alias handling; wildcard and negated
+        /// patterns preserve their case so `Host PROD-*` does not match
+        /// `prod-web`.
+        init(argument: String) {
+            let trimmed = argument.trimmingCharacters(in: .whitespacesAndNewlines)
+            negated = trimmed.hasPrefix("!")
+            let raw = negated ? String(trimmed.dropFirst()) : trimmed
+            if negated || HostPattern.containsWildcard(raw) {
+                pattern = raw
+            } else {
+                pattern = raw.lowercased()
+            }
+        }
+
+        var isWildcard: Bool { HostPattern.containsWildcard(pattern) }
+
+        static func containsWildcard(_ value: String) -> Bool {
+            value.contains("*") || value.contains("?")
+        }
+
         func matches(_ alias: String) -> Bool {
             wildcardMatches(pattern: pattern, alias: alias)
         }
@@ -148,35 +165,40 @@ enum SSHConfigParser {
     }
 
     /// Matches an OpenSSH host pattern (`*` and `?` wildcards) against an alias.
+    /// Like OpenSSH, matching is done on UTF-8 bytes, so `?` matches one byte.
     private static func wildcardMatches(pattern: String, alias: String) -> Bool {
-        var patternIndex = pattern.startIndex
-        var aliasIndex = alias.startIndex
-        var starIndex: String.Index?
-        var starAliasIndex = alias.startIndex
-        while aliasIndex < alias.endIndex {
-            if patternIndex < pattern.endIndex {
-                let character = pattern[patternIndex]
-                if character == "*" {
+        let pattern = Array(pattern.utf8)
+        let alias = Array(alias.utf8)
+        let star = UInt8(ascii: "*")
+        let question = UInt8(ascii: "?")
+        var patternIndex = 0
+        var aliasIndex = 0
+        var starIndex: Int?
+        var starAliasIndex = 0
+        while aliasIndex < alias.count {
+            if patternIndex < pattern.count {
+                let byte = pattern[patternIndex]
+                if byte == star {
                     starIndex = patternIndex
                     starAliasIndex = aliasIndex
-                    patternIndex = pattern.index(after: patternIndex)
+                    patternIndex += 1
                     continue
                 }
-                if character == "?" || character == alias[aliasIndex] {
-                    patternIndex = pattern.index(after: patternIndex)
-                    aliasIndex = alias.index(after: aliasIndex)
+                if byte == question || byte == alias[aliasIndex] {
+                    patternIndex += 1
+                    aliasIndex += 1
                     continue
                 }
             }
             guard let starIndex else { return false }
-            patternIndex = pattern.index(after: starIndex)
-            starAliasIndex = alias.index(after: starAliasIndex)
+            patternIndex = starIndex + 1
+            starAliasIndex += 1
             aliasIndex = starAliasIndex
         }
-        while patternIndex < pattern.endIndex, pattern[patternIndex] == "*" {
-            patternIndex = pattern.index(after: patternIndex)
+        while patternIndex < pattern.count, pattern[patternIndex] == star {
+            patternIndex += 1
         }
-        return patternIndex == pattern.endIndex
+        return patternIndex == pattern.count
     }
 
     static func toProfiles(_ hosts: [SSHConfigHost]) -> [ConnectionProfile] {
