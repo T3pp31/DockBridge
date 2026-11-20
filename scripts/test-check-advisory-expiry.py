@@ -59,8 +59,98 @@ class AdvisoryExpiryTests(unittest.TestCase):
 
     def test_rejects_one_line_array_without_expiry(self):
         # The old awk/sed check skipped this line entirely.
-        text = '[advisories]\nignore = ["RUSTSEC-2023-0071"]\n'
+        text = '[advisories]\nignore = ["RUSTSEC-2023-0071", "RUSTSEC-2020-0001"]\n'
         self.assertTrue(self.errors(text))
+
+    def test_accepts_one_line_array_with_expiry(self):
+        for text in (
+            '[advisories]\nignore = ["RUSTSEC-2023-0071"] # expires: 2026-12-31\n',
+            '[advisories]\nignore=["RUSTSEC-2023-0071"] # expires: 2026-12-31\n',
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(self.errors(text), [])
+
+    def test_accepts_single_quoted_entry(self):
+        text = (
+            "[advisories]\n"
+            "ignore = [\n"
+            "    'RUSTSEC-2023-0071', # expires: 2026-12-31\n"
+            "]\n"
+        )
+        self.assertEqual(self.errors(text), [])
+
+    def test_trailing_comment_quoting_id_does_not_override(self):
+        text = (
+            "[advisories]\n"
+            "ignore = [\n"
+            '    "RUSTSEC-2023-0071", # expires: 2026-12-31\n'
+            '] # includes "RUSTSEC-2023-0071"\n'
+        )
+        self.assertEqual(self.errors(text), [])
+
+    def test_quoted_id_elsewhere_cannot_supply_expiry(self):
+        text = (
+            "[advisories]\n"
+            "ignore = [\n"
+            '    "RUSTSEC-2023-0071",\n'
+            "]\n"
+            "[other]\n"
+            'note = "RUSTSEC-2023-0071" # expires: 2099-01-01\n'
+        )
+        self.assertEqual(
+            self.errors(text),
+            ["ignore for RUSTSEC-2023-0071 has no '# expires: YYYY-MM-DD' comment"],
+        )
+
+    def test_rejects_multiple_ids_sharing_one_comment(self):
+        text = (
+            '[advisories]\nignore = ["RUSTSEC-2023-0071", "RUSTSEC-2020-0001"]'
+            " # expires: 2026-12-31\n"
+        )
+        self.assertEqual(len(self.errors(text)), 2)
+
+    def test_rejects_duplicate_entry(self):
+        text = (
+            "[advisories]\n"
+            "ignore = [\n"
+            '    "RUSTSEC-2023-0071",\n'
+            '    "RUSTSEC-2023-0071", # expires: 2026-12-31\n'
+            "]\n"
+        )
+        errors = self.errors(text)
+        self.assertIn("ignore for RUSTSEC-2023-0071 is listed more than once", errors)
+
+    def test_checks_every_entry(self):
+        text = (
+            "[advisories]\n"
+            "ignore = [\n"
+            '    "RUSTSEC-2023-0071", # expires: 2026-12-31\n'
+            '    "RUSTSEC-2020-0001",\n'
+            "]\n"
+        )
+        self.assertEqual(
+            self.errors(text),
+            ["ignore for RUSTSEC-2020-0001 has no '# expires: YYYY-MM-DD' comment"],
+        )
+
+    def test_accepts_multiple_valid_entries(self):
+        text = (
+            "[advisories]\n"
+            "ignore = [\n"
+            '    "RUSTSEC-2023-0071", # expires: 2026-12-31\n'
+            '    "RUSTSEC-2020-0001", # expires: 2027-01-31\n'
+            "]\n"
+        )
+        self.assertEqual(self.errors(text), [])
+
+    def test_expiry_day_itself_is_still_valid(self):
+        text = (
+            "[advisories]\n"
+            "ignore = [\n"
+            '    "RUSTSEC-2023-0071", # expires: 2026-11-19\n'
+            "]\n"
+        )
+        self.assertEqual(self.errors(text), [])
 
     def test_rejects_whitespace_variation_without_expiry(self):
         # `ignore=[...]` did not match the old line regex either.
@@ -97,8 +187,9 @@ class AdvisoryExpiryTests(unittest.TestCase):
         self.assertEqual(self.errors(text), [])
 
     def test_repository_config_passes(self):
+        # Use the real (UTC) date so an expired repository entry fails CI.
         text = (ROOT / ".cargo" / "audit.toml").read_text(encoding="utf-8")
-        self.assertEqual(self.errors(text), [])
+        self.assertEqual(self.module.validate(text), [])
 
     def test_main_reports_failure_for_missing_file(self):
         with tempfile.TemporaryDirectory() as directory:
