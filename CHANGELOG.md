@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Normalize the release concurrency key to `v<version>` so a manual dispatch
+  and a tag push for the same release serialize instead of running
+  concurrently (#1364).
 - Upgrade `russh` to 0.65.1 and `ssh-key` to 0.7.0-rc.11, and patch `rustix`
   to 1.1.6, resolving RUSTSEC-2026-0486, RUSTSEC-2026-0492, and
   RUSTSEC-2026-0495. Keep the client from advertising host-certificate
