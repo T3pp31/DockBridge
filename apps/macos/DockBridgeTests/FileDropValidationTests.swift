@@ -467,6 +467,48 @@ final class FileDropValidationTests: XCTestCase {
         XCTAssertEqual(items.map(\.name), ["apple.txt", "Ápple.txt", "Banana.txt", "cherry.txt"])
     }
 
+    func testLocalListingFoldsDiacriticsBeforeComparing() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("local-list-sort-diacritic-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for name in ["Zebra.txt", "Äpfel.txt"] {
+            try Data().write(to: directory.appendingPathComponent(name))
+        }
+
+        let items = try LocalFileItem.list(directory: directory, showHiddenFiles: false)
+
+        // Without diacritic folding "ä" (U+00E4) would sort after "z".
+        XCTAssertEqual(items.map(\.name), ["Äpfel.txt", "Zebra.txt"])
+    }
+
+    func testLocalListingSortKeyIsLocaleIndependent() {
+        // Locale-independent folding: "I" folds to "i", never Turkish dotless "ı".
+        XCTAssertEqual(LocalFileItem.listingSortKey(for: "Istanbul.txt"), "istanbul.txt")
+        XCTAssertEqual(
+            LocalFileItem.listingSortKey(for: "Apple.txt"),
+            LocalFileItem.listingSortKey(for: "apple.txt")
+        )
+    }
+
+    func testLocalListingOrdersCaseOnlyCollisionsByRawName() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("local-list-sort-case-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let probe = directory.appendingPathComponent("Apple.txt")
+        try Data().write(to: probe)
+        guard !FileManager.default.fileExists(atPath: directory.appendingPathComponent("apple.txt").path) else {
+            throw XCTSkip("Temporary directory is on a case-insensitive file system")
+        }
+        try Data().write(to: directory.appendingPathComponent("apple.txt"))
+
+        let items = try LocalFileItem.list(directory: directory, showHiddenFiles: false)
+
+        // Same folded key; the raw-name tie-break puts "A" (U+0041) first.
+        XCTAssertEqual(items.map(\.name), ["Apple.txt", "apple.txt"])
+    }
+
     func testLocalItemInitializerRecoversDirectoryTypeWhenResourceValuesFail() {
         let directory = FileManager.default.temporaryDirectory
         let item = LocalFileItem(url: directory, resourceValuesProvider: { _, _ in

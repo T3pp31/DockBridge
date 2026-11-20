@@ -7,11 +7,6 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
     let size: Int64
     let modificationDate: Date?
 
-    /// Case- and diacritic-folded name, computed once at construction so the
-    /// directory listing's sort compares plain strings instead of paying for a
-    /// locale-aware comparison on every comparison (issue #1369).
-    private let sortKey: String
-
     var id: String { url.path }
 
     init(
@@ -31,7 +26,6 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
         self.isDirectory = values?.isDirectory ?? Self.isDirectoryOnFileSystem(at: url)
         self.size = Int64(values?.fileSize ?? 0)
         self.modificationDate = values?.contentModificationDate
-        self.sortKey = Self.sortKey(for: self.name)
     }
 
     init(url: URL, resourceValues values: URLResourceValues) {
@@ -40,7 +34,6 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
         self.isDirectory = values.isDirectory ?? Self.isDirectoryOnFileSystem(at: url)
         self.size = Int64(values.fileSize ?? 0)
         self.modificationDate = values.contentModificationDate
-        self.sortKey = Self.sortKey(for: self.name)
     }
 
     init(parentOf directory: URL) {
@@ -50,29 +43,19 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
         self.isDirectory = true
         self.size = 0
         self.modificationDate = nil
-        self.sortKey = Self.sortKey(for: self.name)
     }
 
     var isParentDirectory: Bool { name == ".." }
 
-    private static func sortKey(for name: String) -> String {
-        name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-    }
-
-    static func == (lhs: LocalFileItem, rhs: LocalFileItem) -> Bool {
-        lhs.url == rhs.url
-            && lhs.name == rhs.name
-            && lhs.isDirectory == rhs.isDirectory
-            && lhs.size == rhs.size
-            && lhs.modificationDate == rhs.modificationDate
-    }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(url)
-        hasher.combine(name)
-        hasher.combine(isDirectory)
-        hasher.combine(size)
-        hasher.combine(modificationDate)
+    /// Listing sort key: the name with case and diacritics folded using
+    /// locale-independent Unicode folding (`locale: nil`), so the result does
+    /// not depend on the user's locale (e.g. Turkish dotless-i folding) and is
+    /// consistent with the plain code-point comparison in `list`.
+    ///
+    /// Ordering contract for `list`: folders first, then ascending folded key,
+    /// then ascending raw name as a deterministic tie-break.
+    static func listingSortKey(for name: String) -> String {
+        name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
     }
 
     /// POSIX permission bits (e.g. "rwxr-xr-x") from the file system, or nil
@@ -124,18 +107,21 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
             return LocalFileItem(url: url, resourceValues: values)
         }
 
-        // Sort on the precomputed folded key: a plain string comparison
-        // instead of localizedCaseInsensitiveCompare per comparison
-        // (issue #1369). The name tie-break keeps the order deterministic when
-        // two names fold to the same key.
-        return items.sorted { lhs, rhs in
-            if lhs.isDirectory != rhs.isDirectory {
-                return lhs.isDirectory && !rhs.isDirectory
+        // Fold each name once and sort on plain string comparisons instead of
+        // calling localizedCaseInsensitiveCompare per comparison (issue #1369).
+        // The key lives only for this sort, so the model keeps its synthesized
+        // Equatable/Hashable. See `listingSortKey(for:)` for the order contract.
+        return items
+            .map { (key: listingSortKey(for: $0.name), item: $0) }
+            .sorted { lhs, rhs in
+                if lhs.item.isDirectory != rhs.item.isDirectory {
+                    return lhs.item.isDirectory
+                }
+                if lhs.key != rhs.key {
+                    return lhs.key < rhs.key
+                }
+                return lhs.item.name < rhs.item.name
             }
-            if lhs.sortKey != rhs.sortKey {
-                return lhs.sortKey < rhs.sortKey
-            }
-            return lhs.name < rhs.name
-        }
+            .map { $0.item }
     }
 }
