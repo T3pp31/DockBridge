@@ -17,6 +17,9 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      # rustsec/audit-check records its result as a check run, which needs
+      # checks: write (the same grant ci.yml's security-audit job has).
+      checks: write
       issues: write
     steps:
       - name: Checkout
