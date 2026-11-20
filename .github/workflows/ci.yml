@@ -118,6 +118,8 @@ jobs:
         run: python3 scripts/test-release-download-docs.py
       - name: Test release security documentation consistency
         run: python3 scripts/test-release-security-docs.py
+      - name: Test release workflow test gate
+        run: python3 scripts/test-release-gating.py
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
