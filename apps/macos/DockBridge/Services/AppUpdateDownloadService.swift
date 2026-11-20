@@ -91,6 +91,10 @@ enum AppUpdateDownloadError: Error, Equatable {
     case revealFailed
     case appBundleNotFound
     case signatureVerificationFailed(ReleaseCodeSignatureVerifierError)
+    /// The signed bundle's version does not match the release version the app
+    /// offered, so installing it could downgrade to an older release (issue #1372).
+    case versionMismatch(expected: String, actual: String)
+    case bundleVersionUnreadable
 }
 
 extension AppUpdateDownloadError: LocalizedError {
@@ -114,6 +118,13 @@ extension AppUpdateDownloadError: LocalizedError {
             return String(localized: "The update disk image does not contain the DockBridge app.")
         case .signatureVerificationFailed(let error):
             return signatureVerificationMessage(for: error)
+        case .versionMismatch(let expected, let actual):
+            let format = String(
+                localized: "The update app bundle version (%@) does not match the offered release version (%@). Download the update manually from the release page."
+            )
+            return String(format: format, actual, expected)
+        case .bundleVersionUnreadable:
+            return String(localized: "The update app bundle version could not be read. Download the update manually from the release page.")
         }
     }
 
@@ -200,6 +211,18 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
             throw AppUpdateDownloadError.signatureVerificationFailed(.unsignedBundle)
         }
 
+        // A signature only proves the bundle is an authentic DockBridge build,
+        // not that it is the release the app offered. Without this check a
+        // validly signed older release could be served under the expected
+        // asset names and downgrade the installation (issue #1372).
+        let bundleVersion = try readBundleShortVersion(at: appBundleURL)
+        guard VersionComparator.compare(bundleVersion, update.version) == .orderedSame else {
+            throw AppUpdateDownloadError.versionMismatch(
+                expected: VersionComparator.normalize(update.version),
+                actual: bundleVersion
+            )
+        }
+
         guard await revealInFinder(mountPoint) else {
             throw AppUpdateDownloadError.revealFailed
         }
@@ -274,5 +297,18 @@ final class AppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable 
             return nil
         }
         return expectedBundleURL
+    }
+
+    /// Reads `CFBundleShortVersionString` from the bundle's `Info.plist`
+    /// using the same hardened reader as the signature verifier. A missing,
+    /// unreadable, or malformed value is reported as `bundleVersionUnreadable`
+    /// rather than a version mismatch or a missing app.
+    private func readBundleShortVersion(at bundleURL: URL) throws -> String {
+        guard let dictionary = BundleInfoPlistReader.readDictionary(inBundle: bundleURL),
+              let version = dictionary["CFBundleShortVersionString"] as? String,
+              !version.isEmpty else {
+            throw AppUpdateDownloadError.bundleVersionUnreadable
+        }
+        return version
     }
 }

@@ -3065,6 +3065,38 @@
         }
       }
     },
+    "The update app bundle version (%@) does not match the offered release version (%@). Download the update manually from the release page.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update app bundle version (%1$@) does not match the offered release version (%2$@). Download the update manually from the release page."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アップデートのバンドルバージョン（%1$@）が提供されたリリースバージョン（%2$@）と一致しません。リリースページから手動でダウンロードしてください。"
+          }
+        }
+      }
+    },
+    "The update app bundle version could not be read. Download the update manually from the release page.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update app bundle version could not be read. Download the update manually from the release page."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アップデートのバンドルバージョンを確認できませんでした。リリースページから手動でダウンロードしてください。"
+          }
+        }
+      }
+    },
     "The update disk image does not contain the DockBridge app.": {
       "localizations": {
         "en": {
