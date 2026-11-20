@@ -357,7 +357,35 @@ final class MainViewModelTestabilityTests: XCTestCase {
         // the concurrently created file (issue #1155).
         XCTAssertFalse(moved)
         XCTAssertEqual(bridge.renamedNoOverwrite.count, 1)
-        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertTrue(bridge.renamed.isEmpty, "must never fall back to the replacing rename")
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            DockBridgeError.Other(message: "destination exists").dockBridgeUserMessage
+        )
+    }
+
+    func testRemoteRenameKeepsSheetWhenRenameLosesRace() async {
+        // Given: the destination is absent when checked, but another writer
+        // creates it before the rename
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        bridge.directoryListings["/target"] = []
+        bridge.renameNoOverwriteFails = true
+        viewModel.beginRename(item: makeRemoteItem(name: "old.txt", path: "/target/old.txt"))
+        viewModel.renameText = "new.txt"
+
+        // When: committing the rename
+        await viewModel.commitRename()
+
+        // Then: it reports the error, keeps the user's input, and never
+        // uses the replacing rename (issue #1155)
+        XCTAssertEqual(bridge.renamedNoOverwrite.count, 1)
+        XCTAssertTrue(bridge.renamed.isEmpty)
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            DockBridgeError.Other(message: "destination exists").dockBridgeUserMessage
+        )
+        XCTAssertEqual(viewModel.renameTarget?.path, "/target/old.txt")
+        XCTAssertEqual(viewModel.renameText, "new.txt")
     }
 
     func testRemoteRenameWithUnchangedNameClosesWithoutRemoteOperations() async {

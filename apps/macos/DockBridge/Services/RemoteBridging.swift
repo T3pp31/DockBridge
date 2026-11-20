@@ -37,8 +37,12 @@ protocol RemoteBridging {
         overwritePolicy: TransferOverwritePolicy
     ) async throws
     func deleteRemote(path: String) async throws
+    /// Renames and atomically replaces an existing destination. User-initiated
+    /// moves and renames must use `renameRemoteNoOverwrite` instead.
     func renameRemote(from: String, to: String) async throws
     /// Renames without replacing an existing destination (issue #1155).
+    /// Best effort: relies on the server rejecting plain SSH_FXP_RENAME onto
+    /// an existing path, as SFTP v3 and OpenSSH do.
     func renameRemoteNoOverwrite(from: String, to: String) async throws
     func mkdirRemote(path: String) async throws
     func fetchTransferTasks() async throws -> [TransferTaskRecord]
