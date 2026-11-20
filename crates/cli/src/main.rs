@@ -702,7 +702,7 @@ fn load_config(explicit: Option<&Path>) -> anyhow::Result<AppConfig> {
     // Validate the built-in defaults too: with an unresolvable home directory
     // the default known_hosts paths stay as `~` and would be written under the
     // working directory unless rejected here (issue #745).
-    AppConfig::default().validate().map_err(Into::into)
+    AppConfig::resolved_default().map_err(Into::into)
 }
 
 fn home_dir_path() -> Option<PathBuf> {
@@ -1214,6 +1214,9 @@ mod tests {
         drop(dir);
     }
 
+    // Windows resolves the home from the user profile known folder and
+    // ignores HOME, so this cannot be simulated there.
+    #[cfg(not(target_os = "windows"))]
     #[serial]
     #[test]
     fn default_config_with_relative_home_is_rejected() {

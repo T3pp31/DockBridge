@@ -170,6 +170,17 @@ impl AppConfig {
         Ok(config)
     }
 
+    /// Returns the built-in defaults, validated.
+    ///
+    /// `AppConfig::default()` keeps a literal `~` prefix on the known_hosts
+    /// paths when the home directory cannot be resolved; production code
+    /// that falls back to the defaults should use this constructor so that
+    /// case is rejected instead of writing under the working directory
+    /// (issue #745).
+    pub fn resolved_default() -> Result<Self, ConfigError> {
+        Self::default().validate()
+    }
+
     /// Validates all fields have sane ranges, normalizing values that can be
     /// safely clamped. Single source of truth shared by TOML, CLI, and UniFFI
     /// entry points.
@@ -252,8 +263,9 @@ impl AppConfig {
 
 /// Rejects a config path whose leading component is still a literal `~`.
 ///
-/// [`expand_tilde`] leaves the path unchanged when the home directory cannot
-/// be resolved. Accepting it here would make callers create a `~` directory
+/// The built-in defaults keep a `~` prefix when the home directory cannot be
+/// resolved ([`expand_tilde`] rejects such paths from config files). Accepting
+/// it here would make callers create a `~` directory
 /// under the current working directory (issue #745).
 fn ensure_config_path_resolved(field: &'static str, path: &Path) -> Result<(), ConfigError> {
     if path.components().next().map(|c| c.as_os_str()) == Some(std::ffi::OsStr::new("~")) {
@@ -376,11 +388,21 @@ fn expand_tilde_with_home(path: &Path, home: Option<&Path>) -> Result<PathBuf, C
     // config paths (e.g. known_hosts) to unexpected locations.
     let home = home.filter(|h| h.is_absolute());
 
-    if let Some(rest) = path_str.strip_prefix("~/") {
+    // Also accept the native separator on Windows, where the built-in
+    // defaults are joined as `~\...`.
+    let rest = path_str.strip_prefix("~/").or_else(|| {
+        if cfg!(windows) {
+            path_str.strip_prefix("~\\")
+        } else {
+            None
+        }
+    });
+    if let Some(rest) = rest {
         let Some(home) = home else {
             return Err(unresolved_home_error(path));
         };
-        if rest.split('/').any(|segment| segment == "..") {
+        let is_separator = |c: char| c == '/' || (cfg!(windows) && c == '\\');
+        if rest.split(is_separator).any(|segment| segment == "..") {
             return Err(ConfigError::InvalidPath {
                 path: path.display().to_string(),
                 reason: "`~/` paths cannot contain `..` segments".to_string(),
@@ -1011,7 +1033,22 @@ mod tests {
         // Given: the default config
         // When: validating
         // Then: it succeeds and is unchanged
-        let config = AppConfig::default().validate().unwrap();
+        // (with paths built from an explicit absolute home so the test does
+        // not depend on the ambient home directory)
+        let home = std::env::temp_dir().join("dockbridge-home");
+        let config = AppConfig {
+            known_hosts_path: default_home_relative_path_with_home(
+                Path::new(".dockbridge/known_hosts.json"),
+                Some(&home),
+            ),
+            openssh_known_hosts_path: default_home_relative_path_with_home(
+                Path::new(".ssh/known_hosts"),
+                Some(&home),
+            ),
+            ..AppConfig::default()
+        }
+        .validate()
+        .unwrap();
         assert_eq!(config.connection_timeout_secs, 30);
         assert_eq!(
             config.directory_walk_max_files,
@@ -1023,23 +1060,37 @@ mod tests {
     fn validate_rejects_unresolved_known_hosts_paths() {
         // Given: known_hosts paths still starting with a literal `~`
         // (the shape produced when the home directory cannot be resolved)
+        // The other field is pinned to an absolute path so each assertion
+        // only passes because of the field under test.
+        let absolute = std::env::temp_dir().join("known_hosts");
         let config = AppConfig {
             known_hosts_path: PathBuf::from("~/.dockbridge/known_hosts.json"),
+            openssh_known_hosts_path: absolute.clone(),
             ..AppConfig::default()
         };
-        assert!(matches!(
-            config.validate().unwrap_err(),
-            ConfigError::InvalidPath { .. }
-        ));
+        match config.validate().unwrap_err() {
+            ConfigError::InvalidPath { path, .. } => {
+                assert_eq!(
+                    path,
+                    Path::new("~/.dockbridge/known_hosts.json")
+                        .display()
+                        .to_string()
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
 
         let config = AppConfig {
+            known_hosts_path: absolute,
             openssh_known_hosts_path: PathBuf::from("~/.ssh/known_hosts"),
             ..AppConfig::default()
         };
-        assert!(matches!(
-            config.validate().unwrap_err(),
-            ConfigError::InvalidPath { .. }
-        ));
+        match config.validate().unwrap_err() {
+            ConfigError::InvalidPath { path, .. } => {
+                assert_eq!(path, Path::new("~/.ssh/known_hosts").display().to_string());
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
