@@ -56,11 +56,35 @@ final class ProfileTrustStore: @unchecked Sendable {
         baseDirectory.appendingPathComponent(fileName, isDirectory: false)
     }
 
+    /// Sets `0600` on `url` without following a symbolic link.
+    ///
+    /// `FileManager.setAttributes` resolves links, so a symlink planted at the
+    /// store path would chmod its target (a directory target even loses its
+    /// search bit). Reject links and non-regular files with `lstat`, then
+    /// change the mode with `fchmodat(AT_SYMLINK_NOFOLLOW)`, which never
+    /// follows a link swapped in after the check and does not need read
+    /// permission, so an owner-unreadable store (e.g. `0200`) can still be
+    /// repaired (issue #1377).
     func setSecurePermissions(for url: URL) throws {
-        try FileManager.default.setAttributes(
-            [.posixPermissions: NSNumber(value: Int16(0o600))],
-            ofItemAtPath: url.path
-        )
+        let path = url.path
+
+        var linkStat = stat()
+        guard lstat(path, &linkStat) == 0 else {
+            throw ProfileTrustStoreError.readFailed(String(cString: strerror(errno)))
+        }
+        let fileType = linkStat.st_mode & S_IFMT
+        guard fileType != S_IFLNK else {
+            throw ProfileTrustStoreError.readFailed(
+                String(localized: "Refusing to follow symbolic link.")
+            )
+        }
+        guard fileType == S_IFREG else {
+            throw ProfileTrustStoreError.readFailed(String(cString: strerror(EINVAL)))
+        }
+
+        guard fchmodat(AT_FDCWD, path, mode_t(0o600), AT_SYMLINK_NOFOLLOW) == 0 else {
+            throw ProfileTrustStoreError.readFailed(String(cString: strerror(errno)))
+        }
     }
 
     func loadTrustedEndpoints() throws -> [UUID: TrustedProfileEndpoint] {
@@ -69,9 +93,12 @@ final class ProfileTrustStore: @unchecked Sendable {
             return [:]
         }
 
-        try setSecurePermissions(for: url)
-
         do {
+            // Repair loose permissions before reading (SecureLocalFileReader
+            // rejects anything but 0600/0400). setSecurePermissions refuses
+            // symlinks, so a planted link cannot redirect the chmod
+            // (issue #1377).
+            try setSecurePermissions(for: url)
             let data = try SecureLocalFileReader.readData(from: url)
             return try decodeTrustedEndpoints(from: data)
         } catch let error as ProfileTrustStoreError {
@@ -93,7 +120,12 @@ final class ProfileTrustStore: @unchecked Sendable {
         do {
             let data = try encodeSignedTrustedEndpoints(records)
             try data.write(to: url, options: .atomic)
-            try setSecurePermissions(for: url)
+            do {
+                try setSecurePermissions(for: url)
+            } catch ProfileTrustStoreError.readFailed(let message) {
+                // Report a permission failure while saving as a write failure.
+                throw ProfileTrustStoreError.writeFailed(message)
+            }
         } catch let error as ProfileTrustStoreError {
             throw error
         } catch {
