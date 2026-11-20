@@ -532,7 +532,7 @@ async fn execute(cli: Cli) -> anyhow::Result<()> {
             let session = connect(&connection, &config, known_hosts).await?;
 
             let directory = SftpClient::new(&session).initial_directory().await?;
-            println!("{}", terminal_safe_text(&directory));
+            println!("{}", format_pwd_output(&directory));
         }
     }
 
@@ -566,6 +566,12 @@ fn is_terminal_unsafe(character: char) -> bool {
 /// sequences, and bidi format characters can reorder displayed text, so both
 /// are rendered as visible Unicode escapes. This preserves normal UTF-8 paths
 /// while keeping text output structurally stable.
+/// Renders the `pwd` line; the directory comes from the server, so it is
+/// escaped for the terminal (issues #1355, #1356).
+fn format_pwd_output(directory: &str) -> String {
+    terminal_safe_text(directory)
+}
+
 fn terminal_safe_text(value: &str) -> String {
     if !value.chars().any(is_terminal_unsafe) {
         return value.to_string();
@@ -810,6 +816,30 @@ mod tests {
 
         // Ordinary format characters that do not reorder text stay intact.
         assert_eq!(terminal_safe_text("a\u{200d}b"), "a\u{200d}b");
+
+        // Neighbours just outside each bidi range are not escaped.
+        for character in [
+            '\u{200b}', '\u{200c}', '\u{2029}', '\u{202f}', '\u{2065}', '\u{206a}',
+        ] {
+            let input = format!("a{character}b");
+            assert_eq!(
+                terminal_safe_text(&input),
+                input,
+                "U+{:04X}",
+                character as u32
+            );
+        }
+    }
+
+    #[test]
+    fn pwd_output_escapes_bidi_override() {
+        // Given: a server-provided directory with a right-to-left override
+        // When: rendering the pwd line
+        // Then: the override is a visible escape
+        assert_eq!(
+            format_pwd_output("/home/invoice\u{202e}txt.exe"),
+            "/home/invoice\\u{202e}txt.exe"
+        );
     }
 
     #[test]
