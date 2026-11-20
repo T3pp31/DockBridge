@@ -16,30 +16,46 @@ struct SSHConfigHost: Equatable, Sendable {
 
 /// Minimal parser for the subset of OpenSSH `~/.ssh/config` that DockBridge
 /// imports (Host/HostName/User/Port/IdentityFile). Unknown directives are
-/// ignored; wildcard and negated Host patterns are not importable profiles.
+/// ignored. Wildcard and negated Host patterns are not importable profiles,
+/// but their directives apply to matching exact aliases as defaults
+/// (issue #688).
 enum SSHConfigParser {
     static func parse(_ contents: String) -> [SSHConfigHost] {
         // Gather importable aliases, then evaluate applicable blocks in file
         // order for each alias, just as OpenSSH does for a selected host.
         struct Block {
             var directives: [Directive] = []
+            /// Host header patterns. `nil` marks the implicit global block that
+            /// precedes the first Host/Match line and applies to every alias.
+            var patterns: [HostPattern]?
         }
-        var blocks = [Block()]
-        var defaultBlockIndices = [0]
-        var blockIndicesByAlias: [String: [Int]] = [:]
+        var blocks = [Block(patterns: nil)]
+        var exactBlockIndicesByAlias: [String: [Int]] = [:]
+        // Index 0 is the implicit global block, which applies to every alias.
+        let defaultBlockIndices = [0]
+        var wildcardBlockIndices: [Int] = []
         var aliases: [(original: String, normalized: String)] = []
         var seenAliases = Set<String>()
         for rawLine in contents.components(separatedBy: .newlines) {
-            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             guard let directive = parseDirective(rawLine) else {
+                // Preserve the existing handling of malformed Host headers: the
+                // block is never registered, so following directives are dropped
+                // rather than applied to the previous alias.
+                let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 if trimmed.hasPrefix("host") || trimmed.hasPrefix("match") {
-                    blocks.append(Block())
+                    blocks.append(Block(patterns: []))
                 }
                 continue
             }
             switch directive.key {
             case "host":
                 let blockIndex = blocks.count
+                let patterns = directive.arguments.map(HostPattern.init(argument:))
+                // Wildcard and negated headers cannot become profiles, but their
+                // directives still apply to matching aliases as defaults.
+                if patterns.contains(where: \.isWildcard) {
+                    wildcardBlockIndices.append(blockIndex)
+                }
                 var blockAliases = Set<String>()
                 for alias in directive.arguments where isImportableAlias(alias) {
                     let normalized = normalizedAlias(alias)
@@ -48,17 +64,14 @@ enum SSHConfigParser {
                     }
                     // A block applies once even when its header repeats an alias.
                     if blockAliases.insert(normalized).inserted {
-                        blockIndicesByAlias[normalized, default: []].append(blockIndex)
+                        exactBlockIndicesByAlias[normalized, default: []].append(blockIndex)
                     }
                 }
-                // Only an unconditional Host * is supported as a default;
-                // other patterns keep the parser's existing import policy.
-                if directive.arguments == ["*"] {
-                    defaultBlockIndices.append(blockIndex)
-                }
-                blocks.append(Block())
+                blocks.append(Block(patterns: patterns))
             case "match":
-                blocks.append(Block())
+                // Match blocks are conditionally applied and are never treated
+                // as defaults for other aliases.
+                blocks.append(Block(patterns: []))
             default:
                 blocks[blocks.count - 1].directives.append(directive)
             }
@@ -66,22 +79,15 @@ enum SSHConfigParser {
 
         return aliases.compactMap { alias in
             var candidates = [SSHConfigHost(alias: alias.original)]
-            let matchingBlockIndices = blockIndicesByAlias[alias.normalized, default: []]
-            var defaultIndex = 0
-            var matchingIndex = 0
-            // Both index lists are already in file order. Merge them so defaults
-            // and exact blocks retain first-value wins and cumulative key order.
-            while defaultIndex < defaultBlockIndices.count || matchingIndex < matchingBlockIndices.count {
-                let blockIndex: Int
-                if matchingIndex == matchingBlockIndices.count
-                    || (defaultIndex < defaultBlockIndices.count
-                        && defaultBlockIndices[defaultIndex] < matchingBlockIndices[matchingIndex]) {
-                    blockIndex = defaultBlockIndices[defaultIndex]
-                    defaultIndex += 1
-                } else {
-                    blockIndex = matchingBlockIndices[matchingIndex]
-                    matchingIndex += 1
-                }
+            // Candidate blocks are the global block, blocks whose header names
+            // the alias exactly, and wildcard/negated blocks that may match it.
+            let candidateIndices = mergedBlockIndices(
+                defaultBlockIndices,
+                exactBlockIndicesByAlias[alias.normalized, default: []],
+                wildcardBlockIndices
+            )
+            for blockIndex in candidateIndices {
+                guard blockApplies(blocks[blockIndex].patterns, to: alias.normalized) else { continue }
                 var valid = true
                 for directive in blocks[blockIndex].directives {
                     apply(directive: directive, to: &candidates, currentBlockIsValid: &valid)
@@ -93,6 +99,106 @@ enum SSHConfigParser {
             else { return nil }
             return host
         }
+    }
+
+    /// Merges block index lists into file order, applying each block once.
+    ///
+    /// A header such as `Host web prod-*` is registered as both an exact and a
+    /// wildcard block; deduplicating keeps its directives from applying twice.
+    private static func mergedBlockIndices(_ lists: [Int]...) -> [Int] {
+        var seen = Set<Int>()
+        var indices: [Int] = []
+        for list in lists {
+            for index in list where seen.insert(index).inserted {
+                indices.append(index)
+            }
+        }
+        return indices.sorted()
+    }
+
+    private struct HostPattern {
+        let negated: Bool
+        let pattern: String
+
+        /// OpenSSH lowercases the target host name but compares Host patterns
+        /// case-sensitively. Plain positive aliases keep the existing
+        /// case-insensitive exact-alias handling; wildcard and negated
+        /// patterns preserve their case so `Host PROD-*` does not match
+        /// `prod-web`.
+        init(argument: String) {
+            let trimmed = argument.trimmingCharacters(in: .whitespacesAndNewlines)
+            negated = trimmed.hasPrefix("!")
+            let raw = negated ? String(trimmed.dropFirst()) : trimmed
+            if negated || HostPattern.containsWildcard(raw) {
+                pattern = raw
+            } else {
+                pattern = raw.lowercased()
+            }
+        }
+
+        var isWildcard: Bool { HostPattern.containsWildcard(pattern) }
+
+        static func containsWildcard(_ value: String) -> Bool {
+            value.contains("*") || value.contains("?")
+        }
+
+        func matches(_ alias: String) -> Bool {
+            wildcardMatches(pattern: pattern, alias: alias)
+        }
+    }
+
+    /// Evaluates a block header against an alias using OpenSSH semantics: the
+    /// global block always applies, and a Host block applies when one positive
+    /// pattern matches and no negated pattern matches. Blocks with no positive
+    /// pattern (Match) never apply.
+    private static func blockApplies(_ patterns: [HostPattern]?, to alias: String) -> Bool {
+        guard let patterns else { return true }
+        var matchedPositive = false
+        for pattern in patterns {
+            if pattern.negated {
+                if pattern.matches(alias) { return false }
+            } else if pattern.matches(alias) {
+                matchedPositive = true
+            }
+        }
+        return matchedPositive
+    }
+
+    /// Matches an OpenSSH host pattern (`*` and `?` wildcards) against an alias.
+    /// Like OpenSSH, matching is done on UTF-8 bytes, so `?` matches one byte.
+    private static func wildcardMatches(pattern: String, alias: String) -> Bool {
+        let pattern = Array(pattern.utf8)
+        let alias = Array(alias.utf8)
+        let star = UInt8(ascii: "*")
+        let question = UInt8(ascii: "?")
+        var patternIndex = 0
+        var aliasIndex = 0
+        var starIndex: Int?
+        var starAliasIndex = 0
+        while aliasIndex < alias.count {
+            if patternIndex < pattern.count {
+                let byte = pattern[patternIndex]
+                if byte == star {
+                    starIndex = patternIndex
+                    starAliasIndex = aliasIndex
+                    patternIndex += 1
+                    continue
+                }
+                if byte == question || byte == alias[aliasIndex] {
+                    patternIndex += 1
+                    aliasIndex += 1
+                    continue
+                }
+            }
+            guard let starIndex else { return false }
+            patternIndex = starIndex + 1
+            starAliasIndex += 1
+            aliasIndex = starAliasIndex
+        }
+        while patternIndex < pattern.count, pattern[patternIndex] == star {
+            patternIndex += 1
+        }
+        return patternIndex == pattern.count
     }
 
     static func toProfiles(_ hosts: [SSHConfigHost]) -> [ConnectionProfile] {
