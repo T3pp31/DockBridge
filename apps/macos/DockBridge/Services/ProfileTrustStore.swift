@@ -206,23 +206,17 @@ final class ProfileTrustStore: @unchecked Sendable {
     private func decodeTrustedEndpoints(from data: Data) throws -> [UUID: TrustedProfileEndpoint] {
         let decoder = JSONDecoder()
 
-        if let envelope = try? decoder.decode(SignedTrustedEndpointsEnvelope.self, from: data) {
-            try verifyEnvelope(envelope)
-            return parseEndpointRecords(envelope.endpoints)
-        }
-
-        if let records = try? decoder.decode([String: TrustedProfileEndpoint].self, from: data) {
-            // Legacy unsigned files are not authenticated. Route them through
-            // the explicit initial-trust confirmation flow instead of silently
-            // accepting and re-signing an attacker-controlled payload.
+        guard let envelope = try? decoder.decode(SignedTrustedEndpointsEnvelope.self, from: data) else {
+            // Legacy unsigned dictionaries and malformed, truncated, or
+            // unknown-format stores are unauthenticated and cannot be verified.
+            // Report them as verificationFailed instead of silently accepting
+            // and re-signing an attacker-controlled payload. File-system
+            // failures (unreadable, symlink, permissions) still surface as
+            // readFailed from SecureLocalFileReader (issue #1378).
             throw ProfileTrustStoreError.verificationFailed
         }
-
-        // A malformed, truncated, or unknown-format store cannot be verified
-        // and is recoverable by re-confirming trust, so treat it like a failed
-        // verification. File-system failures (unreadable, symlink, permissions)
-        // still surface as readFailed from SecureLocalFileReader (issue #1378).
-        throw ProfileTrustStoreError.verificationFailed
+        try verifyEnvelope(envelope)
+        return parseEndpointRecords(envelope.endpoints)
     }
 
     private func parseEndpointRecords(

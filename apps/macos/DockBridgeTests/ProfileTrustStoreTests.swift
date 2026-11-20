@@ -429,8 +429,8 @@ final class ProfileTrustStoreTests: XCTestCase {
         }
     }
     func testMalformedTrustStoreReportsVerificationFailure() throws {
-        // Given: an existing store that is neither a signed envelope nor a
-        // legacy dictionary (truncated JSON)
+        // Given: existing stores that are neither a signed envelope nor a
+        // legacy dictionary (truncated JSON, unknown shape, missing fields)
         let profile = ConnectionProfile(
             name: "Test",
             host: "example.com",
@@ -438,16 +438,19 @@ final class ProfileTrustStoreTests: XCTestCase {
         )
         let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
         try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
-        try Data("{\"endpoints\":".utf8).write(to: trustURL)
 
-        // When: loading and detecting changes
-        // Then: the malformed store is reported as verificationFailed (not a
-        // file-system readFailed) and is never downgraded to initial trust
-        XCTAssertThrowsError(try trustStore.loadTrustedEndpoints()) { error in
-            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
-        }
-        XCTAssertThrowsError(try trustStore.detectEndpointChanges(in: [profile])) { error in
-            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+        for payload in ["{\"endpoints\":", "{\"foo\":\"bar\"}", "{\"endpoints\":{}}", "[]"] {
+            try Data(payload.utf8).write(to: trustURL)
+
+            // When: loading and detecting changes
+            // Then: the malformed store is reported as verificationFailed (not
+            // a file-system readFailed) and is never downgraded to initial trust
+            XCTAssertThrowsError(try trustStore.loadTrustedEndpoints(), payload) { error in
+                XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed, payload)
+            }
+            XCTAssertThrowsError(try trustStore.detectEndpointChanges(in: [profile]), payload) { error in
+                XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed, payload)
+            }
         }
     }
 
