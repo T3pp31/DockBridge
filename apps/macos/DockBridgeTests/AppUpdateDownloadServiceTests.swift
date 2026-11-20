@@ -286,6 +286,80 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         await fulfillment(of: [revealRequested], timeout: 1)
     }
 
+    func testDownloadVerifyAndRevealAcceptsBinaryInfoPlist() async throws {
+        // Given: a matching bundle whose Info.plist is binary, as Xcode builds it
+        let contents = Data("dmg-contents".utf8)
+        let checksum = SHA256.hash(data: contents).map { String(format: "%02x", $0) }.joined()
+        let mountPoint = temporaryDirectory.appendingPathComponent("mount", isDirectory: true)
+        _ = try makeTestBundle(
+            bundleIdentifier: "com.dockbridge.app",
+            version: "0.2.0",
+            plistFormat: .binary,
+            in: mountPoint
+        )
+        let dmgURL = temporaryDirectory.appendingPathComponent("update.dmg")
+        try contents.write(to: dmgURL)
+
+        let revealRequested = expectation(description: "Reveal volume")
+        let service = AppUpdateDownloadService(
+            downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 200),
+            dataSession: MockChecksumURLSession(checksumLine: "\(checksum) update.dmg", statusCode: 200),
+            signatureVerifier: MockSignatureVerifier(),
+            dmgMounter: MockDMGImageMounter(mountPoint: mountPoint),
+            revealInFinder: { _ in
+                revealRequested.fulfill()
+                return true
+            }
+        )
+
+        let update = AppUpdateInfo(
+            version: "0.2.0",
+            downloadURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg")!,
+            checksumURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg.sha256")!,
+            releasePageURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0")!
+        )
+
+        // Then: the binary plist version is read and the volume is revealed
+        try await service.downloadVerifyAndReveal(update: update)
+        await fulfillment(of: [revealRequested], timeout: 1)
+    }
+
+    func testDownloadVerifyAndRevealRejectsBundleWithoutVersion() async throws {
+        // Given: a signed bundle without CFBundleShortVersionString
+        let contents = Data("dmg-contents".utf8)
+        let checksum = SHA256.hash(data: contents).map { String(format: "%02x", $0) }.joined()
+        let mountPoint = temporaryDirectory.appendingPathComponent("mount", isDirectory: true)
+        _ = try makeTestBundle(bundleIdentifier: "com.dockbridge.app", version: nil, in: mountPoint)
+        let dmgURL = temporaryDirectory.appendingPathComponent("update.dmg")
+        try contents.write(to: dmgURL)
+
+        let service = AppUpdateDownloadService(
+            downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 200),
+            dataSession: MockChecksumURLSession(checksumLine: "\(checksum) update.dmg", statusCode: 200),
+            signatureVerifier: MockSignatureVerifier(),
+            dmgMounter: MockDMGImageMounter(mountPoint: mountPoint),
+            revealInFinder: { _ in
+                XCTFail("Finder must not open a bundle with an unreadable version")
+                return true
+            }
+        )
+
+        let update = AppUpdateInfo(
+            version: "0.2.0",
+            downloadURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg")!,
+            checksumURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg.sha256")!,
+            releasePageURL: URL(string: "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0")!
+        )
+
+        // Then: it is reported as an unreadable version, not a missing app
+        do {
+            try await service.downloadVerifyAndReveal(update: update)
+            XCTFail("Expected bundleVersionUnreadable")
+        } catch let error as AppUpdateDownloadError {
+            XCTAssertEqual(error, .bundleVersionUnreadable)
+        }
+    }
+
     func testDownloadVerifyAndRevealRejectsMissingAppBundle() async throws {
         let dmgURL = temporaryDirectory.appendingPathComponent("update.dmg")
         try Data("dmg-contents".utf8).write(to: dmgURL)
@@ -576,6 +650,7 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         bundleIdentifier: String,
         bundleName: String = "DockBridge.app",
         version: String? = "0.2.0",
+        plistFormat: PropertyListSerialization.PropertyListFormat = .xml,
         in directory: URL
     ) throws -> URL {
         let bundleURL = directory.appendingPathComponent(bundleName, isDirectory: true)
@@ -593,7 +668,7 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         if let version {
             plist["CFBundleShortVersionString"] = version
         }
-        let plistData = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        let plistData = try PropertyListSerialization.data(fromPropertyList: plist, format: plistFormat, options: 0)
         try plistData.write(to: contentsURL.appendingPathComponent("Info.plist"))
         return bundleURL
     }

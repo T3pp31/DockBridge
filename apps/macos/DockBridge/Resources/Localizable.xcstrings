@@ -3081,6 +3081,22 @@
         }
       }
     },
+    "The update app bundle version could not be read. Download the update manually from the release page.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update app bundle version could not be read. Download the update manually from the release page."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アップデートのバンドルバージョンを確認できませんでした。リリースページから手動でダウンロードしてください。"
+          }
+        }
+      }
+    },
     "The update disk image does not contain the DockBridge app.": {
       "localizations": {
         "en": {
