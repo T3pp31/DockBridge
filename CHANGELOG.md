@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Run the localization, UI/UX tracking, and Settings scene guard script tests
+  in CI so regressions in their verification logic fail the build (#1366).
 - Upgrade `russh` to 0.65.1 and `ssh-key` to 0.7.0-rc.11, and patch `rustix`
   to 1.1.6, resolving RUSTSEC-2026-0486, RUSTSEC-2026-0492, and
   RUSTSEC-2026-0495. Keep the client from advertising host-certificate
