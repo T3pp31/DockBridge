@@ -339,6 +339,49 @@ final class ConnectionFormPrivateKeySelectionTests: XCTestCase {
     }
 }
 
+// Tests for ConnectionFormView.resolveCredentials (issues #782, #1381).
+@MainActor
+final class ConnectionFormCredentialResolutionTests: XCTestCase {
+    func testResolveCredentialsMapsTypedValuesForEachAuthType() {
+        struct Case {
+            let authType: AuthType
+            let password: String
+            let passphrase: String
+            let expectedPassword: String?
+            let expectedPassphrase: String?
+        }
+        let cases: [Case] = [
+            // Password auth: typed password is passed, empty stays nil, and a
+            // leftover passphrase is ignored.
+            Case(authType: .password, password: "secret", passphrase: "",
+                 expectedPassword: "secret", expectedPassphrase: nil),
+            Case(authType: .password, password: "", passphrase: "",
+                 expectedPassword: nil, expectedPassphrase: nil),
+            Case(authType: .password, password: "secret", passphrase: "leftover",
+                 expectedPassword: "secret", expectedPassphrase: nil),
+            // Private-key auth: typed passphrase is passed, empty stays nil,
+            // and a leftover password is ignored.
+            Case(authType: .privateKey, password: "", passphrase: "key-pass",
+                 expectedPassword: nil, expectedPassphrase: "key-pass"),
+            Case(authType: .privateKey, password: "", passphrase: "",
+                 expectedPassword: nil, expectedPassphrase: nil),
+            Case(authType: .privateKey, password: "unused", passphrase: "key-pass",
+                 expectedPassword: nil, expectedPassphrase: "key-pass"),
+        ]
+
+        for testCase in cases {
+            let credentials = ConnectionFormView.resolveCredentials(
+                authType: testCase.authType,
+                password: testCase.password,
+                passphrase: testCase.passphrase
+            )
+            let label = "\(testCase.authType) password=\(testCase.password) passphrase=\(testCase.passphrase)"
+            XCTAssertEqual(credentials.password, testCase.expectedPassword, label)
+            XCTAssertEqual(credentials.passphrase, testCase.expectedPassphrase, label)
+        }
+    }
+}
+
 private final class SecurityScopeCallRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var startCount = 0
