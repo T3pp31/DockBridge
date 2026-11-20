@@ -480,6 +480,9 @@ final class ProfileTrustStoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let linkURL = baseDirectory.appendingPathComponent("link-dir", isDirectory: true)
         try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: directory)
+        let originalPermissions = (try FileManager.default.attributesOfItem(atPath: directory.path)[
+            .posixPermissions
+        ] as? NSNumber)?.intValue
 
         // When: applying secure permissions
         // Then: it refuses instead of chmod-ing the target directory, which
@@ -492,7 +495,30 @@ final class ProfileTrustStoreTests: XCTestCase {
         }
         let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
         let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
-        XCTAssertEqual(permissions, Int(0o755))
+        XCTAssertEqual(permissions, originalPermissions)
+    }
+
+    func testLoadTrustedEndpointsRepairsOwnerUnreadableStore() throws {
+        // Given: a valid store whose mode lacks the owner read bit
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+        try trustStore.seedInitialTrust(from: [profile])
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o200))],
+            ofItemAtPath: trustURL.path
+        )
+
+        // When: loading the store
+        let endpoints = try trustStore.loadTrustedEndpoints()
+
+        // Then: permissions are repaired to 0600 and the store is readable
+        XCTAssertNotNil(endpoints[profile.id])
+        let attributes = try FileManager.default.attributesOfItem(atPath: trustURL.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, Int(0o600))
     }
 }
 

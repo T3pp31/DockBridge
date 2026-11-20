@@ -60,8 +60,11 @@ final class ProfileTrustStore: @unchecked Sendable {
     ///
     /// `FileManager.setAttributes` resolves links, so a symlink planted at the
     /// store path would chmod its target (a directory target even loses its
-    /// search bit). Reject links with `lstat` and change the mode on a
-    /// no-follow descriptor instead (issue #1377).
+    /// search bit). Reject links and non-regular files with `lstat`, then
+    /// change the mode with `fchmodat(AT_SYMLINK_NOFOLLOW)`, which never
+    /// follows a link swapped in after the check and does not need read
+    /// permission, so an owner-unreadable store (e.g. `0200`) can still be
+    /// repaired (issue #1377).
     func setSecurePermissions(for url: URL) throws {
         let path = url.path
 
@@ -69,20 +72,17 @@ final class ProfileTrustStore: @unchecked Sendable {
         guard lstat(path, &linkStat) == 0 else {
             throw ProfileTrustStoreError.readFailed(String(cString: strerror(errno)))
         }
-        guard (linkStat.st_mode & S_IFMT) != S_IFLNK else {
+        let fileType = linkStat.st_mode & S_IFMT
+        guard fileType != S_IFLNK else {
             throw ProfileTrustStoreError.readFailed(
                 String(localized: "Refusing to follow symbolic link.")
             )
         }
-
-        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-        guard fd >= 0 else {
-            let openError = errno
-            throw ProfileTrustStoreError.readFailed(String(cString: strerror(openError)))
+        guard fileType == S_IFREG else {
+            throw ProfileTrustStoreError.readFailed(String(cString: strerror(EINVAL)))
         }
-        defer { close(fd) }
 
-        guard fchmod(fd, mode_t(0o600)) == 0 else {
+        guard fchmodat(AT_FDCWD, path, mode_t(0o600), AT_SYMLINK_NOFOLLOW) == 0 else {
             throw ProfileTrustStoreError.readFailed(String(cString: strerror(errno)))
         }
     }
@@ -120,7 +120,12 @@ final class ProfileTrustStore: @unchecked Sendable {
         do {
             let data = try encodeSignedTrustedEndpoints(records)
             try data.write(to: url, options: .atomic)
-            try setSecurePermissions(for: url)
+            do {
+                try setSecurePermissions(for: url)
+            } catch ProfileTrustStoreError.readFailed(let message) {
+                // Report a permission failure while saving as a write failure.
+                throw ProfileTrustStoreError.writeFailed(message)
+            }
         } catch let error as ProfileTrustStoreError {
             throw error
         } catch {
