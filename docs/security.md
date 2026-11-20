@@ -309,9 +309,15 @@ with the developer's or CI runner's full permissions. Mitigations:
 
 - Dependency updates arrive through Dependabot pull requests and are reviewed
   as code before merge; `Cargo.lock` pins the exact versions that run.
-- Release signing and notarization secrets are only imported in the release
-  workflow's signing step, after the build completes, and are not present in
-  the Rust build environment.
+- Known gap: build scripts are **not** isolated from release credentials. The
+  release workflow imports the signing certificate and notary profile into a
+  runner keychain before `scripts/package-macos-release.sh` builds the app's
+  Rust libraries with `cargo`, so dependency `build.rs` files and proc macros
+  run on the same runner while that keychain and notary profile exist.
+  Isolating them would require building the Rust artifacts (or the whole
+  unsigned app) in a separate job that holds no secrets, and only signing and
+  notarizing in a later job; until then, dependency review and `Cargo.lock`
+  pinning are the controls.
 - Do not run untrusted dependency sources locally; keep `cargo` configured to
   crates.io and the reviewed vendored forks listed below.
 
