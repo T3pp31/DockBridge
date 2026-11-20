@@ -66,8 +66,16 @@ jobs:
           fi
           # Resolve the CLI artifact name once; the build, attestation, and
           # upload steps all read it from here (issue #1363).
+          # Supports the same {app_name}/{version} placeholders as the other
+          # *_name_template keys; anything left unresolved fails the release.
           CLI_TEMPLATE="$(bash scripts/release-config.sh cli_name_template)"
-          CLI_NAME="${CLI_TEMPLATE//\{version\}/${VERSION}}"
+          CLI_APP_NAME="$(bash scripts/release-config.sh app_name)"
+          CLI_NAME="${CLI_TEMPLATE//\{app_name\}/${CLI_APP_NAME}}"
+          CLI_NAME="${CLI_NAME//\{version\}/${VERSION}}"
+          if [[ "$CLI_NAME" == *[{}]* ]]; then
+            echo "error: cli_name_template has an unsupported placeholder: ${CLI_TEMPLATE}" >&2
+            exit 1
+          fi
           {
             echo "version=${VERSION}"
             echo "prerelease=${PRERELEASE}"

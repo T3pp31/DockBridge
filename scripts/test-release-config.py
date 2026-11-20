@@ -74,7 +74,8 @@ class ReleaseConfigTests(unittest.TestCase):
         block = block.replace("${{ github.event_name }}", event_name)
         env = dict(self.env)
         # `Resolve version` derives the version from the tag on a tag push.
-        env.setdefault("GITHUB_REF_NAME", f"v{version}")
+        # Always override: CI runners set their own GITHUB_REF_NAME.
+        env["GITHUB_REF_NAME"] = f"v{version}"
         return subprocess.run(
             ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", preamble + block],
             cwd=self.root, env=env, capture_output=True, text=True, timeout=5,
@@ -182,6 +183,41 @@ class ReleaseConfigTests(unittest.TestCase):
             f"dmg={dmg}", f"sha256={dmg}.sha256", f"cli={cli}",
             f"cli_sha256={cli}.sha256", f"sbom={sbom}", f"sbom_sha256={sbom}.sha256",
         ])
+
+    def test_custom_cli_template_flows_to_build_and_assets(self):
+        self.config.write_text(CONFIG.replace(
+            'cli_name_template = "dockbridge-{version}-macOS"',
+            'cli_name_template = "{app_name}-cli-{version}"'))
+        result = self.run_step("release.yml", "Resolve version")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        outputs = dict(
+            line.split("=", 1) for line in self.output.read_text().splitlines())
+        self.assertEqual(outputs["version"], "1.2.3")
+        self.assertEqual(outputs["prerelease"], "false")
+        self.assertEqual(outputs["cli_name"], "Fixture App-cli-1.2.3")
+        self.output.write_text("")
+        result = self.run_step(
+            "release.yml", "Resolve asset paths", cli_name=outputs["cli_name"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("cli=dist/Fixture App-cli-1.2.3", self.output.read_text().splitlines())
+
+    def test_unresolved_cli_placeholder_fails(self):
+        self.config.write_text(CONFIG.replace(
+            'cli_name_template = "dockbridge-{version}-macOS"',
+            'cli_name_template = "dockbridge-{versoin}-macOS"'))
+        result = self.run_step("release.yml", "Resolve version")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsupported placeholder", result.stderr)
+        self.assertEqual(self.output.read_text(), "")
+
+    def test_downstream_steps_read_resolved_names(self):
+        build = workflow_block("release.yml", "Build hardened CLI")
+        self.assertIn("${{ steps.version.outputs.cli_name }}", build)
+        self.assertNotIn("dockbridge-${VERSION}", build)
+        text = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+        self.assertIn(
+            "name: ${{ steps.assets.outputs.app_name }} ${{ steps.version.outputs.version }}",
+            text)
 
     def test_missing_tool_and_asset_keys_stop_before_publication(self):
         for key, workflow, name in (
