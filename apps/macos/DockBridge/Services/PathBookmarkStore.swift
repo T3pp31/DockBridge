@@ -8,12 +8,16 @@ final class PathBookmarkStore: @unchecked Sendable {
     private let lock = NSLock()
     private let backupStorageKey = "pathBookmarksCorruptBackup"
 
-    /// Decoded bookmarks for the raw data last read from `defaults`. Comparing
-    /// the raw data keeps the cache coherent when another instance (or a test)
-    /// writes the key directly, while avoiding a decode per access
-    /// (issue #1373). Guarded by `lock`.
-    private var cachedBookmarks: [PathBookmark]?
-    private var cachedData: Data?
+    /// Decoded bookmarks paired with the raw data they were decoded from (or
+    /// encoded to). Comparing the raw data keeps the cache coherent when
+    /// another instance (or a test) writes the key directly, while avoiding a
+    /// decode per access (issue #1373). Only successful decodes are cached:
+    /// corrupt data is re-decoded (and re-logged/backed up) on every read so
+    /// the failure is never masked as an empty list. Guarded by `lock`.
+    private var cache: (data: Data, bookmarks: [PathBookmark])?
+
+    /// Number of JSON decodes performed; lets tests verify cache reuse.
+    private(set) var decodeCount = 0
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -60,23 +64,21 @@ final class PathBookmarkStore: @unchecked Sendable {
     /// not changed since the last decode. Callers must hold `lock`.
     private func readBookmarks() -> [PathBookmark] {
         guard let data = defaults.data(forKey: storageKey) else {
-            cachedBookmarks = []
-            cachedData = nil
+            cache = nil
             return []
         }
-        if let cachedBookmarks, cachedData == data {
-            return cachedBookmarks
+        if let cache, cache.data == data {
+            return cache.bookmarks
         }
+        cache = nil
+        decodeCount += 1
         do {
             let bookmarks = try JSONDecoder().decode([PathBookmark].self, from: data)
-            cachedBookmarks = bookmarks
-            cachedData = data
+            cache = (data: data, bookmarks: bookmarks)
             return bookmarks
         } catch {
             AppLogging.ui.error("failed to decode path bookmarks: \(error.localizedDescription, privacy: .public)")
             defaults.set(data, forKey: backupStorageKey)
-            cachedBookmarks = []
-            cachedData = data
             return []
         }
     }
@@ -86,8 +88,7 @@ final class PathBookmarkStore: @unchecked Sendable {
         do {
             let data = try JSONEncoder().encode(bookmarks)
             defaults.set(data, forKey: storageKey)
-            cachedBookmarks = bookmarks
-            cachedData = data
+            cache = (data: data, bookmarks: bookmarks)
         } catch {
             AppLogging.ui.error("failed to encode path bookmarks: \(error.localizedDescription, privacy: .public)")
         }
