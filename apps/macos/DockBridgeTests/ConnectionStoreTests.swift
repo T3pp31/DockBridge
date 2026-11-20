@@ -179,9 +179,11 @@ final class ConnectionStoreTests: XCTestCase {
         let corruptTrust = Data("not-json".utf8)
         try corruptTrust.write(to: trustURL)
 
+        // A malformed store is reported as verificationFailed so the trust
+        // flow can re-confirm it (issue #1378); the batch still propagates.
         XCTAssertThrowsError(try store.trustProfiles(profiles)) { error in
-            guard case ProfileTrustStoreError.readFailed = error else {
-                return XCTFail("Expected readFailed, got \(error)")
+            guard case ProfileTrustStoreError.verificationFailed = error else {
+                return XCTFail("Expected verificationFailed, got \(error)")
             }
         }
         try store.saveProfiles(profiles)
@@ -489,12 +491,12 @@ final class ConnectionStoreTests: XCTestCase {
         let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
         try JSONEncoder().encode(matchingTrust).write(to: trustURL)
 
-        let result = try store.loadProfilesWithEndpointCheck()
-
-        XCTAssertEqual(result.profiles.first?.host, "evil.example.com")
-        XCTAssertTrue(result.endpointChanges.isEmpty)
-        XCTAssertEqual(result.pendingInitialTrust, [tampered])
-        XCTAssertTrue(result.pendingNewProfileTrust.isEmpty)
+        // Replacing the signed store with an unsigned one must fail
+        // verification instead of being downgraded to initial trust, which
+        // would hide the endpoint change (issue #1375).
+        XCTAssertThrowsError(try store.loadProfilesWithEndpointCheck()) { error in
+            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+        }
     }
 
     func testLoadProfilesRejectsSymlinkedStoreFile() throws {

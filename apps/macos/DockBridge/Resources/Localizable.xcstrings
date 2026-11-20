@@ -5447,23 +5447,6 @@
         }
       }
     },
-    "Unrecognized trusted endpoints file format.": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unrecognized trusted endpoints file format."
-          }
-        },
-        "ja": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "信頼済み接続先ファイルの形式を認識できません。"
-          }
-        }
-      }
-    },
     "Go to Local Path": {
       "extractionState": "manual",
       "localizations": {

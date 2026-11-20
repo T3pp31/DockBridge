@@ -102,23 +102,13 @@ final class ProfileTrustStore: @unchecked Sendable {
     }
 
     func detectEndpointChanges(in profiles: [ConnectionProfile]) throws -> ProfileTrustDetectionResult {
-        let trusted: [UUID: TrustedProfileEndpoint]
-        do {
-            trusted = try loadTrustedEndpoints()
-        } catch ProfileTrustStoreError.verificationFailed {
-            guard !profiles.isEmpty else {
-                return ProfileTrustDetectionResult(
-                    endpointChanges: [],
-                    pendingInitialTrust: [],
-                    pendingNewProfileTrust: []
-                )
-            }
-            return ProfileTrustDetectionResult(
-                endpointChanges: [],
-                pendingInitialTrust: profiles,
-                pendingNewProfileTrust: []
-            )
-        }
+        // An absent store is the legitimate first-run state; a store that
+        // exists but fails verification (corrupt, tampered, or legacy
+        // unsigned) must not be downgraded to "first trust", because that
+        // would silently re-register changed endpoints without the warning
+        // path (issue #1375). Propagate verificationFailed so the UI can
+        // report it explicitly.
+        let trusted = try loadTrustedEndpoints()
 
         if trusted.isEmpty, !profiles.isEmpty {
             return ProfileTrustDetectionResult(
@@ -216,21 +206,17 @@ final class ProfileTrustStore: @unchecked Sendable {
     private func decodeTrustedEndpoints(from data: Data) throws -> [UUID: TrustedProfileEndpoint] {
         let decoder = JSONDecoder()
 
-        if let envelope = try? decoder.decode(SignedTrustedEndpointsEnvelope.self, from: data) {
-            try verifyEnvelope(envelope)
-            return parseEndpointRecords(envelope.endpoints)
-        }
-
-        if let records = try? decoder.decode([String: TrustedProfileEndpoint].self, from: data) {
-            // Legacy unsigned files are not authenticated. Route them through
-            // the explicit initial-trust confirmation flow instead of silently
-            // accepting and re-signing an attacker-controlled payload.
+        guard let envelope = try? decoder.decode(SignedTrustedEndpointsEnvelope.self, from: data) else {
+            // Legacy unsigned dictionaries and malformed, truncated, or
+            // unknown-format stores are unauthenticated and cannot be verified.
+            // Report them as verificationFailed instead of silently accepting
+            // and re-signing an attacker-controlled payload. File-system
+            // failures (unreadable, symlink, permissions) still surface as
+            // readFailed from SecureLocalFileReader (issue #1378).
             throw ProfileTrustStoreError.verificationFailed
         }
-
-        throw ProfileTrustStoreError.readFailed(
-            String(localized: "Unrecognized trusted endpoints file format.")
-        )
+        try verifyEnvelope(envelope)
+        return parseEndpointRecords(envelope.endpoints)
     }
 
     private func parseEndpointRecords(
