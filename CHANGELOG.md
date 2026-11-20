@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- FFI 境界を越えた資格情報が `Zeroizing` で保持され、`SecretPassword` のバッファがドロップ時にゼロ化されるよう修正 (#1144)。
 - プロファイル保存・一括信頼更新で信頼ストアをまとめて更新し、件数分の全件読み書きとKeychain参照を削減 (#1347)
 - ドロップ検証で表示一覧の正規化済みパスと種別を索引化し、複数項目ドロップ時の全件走査とパス正規化の繰り返しを削減 (#1341)。
 - Keychain の暗号化キー読み取り拒否をプロファイル破損と区別し、復旧可能な profiles.json の削除を促さないよう修正 (#1345)。

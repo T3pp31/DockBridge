@@ -32,8 +32,12 @@ uniffi::include_scaffolding!("dockbridge_uniffi");
 pub struct SecretCredential(String);
 
 impl SecretCredential {
-    fn into_inner(mut self) -> String {
-        std::mem::take(&mut self.0)
+    /// Returns the secret in a `Zeroizing` wrapper so the moved-out String is
+    /// wiped when the caller drops it. `std::mem::take` alone would leave the
+    /// plaintext in the extracted String untouched by the type's
+    /// `ZeroizeOnDrop` (issue #1144).
+    fn into_inner(mut self) -> zeroize::Zeroizing<String> {
+        zeroize::Zeroizing::new(std::mem::take(&mut self.0))
     }
 }
 
@@ -1018,14 +1022,14 @@ async fn finish_disconnected_monitor(
 fn to_core_profile(profile: ConnectionProfileRecord) -> ConnectionProfile {
     let auth = match profile.auth_type {
         AuthTypeRecord::Password { password } => AuthType::Password {
-            password: SecretPassword::new(password.into_inner()),
+            password: SecretPassword::from_zeroizing(password.into_inner()),
         },
         AuthTypeRecord::PrivateKey {
             key_path,
             passphrase,
         } => AuthType::PrivateKey {
             key_path: PathBuf::from(key_path),
-            passphrase: passphrase.map(|value| SecretPassword::new(value.into_inner())),
+            passphrase: passphrase.map(|value| SecretPassword::from_zeroizing(value.into_inner())),
         },
     };
 
@@ -1164,7 +1168,7 @@ fn inspect_private_key_algorithm(
     let passphrase = passphrase.map(SecretCredential::into_inner);
     let algorithm = core_inspect_private_key_algorithm(
         PathBuf::from(&key_path).as_path(),
-        passphrase.as_deref(),
+        passphrase.as_deref().map(String::as_str),
     )
     .map_err(map_error)?;
 
@@ -1180,6 +1184,12 @@ fn inspect_private_key_algorithm(
 mod tests {
     use super::*;
     use dockbridge_core::sftp::test_server::TestSftpServer;
+
+    #[test]
+    fn secret_credential_into_inner_preserves_value() {
+        let inner = SecretCredential("ffi-secret".to_string()).into_inner();
+        assert_eq!(inner.as_str(), "ffi-secret");
+    }
 
     #[derive(Default)]
     struct RecordingDisconnectHandler {
