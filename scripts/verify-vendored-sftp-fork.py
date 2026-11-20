@@ -11,14 +11,13 @@ Run from the repository root: python3 scripts/verify-vendored-sftp-fork.py
 
 import json
 import pathlib
-import re
 import subprocess
 import sys
 
 try:
     import tomllib
-except ModuleNotFoundError:  # Python < 3.11 (CI uses 3.12)
-    tomllib = None
+except ModuleNotFoundError:  # Python < 3.11
+    sys.exit("error: verify-vendored-sftp-fork.py requires Python 3.11+ (tomllib)")
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKSPACE_MANIFEST = ROOT / "Cargo.toml"
@@ -27,19 +26,12 @@ CRATE = "bssh-russh-sftp"
 
 
 def _version_from_section(text, section, key):
-    """Read `version` from a dependency table without requiring tomllib."""
-    if tomllib is not None:
-        manifest = tomllib.loads(text)
-        if section == "package":
-            return manifest.get("package", {}).get(key)
-        return manifest.get("workspace", {}).get("dependencies", {}).get(key, {}).get("version")
-    # Fallback for Python < 3.11: match the inline table on the key's line.
-    match = re.search(
-        rf'^{key}\s*=\s*\{{[^}}]*version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-    if match:
-        return match.group(1)
-    match = re.search(rf'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-    return match.group(1) if match else None
+    """Read `version` from `[package]` or a `[workspace.dependencies]` entry."""
+    manifest = tomllib.loads(text)
+    if section == "package":
+        return manifest.get("package", {}).get(key)
+    entry = manifest.get("workspace", {}).get("dependencies", {}).get(key, {})
+    return entry.get("version") if isinstance(entry, dict) else None
 
 
 def pinned_requirement():
@@ -58,22 +50,31 @@ def resolved_packages():
         cwd=ROOT, capture_output=True, text=True, timeout=120,
     )
     if result.returncode != 0:
-        print(result.stderr, file=sys.stderr)
-        raise SystemExit("error: cargo metadata failed")
+        raise RuntimeError(f"cargo metadata failed:\n{result.stderr}")
     return json.loads(result.stdout)["packages"]
 
 
 def main():
     errors = []
     pinned = pinned_requirement()
-    if pinned != f"={vendored_version()}":
+    vendored = vendored_version()
+    if pinned is None:
+        errors.append(f"could not read the {CRATE} requirement from {WORKSPACE_MANIFEST}")
+    if vendored is None:
+        errors.append(f"could not read the package version from {VENDOR_MANIFEST}")
+    if pinned is not None and vendored is not None and pinned != f"={vendored}":
         errors.append(
             f"workspace pin {pinned!r} does not match vendored version "
-            f"{vendored_version()!r}; Cargo would fall back to the registry crate")
+            f"{vendored!r}; Cargo would fall back to the registry crate")
 
-    matches = [package for package in resolved_packages()
+    try:
+        packages = resolved_packages()
+    except RuntimeError as error:
+        errors.append(str(error))
+        packages = None
+    matches = [package for package in packages or []
                if package["name"] == CRATE]
-    if not matches:
+    if packages is not None and not matches:
         errors.append(f"{CRATE} is not in the resolved dependency graph")
     for package in matches:
         source = package.get("source")
@@ -86,16 +87,16 @@ def main():
             errors.append(
                 f"{CRATE} resolves from {vendor_path}, expected "
                 f"{VENDOR_MANIFEST.resolve()}")
-        if package["version"] != vendored_version():
+        if package["version"] != vendored:
             errors.append(
                 f"resolved {CRATE} version {package['version']} != vendored "
-                f"{vendored_version()}")
+                f"{vendored}")
 
     for error in errors:
         print(f"error: {error}", file=sys.stderr)
     if errors:
         return 1
-    print(f"{CRATE} {vendored_version()} resolves from the vendored path")
+    print(f"{CRATE} {vendored} resolves from the vendored path")
     return 0
 
 
