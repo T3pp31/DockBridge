@@ -449,6 +449,90 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertEqual(backups.count, 1)
     }
 
+    func testLegacyMigrationDoesNotLoseConcurrentUpsertsOrDeletes() throws {
+        // Given: a legacy plaintext store holding a profile that will be deleted
+        let doomedID = UUID()
+        let legacyJSON = """
+        [{"id": "\(doomedID.uuidString)", "name": "Legacy",
+          "host": "legacy.example.com", "port": 22, "username": "legacy-user",
+          "authType": "password"}]
+        """
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        try legacyJSON.write(
+            to: URL(fileURLWithPath: storeProfilesPath),
+            atomically: true,
+            encoding: .utf8
+        )
+        let added = (0..<4).map { index in
+            ConnectionProfile(
+                name: "Added \(index)",
+                host: "added\(index).example.com",
+                username: "user",
+                authType: .password
+            )
+        }
+
+        // When: migrating reads race with upserts and a delete
+        let errors = Errors()
+        DispatchQueue.concurrentPerform(iterations: 12) { index in
+            do {
+                switch index {
+                case 0..<4:
+                    _ = try self.store.upsert(added[index])
+                case 4:
+                    _ = try self.store.delete(id: doomedID)
+                default:
+                    _ = try self.store.loadProfiles()
+                }
+            } catch {
+                errors.append(error.localizedDescription)
+            }
+        }
+
+        // Then: every upsert survives, the delete sticks, and the store is encrypted
+        XCTAssertEqual(errors.values, [])
+        let loaded = try store.loadProfiles()
+        XCTAssertEqual(Set(loaded.map(\.id)), Set(added.map(\.id)))
+        let onDisk = try String(contentsOf: URL(fileURLWithPath: storeProfilesPath), encoding: .utf8)
+        XCTAssertTrue(onDisk.contains(EncryptedProfilesEnvelope.formatIdentifier))
+        XCTAssertFalse(onDisk.contains("legacy.example.com"))
+    }
+
+    func testLegacyMigrationBackupAddsSuffixOnSameSecondCollision() throws {
+        // Given: a fixed clock so two migrations produce the same stamp
+        let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        store.backupClock = { fixedDate }
+        let legacyJSON = """
+        [{"id": "\(UUID().uuidString)", "name": "Legacy",
+          "host": "legacy.example.com", "port": 22, "username": "legacy-user",
+          "authType": "password"}]
+        """
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        let url = URL(fileURLWithPath: storeProfilesPath)
+
+        // When: the legacy store is migrated twice within the same "second"
+        for _ in 0..<2 {
+            try legacyJSON.write(to: url, atomically: true, encoding: .utf8)
+            _ = try store.loadProfiles()
+        }
+
+        // Then: both backups exist, the second one suffixed, and each holds
+        // the pre-migration plaintext
+        let backups = try FileManager.default
+            .contentsOfDirectory(atPath: baseDirectory.path)
+            .filter { $0.hasPrefix("profiles.json.bak-") }
+            .sorted()
+        XCTAssertEqual(backups.count, 2)
+        XCTAssertEqual(backups.filter { $0.hasSuffix("-1") }.count, 1)
+        for name in backups {
+            let contents = try String(
+                contentsOf: baseDirectory.appendingPathComponent(name),
+                encoding: .utf8
+            )
+            XCTAssertEqual(contents, legacyJSON)
+        }
+    }
+
     private final class Errors: @unchecked Sendable {
         private let lock = NSLock()
         private var messages: [String] = []

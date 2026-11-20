@@ -42,9 +42,16 @@ final class ConnectionStore: @unchecked Sendable {
     private let profilesBaseDirectory: URL
     private let trustStore: ProfileTrustStore
     private let encryptionService: ProfileEncryptionService
-    /// Serializes read-modify-write cycles so concurrent upserts/deletes do
-    /// not overwrite each other (issue #691).
+    /// Serializes every read and write of `profiles.json` (including the
+    /// legacy plaintext migration performed on read) so concurrent
+    /// loads/upserts/deletes do not overwrite each other (issues #691, #1149).
+    /// `NSLock` is not reentrant: methods suffixed `Locked` require the caller
+    /// to hold it, and public methods that take it must never be called while
+    /// it is held. Trust-store calls are made outside this lock where possible.
     private let mutationLock = NSLock()
+    /// Clock used to stamp legacy-migration backups. Injectable so tests can
+    /// force same-second backup name collisions.
+    var backupClock: () -> Date = { Date() }
     private let fileName = "profiles.json"
 
     init(
@@ -87,9 +94,14 @@ final class ConnectionStore: @unchecked Sendable {
         // read, so reads must serialize with upsert/delete too; otherwise a
         // concurrent mutation can be overwritten by the migration write
         // (issue #1149).
+        // Only the disk read (and possible migration write) needs the lock;
+        // endpoint detection works on this snapshot and the trust store.
         mutationLock.lock()
-        defer { mutationLock.unlock() }
-        let profiles = try readProfilesFromDiskLocked()
+        let profiles: [ConnectionProfile]
+        do {
+            defer { mutationLock.unlock() }
+            profiles = try readProfilesFromDiskLocked()
+        }
         let detection = try trustStore.detectEndpointChanges(in: profiles)
         return ProfileLoadResult(
             profiles: profiles,
@@ -100,6 +112,13 @@ final class ConnectionStore: @unchecked Sendable {
     }
 
     func saveProfiles(_ profiles: [ConnectionProfile], updateTrust: Bool = true) throws {
+        mutationLock.lock()
+        defer { mutationLock.unlock() }
+        try saveProfilesLocked(profiles, updateTrust: updateTrust)
+    }
+
+    /// Writes `profiles.json`. The caller must hold `mutationLock`.
+    private func saveProfilesLocked(_ profiles: [ConnectionProfile], updateTrust: Bool = true) throws {
         let stored = profiles.map(StoredConnectionProfile.init(from:))
         try writeEncryptedProfiles(stored, updateTrust: updateTrust, sourceProfiles: profiles)
     }
@@ -113,7 +132,7 @@ final class ConnectionStore: @unchecked Sendable {
         } else {
             profiles.append(profile)
         }
-        try saveProfiles(profiles)
+        try saveProfilesLocked(profiles)
         return profiles
     }
 
@@ -122,7 +141,7 @@ final class ConnectionStore: @unchecked Sendable {
         defer { mutationLock.unlock() }
         var profiles = try readProfilesFromDiskLocked()
         profiles.removeAll { $0.id == id }
-        try saveProfiles(profiles)
+        try saveProfilesLocked(profiles)
         do {
             try trustStore.removeTrust(for: id)
         } catch {
@@ -159,7 +178,7 @@ final class ConnectionStore: @unchecked Sendable {
         profiles[index].port = change.trusted.port
         profiles[index].username = change.trusted.username
 
-        try saveProfiles(profiles, updateTrust: false)
+        try saveProfilesLocked(profiles, updateTrust: false)
         return profiles
     }
 
@@ -176,6 +195,8 @@ final class ConnectionStore: @unchecked Sendable {
         )
     }
 
+    /// Reads (and, for a legacy plaintext store, migrates) `profiles.json`.
+    /// The caller must hold `mutationLock`.
     private func readProfilesFromDiskLocked() throws -> [ConnectionProfile] {
         let url = profilesURL
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -244,7 +265,7 @@ final class ConnectionStore: @unchecked Sendable {
         formatter.formatOptions = [.withInternetDateTime]
         // Colon and '+' are both replaced so the stamp stays filesystem-safe
         // on every platform (offset renders as e.g. `+09-00` otherwise).
-        let stamp = formatter.string(from: Date())
+        let stamp = formatter.string(from: backupClock())
             .replacingOccurrences(of: ":", with: "-")
             .replacingOccurrences(of: "+", with: "-")
         let directory = url.deletingLastPathComponent()
