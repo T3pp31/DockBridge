@@ -138,6 +138,83 @@ final class AppUpdateDownloadServiceTests: XCTestCase {
         }
     }
 
+    func testDownloadVerifyAndRevealRejectsNonSuccessDownloadStatus() async throws {
+        // Given: the DMG download returns an error page with a 404
+        let dmgURL = temporaryDirectory.appendingPathComponent("update.dmg")
+        try Data("error page".utf8).write(to: dmgURL)
+        let mountPoint = temporaryDirectory.appendingPathComponent("mount", isDirectory: true)
+        try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
+        _ = try makeTestBundle(bundleIdentifier: "com.dockbridge.app", in: mountPoint)
+        let mounter = MockDMGImageMounter(mountPoint: mountPoint)
+        let service = AppUpdateDownloadService(
+            downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 404),
+            dataSession: MockChecksumURLSession(
+                checksumLine: String(repeating: "a", count: 64) + " update.dmg",
+                statusCode: 200
+            ),
+            signatureVerifier: MockSignatureVerifier(),
+            dmgMounter: mounter,
+            fileManager: .default
+        )
+
+        let update = AppUpdateInfo(
+            version: "0.2.0",
+            downloadURL: URL(string: "https://example.com/update.dmg")!,
+            checksumURL: URL(string: "https://example.com/update.dmg.sha256")!,
+            releasePageURL: URL(string: "https://example.com/release")!
+        )
+
+        // Then: it fails before mounting, not later as a checksum mismatch
+        do {
+            try await service.downloadVerifyAndReveal(update: update)
+            XCTFail("Expected invalidDownloadResponse")
+        } catch let error as AppUpdateDownloadError {
+            XCTAssertEqual(error, .invalidDownloadResponse)
+        }
+        XCTAssertNil(mounter.downloadedURL)
+        XCTAssertTrue(mounter.unmountedMountPoints.isEmpty)
+    }
+
+    func testDownloadVerifyAndRevealRejectsNonSuccessChecksumStatus() async throws {
+        // Given: the checksum request returns a 500 whose body is a well-formed,
+        // matching checksum, so only the HTTP status check can reject it
+        let contents = Data("dmg-contents".utf8)
+        let checksum = SHA256.hash(data: contents).map { String(format: "%02x", $0) }.joined()
+        let dmgURL = temporaryDirectory.appendingPathComponent("update.dmg")
+        try contents.write(to: dmgURL)
+        let mountPoint = temporaryDirectory.appendingPathComponent("mount", isDirectory: true)
+        try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
+        _ = try makeTestBundle(bundleIdentifier: "com.dockbridge.app", in: mountPoint)
+        let mounter = MockDMGImageMounter(mountPoint: mountPoint)
+        let service = AppUpdateDownloadService(
+            downloadSession: MockDownloadURLSession(fileURL: dmgURL, statusCode: 200),
+            dataSession: MockChecksumURLSession(
+                checksumLine: "\(checksum) update.dmg",
+                statusCode: 500
+            ),
+            signatureVerifier: MockSignatureVerifier(),
+            dmgMounter: mounter,
+            fileManager: .default
+        )
+
+        let update = AppUpdateInfo(
+            version: "0.2.0",
+            downloadURL: URL(string: "https://example.com/update.dmg")!,
+            checksumURL: URL(string: "https://example.com/update.dmg.sha256")!,
+            releasePageURL: URL(string: "https://example.com/release")!
+        )
+
+        // Then: it reports a checksum fetch failure and never mounts
+        do {
+            try await service.downloadVerifyAndReveal(update: update)
+            XCTFail("Expected checksumFetchFailed")
+        } catch let error as AppUpdateDownloadError {
+            XCTAssertEqual(error, .checksumFetchFailed)
+        }
+        XCTAssertNil(mounter.downloadedURL)
+        XCTAssertTrue(mounter.unmountedMountPoints.isEmpty)
+    }
+
     func testDownloadVerifyAndRevealRejectsChecksumMismatch() async throws {
         let dmgURL = temporaryDirectory.appendingPathComponent("update.dmg")
         try Data("dmg-contents".utf8).write(to: dmgURL)
