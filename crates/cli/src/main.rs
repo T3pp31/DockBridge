@@ -262,8 +262,11 @@ fn is_supported_key_algorithm(algorithm: &PrivateKeyAlgorithm) -> bool {
 
 impl CliHostKeyPrompt {
     fn print_message(&self, text: &str) {
+        // `host` comes from the server or the connection arguments; keep a
+        // crafted name from emitting terminal control sequences (issue #1355).
+        let text = host_key_prompt_text(text);
         if self.policy == HostKeyPolicy::Ask {
-            print_to_tty_or_stderr(text);
+            print_to_tty_or_stderr(&text);
         } else {
             eprintln!("{text}");
         }
@@ -327,6 +330,18 @@ impl HostKeyPrompt for CliHostKeyPrompt {
 /// Writes prompt text to the controlling terminal when available, falling
 /// back to stderr so redirected diagnostics never hide an interactive prompt
 /// (issue #648).
+/// Renders a host-key prompt line for the terminal, escaping control
+/// sequences from server- or argument-derived values (issue #1355).
+fn host_key_prompt_text(text: &str) -> String {
+    terminal_safe_text(text)
+}
+
+/// Renders the CLI's top-level error line; the error chain may carry
+/// server-provided text, so it is sanitized for the terminal (issue #1355).
+fn render_error_for_terminal(err: &anyhow::Error) -> String {
+    format!("Error: {}", terminal_safe_text(&format!("{err:#}")))
+}
+
 fn print_to_tty_or_stderr(text: &str) {
     if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
         use std::io::Write;
@@ -390,7 +405,9 @@ async fn run() -> ExitCode {
     match execute(cli).await {
         Ok(()) => ExitCode::from(EXIT_OK),
         Err(err) => {
-            eprintln!("Error: {err:#}");
+            // Server-provided STATUS/disconnect messages reach this chain, so
+            // sanitize before writing to the terminal (issue #1355).
+            eprintln!("{}", render_error_for_terminal(&err));
             ExitCode::from(exit_code_for_error(&err))
         }
     }
@@ -760,6 +777,31 @@ mod tests {
             terminal_safe_text("\u{1b}[31m/path\u{a}\t"),
             "\\u{001b}[31m/path\\u{000a}\\u{0009}"
         );
+    }
+
+    #[test]
+    fn error_chain_output_is_terminal_safe() {
+        // Given: a server-derived error message carrying an ANSI escape
+        // When: formatting the error chain for stderr
+        // Then: the escape is visible text, not a terminal control sequence
+        let err = anyhow::Error::new(AppError::Sftp(SftpError::ListFailed {
+            path: "/tmp".to_string(),
+            message: "denied\u{1b}[2Jby server".to_string(),
+        }));
+        let rendered = render_error_for_terminal(&err);
+        assert!(rendered.starts_with("Error: "), "got {rendered}");
+        assert!(rendered.contains("\\u{001b}"), "got {rendered}");
+        assert!(!rendered.contains('\u{1b}'), "got {rendered}");
+    }
+
+    #[test]
+    fn host_key_prompt_text_escapes_crafted_host() {
+        // Given: a host name carrying an ANSI clear-screen sequence
+        // When: rendering a host-key prompt line
+        // Then: the escape is shown as visible text
+        let rendered = host_key_prompt_text("Host key for 'evil\u{1b}[2Jhost:22' has changed.");
+        assert!(rendered.contains("evil\\u{001b}[2Jhost"), "got {rendered}");
+        assert!(!rendered.contains('\u{1b}'), "got {rendered}");
     }
 
     #[test]
