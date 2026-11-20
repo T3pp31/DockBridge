@@ -653,6 +653,28 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertNil(try XCTUnwrap(hosts.first).user)
     }
 
+    func testMalformedMatchHeaderDoesNotApplyFollowingValuesToPreviousAlias() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostName server.example.com
+        Match "unterminated
+            User leaked
+        """)
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertNil(try XCTUnwrap(hosts.first).user)
+    }
+
+    func testBareHostLineDoesNotApplyFollowingValuesToPreviousAlias() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostName server.example.com
+        Host
+            User leaked
+        """)
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertNil(try XCTUnwrap(hosts.first).user)
+    }
+
     func testHostNameWithoutArgumentsDoesNotStartAnOrphanBlock() throws {
         // Given: a Host block whose HostName has no value
         let hosts = SSHConfigParser.parse("""
