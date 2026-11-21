@@ -380,7 +380,7 @@ final class ProfileTrustStoreTests: XCTestCase {
         }
     }
 
-    func testDetectEndpointChangesTreatsTamperedTrustStoreAsUntrusted() throws {
+    func testDetectEndpointChangesRejectsTamperedTrustStore() throws {
         let profile = ConnectionProfile(
             name: "Test",
             host: "example.com",
@@ -398,11 +398,12 @@ final class ProfileTrustStoreTests: XCTestCase {
         let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
         try JSONEncoder().encode(tamperedRecords).write(to: trustURL)
 
-        let detection = try trustStore.detectEndpointChanges(in: [profile])
-
-        XCTAssertTrue(detection.endpointChanges.isEmpty)
-        XCTAssertEqual(detection.pendingInitialTrust, [profile])
-        XCTAssertTrue(detection.pendingNewProfileTrust.isEmpty)
+        // A tampered store must surface verificationFailed instead of being
+        // downgraded to initial trust, which would hide endpoint changes
+        // (issue #1375).
+        XCTAssertThrowsError(try trustStore.detectEndpointChanges(in: [profile])) { error in
+            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+        }
     }
 
     func testLegacyUnsignedTrustStoreRequiresExplicitTrust() throws {
@@ -421,9 +422,38 @@ final class ProfileTrustStoreTests: XCTestCase {
         }
         XCTAssertFalse(try signingKeyStore.hasExistingKey)
 
-        let detection = try trustStore.detectEndpointChanges(in: [profile])
-        XCTAssertEqual(detection.pendingInitialTrust, [profile])
+        // An unsigned legacy store is not authenticated, so it is reported as
+        // a verification failure rather than silently re-trusted.
+        XCTAssertThrowsError(try trustStore.detectEndpointChanges(in: [profile])) { error in
+            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+        }
     }
+    func testMalformedTrustStoreReportsVerificationFailure() throws {
+        // Given: existing stores that are neither a signed envelope nor a
+        // legacy dictionary (truncated JSON, unknown shape, missing fields)
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+
+        for payload in ["{\"endpoints\":", "{\"foo\":\"bar\"}", "{\"endpoints\":{}}", "[]"] {
+            try Data(payload.utf8).write(to: trustURL)
+
+            // When: loading and detecting changes
+            // Then: the malformed store is reported as verificationFailed (not
+            // a file-system readFailed) and is never downgraded to initial trust
+            XCTAssertThrowsError(try trustStore.loadTrustedEndpoints(), payload) { error in
+                XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed, payload)
+            }
+            XCTAssertThrowsError(try trustStore.detectEndpointChanges(in: [profile]), payload) { error in
+                XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed, payload)
+            }
+        }
+    }
+
     func testLoadTrustedEndpointsRejectsSymlinkedStoreFile() throws {
         let profile = ConnectionProfile(
             name: "Test",
