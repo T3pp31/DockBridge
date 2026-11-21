@@ -37,7 +37,11 @@ russh = "0.65"
 # high-throughput downloads. The crate alias `russh-sftp` keeps source
 # imports unchanged. It is pinned exactly; see docs/security.md.
 russh-sftp = { package = "bssh-russh-sftp", version = "=2.4.0" }
-uniffi = { version = "0.32", features = ["cli"] }
+# Do not enable `cli` here: workspace features are additive for every target
+# that inherits this dependency, which would pull the bindgen toolchain into
+# the library/staticlib builds. crates/uniffi enables it through its own
+# `cli` feature, used only by the uniffi-bindgen binary (issue #1368).
+uniffi = { version = "0.32" }
 
 # Local copy of the bssh-russh-sftp fork that additionally implements the
 # posix-rename@openssh.com extension (atomic Replace uploads on OpenSSH).
