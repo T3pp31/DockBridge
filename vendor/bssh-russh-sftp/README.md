@@ -27,6 +27,12 @@ Re-applied on sync from `patches/server-readahead-write-coalescing.patch`.
 
 Re-applied on sync from `patches/posix-rename.patch`.
 
+### Dependency: replace unmaintained `chrono` with `time` (`src/utils.rs`, `src/protocol/file.rs`)
+
+Upstream depends on `chrono` only for UNIX timestamp conversion and the `longname` date format. `chrono` is unmaintained (RUSTSEC-2026-0543), so the fork uses `time` instead (`Cargo.toml` is edited directly and preserved across syncs). `utils::unix` computes seconds from `SystemTime` without a date library; `File::longname` formats the month/day/year/time with `OffsetDateTime` and the same `%b %d %Y %H:%M` layout.
+
+Re-applied on sync from `patches/drop-chrono-utils.patch` and `patches/drop-chrono-file.patch`.
+
 > The `serde_bytes` packet-serialization performance fix that originally motivated this fork was upstreamed in russh-sftp 2.1.2; it is kept for reference under `patches/historical/`.
 
 ## Usage
