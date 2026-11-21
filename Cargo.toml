@@ -41,7 +41,10 @@ russh-sftp = { package = "bssh-russh-sftp", version = "=2.4.0" }
 # that inherits this dependency, which would pull the bindgen toolchain into
 # the library/staticlib builds. crates/uniffi enables it through its own
 # `cli` feature, used only by the uniffi-bindgen binary (issue #1368).
-uniffi = { version = "0.32" }
+# `cargo-metadata` is only needed by bindgen's CLI; the build script uses the
+# dedicated `build` feature below without pulling cargo_metadata into the
+# library dependency graph.
+uniffi = { version = "0.32", default-features = false }
 
 # Local copy of the bssh-russh-sftp fork that additionally implements the
 # posix-rename@openssh.com extension (atomic Replace uploads on OpenSSH).
