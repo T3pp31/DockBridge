@@ -699,7 +699,10 @@ fn load_config(explicit: Option<&Path>) -> anyhow::Result<AppConfig> {
         paths = ?candidates,
         "no configuration file found; using built-in default configuration"
     );
-    Ok(AppConfig::default())
+    // Validate the built-in defaults too: with an unresolvable home directory
+    // the default known_hosts paths stay as `~` and would be written under the
+    // working directory unless rejected here (issue #745).
+    AppConfig::resolved_default().map_err(Into::into)
 }
 
 fn home_dir_path() -> Option<PathBuf> {
@@ -1209,6 +1212,25 @@ mod tests {
             assert!(app_config_matches_default(&config));
         });
         drop(dir);
+    }
+
+    // Windows resolves the home from the user profile known folder and
+    // ignores HOME, so this cannot be simulated there.
+    #[cfg(not(target_os = "windows"))]
+    #[serial]
+    #[test]
+    fn default_config_with_relative_home_is_rejected() {
+        // Given: no config file and a relative HOME (unresolvable home)
+        // When: falling back to the built-in defaults
+        // Then: loading fails instead of writing known_hosts under a literal `~`
+        with_config_env(|| {
+            std::env::set_var("HOME", "relative/home");
+            let err = load_config(None).unwrap_err();
+            assert!(
+                err.to_string().contains("home directory"),
+                "expected a home-directory error, got: {err}"
+            );
+        });
     }
 
     #[test]
