@@ -16,7 +16,7 @@ path = "src/bin/uniffi-bindgen.rs"
 required-features = ["cli"]
 
 [features]
-cli = ["uniffi/cli"]
+cli = ["uniffi/cli", "uniffi/cargo-metadata"]
 
 [dependencies]
 dockbridge-core = { path = "../core" }
