@@ -379,6 +379,10 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         prompts: [KbdInteractivePromptRecord]
     ) async -> [String?] {
         guard !Task.isCancelled else { return prompts.map { _ in nil } }
+        // An empty prompt list needs no user input: answer immediately instead
+        // of leaving the challenge pending until the connection timeout
+        // (issue #1379).
+        guard !prompts.isEmpty else { return [] }
         let promptID = UUID()
         if pendingKbdInteractiveChallenge != nil {
             respondToKbdInteractiveChallenge(nil)
