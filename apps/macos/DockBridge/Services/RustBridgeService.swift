@@ -232,6 +232,16 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         }
     }
 
+    /// Renames without replacing an existing destination. The existence
+    /// check before a move/rename is not atomic with the rename, so this
+    /// rejects a destination created in the meantime instead of silently
+    /// overwriting it (issue #1155).
+    func renameRemoteNoOverwrite(from: String, to: String) async throws {
+        try await runOnBridge { client, sessionId in
+            try client.renameNoOverwrite(sessionId: sessionId, from: from, to: to)
+        }
+    }
+
     func mkdirRemote(path: String) async throws {
         try await runOnBridge { client, sessionId in
             try client.createDirectory(sessionId: sessionId, remotePath: path)

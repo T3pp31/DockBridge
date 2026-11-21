@@ -898,6 +898,32 @@ impl<'a> SftpClient<'a> {
             })
     }
 
+    /// Renames `from` to `to` without replacing an existing destination.
+    ///
+    /// Uses plain `SSH_FXP_RENAME` (never `posix-rename@openssh.com`, which
+    /// replaces atomically). SFTP v3 requires servers to fail this request
+    /// when the destination exists, and OpenSSH's `sftp-server` implements it
+    /// for regular files as `link()` + `unlink()`, which refuses an existing
+    /// target. This is best effort and server dependent: a non-compliant
+    /// server that maps the request to a plain POSIX `rename(2)` may still
+    /// replace the destination, and OpenSSH's non-regular-file fallback is a
+    /// racy `stat()` + `rename()`. On compliant servers this closes the
+    /// check-then-rename race where a file created by another writer between
+    /// the existence check and the rename would be silently overwritten
+    /// (issue #1155).
+    pub async fn rename_no_overwrite(&self, from: &str, to: &str) -> Result<(), SftpError> {
+        let from = normalize_remote_path(from)?;
+        let to = normalize_remote_path(to)?;
+        self.sftp()
+            .rename(&from, &to)
+            .await
+            .map_err(|err| SftpError::RenameFailed {
+                from,
+                to,
+                message: err.to_string(),
+            })
+    }
+
     /// Renames `from` to `to`, atomically replacing an existing destination
     /// via the `posix-rename@openssh.com` extension. Returns `Ok(false)` when
     /// the server does not advertise the extension.
@@ -4631,6 +4657,103 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(contents, b"new");
+    }
+
+    #[tokio::test]
+    async fn rename_no_overwrite_refuses_existing_destination() {
+        // Given: source and a destination created by another writer
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/rename/src.txt", b"new").await;
+        server
+            .write_remote_file("/rename/dst.txt", b"existing")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        // When: renaming without overwrite
+        let err = client
+            .rename_no_overwrite("/rename/src.txt", "/rename/dst.txt")
+            .await
+            .unwrap_err();
+
+        // Then: it fails and leaves both files untouched, unlike `rename`
+        // which replaces through posix-rename (issue #1155).
+        assert!(matches!(err, SftpError::RenameFailed { .. }), "{err:?}");
+        assert!(server.remote_file_exists("/rename/src.txt"));
+        let contents = tokio::fs::read(server.root.join("rename/dst.txt"))
+            .await
+            .unwrap();
+        assert_eq!(contents, b"existing");
+    }
+
+    #[tokio::test]
+    async fn rename_no_overwrite_refuses_existing_directory_destination() {
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/rename/src.txt", b"new").await;
+        server.create_remote_dir("/rename/dst").await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let err = client
+            .rename_no_overwrite("/rename/src.txt", "/rename/dst")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, SftpError::RenameFailed { .. }), "{err:?}");
+        assert!(server.remote_file_exists("/rename/src.txt"));
+        assert!(server.root.join("rename/dst").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rename_no_overwrite_refuses_existing_symlink_destination() {
+        let server = TestSftpServer::start().await;
+        server.write_remote_file("/rename/src.txt", b"new").await;
+        server
+            .write_remote_file("/rename/target.txt", b"existing")
+            .await;
+        std::os::unix::fs::symlink(
+            server.root.join("rename/target.txt"),
+            server.root.join("rename/link.txt"),
+        )
+        .unwrap();
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        let err = client
+            .rename_no_overwrite("/rename/src.txt", "/rename/link.txt")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, SftpError::RenameFailed { .. }), "{err:?}");
+        assert!(server.remote_file_exists("/rename/src.txt"));
+        let link = server.root.join("rename/link.txt");
+        assert!(std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(&link).unwrap(), b"existing");
+    }
+
+    #[tokio::test]
+    async fn rename_no_overwrite_moves_when_destination_is_absent() {
+        let server = TestSftpServer::start().await;
+        server
+            .write_remote_file("/rename/src.txt", b"payload")
+            .await;
+        let session = server.connect_session().await;
+        let client = SftpClient::new(&session);
+
+        client
+            .rename_no_overwrite("/rename/src.txt", "/rename/dst.txt")
+            .await
+            .unwrap();
+
+        assert!(!server.remote_file_exists("/rename/src.txt"));
+        let contents = tokio::fs::read(server.root.join("rename/dst.txt"))
+            .await
+            .unwrap();
+        assert_eq!(contents, b"payload");
     }
 
     #[tokio::test]
