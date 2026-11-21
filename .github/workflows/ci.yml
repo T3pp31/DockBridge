@@ -128,6 +128,8 @@ jobs:
         run: python3 scripts/test-release-gating.py
       - name: Test advisory expiry check
         run: python3 scripts/test-check-advisory-expiry.py
+      - name: Test scheduled security audit workflow permissions
+        run: python3 scripts/test-security-audit-workflow.py
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
