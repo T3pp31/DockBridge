@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resolve the CLI artifact name once from `cli_name_template` in
   `config/release.toml` instead of duplicating the literal in two workflow
   steps, and use `app_name` for the release title (#1363).
+- Check `.cargo/audit.toml` advisory exceptions with a TOML parser instead of
+  line-based `awk`/`sed`, so one-line arrays and whitespace variations cannot
+  bypass the expiry check (#1362).
 - Upgrade `russh` to 0.65.1 and `ssh-key` to 0.7.0-rc.11, and patch `rustix`
   to 1.1.6, resolving RUSTSEC-2026-0486, RUSTSEC-2026-0492, and
   RUSTSEC-2026-0495. Keep the client from advertising host-certificate
