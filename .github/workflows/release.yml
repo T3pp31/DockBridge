@@ -10,8 +10,11 @@ on:
         description: Version to release (e.g. 0.1.0)
         required: true
 
+# Key the group on the same `v<version>` tag the release job publishes to, so
+# a manual dispatch for 1.0.0 and a v1.0.0 tag push serialize as one release
+# instead of racing as release-1.0.0 vs release-v1.0.0 (issue #1364).
 concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && format('v{0}', github.event.inputs.version) || github.ref_name }}
   cancel-in-progress: false
 
 permissions: {}

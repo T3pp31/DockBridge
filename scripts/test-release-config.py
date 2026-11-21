@@ -215,6 +215,41 @@ class ReleaseConfigTests(unittest.TestCase):
             self.assertNotRegex(text, r"awk[^\n]*config/release\.toml")
         self.assertEqual(used_keys, set(KEYS))
 
+    def concurrency_block(self):
+        text = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+        block = re.search(r"^concurrency:\n((?:[ \t]+.*\n)+)", text, re.MULTILINE)
+        self.assertIsNotNone(block, "release.yml has no workflow-level concurrency")
+        return block[1]
+
+    def test_release_concurrency_normalizes_the_version(self):
+        # A dispatch for 1.0.0 must share the concurrency group of a v1.0.0
+        # tag push, or the two runs publish concurrently (issue #1364).
+        block = self.concurrency_block()
+        match = re.search(
+            r"""^\s*group:\s*["']?release-\$\{\{\s*(.+?)\s*&&\s*(.+?)\s*\|\|\s*(.+?)\s*\}\}""",
+            block, re.MULTILINE)
+        self.assertIsNotNone(match, block)
+        condition, dispatch, tag = (re.sub(r"\s+", "", part) for part in match.groups())
+        self.assertEqual(condition, "github.event_name=='workflow_dispatch'")
+        self.assertEqual(dispatch, "format('v{0}',github.event.inputs.version)")
+        self.assertEqual(tag, "github.ref_name")
+
+        def group(event_name, version="", ref_name=""):
+            # Mirrors the expression's semantics for the fixed parts above.
+            if event_name == "workflow_dispatch" and version:
+                return f"release-v{version}"
+            return f"release-{ref_name}"
+
+        self.assertEqual(group("workflow_dispatch", version="1.0.0"),
+                         group("push", ref_name="v1.0.0"))
+        self.assertNotEqual(group("workflow_dispatch", version="2.0.0"),
+                            group("push", ref_name="v1.0.0"))
+
+    def test_release_concurrency_waits_instead_of_cancelling(self):
+        # Cancelling would abort an in-progress publish of the same release.
+        self.assertRegex(self.concurrency_block(),
+                         r"(?m)^\s*cancel-in-progress:\s*false\s*$")
+
 
 if __name__ == "__main__":
     unittest.main()
