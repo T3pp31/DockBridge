@@ -328,19 +328,64 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
         let unknownResult = await viewModel.moveRemoteItem(from: "/source/file.txt", toDirectory: "/target")
         XCTAssertFalse(unknownResult)
-        XCTAssertTrue(bridge.renamed.isEmpty)
+        XCTAssertTrue(bridge.renamedNoOverwrite.isEmpty)
         XCTAssertEqual(viewModel.errorMessage, String(localized: "Unable to check the remote destination. Try again."))
 
         bridge.directoryListings["/target"] = [makeRemoteItem(name: "file.txt", path: "/target/file.txt")]
         let collisionResult = await viewModel.moveRemoteItem(from: "/source/file.txt", toDirectory: "/target")
         XCTAssertFalse(collisionResult)
-        XCTAssertTrue(bridge.renamed.isEmpty)
+        XCTAssertTrue(bridge.renamedNoOverwrite.isEmpty)
 
         bridge.directoryListings["/target"] = []
         let absentResult = await viewModel.moveRemoteItem(from: "/source/file.txt", toDirectory: "/target")
         XCTAssertTrue(absentResult)
-        XCTAssertEqual(bridge.renamed.count, 1)
-        XCTAssertEqual(bridge.renamed.first?.to, "/target/file.txt")
+        XCTAssertEqual(bridge.renamedNoOverwrite.count, 1)
+        XCTAssertEqual(bridge.renamedNoOverwrite.first?.to, "/target/file.txt")
+    }
+
+    func testRemoteMoveReportsDestinationCreatedDuringRenameRace() async {
+        // Given: the destination is absent when checked, but the rename loses
+        // the race to another writer that creates it
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        bridge.directoryListings["/target"] = []
+        bridge.renameNoOverwriteFails = true
+
+        // When: moving
+        let moved = await viewModel.moveRemoteItem(from: "/source/file.txt", toDirectory: "/target")
+
+        // Then: it fails and reports the error instead of silently replacing
+        // the concurrently created file (issue #1155).
+        XCTAssertFalse(moved)
+        XCTAssertEqual(bridge.renamedNoOverwrite.count, 1)
+        XCTAssertTrue(bridge.renamed.isEmpty, "must never fall back to the replacing rename")
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            DockBridgeError.Other(message: "destination exists").dockBridgeUserMessage
+        )
+    }
+
+    func testRemoteRenameKeepsSheetWhenRenameLosesRace() async {
+        // Given: the destination is absent when checked, but another writer
+        // creates it before the rename
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        bridge.directoryListings["/target"] = []
+        bridge.renameNoOverwriteFails = true
+        viewModel.beginRename(item: makeRemoteItem(name: "old.txt", path: "/target/old.txt"))
+        viewModel.renameText = "new.txt"
+
+        // When: committing the rename
+        await viewModel.commitRename()
+
+        // Then: it reports the error, keeps the user's input, and never
+        // uses the replacing rename (issue #1155)
+        XCTAssertEqual(bridge.renamedNoOverwrite.count, 1)
+        XCTAssertTrue(bridge.renamed.isEmpty)
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            DockBridgeError.Other(message: "destination exists").dockBridgeUserMessage
+        )
+        XCTAssertEqual(viewModel.renameTarget?.path, "/target/old.txt")
+        XCTAssertEqual(viewModel.renameText, "new.txt")
     }
 
     func testRemoteRenameWithUnchangedNameClosesWithoutRemoteOperations() async {
@@ -401,13 +446,13 @@ final class MainViewModelTestabilityTests: XCTestCase {
         viewModel.renameText = "new.txt"
 
         await viewModel.commitRename()
-        XCTAssertTrue(bridge.renamed.isEmpty)
+        XCTAssertTrue(bridge.renamedNoOverwrite.isEmpty)
         XCTAssertNotNil(viewModel.renameTarget)
         XCTAssertEqual(viewModel.errorMessage, String(localized: "Unable to check the remote destination. Try again."))
 
         bridge.directoryListings["/target"] = [makeRemoteItem(name: "new.txt", path: "/target/new.txt")]
         await viewModel.commitRename()
-        XCTAssertTrue(bridge.renamed.isEmpty)
+        XCTAssertTrue(bridge.renamedNoOverwrite.isEmpty)
         XCTAssertNotNil(viewModel.renameTarget)
         XCTAssertEqual(viewModel.renameText, "new.txt")
         XCTAssertEqual(viewModel.errorMessage, String(localized: "A file already exists at the destination."))
@@ -415,9 +460,9 @@ final class MainViewModelTestabilityTests: XCTestCase {
         viewModel.errorMessage = nil
         bridge.directoryListings["/target"] = []
         await viewModel.commitRename()
-        XCTAssertEqual(bridge.renamed.count, 1)
-        XCTAssertEqual(bridge.renamed.first?.from, "/target/old.txt")
-        XCTAssertEqual(bridge.renamed.first?.to, "/target/new.txt")
+        XCTAssertEqual(bridge.renamedNoOverwrite.count, 1)
+        XCTAssertEqual(bridge.renamedNoOverwrite.first?.from, "/target/old.txt")
+        XCTAssertEqual(bridge.renamedNoOverwrite.first?.to, "/target/new.txt")
         XCTAssertNil(viewModel.renameTarget)
         XCTAssertTrue(viewModel.renameText.isEmpty)
         XCTAssertNil(viewModel.errorMessage)
@@ -1365,6 +1410,113 @@ final class QuickLookPresenterTests: XCTestCase {
         )
 
         XCTAssertTrue(host === panel)
+    }
+
+    func testPreviewFallsBackToOpeningFilesWhenPanelIsUnavailable() {
+        // Given: a usable host window, no panel, and a recording opener
+        var opened: [URL] = []
+        var panelRequested = false
+        let window = makeWindow()
+        XCTAssertNotNil(window.contentView)
+        let presenter = QuickLookPresenter(dependencies: .init(
+            previewPanel: {
+                panelRequested = true
+                return nil
+            },
+            openFile: { opened.append($0) },
+            isPreviewableFile: { _ in true },
+            hostWindow: { window }
+        ))
+        let urls = [
+            URL(fileURLWithPath: "/tmp/a.txt"),
+            URL(fileURLWithPath: "/tmp/b.txt"),
+        ]
+
+        // When: previewing
+        presenter.preview(urls: urls)
+
+        // Then: the panel lookup ran, failed, and every valid file is opened by the fallback
+        XCTAssertTrue(panelRequested)
+        XCTAssertEqual(opened, urls)
+        XCTAssertFalse(window.contentView?.nextResponder === presenter)
+        XCTAssertEqual(presenter.numberOfPreviewItems(in: nil), urls.count)
+    }
+
+    func testPreviewOpensOnlyExistingRegularFiles() {
+        var opened: [URL] = []
+        let existing = URL(fileURLWithPath: "/tmp/keep.txt")
+        let missing = URL(fileURLWithPath: "/tmp/missing.txt")
+        let presenter = QuickLookPresenter(dependencies: .init(
+            previewPanel: { nil },
+            openFile: { opened.append($0) },
+            isPreviewableFile: { $0 == existing },
+            hostWindow: { nil }
+        ))
+
+        presenter.preview(urls: [existing, missing])
+
+        XCTAssertEqual(opened, [existing])
+        XCTAssertEqual(presenter.numberOfPreviewItems(in: nil), 1)
+    }
+
+    func testPreviewDoesNothingWhenNoFileIsPreviewable() {
+        // Given: a presenter that already previews one file
+        var opened: [URL] = []
+        let valid = URL(fileURLWithPath: "/tmp/a.txt")
+        let presenter = QuickLookPresenter(dependencies: .init(
+            previewPanel: { nil },
+            openFile: { opened.append($0) },
+            isPreviewableFile: { $0 == valid },
+            hostWindow: { nil }
+        ))
+        presenter.preview(urls: [valid])
+        XCTAssertEqual(opened, [valid])
+
+        // When: previewing only unpreviewable paths
+        presenter.preview(urls: [URL(fileURLWithPath: "/tmp/dir")])
+
+        // Then: nothing is opened and the previous preview items are kept
+        XCTAssertEqual(opened, [valid])
+        XCTAssertEqual(presenter.numberOfPreviewItems(in: nil), 1)
+    }
+
+    func testPreviewItemAtMapsIndexesAndRejectsStaleIndex() {
+        let first = URL(fileURLWithPath: "/tmp/a.txt")
+        let second = URL(fileURLWithPath: "/tmp/b.txt")
+        let presenter = QuickLookPresenter(dependencies: .init(
+            previewPanel: { nil },
+            openFile: { _ in },
+            isPreviewableFile: { _ in true },
+            hostWindow: { nil }
+        ))
+        presenter.preview(urls: [first, second])
+
+        XCTAssertEqual(presenter.previewPanel(nil, previewItemAt: 0) as? URL, first)
+        XCTAssertEqual(presenter.previewPanel(nil, previewItemAt: 1) as? URL, second)
+        XCTAssertNil(presenter.previewPanel(nil, previewItemAt: 2))
+    }
+
+    func testDefaultPreviewRuleExcludesDirectoriesAndMissingFiles() throws {
+        // Given: a real file and directory, using the default preview rule
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quicklook-\(UUID().uuidString)", isDirectory: true)
+        let directory = root.appendingPathComponent("folder", isDirectory: true)
+        let file = root.appendingPathComponent("file.txt")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var opened: [URL] = []
+        let presenter = QuickLookPresenter(dependencies: .init(
+            previewPanel: { nil },
+            openFile: { opened.append($0) },
+            hostWindow: { nil }
+        ))
+
+        // When: previewing a directory, a missing path, and a file
+        presenter.preview(urls: [directory, root.appendingPathComponent("missing.txt"), file])
+
+        // Then: only the regular file is opened
+        XCTAssertEqual(opened, [file])
     }
 
     private func makeWindow(isVisible: Bool = true) -> QuickLookHostTestWindow {

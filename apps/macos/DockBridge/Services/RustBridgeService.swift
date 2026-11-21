@@ -232,6 +232,16 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         }
     }
 
+    /// Renames without replacing an existing destination. The existence
+    /// check before a move/rename is not atomic with the rename, so this
+    /// rejects a destination created in the meantime instead of silently
+    /// overwriting it (issue #1155).
+    func renameRemoteNoOverwrite(from: String, to: String) async throws {
+        try await runOnBridge { client, sessionId in
+            try client.renameNoOverwrite(sessionId: sessionId, from: from, to: to)
+        }
+    }
+
     func mkdirRemote(path: String) async throws {
         try await runOnBridge { client, sessionId in
             try client.createDirectory(sessionId: sessionId, remotePath: path)
@@ -379,6 +389,10 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         prompts: [KbdInteractivePromptRecord]
     ) async -> [String?] {
         guard !Task.isCancelled else { return prompts.map { _ in nil } }
+        // An empty prompt list needs no user input: answer immediately instead
+        // of leaving the challenge pending until the connection timeout
+        // (issue #1379).
+        guard !prompts.isEmpty else { return [] }
         let promptID = UUID()
         if pendingKbdInteractiveChallenge != nil {
             respondToKbdInteractiveChallenge(nil)

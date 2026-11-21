@@ -17,6 +17,9 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      # rustsec/audit-check records its result as a check run, which needs
+      # checks: write (the same grant ci.yml's security-audit job has).
+      checks: write
       issues: write
     steps:
       - name: Checkout
@@ -39,34 +42,7 @@ jobs:
         with:
           persist-credentials: false
 
+      # Parse audit.toml as TOML (via tomllib) so a one-line array or a
+      # whitespace variation cannot bypass the expiry check (issue #1362).
       - name: Check that advisory exceptions have not expired
-        run: |
-          MISSING=0
-          while IFS= read -r line; do
-            if [[ "$line" =~ ^[[:space:]]*\"(RUSTSEC-[0-9]+-[0-9]+)\" ]]; then
-              id="${BASH_REMATCH[1]}"
-              if ! grep -q "# expires: " <<<"$line"; then
-                echo "error: ignore for $id has no '# expires: YYYY-MM-DD' comment" >&2
-                MISSING=1
-              else
-                expiry="$(grep -oE '# expires: [0-9]{4}-[0-9]{2}-[0-9]{2}([[:space:]]|$)' <<<"$line" | awk '{print $3}')"
-                if [[ -z "$expiry" ]]; then
-                  echo "error: ignore for $id has an invalid '# expires: YYYY-MM-DD' comment" >&2
-                  MISSING=1
-                else
-                  normalized_expiry="$(date -u -d "$expiry" +%F 2>/dev/null || true)"
-                  if [[ "$normalized_expiry" != "$expiry" ]]; then
-                    echo "error: ignore for $id has invalid expiry date '$expiry'" >&2
-                    MISSING=1
-                  elif [[ "$(date -u +%Y-%m-%d)" > "$expiry" ]]; then
-                    echo "error: ignore for $id expired on $expiry" >&2
-                    MISSING=1
-                  fi
-                fi
-              fi
-            fi
-          done < <(awk '/\[advisories\]/,/^\]/' .cargo/audit.toml | sed '/ignore = \[/d; /^\]/d' | grep -v '^[[:space:]]*#')
-          if [[ "$MISSING" -ne 0 ]]; then
-            echo "add or refresh an '# expires: YYYY-MM-DD' comment for every ignore entry" >&2
-            exit 1
-          fi
+        run: python3 scripts/check-advisory-expiry.py

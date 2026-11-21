@@ -223,4 +223,30 @@ final class RustBridgeServiceSessionTests: XCTestCase {
         XCTAssertTrue(bridge.activeSession === registeredSession)
         XCTAssertEqual(bridge.connectedProfileID, profileID)
     }
+
+    func testEmptyKbdInteractivePromptsAnswerImmediately() async throws {
+        // Given: a fixed 30s connection timeout and a server challenge with no prompts
+        let suiteName = "RustBridgeServiceSessionTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(30, forKey: AppSettingsKeys.connectionTimeoutSecs)
+        let bridge = RustBridgeService(settings: AppSettingsService(defaults: defaults))
+
+        // When: awaiting answers
+        let clock = ContinuousClock()
+        let start = clock.now
+        let answers = await bridge.awaitKbdInteractiveAnswers(
+            name: "empty",
+            instructions: "",
+            prompts: []
+        )
+        let elapsed = clock.now - start
+
+        // Then: an empty answer is returned well before the connection
+        // timeout, without leaving a pending challenge (a regression that
+        // waits for the timeout would take ~30s and fail here)
+        XCTAssertEqual(answers, [])
+        XCTAssertNil(bridge.pendingKbdInteractiveChallenge)
+        XCTAssertLessThan(elapsed, .seconds(5))
+    }
 }

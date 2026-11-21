@@ -53,9 +53,6 @@ features = ["serde"]
 [dependencies.bytes]
 version = "1.11.1"
 
-[dependencies.chrono]
-version = "0.4.44"
-
 [dependencies.dashmap]
 version = "6.1.0"
 
@@ -79,6 +76,11 @@ version = "0.11.19"
 
 [dependencies.thiserror]
 version = "2.0.18"
+
+[dependencies.time]
+version = "0.3.55"
+default-features = false
+features = ["std"]
 
 [dependencies.tokio]
 version = "1.52.3"

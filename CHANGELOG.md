@@ -11,6 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Run the localization, UI/UX tracking, and Settings scene guard script tests
   in CI so regressions in their verification logic fail the build (#1366).
+- Replace `chrono` with `time` in the vendored `bssh-russh-sftp` fork, since
+  `chrono` is unmaintained (RUSTSEC-2026-0543). The remaining `chrono` entry in
+  `Cargo.lock` is a `wasm32`-only dependency of `russh-util`, which DockBridge
+  does not build; it is tracked as an expiring audit exception (#1382).
+- Stop enabling `uniffi/cli` from the workspace dependency so the bindgen
+  toolchain is only compiled for the `uniffi-bindgen` binary instead of every
+  library/staticlib build (#1368).
+- Gate release publishing on a test job that runs the Rust workspace tests
+  and the macOS app tests, so a tag push cannot publish artifacts from an
+  untested commit (#1365).
+- Normalize the release concurrency key to `v<version>` so a manual dispatch
+  and a tag push for the same release serialize instead of running
+  concurrently (#1364).
+- Resolve the CLI artifact name once from `cli_name_template` in
+  `config/release.toml` instead of duplicating the literal in two workflow
+  steps, and use `app_name` for the release title (#1363).
+- Check `.cargo/audit.toml` advisory exceptions with a TOML parser instead of
+  line-based `awk`/`sed`, so one-line arrays and whitespace variations cannot
+  bypass the expiry check (#1362).
 - Upgrade `russh` to 0.65.1 and `ssh-key` to 0.7.0-rc.11, and patch `rustix`
   to 1.1.6, resolving RUSTSEC-2026-0486, RUSTSEC-2026-0492, and
   RUSTSEC-2026-0495. Keep the client from advertising host-certificate
@@ -22,6 +41,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `sftp://` URL のユーザー名・リモートパスを二重にパーセントデコードしていたため、名前に字義通りの `%20` を含む場合に誤ったパスへ接続していた問題を修正 (#1153)。
+- ホームディレクトリが未設定または相対パスの場合、既定の known_hosts パスを相対 `~` のまま返さず設定エラーとして拒否し、カレントディレクトリ配下への書き込みを防ぐよう修正 (#745)。
+- SSH config インポートでワイルドカード／否定パターンの Host ブロック（`Host prod-*`、`Host * !bastion` など）の User/Port/IdentityFile を、一致するエイリアスの既定値としてファイル順に適用するよう修正 (#688)。
+- 同一 Host 行の否定パターンが肯定エイリアスにも適用され、`Host foo !f*` のようなブロックが `foo` に適用されないことを回帰テストで保証 (#1370)。
+- SSH config インポートで引数なし・引用符未閉じの `HostName` などを Host ブロック開始と誤認せず、後続の User/Port/IdentityFile を同じブロックに適用するよう修正 (#1371)。
+- アプリ内更新で署名済みバンドルの `CFBundleShortVersionString` が提示されたリリースバージョンと一致することを検証し、署名済み旧版へのダウングレードを防ぐよう修正 (#1372)。
+- 接続フォームの資格情報解決を純粋関数に切り出し、Keychain 保存設定に関わらず非空入力がセッションへ渡り、空入力が nil のまま、選択外の認証方式の値が無視されることを単体テストで保証 (#1381)。
+- キーボードインタラクティブ認証でプロンプトが空の場合、接続タイムアウトまで待機せず即座に空応答を返すよう修正 (#1379)。
+- 署名済み信頼ファイルが形式不正・切り詰めの場合に読み取りエラーではなく検証失敗として報告するよう修正 (#1378)。
+- 信頼ストアの検証失敗を初回信頼フローへ降格せず、整合性検証エラーとして明示するよう修正し、改ざん・破損・旧形式への置換でエンドポイント変更検出を回避できないようにした (#1375)。
+- `trusted_endpoints.json` のパーミッション変更がシンボリックリンクを辿らないよう修正し、リンク先のファイルやディレクトリの権限を意図せず変更しないようにした (#1377)。
+- プロファイル削除時に信頼ストアを二重に読み書きしていた処理を1回の更新にまとめ、信頼ストアの更新回数と Keychain 参照回数をプロファイル数に依存しない一定回数に削減 (#1374)。あわせて、削除と無関係なプロファイルの未確認のエンドポイント変更が削除時に自動承認されなくなった。
+- パスブックマークの参照・追加・削除で毎回全件の JSON デコードを行っていた処理に、保存データの変化を検出するメモリ内キャッシュを追加し、デコード回数を削減 (#1373)。
+- ローカルディレクトリ一覧のソートで、比較のたびに locale 依存比較を呼ぶ代わりに事前計算した正規化キーを使い、大量エントリ時のソートコストを削減 (#1369)。並び順はフォルダ優先・ロケール非依存の大小／分音符号畳み込みキー・生の名前によるタイブレークの順。
+- 資格情報プロンプトで Keychain 保存を選んだ場合、セッション限定の古い資格情報を破棄し、以降の接続で保存済みの新しい値を使うよう修正 (#1154)。
+- 定期セキュリティ監査ジョブに `checks: write` を付与し、`rustsec/audit-check` がチェック実行を作成できるよう修正 (#1361)。
+- CLI のテキスト出力で Unicode 双方向制御文字（U+202A〜U+202E、U+2066〜U+2069 など）を可視エスケープし、ファイル名の表示偽装を防ぐよう修正 (#1356)。
+- CLI のエラー表示とホスト鍵プロンプトでサーバー由来の文字列を端末向けにサニタイズし、ANSI エスケープによる表示偽装を防ぐよう修正 (#1355)。
+- 更新 DMG とチェックサム取得の非 2xx HTTP 応答を検証する異常系テストを追加し、エラーページをダウンロード結果として扱う回帰を検出できるようにした (#1354)。
+- レガシー平文プロファイルの暗号化移行を読み取りロック内で行い、並行する upsert/delete の変更が移行書き込みで失われないようにした。同一秒に移行が重複してもバックアップ名の衝突で失敗しないよう修正 (#1149)。
+- E2E テストの Docker 可用性プローブにタイムアウトを設け、Docker デーモンが応答しない場合にメインスレッドが無期限にブロックされないようにした (#1156)。
+- `SensitiveString` の保存バッファを `@ObservationIgnored` で真の stored property に戻し、`clear()` と再代入が平文バッファを実際にゼロ化するよう修正。解放時のゼロ化も追加 (#1145)。
+- リモートの移動・リネームで存在確認と rename の間の競合により、別の書き込み主体が作成した宛先を無確認で上書きし得た問題を修正。no-overwrite の rename（素の SSH_FXP_RENAME）を使い、SFTP v3 準拠サーバーでは競合時に失敗させる。非準拠サーバーでの挙動はサーバー実装依存 (#1155)。
+- FFI 境界を越えた資格情報が `Zeroizing` で保持され、`SecretPassword` のバッファがドロップ時にゼロ化されるよう修正 (#1144)。
+- ステイルした秘密鍵ブックマークを解決時に再作成・永続化し、キーファイル移動後にブックマークが解決不能になるのを防ぐよう修正 (#1146)。
+- `QuickLookPresenter` のパネル取得・ファイルオープン・存在確認を注入可能にし、フォールバックとプレビュー状態の回帰をテストで検出できるようにした (#1380)。
+- CI で vendored SFTP フォークのバージョン固定と解決元を検証し、不一致時にレジストリ版へ黙ってフォールバックして posix-rename が失われるのを防ぐようにした (#1367)。
 - プロファイル保存・一括信頼更新で信頼ストアをまとめて更新し、件数分の全件読み書きとKeychain参照を削減 (#1347)
 - ドロップ検証で表示一覧の正規化済みパスと種別を索引化し、複数項目ドロップ時の全件走査とパス正規化の繰り返しを削減 (#1341)。
 - Keychain の暗号化キー読み取り拒否をプロファイル破損と区別し、復旧可能な profiles.json の削除を促さないよう修正 (#1345)。

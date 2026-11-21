@@ -74,6 +74,8 @@ mkdir -p "$PATCH_DIR"
 PATCH_TARGETS=(
     "client/fs/file.rs:pipelined-file-io.patch"
     "server/mod.rs:server-readahead-write-coalescing.patch"
+    "utils.rs:drop-chrono-utils.patch"
+    "protocol/file.rs:drop-chrono-file.patch"
 )
 
 # Guard against exactly the failure this list exists to prevent: any src file

@@ -258,6 +258,103 @@ final class SecurityScopedBookmarkServiceTests: XCTestCase {
     }
 }
 
+final class StalePrivateKeyBookmarkTests: XCTestCase {
+    func testFreshBookmarkIsNotRecreated() throws {
+        // Given: a real, non-stale bookmark for a temporary file
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let keyURL = directory.appendingPathComponent("id_test")
+        try Data("key".utf8).write(to: keyURL)
+        let bookmark = try SecurityScopedBookmarkService.shared.createBookmark(for: keyURL, readOnly: true)
+        var profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyBookmark: bookmark
+        )
+        var createCalls = 0
+
+        // When: refreshing stale bookmarks
+        let refreshed = profile.refreshStalePrivateKeyBookmark { _, _ in
+            createCalls += 1
+            return bookmark
+        }
+
+        // Then: a fresh bookmark is left untouched. The resolved URL may be
+        // canonicalized (/var -> /private/var), so compare the file name.
+        XCTAssertFalse(refreshed)
+        XCTAssertEqual(createCalls, 0)
+        XCTAssertEqual(profile.privateKeyBookmark, bookmark)
+        XCTAssertEqual(
+            profile.privateKeyPath.map { URL(fileURLWithPath: $0).lastPathComponent },
+            keyURL.lastPathComponent
+        )
+    }
+
+    func testUnresolvableBookmarkIsNotRecreated() {
+        var profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyBookmark: Data([1, 2, 3])
+        )
+        var createCalls = 0
+
+        let refreshed = profile.refreshStalePrivateKeyBookmark { _, _ in
+            createCalls += 1
+            return Data([4, 5, 6])
+        }
+
+        XCTAssertFalse(refreshed)
+        XCTAssertEqual(createCalls, 0)
+        XCTAssertEqual(profile.privateKeyBookmark, Data([1, 2, 3]))
+    }
+
+    func testRefreshResolvesBookmarkEvenWhenLegacyPathIsSet() throws {
+        // Given: a legacy profile that persisted an outdated display path
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let keyURL = directory.appendingPathComponent("id_legacy")
+        try Data("key".utf8).write(to: keyURL)
+        let bookmark = try SecurityScopedBookmarkService.shared.createBookmark(for: keyURL, readOnly: true)
+        var profile = ConnectionProfile(
+            name: "Legacy",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyBookmark: bookmark
+        )
+        profile.privateKeyPath = "/old/location/id_legacy_old"
+
+        // When: refreshing
+        _ = profile.refreshStalePrivateKeyBookmark { _, _ in bookmark }
+
+        // Then: the bookmark was resolved (not skipped) and the path follows it
+        XCTAssertEqual(
+            profile.privateKeyPath.map { URL(fileURLWithPath: $0).lastPathComponent },
+            keyURL.lastPathComponent
+        )
+    }
+
+    func testHydrateReturnsFalseForUnresolvableBookmark() {
+        var profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyBookmark: Data([1, 2, 3])
+        )
+        XCTAssertFalse(profile.hydrateDisplayKeyPathFromBookmark())
+        XCTAssertNil(profile.privateKeyPath)
+    }
+}
+
 @MainActor
 final class ConnectionFormPrivateKeySelectionTests: XCTestCase {
     private let selectedURL = URL(fileURLWithPath: "/keys/replacement")
@@ -336,6 +433,49 @@ final class ConnectionFormPrivateKeySelectionTests: XCTestCase {
             privateKeyBookmark: bookmark,
             initialRemotePath: "/edited/path"
         )
+    }
+}
+
+// Tests for ConnectionFormView.resolveCredentials (issues #782, #1381).
+@MainActor
+final class ConnectionFormCredentialResolutionTests: XCTestCase {
+    func testResolveCredentialsMapsTypedValuesForEachAuthType() {
+        struct Case {
+            let authType: AuthType
+            let password: String
+            let passphrase: String
+            let expectedPassword: String?
+            let expectedPassphrase: String?
+        }
+        let cases: [Case] = [
+            // Password auth: typed password is passed, empty stays nil, and a
+            // leftover passphrase is ignored.
+            Case(authType: .password, password: "secret", passphrase: "",
+                 expectedPassword: "secret", expectedPassphrase: nil),
+            Case(authType: .password, password: "", passphrase: "",
+                 expectedPassword: nil, expectedPassphrase: nil),
+            Case(authType: .password, password: "secret", passphrase: "leftover",
+                 expectedPassword: "secret", expectedPassphrase: nil),
+            // Private-key auth: typed passphrase is passed, empty stays nil,
+            // and a leftover password is ignored.
+            Case(authType: .privateKey, password: "", passphrase: "key-pass",
+                 expectedPassword: nil, expectedPassphrase: "key-pass"),
+            Case(authType: .privateKey, password: "", passphrase: "",
+                 expectedPassword: nil, expectedPassphrase: nil),
+            Case(authType: .privateKey, password: "unused", passphrase: "key-pass",
+                 expectedPassword: nil, expectedPassphrase: "key-pass"),
+        ]
+
+        for testCase in cases {
+            let credentials = ConnectionFormView.resolveCredentials(
+                authType: testCase.authType,
+                password: testCase.password,
+                passphrase: testCase.passphrase
+            )
+            let label = "\(testCase.authType) password=\(testCase.password) passphrase=\(testCase.passphrase)"
+            XCTAssertEqual(credentials.password, testCase.expectedPassword, label)
+            XCTAssertEqual(credentials.passphrase, testCase.expectedPassphrase, label)
+        }
     }
 }
 

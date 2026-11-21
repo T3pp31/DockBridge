@@ -1,7 +1,11 @@
-use chrono::{DateTime, Utc};
 use std::time::{Duration, UNIX_EPOCH};
+use time::OffsetDateTime;
 
 use super::FileAttributes;
+
+const MONTH_ABBREVIATIONS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct File {
@@ -39,8 +43,15 @@ impl File {
         let size = self.attrs.size.unwrap_or(0);
         let mtime = self.attrs.mtime.unwrap_or(0);
 
-        let datetime = DateTime::<Utc>::from(UNIX_EPOCH + Duration::from_secs(mtime as u64));
-        let delayed = datetime.format("%b %d %Y %H:%M");
+        let datetime = OffsetDateTime::from(UNIX_EPOCH + Duration::from_secs(mtime as u64));
+        let delayed = format!(
+            "{} {:02} {} {:02}:{:02}",
+            MONTH_ABBREVIATIONS[datetime.month() as usize - 1],
+            datetime.day(),
+            datetime.year(),
+            datetime.hour(),
+            datetime.minute()
+        );
 
         format!(
             "{directory}{permissions} 0 {} {} {size} {delayed} {}",
@@ -56,5 +67,27 @@ impl File {
             },
             self.filename
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::FileAttributes;
+
+    #[test]
+    fn longname_formats_mtime_like_the_previous_chrono_layout() {
+        // Given: a file whose mtime is 2021-02-03T04:05:06Z (1612325106)
+        let mut attrs = FileAttributes::dummy();
+        attrs.mtime = Some(1_612_325_106);
+
+        // When: the longname is built
+        let longname = File::new("file.txt", attrs).longname;
+
+        // Then: the date uses the same "%b %d %Y %H:%M" layout
+        assert!(
+            longname.contains("Feb 03 2021 04:05"),
+            "unexpected longname: {longname}"
+        );
     }
 }

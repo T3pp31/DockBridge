@@ -157,30 +157,7 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
     }
 
     private func readBundleIdentifier(from fileDescriptor: Int32) throws -> String {
-        let sizeLimit = AppUpdateConfig.maxInfoPlistSizeBytes
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
-            // Read at most one byte beyond the limit to detect files growing
-            // after fstat without allocating or reading an unbounded amount.
-            let bytesRead = read(fileDescriptor, &buffer, min(buffer.count, sizeLimit - data.count + 1))
-            if bytesRead < 0 {
-                if errno == EINTR {
-                    continue
-                }
-                throw ReleaseCodeSignatureVerifierError.unsignedBundle
-            }
-            if bytesRead == 0 {
-                break
-            }
-            guard data.count + bytesRead <= sizeLimit else {
-                throw ReleaseCodeSignatureVerifierError.unsignedBundle
-            }
-            data.append(buffer, count: bytesRead)
-        }
-
-        let plist = try PropertyListSerialization.propertyList(from: data, format: nil)
-        guard let dictionary = plist as? [String: Any],
+        guard let dictionary = BundleInfoPlistReader.readDictionary(from: fileDescriptor),
               let bundleIdentifier = dictionary["CFBundleIdentifier"] as? String else {
             throw ReleaseCodeSignatureVerifierError.unsignedBundle
         }
@@ -232,5 +209,59 @@ struct ReleaseCodeSignatureVerifier: AppBundleSignatureVerifying {
                 actual: fingerprint
             )
         }
+    }
+}
+
+/// Hardened `Info.plist` reader shared by the signature verifier and the
+/// update download service so both apply the same protections: no symlink
+/// following, no FIFO blocking, a regular-file check, and a bounded size.
+enum BundleInfoPlistReader {
+    /// Opens `Contents/Info.plist` inside `bundleURL` and parses it.
+    /// Returns nil when the file is missing, unsafe, oversized, or malformed.
+    static func readDictionary(inBundle bundleURL: URL) -> [String: Any]? {
+        let infoPlistURL = bundleURL.appendingPathComponent("Contents/Info.plist")
+        let fileDescriptor = open(infoPlistURL.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard fileDescriptor >= 0 else { return nil }
+        defer { close(fileDescriptor) }
+
+        var fileStat = stat()
+        guard fstat(fileDescriptor, &fileStat) == 0,
+              (fileStat.st_mode & S_IFMT) == S_IFREG,
+              fileStat.st_size >= 0,
+              fileStat.st_size <= AppUpdateConfig.maxInfoPlistSizeBytes else {
+            return nil
+        }
+        return readDictionary(from: fileDescriptor)
+    }
+
+    /// Reads and parses an already validated `Info.plist` descriptor.
+    /// Returns nil on read errors, growth past the size limit, or a parse failure.
+    static func readDictionary(from fileDescriptor: Int32) -> [String: Any]? {
+        let sizeLimit = AppUpdateConfig.maxInfoPlistSizeBytes
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            // Read at most one byte beyond the limit to detect files growing
+            // after fstat without allocating or reading an unbounded amount.
+            let bytesRead = read(fileDescriptor, &buffer, min(buffer.count, sizeLimit - data.count + 1))
+            if bytesRead < 0 {
+                if errno == EINTR {
+                    continue
+                }
+                return nil
+            }
+            if bytesRead == 0 {
+                break
+            }
+            guard data.count + bytesRead <= sizeLimit else {
+                return nil
+            }
+            data.append(buffer, count: bytesRead)
+        }
+
+        guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) else {
+            return nil
+        }
+        return plist as? [String: Any]
     }
 }

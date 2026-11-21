@@ -124,6 +124,17 @@ jobs:
         run: python3 scripts/test-ui-ux-tracking.py
       - name: Test Settings scene wiring guard
         run: python3 scripts/test-settings-scene.py
+      - name: Test release workflow test gate
+        run: python3 scripts/test-release-gating.py
+      - name: Test advisory expiry check
+        run: python3 scripts/test-check-advisory-expiry.py
+      - name: Test scheduled security audit workflow permissions
+        run: python3 scripts/test-security-audit-workflow.py
+      - name: Test vendored SFTP fork version check
+        run: python3 scripts/test-verify-vendored-sftp-fork.py
+
+      - name: Verify the vendored SFTP fork is resolved
+        run: python3 scripts/verify-vendored-sftp-fork.py
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
@@ -146,6 +157,19 @@ jobs:
 
       - name: Check UniFFI bindgen CLI feature
         run: cargo check -p dockbridge-uniffi --features cli --bin uniffi-bindgen
+
+      - name: Clippy UniFFI bindgen CLI feature
+        run: cargo clippy -p dockbridge-uniffi --features cli --all-targets -- -D warnings
+
+      - name: Ensure default UniFFI build excludes bindgen toolchain
+        run: |
+          tree="$(cargo tree -p dockbridge-uniffi -e normal --prefix none)"
+          for crate in uniffi_bindgen askama goblin cargo_metadata; do
+            if grep -Eq "^${crate} v" <<<"$tree"; then
+              echo "::error::${crate} is in the default dockbridge-uniffi dependency graph; enable uniffi/cli only via the crate's cli feature."
+              exit 1
+            fi
+          done
 
       - name: Build hardened CLI (release configuration)
         run: cargo build -p dockbridge-cli --release --features disable-cli-password

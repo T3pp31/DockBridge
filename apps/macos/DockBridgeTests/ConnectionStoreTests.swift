@@ -179,9 +179,11 @@ final class ConnectionStoreTests: XCTestCase {
         let corruptTrust = Data("not-json".utf8)
         try corruptTrust.write(to: trustURL)
 
+        // A malformed store is reported as verificationFailed so the trust
+        // flow can re-confirm it (issue #1378); the batch still propagates.
         XCTAssertThrowsError(try store.trustProfiles(profiles)) { error in
-            guard case ProfileTrustStoreError.readFailed = error else {
-                return XCTFail("Expected readFailed, got \(error)")
+            guard case ProfileTrustStoreError.verificationFailed = error else {
+                return XCTFail("Expected verificationFailed, got \(error)")
             }
         }
         try store.saveProfiles(profiles)
@@ -210,6 +212,59 @@ final class ConnectionStoreTests: XCTestCase {
             encryptionService: encryptionService
         )
         return reads
+    }
+
+    func testDeleteRewritesTrustOnceRegardlessOfProfileCount() throws {
+        var deleteReadsByCount: [Int: Int] = [:]
+        for count in [1, 16] {
+            let reads = configureCountingTrustStore()
+            let profiles = (0..<count).map {
+                ConnectionProfile(name: "Profile \($0)", host: "host\($0).example.com", username: "user")
+            }
+            try store.saveProfiles(profiles, updateTrust: false)
+            try store.seedInitialTrust(for: profiles)
+
+            // Baseline: the cost of the single trust-store rewrite that
+            // delete is expected to perform, measured rather than hard-coded.
+            let baselineStart = reads.count
+            try trustStore.removeTrust(for: UUID())
+            let removeTrustReads = reads.count - baselineStart
+
+            let readsBefore = reads.count
+            _ = try store.delete(id: profiles[0].id)
+            let deleteReads = reads.count - readsBefore
+
+            XCTAssertEqual(deleteReads, removeTrustReads, "Profile count: \(count)")
+            deleteReadsByCount[count] = deleteReads
+            XCTAssertEqual(
+                try trustStore.loadTrustedEndpoints(),
+                Dictionary(uniqueKeysWithValues: profiles.dropFirst().map {
+                    ($0.id, TrustedProfileEndpoint(profile: $0))
+                })
+            )
+        }
+        XCTAssertEqual(deleteReadsByCount[1], deleteReadsByCount[16], "reads must not depend on profile count")
+    }
+
+    func testDeleteLeavesPendingEndpointChangesOfOtherProfilesUntouched() throws {
+        let pending = ConnectionProfile(name: "Pending", host: "trusted.example.com", username: "user")
+        let removed = ConnectionProfile(name: "Removed", host: "removed.example.com", username: "user")
+        try store.saveProfiles([pending, removed], updateTrust: false)
+        try store.seedInitialTrust(for: [pending, removed])
+
+        // The stored profile now points at a new host, but its trust entry still
+        // records the old one: an endpoint change awaiting user confirmation.
+        var moved = pending
+        moved.host = "moved.example.com"
+        try store.saveProfiles([moved, removed], updateTrust: false)
+
+        _ = try store.delete(id: removed.id)
+
+        // Deleting an unrelated profile must neither accept nor drop the change.
+        XCTAssertEqual(
+            try trustStore.loadTrustedEndpoints(),
+            [pending.id: TrustedProfileEndpoint(profile: pending)]
+        )
     }
 
     func testDeleteRemovesProfileAndOnlyItsTrust() throws {
@@ -409,6 +464,141 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertTrue(onDisk.contains(EncryptedProfilesEnvelope.formatIdentifier))
     }
 
+    func testConcurrentLegacyMigrationBacksUpWithoutColliding() throws {
+        // Given: a legacy plaintext store and many concurrent readers, all of
+        // which may enter the one-way migration in the same second
+        let profileID = UUID()
+        let legacyJSON = """
+        [{"id": "\(profileID.uuidString)", "name": "Legacy",
+          "host": "legacy.example.com", "port": 22, "username": "legacy-user",
+          "authType": "password"}]
+        """
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        try legacyJSON.write(
+            to: URL(fileURLWithPath: storeProfilesPath),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let errors = Errors()
+        DispatchQueue.concurrentPerform(iterations: 8) { _ in
+            do {
+                let loaded = try self.store.loadProfiles()
+                if loaded.map(\.id) != [profileID] {
+                    errors.append("unexpected profiles: \(loaded.map(\.id))")
+                }
+            } catch {
+                errors.append(error.localizedDescription)
+            }
+        }
+
+        // Then: no reader fails on a backup-name collision and the store is
+        // migrated exactly once.
+        XCTAssertEqual(errors.values, [])
+        let onDisk = try String(contentsOf: URL(fileURLWithPath: storeProfilesPath), encoding: .utf8)
+        XCTAssertTrue(onDisk.contains(EncryptedProfilesEnvelope.formatIdentifier))
+        XCTAssertFalse(onDisk.contains("legacy.example.com"))
+        let backups = try FileManager.default
+            .contentsOfDirectory(atPath: baseDirectory.path)
+            .filter { $0.hasPrefix("profiles.json.bak-") }
+        XCTAssertEqual(backups.count, 1)
+    }
+
+    func testLegacyMigrationDoesNotLoseConcurrentUpsertsOrDeletes() throws {
+        // Given: a legacy plaintext store holding a profile that will be deleted
+        let doomedID = UUID()
+        let legacyJSON = """
+        [{"id": "\(doomedID.uuidString)", "name": "Legacy",
+          "host": "legacy.example.com", "port": 22, "username": "legacy-user",
+          "authType": "password"}]
+        """
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        try legacyJSON.write(
+            to: URL(fileURLWithPath: storeProfilesPath),
+            atomically: true,
+            encoding: .utf8
+        )
+        let added = (0..<4).map { index in
+            ConnectionProfile(
+                name: "Added \(index)",
+                host: "added\(index).example.com",
+                username: "user",
+                authType: .password
+            )
+        }
+
+        // When: migrating reads race with upserts and a delete
+        let errors = Errors()
+        DispatchQueue.concurrentPerform(iterations: 12) { index in
+            do {
+                switch index {
+                case 0..<4:
+                    _ = try self.store.upsert(added[index])
+                case 4:
+                    _ = try self.store.delete(id: doomedID)
+                default:
+                    _ = try self.store.loadProfiles()
+                }
+            } catch {
+                errors.append(error.localizedDescription)
+            }
+        }
+
+        // Then: every upsert survives, the delete sticks, and the store is encrypted
+        XCTAssertEqual(errors.values, [])
+        let loaded = try store.loadProfiles()
+        XCTAssertEqual(Set(loaded.map(\.id)), Set(added.map(\.id)))
+        let onDisk = try String(contentsOf: URL(fileURLWithPath: storeProfilesPath), encoding: .utf8)
+        XCTAssertTrue(onDisk.contains(EncryptedProfilesEnvelope.formatIdentifier))
+        XCTAssertFalse(onDisk.contains("legacy.example.com"))
+    }
+
+    func testLegacyMigrationBackupAddsSuffixOnSameSecondCollision() throws {
+        // Given: a fixed clock so two migrations produce the same stamp
+        let fixedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        store.backupClock = { fixedDate }
+        let legacyJSON = """
+        [{"id": "\(UUID().uuidString)", "name": "Legacy",
+          "host": "legacy.example.com", "port": 22, "username": "legacy-user",
+          "authType": "password"}]
+        """
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        let url = URL(fileURLWithPath: storeProfilesPath)
+
+        // When: the legacy store is migrated twice within the same "second"
+        for _ in 0..<2 {
+            try legacyJSON.write(to: url, atomically: true, encoding: .utf8)
+            _ = try store.loadProfiles()
+        }
+
+        // Then: both backups exist, the second one suffixed, and each holds
+        // the pre-migration plaintext
+        let backups = try FileManager.default
+            .contentsOfDirectory(atPath: baseDirectory.path)
+            .filter { $0.hasPrefix("profiles.json.bak-") }
+            .sorted()
+        XCTAssertEqual(backups.count, 2)
+        XCTAssertEqual(backups.filter { $0.hasSuffix("-1") }.count, 1)
+        for name in backups {
+            let contents = try String(
+                contentsOf: baseDirectory.appendingPathComponent(name),
+                encoding: .utf8
+            )
+            XCTAssertEqual(contents, legacyJSON)
+        }
+    }
+
+    private final class Errors: @unchecked Sendable {
+        private let lock = NSLock()
+        private var messages: [String] = []
+
+        var values: [String] { lock.withLock { messages } }
+
+        func append(_ message: String) {
+            lock.withLock { messages.append(message) }
+        }
+    }
+
     func testLoadProfilesMigratesExistingFilePermissionsTo0600() throws {
         try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
         try Data("[]".utf8).write(to: URL(fileURLWithPath: storeProfilesPath))
@@ -489,12 +679,12 @@ final class ConnectionStoreTests: XCTestCase {
         let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
         try JSONEncoder().encode(matchingTrust).write(to: trustURL)
 
-        let result = try store.loadProfilesWithEndpointCheck()
-
-        XCTAssertEqual(result.profiles.first?.host, "evil.example.com")
-        XCTAssertTrue(result.endpointChanges.isEmpty)
-        XCTAssertEqual(result.pendingInitialTrust, [tampered])
-        XCTAssertTrue(result.pendingNewProfileTrust.isEmpty)
+        // Replacing the signed store with an unsigned one must fail
+        // verification instead of being downgraded to initial trust, which
+        // would hide the endpoint change (issue #1375).
+        XCTAssertThrowsError(try store.loadProfilesWithEndpointCheck()) { error in
+            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+        }
     }
 
     func testLoadProfilesRejectsSymlinkedStoreFile() throws {

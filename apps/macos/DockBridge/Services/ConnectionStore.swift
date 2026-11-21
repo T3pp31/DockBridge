@@ -42,9 +42,16 @@ final class ConnectionStore: @unchecked Sendable {
     private let profilesBaseDirectory: URL
     private let trustStore: ProfileTrustStore
     private let encryptionService: ProfileEncryptionService
-    /// Serializes read-modify-write cycles so concurrent upserts/deletes do
-    /// not overwrite each other (issue #691).
+    /// Serializes every read and write of `profiles.json` (including the
+    /// legacy plaintext migration performed on read) so concurrent
+    /// loads/upserts/deletes do not overwrite each other (issues #691, #1149).
+    /// `NSLock` is not reentrant: methods suffixed `Locked` require the caller
+    /// to hold it, and public methods that take it must never be called while
+    /// it is held. Trust-store calls are made outside this lock where possible.
     private let mutationLock = NSLock()
+    /// Clock used to stamp legacy-migration backups. Injectable so tests can
+    /// force same-second backup name collisions.
+    var backupClock: () -> Date = { Date() }
     private let fileName = "profiles.json"
 
     init(
@@ -83,7 +90,19 @@ final class ConnectionStore: @unchecked Sendable {
     }
 
     func loadProfilesWithEndpointCheck() throws -> ProfileLoadResult {
-        let profiles = try readProfilesFromDisk()
+        // A legacy plaintext store is migrated (backed up and rewritten) on
+        // read, so reads must serialize with upsert/delete too; otherwise a
+        // concurrent mutation can be overwritten by the migration write
+        // (issue #1149). Reading may also persist refreshed private-key
+        // bookmarks (issue #1146), so that write needs the same serialization.
+        // Only the disk read (and possible migration write) needs the lock;
+        // endpoint detection works on this snapshot and the trust store.
+        mutationLock.lock()
+        let profiles: [ConnectionProfile]
+        do {
+            defer { mutationLock.unlock() }
+            profiles = try readProfilesFromDiskLocked()
+        }
         let detection = try trustStore.detectEndpointChanges(in: profiles)
         return ProfileLoadResult(
             profiles: profiles,
@@ -94,6 +113,13 @@ final class ConnectionStore: @unchecked Sendable {
     }
 
     func saveProfiles(_ profiles: [ConnectionProfile], updateTrust: Bool = true) throws {
+        mutationLock.lock()
+        defer { mutationLock.unlock() }
+        try saveProfilesLocked(profiles, updateTrust: updateTrust)
+    }
+
+    /// Writes `profiles.json`. The caller must hold `mutationLock`.
+    private func saveProfilesLocked(_ profiles: [ConnectionProfile], updateTrust: Bool = true) throws {
         let stored = profiles.map(StoredConnectionProfile.init(from:))
         try writeEncryptedProfiles(stored, updateTrust: updateTrust, sourceProfiles: profiles)
     }
@@ -101,22 +127,26 @@ final class ConnectionStore: @unchecked Sendable {
     func upsert(_ profile: ConnectionProfile) throws -> [ConnectionProfile] {
         mutationLock.lock()
         defer { mutationLock.unlock() }
-        var profiles = try readProfilesFromDisk()
+        var profiles = try readProfilesFromDiskLocked()
         if let index = profiles.firstIndex(where: { $0.id == profile.id }) {
             profiles[index] = profile
         } else {
             profiles.append(profile)
         }
-        try saveProfiles(profiles)
+        try saveProfilesLocked(profiles)
         return profiles
     }
 
     func delete(id: UUID) throws -> [ConnectionProfile] {
         mutationLock.lock()
         defer { mutationLock.unlock() }
-        var profiles = try readProfilesFromDisk()
+        var profiles = try readProfilesFromDiskLocked()
         profiles.removeAll { $0.id == id }
-        try saveProfiles(profiles)
+        // Skip the batch trust refresh here: the removed profile is gone from
+        // `profiles`, so `updateTrusts` would only re-verify the remaining
+        // entries, and `removeTrust` below already rewrites the store once
+        // (issue #1374).
+        try saveProfilesLocked(profiles, updateTrust: false)
         do {
             try trustStore.removeTrust(for: id)
         } catch {
@@ -144,7 +174,7 @@ final class ConnectionStore: @unchecked Sendable {
     func restoreTrustedEndpoint(for change: ProfileEndpointChange) throws -> [ConnectionProfile] {
         mutationLock.lock()
         defer { mutationLock.unlock() }
-        var profiles = try readProfilesFromDisk()
+        var profiles = try readProfilesFromDiskLocked()
         guard let index = profiles.firstIndex(where: { $0.id == change.profileID }) else {
             return profiles
         }
@@ -153,7 +183,7 @@ final class ConnectionStore: @unchecked Sendable {
         profiles[index].port = change.trusted.port
         profiles[index].username = change.trusted.username
 
-        try saveProfiles(profiles, updateTrust: false)
+        try saveProfilesLocked(profiles, updateTrust: false)
         return profiles
     }
 
@@ -170,7 +200,9 @@ final class ConnectionStore: @unchecked Sendable {
         )
     }
 
-    private func readProfilesFromDisk() throws -> [ConnectionProfile] {
+    /// Reads (and, for a legacy plaintext store, migrates) `profiles.json`.
+    /// The caller must hold `mutationLock`.
+    private func readProfilesFromDiskLocked() throws -> [ConnectionProfile] {
         let url = profilesURL
         guard FileManager.default.fileExists(atPath: url.path) else {
             return []
@@ -189,7 +221,30 @@ final class ConnectionStore: @unchecked Sendable {
            envelope.format == EncryptedProfilesEnvelope.formatIdentifier {
             do {
                 let stored = try encryptionService.decrypt(envelope)
-                return stored.map { $0.toConnectionProfile() }
+                let profiles = stored.map { $0.toConnectionProfile(refreshStaleBookmark: true) }
+                // Persist refreshed bookmarks so a later move cannot leave
+                // them unresolvable. Compare bookmark bytes only, because the
+                // display-only privateKeyPath always differs from disk. Best
+                // effort: a save failure must not make profiles unreadable
+                // (issue #1146).
+                let refreshed = profiles.map(StoredConnectionProfile.init(from:))
+                let bookmarksChanged = zip(refreshed, stored).contains {
+                    $0.privateKeyBookmark != $1.privateKeyBookmark
+                }
+                if bookmarksChanged {
+                    do {
+                        try writeEncryptedProfiles(
+                            refreshed,
+                            updateTrust: false,
+                            sourceProfiles: profiles
+                        )
+                    } catch {
+                        AppLogging.connection.error(
+                            "refreshed bookmark save failed: \(error.localizedDescription, privacy: .public)"
+                        )
+                    }
+                }
+                return profiles
             } catch let error as ProfileEncryptionError {
                 switch error {
                 case .invalidEnvelope, .decryptionFailed:
@@ -213,15 +268,21 @@ final class ConnectionStore: @unchecked Sendable {
             // migration so the plaintext is recoverable if the master key is
             // later lost.
             try backupProfilesFileIfPresent()
-            let stored = legacyProfiles.map(StoredConnectionProfile.init(from:))
+            // Refresh stale private-key bookmarks before the one-way migration
+            // so the encrypted store starts with usable bookmark data
+            // (issue #1146).
+            let migrated = legacyProfiles.map { profile -> ConnectionProfile in
+                var profile = profile
+                profile.refreshStalePrivateKeyBookmark()
+                return profile
+            }
+            let stored = migrated.map(StoredConnectionProfile.init(from:))
             do {
-                try writeEncryptedProfiles(stored, updateTrust: false, sourceProfiles: legacyProfiles)
+                try writeEncryptedProfiles(stored, updateTrust: false, sourceProfiles: migrated)
             } catch {
                 throw ConnectionStoreError.writeFailed(error.localizedDescription)
             }
-            return legacyProfiles.map { profile in
-                StoredConnectionProfile(from: profile).toConnectionProfile()
-            }
+            return stored.map { $0.toConnectionProfile() }
         }
 
         throw ConnectionStoreError.readFailed(
@@ -238,11 +299,24 @@ final class ConnectionStore: @unchecked Sendable {
         formatter.formatOptions = [.withInternetDateTime]
         // Colon and '+' are both replaced so the stamp stays filesystem-safe
         // on every platform (offset renders as e.g. `+09-00` otherwise).
-        let stamp = formatter.string(from: Date())
+        let stamp = formatter.string(from: backupClock())
             .replacingOccurrences(of: ":", with: "-")
             .replacingOccurrences(of: "+", with: "-")
-        let backup = url.deletingLastPathComponent()
-            .appendingPathComponent("profiles.json.bak-\(stamp)", isDirectory: false)
+        let directory = url.deletingLastPathComponent()
+        var backup = directory.appendingPathComponent(
+            "profiles.json.bak-\(stamp)",
+            isDirectory: false
+        )
+        // Two migrations within the same second would collide on the stamp and
+        // fail with fileExists; add a suffix until the name is free.
+        var suffix = 1
+        while FileManager.default.fileExists(atPath: backup.path) {
+            backup = directory.appendingPathComponent(
+                "profiles.json.bak-\(stamp)-\(suffix)",
+                isDirectory: false
+            )
+            suffix += 1
+        }
         try FileManager.default.copyItem(at: url, to: backup)
     }
 

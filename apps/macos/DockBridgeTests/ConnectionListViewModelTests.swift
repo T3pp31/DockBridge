@@ -75,8 +75,10 @@ final class ConnectionListViewModelTests: XCTestCase {
         viewModel.load()
         let url = try XCTUnwrap(URL(string: "sftp://alice@new.example.com:2222/incoming"))
         let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json")
-        // A malformed trust file makes loadProfiles throw, while upsert still
-        // succeeds because trust refresh is secondary to the encrypted save.
+        // A malformed trust file fails verification, so loads report an error
+        // instead of being downgraded to initial trust (issue #1375). upsert
+        // still succeeds because trust refresh is secondary to the encrypted
+        // save.
         try Data("invalid trust store".utf8).write(to: trustURL)
 
         viewModel.handleSFTPURL(url)
@@ -89,14 +91,16 @@ final class ConnectionListViewModelTests: XCTestCase {
         XCTAssertEqual(imported.initialRemotePath, "/incoming")
         XCTAssertNil(viewModel.pendingConnectProfile)
         XCTAssertNil(viewModel.errorMessage)
-        XCTAssertThrowsError(try store.loadProfiles())
+        XCTAssertThrowsError(try store.loadProfilesWithEndpointCheck()) { error in
+            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+        }
 
         viewModel.handleSFTPURL(url)
 
         XCTAssertEqual(viewModel.profiles, [existing, imported])
         XCTAssertEqual(viewModel.selectedProfileID, imported.id)
-        // The matched-profile connection must still report the trust read error
-        // rather than bypassing the endpoint check or creating another profile.
+        // The matched-profile connection still reports the trust error rather
+        // than bypassing the endpoint check or creating another profile.
         XCTAssertNotNil(viewModel.errorMessage)
         XCTAssertNil(viewModel.pendingConnectProfile)
         try FileManager.default.removeItem(at: trustURL)
@@ -792,6 +796,112 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertEqual(viewModel.pendingCredentialPrompt?.profile.id, profile.id)
         XCTAssertEqual(viewModel.pendingCredentialPrompt?.kind, .password)
         XCTAssertNil(viewModel.errorMessage)
+    }
+
+    /// A view model whose bridge preparation fails before any network I/O,
+    /// so a connect attempt queued by `confirmCredentialPrompt` finishes
+    /// locally and reports through `errorMessage`.
+    private func makeBridgeFailingViewModel() throws -> ConnectionListViewModel {
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+        let blockedDirectory = baseDirectory.appendingPathComponent("not-a-directory-\(UUID().uuidString)")
+        try Data().write(to: blockedDirectory)
+        let suiteName = "com.dockbridge.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
+        return ConnectionListViewModel(
+            store: store,
+            keychain: keychain,
+            bridge: RustBridgeService(
+                settings: AppSettingsService(defaults: defaults),
+                hostKeyStore: HostKeyStore(baseDirectory: blockedDirectory)
+            )
+        )
+    }
+
+    /// Confirms the pending prompt and waits for the queued connect attempt
+    /// to fail at bridge preparation, so no task outlives the test.
+    private func confirmAndAwaitBridgeFailure(
+        _ localViewModel: ConnectionListViewModel,
+        credential: SensitiveString,
+        saveToKeychain: Bool
+    ) async {
+        let failed = expectation(description: "Bridge preparation fails without network access")
+        let cancellable = localViewModel.$errorMessage.compactMap { $0 }.first().sink { _ in
+            failed.fulfill()
+        }
+        defer { cancellable.cancel() }
+        localViewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: saveToKeychain)
+        await fulfillment(of: [failed], timeout: 5)
+    }
+
+    func testConfirmCredentialPromptSaveToKeychainDropsSessionOnlyCredentials() async throws {
+        // Given: a view model whose connect attempts fail before network I/O
+        let localViewModel = try makeBridgeFailingViewModel()
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .password
+        )
+        let otherProfile = ConnectionProfile(
+            name: "Other",
+            host: "other.example.com",
+            username: "user",
+            authType: .password
+        )
+
+        // And: session-only credentials recorded for both profiles
+        localViewModel.save(profile, password: "session-only", passphrase: nil, saveSecrets: false)
+        localViewModel.save(otherProfile, password: "other-session", passphrase: nil, saveSecrets: false)
+        XCTAssertEqual(
+            try localViewModel.credentialsForConnection(profile: profile).password,
+            "session-only"
+        )
+
+        // When: the prompt for one profile is confirmed with Keychain saving
+        localViewModel.beginPasswordPrompt(for: profile)
+        let credential = SensitiveString()
+        credential.text = "saved-secret"
+        await confirmAndAwaitBridgeFailure(localViewModel, credential: credential, saveToKeychain: true)
+
+        // Then: lookups read the saved value, not the stale session one
+        XCTAssertEqual(
+            try localViewModel.credentialsForConnection(profile: profile).password,
+            "saved-secret"
+        )
+        let account = keychain.keychainAccount(for: profile.id, kind: "profile")
+        XCTAssertEqual(try keychain.loadPassword(account: account), "saved-secret")
+        // And: other profiles keep their session-only credentials
+        XCTAssertEqual(
+            try localViewModel.credentialsForConnection(profile: otherProfile).password,
+            "other-session"
+        )
+    }
+
+    func testConfirmCredentialPromptWithoutKeychainKeepsSessionOnlyCredentials() async throws {
+        // Given: a view model whose connect attempts fail before network I/O
+        let localViewModel = try makeBridgeFailingViewModel()
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user",
+            authType: .password
+        )
+
+        // And: session-only credentials recorded for the profile
+        localViewModel.save(profile, password: "session-only", passphrase: nil, saveSecrets: false)
+
+        // When: the prompt is confirmed without saving to Keychain
+        localViewModel.beginPasswordPrompt(for: profile)
+        let credential = SensitiveString()
+        credential.text = "one-time"
+        await confirmAndAwaitBridgeFailure(localViewModel, credential: credential, saveToKeychain: false)
+
+        // Then: the session-only value remains the lookup source
+        XCTAssertEqual(
+            try localViewModel.credentialsForConnection(profile: profile).password,
+            "session-only"
+        )
     }
 
     func testConfirmCredentialPromptClearsInputWithoutPendingPrompt() {

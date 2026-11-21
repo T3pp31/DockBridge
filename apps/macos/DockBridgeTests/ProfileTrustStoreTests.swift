@@ -380,7 +380,7 @@ final class ProfileTrustStoreTests: XCTestCase {
         }
     }
 
-    func testDetectEndpointChangesTreatsTamperedTrustStoreAsUntrusted() throws {
+    func testDetectEndpointChangesRejectsTamperedTrustStore() throws {
         let profile = ConnectionProfile(
             name: "Test",
             host: "example.com",
@@ -398,11 +398,12 @@ final class ProfileTrustStoreTests: XCTestCase {
         let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
         try JSONEncoder().encode(tamperedRecords).write(to: trustURL)
 
-        let detection = try trustStore.detectEndpointChanges(in: [profile])
-
-        XCTAssertTrue(detection.endpointChanges.isEmpty)
-        XCTAssertEqual(detection.pendingInitialTrust, [profile])
-        XCTAssertTrue(detection.pendingNewProfileTrust.isEmpty)
+        // A tampered store must surface verificationFailed instead of being
+        // downgraded to initial trust, which would hide endpoint changes
+        // (issue #1375).
+        XCTAssertThrowsError(try trustStore.detectEndpointChanges(in: [profile])) { error in
+            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+        }
     }
 
     func testLegacyUnsignedTrustStoreRequiresExplicitTrust() throws {
@@ -421,9 +422,38 @@ final class ProfileTrustStoreTests: XCTestCase {
         }
         XCTAssertFalse(try signingKeyStore.hasExistingKey)
 
-        let detection = try trustStore.detectEndpointChanges(in: [profile])
-        XCTAssertEqual(detection.pendingInitialTrust, [profile])
+        // An unsigned legacy store is not authenticated, so it is reported as
+        // a verification failure rather than silently re-trusted.
+        XCTAssertThrowsError(try trustStore.detectEndpointChanges(in: [profile])) { error in
+            XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed)
+        }
     }
+    func testMalformedTrustStoreReportsVerificationFailure() throws {
+        // Given: existing stores that are neither a signed envelope nor a
+        // legacy dictionary (truncated JSON, unknown shape, missing fields)
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
+
+        for payload in ["{\"endpoints\":", "{\"foo\":\"bar\"}", "{\"endpoints\":{}}", "[]"] {
+            try Data(payload.utf8).write(to: trustURL)
+
+            // When: loading and detecting changes
+            // Then: the malformed store is reported as verificationFailed (not
+            // a file-system readFailed) and is never downgraded to initial trust
+            XCTAssertThrowsError(try trustStore.loadTrustedEndpoints(), payload) { error in
+                XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed, payload)
+            }
+            XCTAssertThrowsError(try trustStore.detectEndpointChanges(in: [profile]), payload) { error in
+                XCTAssertEqual(error as? ProfileTrustStoreError, .verificationFailed, payload)
+            }
+        }
+    }
+
     func testLoadTrustedEndpointsRejectsSymlinkedStoreFile() throws {
         let profile = ConnectionProfile(
             name: "Test",
@@ -444,6 +474,81 @@ final class ProfileTrustStoreTests: XCTestCase {
             }
             XCTAssertEqual(message, String(localized: "Refusing to follow symbolic link."))
         }
+    }
+
+    func testLoadTrustedEndpointsDoesNotChangeSymlinkTargetPermissions() throws {
+        // Given: the store path replaced by a symlink to a permissive file
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+        try trustStore.seedInitialTrust(from: [profile])
+
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        let targetURL = baseDirectory.appendingPathComponent("target.json", isDirectory: false)
+        try FileManager.default.copyItem(at: trustURL, to: targetURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o644))],
+            ofItemAtPath: targetURL.path
+        )
+        try FileManager.default.removeItem(at: trustURL)
+        try FileManager.default.createSymbolicLink(at: trustURL, withDestinationURL: targetURL)
+
+        // When: loading the store fails on the symlink
+        XCTAssertThrowsError(try trustStore.loadTrustedEndpoints())
+
+        // Then: the link target keeps its original permissions (issue #1377)
+        let attributes = try FileManager.default.attributesOfItem(atPath: targetURL.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
+        XCTAssertEqual(permissions, Int(0o644))
+    }
+
+    func testSetSecurePermissionsDoesNotFollowDirectorySymlink() throws {
+        // Given: a directory symlink at the store path
+        let directory = baseDirectory.appendingPathComponent("real-dir", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let linkURL = baseDirectory.appendingPathComponent("link-dir", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: directory)
+        let originalPermissions = (try FileManager.default.attributesOfItem(atPath: directory.path)[
+            .posixPermissions
+        ] as? NSNumber)?.intValue
+
+        // When: applying secure permissions
+        // Then: it refuses instead of chmod-ing the target directory, which
+        // would lose its search bit
+        XCTAssertThrowsError(try trustStore.setSecurePermissions(for: linkURL)) { error in
+            guard case ProfileTrustStoreError.readFailed(let message) = error else {
+                return XCTFail("Expected readFailed, got \(error)")
+            }
+            XCTAssertEqual(message, String(localized: "Refusing to follow symbolic link."))
+        }
+        let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
+        XCTAssertEqual(permissions, originalPermissions)
+    }
+
+    func testLoadTrustedEndpointsRepairsOwnerUnreadableStore() throws {
+        // Given: a valid store whose mode lacks the owner read bit
+        let profile = ConnectionProfile(
+            name: "Test",
+            host: "example.com",
+            username: "user"
+        )
+        try trustStore.seedInitialTrust(from: [profile])
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json", isDirectory: false)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o200))],
+            ofItemAtPath: trustURL.path
+        )
+
+        // When: loading the store
+        let endpoints = try trustStore.loadTrustedEndpoints()
+
+        // Then: permissions are repaired to 0600 and the store is readable
+        XCTAssertNotNil(endpoints[profile.id])
+        let attributes = try FileManager.default.attributesOfItem(atPath: trustURL.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, Int(0o600))
     }
 }
 

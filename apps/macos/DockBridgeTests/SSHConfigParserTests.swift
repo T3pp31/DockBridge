@@ -424,6 +424,184 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertEqual(host.port, 2200)
     }
 
+    func testWildcardHostBlockProvidesDefaultsForMatchingAliases() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host prod-*
+            User deploy
+            Port 2222
+            IdentityFile ~/.ssh/id_prod
+        Host prod-web
+            HostName prod-web.example.com
+        Host prod-db
+            HostName prod-db.example.com
+        """)
+
+        XCTAssertEqual(hosts.map(\.alias), ["prod-web", "prod-db"])
+        XCTAssertTrue(hosts.allSatisfy { $0.user == "deploy" })
+        XCTAssertTrue(hosts.allSatisfy { $0.port == 2222 })
+        XCTAssertTrue(hosts.allSatisfy { $0.identityFile == NSHomeDirectory() + "/.ssh/id_prod" })
+    }
+
+    func testNegatedWildcardHostBlockDoesNotApplyToMatchingAlias() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host prod-* !prod-web
+            User deploy
+            Port 2222
+        Host prod-web
+            HostName prod-web.example.com
+        Host prod-db
+            HostName prod-db.example.com
+        """)
+
+        let web = try XCTUnwrap(hosts.first { $0.alias == "prod-web" })
+        XCTAssertNil(web.user)
+        XCTAssertNil(web.port)
+        let db = try XCTUnwrap(hosts.first { $0.alias == "prod-db" })
+        XCTAssertEqual(db.user, "deploy")
+        XCTAssertEqual(db.port, 2222)
+    }
+
+    func testNegatedPatternOnTheSameHeaderSuppressesExactAlias() throws {
+        // Given: a header naming an exact alias and a negated pattern that
+        // matches it (OpenSSH excludes the block for that alias)
+        let hosts = SSHConfigParser.parse("""
+        Host foo !f*
+            HostName attacker.example.com
+            User attacker
+            Port 2222
+        Host foo
+            HostName real.example.com
+        """)
+
+        // Then: only the later exact block applies, not the negated one
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertEqual(host.alias, "foo")
+        XCTAssertEqual(host.hostName, "real.example.com")
+        XCTAssertNil(host.user)
+        XCTAssertNil(host.port)
+    }
+
+    func testNegatedPatternOnTheSameHeaderSuppressesMatchingWildcardAlias() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host foo* !foo
+            HostName attacker.example.com
+        Host foo
+            HostName real.example.com
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertEqual(host.alias, "foo")
+        XCTAssertEqual(host.hostName, "real.example.com")
+    }
+
+    func testNonMatchingNegatedPatternOnTheSameHeaderStillApplies() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host foo !bar
+            User deploy
+            Port 2222
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(host.alias, "foo")
+        XCTAssertEqual(host.user, "deploy")
+        XCTAssertEqual(host.port, 2222)
+    }
+
+    func testNegatedOnlyHeaderNeverApplies() throws {
+        // Given: a header with only a negated pattern
+        let hosts = SSHConfigParser.parse("""
+        Host !f*
+            User nobody
+        Host foo
+            HostName foo.example.com
+        Host bar
+            HostName bar.example.com
+        """)
+
+        // Then: it is not treated as a default for any alias, including
+        // aliases that the negated pattern does not match
+        XCTAssertEqual(hosts.map(\.alias), ["foo", "bar"])
+        XCTAssertEqual(hosts.map(\.hostName), ["foo.example.com", "bar.example.com"])
+        XCTAssertEqual(hosts.map(\.user), [nil, nil])
+    }
+
+    func testQuestionMarkPatternMatchesSingleCharacterAliases() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host web-?
+            User web
+        Host web-1
+            HostName web1.example.com
+        Host web-12
+            HostName web12.example.com
+        """)
+
+        let single = try XCTUnwrap(hosts.first { $0.alias == "web-1" })
+        XCTAssertEqual(single.user, "web")
+        let longer = try XCTUnwrap(hosts.first { $0.alias == "web-12" })
+        XCTAssertNil(longer.user)
+    }
+
+    func testWildcardDefaultsUseFirstObtainedValueAcrossFileOrder() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host *
+            User any
+        Host prod-*
+            User prod
+        Host prod-web
+            HostName web.example.com
+            User exact
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(host.user, "any")
+    }
+
+    func testWildcardAndExactPatternsOnOneHeaderApplyOnce() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host prod-web prod-*
+            User deploy
+            IdentityFile ~/.ssh/id_deploy
+        Host prod-web
+            HostName web.example.com
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(host.user, "deploy")
+        XCTAssertEqual(host.identityFiles, [NSHomeDirectory() + "/.ssh/id_deploy"])
+    }
+
+    func testWildcardAndNegatedPatternsAreCaseSensitive() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host PROD-*
+            User deploy
+        Host * !PROD-WEB
+            Port 2222
+        Host prod-web
+            HostName web.example.com
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertNil(host.user)
+        XCTAssertEqual(host.port, 2222)
+    }
+
+    func testQuestionMarkMatchesOneUTF8Byte() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host srv-?
+            Port 2222
+        Host srv-??
+            User twobytes
+        Host srv-\u{00E9}
+            HostName example.com
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertNil(host.port)
+        XCTAssertEqual(host.user, "twobytes")
+    }
+
     func testMatchValuesDoNotBecomeGlobalDefaults() throws {
         let hosts = SSHConfigParser.parse("""
         Match user unrelated
@@ -473,6 +651,93 @@ final class SSHConfigParserTests: XCTestCase {
         """)
         XCTAssertEqual(hosts.count, 1)
         XCTAssertNil(try XCTUnwrap(hosts.first).user)
+    }
+
+    func testMalformedMatchHeaderDoesNotApplyFollowingValuesToPreviousAlias() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostName server.example.com
+        Match "unterminated
+            User leaked
+        """)
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertNil(try XCTUnwrap(hosts.first).user)
+    }
+
+    func testBareHostLineDoesNotApplyFollowingValuesToPreviousAlias() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostName server.example.com
+        Host
+            User leaked
+        """)
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertNil(try XCTUnwrap(hosts.first).user)
+    }
+
+    func testHostNameWithoutArgumentsDoesNotStartAnOrphanBlock() throws {
+        // Given: a Host block whose HostName has no value
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostName
+            User alice
+            Port 2222
+        """)
+
+        // Then: the following directives stay in the same block
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(hosts.count, 1)
+        XCTAssertNil(host.hostName)
+        XCTAssertEqual(host.user, "alice")
+        XCTAssertEqual(host.port, 2222)
+    }
+
+    func testHostNameWithCommentOnlyDoesNotStartAnOrphanBlock() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostName # placeholder
+            User alice
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertNil(host.hostName)
+        XCTAssertEqual(host.user, "alice")
+    }
+
+    func testHostNameWithUnterminatedQuoteDoesNotStartAnOrphanBlock() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostName "example.com
+            User alice
+        """)
+
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertNil(host.hostName)
+        XCTAssertEqual(host.user, "alice")
+    }
+
+    func testHostKeyAlgorithmsWithoutArgumentsDoesNotStartAnOrphanBlock() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host server
+            HostKeyAlgorithms
+            HostName server.example.com
+        """)
+
+        XCTAssertEqual(try XCTUnwrap(hosts.first).hostName, "server.example.com")
+    }
+
+    func testMalformedHostNameInUniversalBlockKeepsDefaults() throws {
+        // Given: a `Host *` block whose HostName fails to parse
+        let hosts = SSHConfigParser.parse("""
+        Host *
+            HostName # placeholder
+            User default-user
+        Host server
+            HostName server.example.com
+        """)
+
+        // Then: later directives in the universal block still apply
+        XCTAssertEqual(try XCTUnwrap(hosts.first).user, "default-user")
     }
 
 }

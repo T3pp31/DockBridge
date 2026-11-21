@@ -606,22 +606,159 @@ final class FileDropAcceptanceTests: XCTestCase {
     }
 
     private static func isDockerE2EAvailable() -> Bool {
+        // `docker ps` has no built-in timeout and blocks until the daemon
+        // answers; this runs on the main actor, so a hung daemon would freeze
+        // the rest of the test run. Run it with a deadline and kill the child
+        // instead of waiting indefinitely (issue #1156).
+        isProbeOutputMatching(
+            executable: dockerExecutable,
+            arguments: [
+                "ps",
+                "--filter", "name=dockbridge-e2e",
+                "--filter", "status=running",
+                "--format", "{{.Names}}",
+            ],
+            expected: "dockbridge-e2e",
+            timeout: dockerProbeTimeout
+        )
+    }
+
+    /// Runs `executable` and returns whether it exited 0 within `timeout`
+    /// with trimmed stdout equal to `expected`.
+    static func isProbeOutputMatching(
+        executable: String,
+        arguments: [String],
+        expected: String,
+        timeout: TimeInterval,
+        killGrace: TimeInterval = dockerProbeKillGrace
+    ) -> Bool {
+        guard let result = runBoundedProbe(
+            executable: executable,
+            arguments: arguments,
+            timeout: timeout,
+            killGrace: killGrace
+        ) else { return false }
+        guard result.status == 0 else { return false }
+        return result.output.trimmingCharacters(in: .whitespacesAndNewlines) == expected
+    }
+
+    /// Runs a child process with a hard deadline. Stdout is drained
+    /// concurrently so a chatty child cannot block on a full pipe. Returns nil
+    /// when the child could not start or overran `timeout`; in that case it is
+    /// sent SIGTERM, then SIGKILL after `killGrace`, and the pipe is never
+    /// read synchronously, so this always returns in bounded time.
+    static func runBoundedProbe(
+        executable: String,
+        arguments: [String],
+        timeout: TimeInterval,
+        killGrace: TimeInterval
+    ) -> (status: Int32, output: String)? {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: dockerExecutable)
-        process.arguments = [
-            "ps",
-            "--filter", "name=dockbridge-e2e",
-            "--filter", "status=running",
-            "--format", "{{.Names}}",
-        ]
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
         let pipe = Pipe()
         process.standardOutput = pipe
-        guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return false }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return output == "dockbridge-e2e"
+        let buffer = ProbeOutputBuffer()
+        let reader = pipe.fileHandleForReading
+        reader.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                handle.readabilityHandler = nil
+            } else {
+                buffer.append(chunk)
+            }
+        }
+        guard (try? process.run()) != nil else {
+            reader.readabilityHandler = nil
+            return nil
+        }
+
+        guard waitForExit(process, timeout: timeout) else {
+            reader.readabilityHandler = nil
+            process.terminate()
+            if !waitForExit(process, timeout: killGrace) {
+                kill(process.processIdentifier, SIGKILL)
+                _ = waitForExit(process, timeout: killGrace)
+            }
+            return nil
+        }
+
+        // The child has exited and closed its end; collect what the handler
+        // has not delivered yet.
+        reader.readabilityHandler = nil
+        buffer.append(reader.readDataToEndOfFile())
+        return (process.terminationStatus, String(data: buffer.data, encoding: .utf8) ?? "")
+    }
+
+    private static func waitForExit(_ process: Process, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return !process.isRunning
+    }
+
+    private final class ProbeOutputBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage = Data()
+
+        var data: Data { lock.withLock { storage } }
+
+        func append(_ chunk: Data) {
+            lock.withLock { storage.append(chunk) }
+        }
+    }
+
+    private static let dockerProbeTimeout: TimeInterval = 5
+    static let dockerProbeKillGrace: TimeInterval = 1
+
+    // MARK: - Bounded probe regression tests (issue #1156)
+
+    func testBoundedProbeMatchesExpectedOutput() {
+        XCTAssertTrue(Self.isProbeOutputMatching(
+            executable: "/bin/echo", arguments: ["dockbridge-e2e"],
+            expected: "dockbridge-e2e", timeout: 5
+        ))
+    }
+
+    func testBoundedProbeRejectsMismatchedOutputAndNonZeroExit() {
+        XCTAssertFalse(Self.isProbeOutputMatching(
+            executable: "/bin/echo", arguments: ["something-else"],
+            expected: "dockbridge-e2e", timeout: 5
+        ))
+        XCTAssertFalse(Self.isProbeOutputMatching(
+            executable: "/bin/sh", arguments: ["-c", "echo dockbridge-e2e; exit 1"],
+            expected: "dockbridge-e2e", timeout: 5
+        ))
+    }
+
+    func testBoundedProbeDrainsLargeOutput() {
+        // Far more than a pipe buffer (~64 KiB): must not deadlock.
+        let result = Self.runBoundedProbe(
+            executable: "/bin/sh", arguments: ["-c", "yes x | head -c 1048576"],
+            timeout: 5, killGrace: 1
+        )
+        XCTAssertEqual(result?.status, 0)
+        XCTAssertEqual(result?.output.utf8.count, 1_048_576)
+    }
+
+    func testBoundedProbeTimesOutOnUnresponsiveChild() {
+        let start = Date()
+        let result = Self.runBoundedProbe(
+            executable: "/bin/sleep", arguments: ["60"], timeout: 0.5, killGrace: 0.5
+        )
+        XCTAssertNil(result)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 3)
+    }
+
+    func testBoundedProbeKillsChildThatIgnoresSIGTERM() {
+        let start = Date()
+        let result = Self.runBoundedProbe(
+            executable: "/bin/sh",
+            arguments: ["-c", "trap '' TERM; while :; do sleep 1; done"],
+            timeout: 0.5, killGrace: 0.5
+        )
+        XCTAssertNil(result)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 4)
     }
 }

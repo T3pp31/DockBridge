@@ -10,4 +10,5 @@
 [advisories]
 ignore = [
     "RUSTSEC-2023-0071", # rsa Marvin Attack — no upstream fix; see docs/security.md (#77) # expires: 2026-12-31
+    "RUSTSEC-2026-0543", # chrono is unmaintained; only a wasm32-only dependency of russh-util (not built by DockBridge); see docs/security.md (#1382) # expires: 2027-03-31
 ]

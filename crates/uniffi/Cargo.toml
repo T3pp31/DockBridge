@@ -16,16 +16,16 @@ path = "src/bin/uniffi-bindgen.rs"
 required-features = ["cli"]
 
 [features]
-cli = ["uniffi/cli"]
+cli = ["uniffi/cli", "uniffi/cargo-metadata"]
 
 [dependencies]
 dockbridge-core = { path = "../core" }
 tokio.workspace = true
-uniffi.workspace = true
+uniffi = { workspace = true, default-features = false }
 zeroize.workspace = true
 
 [build-dependencies]
-uniffi = { workspace = true, features = ["build"] }
+uniffi = { workspace = true, default-features = false, features = ["build"] }
 
 [dev-dependencies]
 dockbridge-core = { path = "../core", features = ["test-support"] }

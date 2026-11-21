@@ -10,13 +10,15 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 KEYS = (
-    "version", "app_name", "asset_name_template", "sbom_name_template",
-    "cargo_cyclonedx_version", "xcodegen_version", "xcodegen_sha256",
+    "version", "app_name", "asset_name_template", "cli_name_template",
+    "sbom_name_template", "cargo_cyclonedx_version", "xcodegen_version",
+    "xcodegen_sha256",
 )
 CONFIG = '''[release]
 version = "1.2.3"
 app_name = "Fixture App"
 asset_name_template = "{app_name}-{version}-macOS.dmg"
+cli_name_template = "dockbridge-{version}-macOS"
 sbom_name_template = "{app_name}-{version}.cdx.json"
 cargo_cyclonedx_version = "0.5.9"
 xcodegen_version = "2.45.4"
@@ -62,12 +64,21 @@ class ReleaseConfigTests(unittest.TestCase):
             capture_output=True, text=True, timeout=5,
         )
 
-    def run_step(self, workflow, name, version="1.2.3", preamble=""):
+    def run_step(self, workflow, name, version="1.2.3", preamble="", cli_name=None,
+                 event_name="push"):
         block = workflow_block(workflow, name).replace(
             "${{ steps.version.outputs.version }}", version)
+        block = block.replace(
+            "${{ steps.version.outputs.cli_name }}",
+            cli_name if cli_name is not None else f"dockbridge-{version}-macOS")
+        block = block.replace("${{ github.event_name }}", event_name)
+        env = dict(self.env)
+        # `Resolve version` derives the version from the tag on a tag push.
+        # Always override: CI runners set their own GITHUB_REF_NAME.
+        env["GITHUB_REF_NAME"] = f"v{version}"
         return subprocess.run(
             ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", preamble + block],
-            cwd=self.root, env=self.env, capture_output=True, text=True, timeout=5,
+            cwd=self.root, env=env, capture_output=True, text=True, timeout=5,
         )
 
     def assert_failure(self, result):
@@ -168,9 +179,45 @@ class ReleaseConfigTests(unittest.TestCase):
         cli = f"dist/dockbridge-{version}-macOS"
         sbom = f"dist/Fixture App-{version}.cdx.json"
         self.assertEqual(self.output.read_text().splitlines(), [
+            "app_name=Fixture App",
             f"dmg={dmg}", f"sha256={dmg}.sha256", f"cli={cli}",
             f"cli_sha256={cli}.sha256", f"sbom={sbom}", f"sbom_sha256={sbom}.sha256",
         ])
+
+    def test_custom_cli_template_flows_to_build_and_assets(self):
+        self.config.write_text(CONFIG.replace(
+            'cli_name_template = "dockbridge-{version}-macOS"',
+            'cli_name_template = "{app_name}-cli-{version}"'))
+        result = self.run_step("release.yml", "Resolve version")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        outputs = dict(
+            line.split("=", 1) for line in self.output.read_text().splitlines())
+        self.assertEqual(outputs["version"], "1.2.3")
+        self.assertEqual(outputs["prerelease"], "false")
+        self.assertEqual(outputs["cli_name"], "Fixture App-cli-1.2.3")
+        self.output.write_text("")
+        result = self.run_step(
+            "release.yml", "Resolve asset paths", cli_name=outputs["cli_name"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("cli=dist/Fixture App-cli-1.2.3", self.output.read_text().splitlines())
+
+    def test_unresolved_cli_placeholder_fails(self):
+        self.config.write_text(CONFIG.replace(
+            'cli_name_template = "dockbridge-{version}-macOS"',
+            'cli_name_template = "dockbridge-{versoin}-macOS"'))
+        result = self.run_step("release.yml", "Resolve version")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsupported placeholder", result.stderr)
+        self.assertEqual(self.output.read_text(), "")
+
+    def test_downstream_steps_read_resolved_names(self):
+        build = workflow_block("release.yml", "Build hardened CLI")
+        self.assertIn("${{ steps.version.outputs.cli_name }}", build)
+        self.assertNotIn("dockbridge-${VERSION}", build)
+        text = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+        self.assertIn(
+            "name: ${{ steps.assets.outputs.app_name }} ${{ steps.version.outputs.version }}",
+            text)
 
     def test_missing_tool_and_asset_keys_stop_before_publication(self):
         for key, workflow, name in (
@@ -178,6 +225,9 @@ class ReleaseConfigTests(unittest.TestCase):
             ("cargo_cyclonedx_version", "release.yml", "Install cargo-cyclonedx"),
             ("app_name", "release.yml", "Resolve asset paths"),
             ("asset_name_template", "release.yml", "Resolve asset paths"),
+            # Resolved once in `Resolve version`; downstream steps read the
+            # output instead of re-reading the template (issue #1363).
+            ("cli_name_template", "release.yml", "Resolve version"),
             ("sbom_name_template", "release.yml", "Resolve asset paths"),
         ):
             with self.subTest(key=key, workflow=workflow):
@@ -214,6 +264,41 @@ class ReleaseConfigTests(unittest.TestCase):
             used_keys.update(re.findall(r"bash scripts/release-config\.sh ([a-z_][a-z0-9_]*)", text))
             self.assertNotRegex(text, r"awk[^\n]*config/release\.toml")
         self.assertEqual(used_keys, set(KEYS))
+
+    def concurrency_block(self):
+        text = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+        block = re.search(r"^concurrency:\n((?:[ \t]+.*\n)+)", text, re.MULTILINE)
+        self.assertIsNotNone(block, "release.yml has no workflow-level concurrency")
+        return block[1]
+
+    def test_release_concurrency_normalizes_the_version(self):
+        # A dispatch for 1.0.0 must share the concurrency group of a v1.0.0
+        # tag push, or the two runs publish concurrently (issue #1364).
+        block = self.concurrency_block()
+        match = re.search(
+            r"""^\s*group:\s*["']?release-\$\{\{\s*(.+?)\s*&&\s*(.+?)\s*\|\|\s*(.+?)\s*\}\}""",
+            block, re.MULTILINE)
+        self.assertIsNotNone(match, block)
+        condition, dispatch, tag = (re.sub(r"\s+", "", part) for part in match.groups())
+        self.assertEqual(condition, "github.event_name=='workflow_dispatch'")
+        self.assertEqual(dispatch, "format('v{0}',github.event.inputs.version)")
+        self.assertEqual(tag, "github.ref_name")
+
+        def group(event_name, version="", ref_name=""):
+            # Mirrors the expression's semantics for the fixed parts above.
+            if event_name == "workflow_dispatch" and version:
+                return f"release-v{version}"
+            return f"release-{ref_name}"
+
+        self.assertEqual(group("workflow_dispatch", version="1.0.0"),
+                         group("push", ref_name="v1.0.0"))
+        self.assertNotEqual(group("workflow_dispatch", version="2.0.0"),
+                            group("push", ref_name="v1.0.0"))
+
+    def test_release_concurrency_waits_instead_of_cancelling(self):
+        # Cancelling would abort an in-progress publish of the same release.
+        self.assertRegex(self.concurrency_block(),
+                         r"(?m)^\s*cancel-in-progress:\s*false\s*$")
 
 
 if __name__ == "__main__":
