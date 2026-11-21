@@ -4,6 +4,10 @@ app_name = "DockBridge"
 min_macos = "15.0"
 github_repo = "T3pp31/DockBridge"
 asset_name_template = "{app_name}-{version}-macOS.dmg"
+# Universal macOS CLI binary. The published name stays `dockbridge-...` even
+# if app_name changes; the workflow resolves it from this template only.
+# Supported placeholders: {app_name}, {version}; any other fails the release.
+cli_name_template = "dockbridge-{version}-macOS"
 bundle_identifier = "com.dockbridge.app"
 # Set when SIGN_AND_NOTARIZE=true in the release workflow.
 team_id = ""

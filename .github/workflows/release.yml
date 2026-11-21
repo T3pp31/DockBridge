@@ -298,11 +298,24 @@ jobs:
           else
             PRERELEASE=false
           fi
+          # Resolve the CLI artifact name once; the build, attestation, and
+          # upload steps all read it from here (issue #1363).
+          # Supports the same {app_name}/{version} placeholders as the other
+          # *_name_template keys; anything left unresolved fails the release.
+          CLI_TEMPLATE="$(bash scripts/release-config.sh cli_name_template)"
+          CLI_APP_NAME="$(bash scripts/release-config.sh app_name)"
+          CLI_NAME="${CLI_TEMPLATE//\{app_name\}/${CLI_APP_NAME}}"
+          CLI_NAME="${CLI_NAME//\{version\}/${VERSION}}"
+          if [[ "$CLI_NAME" == *[{}]* ]]; then
+            echo "error: cli_name_template has an unsupported placeholder: ${CLI_TEMPLATE}" >&2
+            exit 1
+          fi
           {
             echo "version=${VERSION}"
             echo "prerelease=${PRERELEASE}"
+            echo "cli_name=${CLI_NAME}"
           } >> "$GITHUB_OUTPUT"
-          echo "Release version: ${VERSION}"
+          echo "Release version: ${VERSION} (CLI: ${CLI_NAME})"
 
       - name: Verify release.toml / Cargo.toml match the tag version
         run: |
@@ -341,12 +354,11 @@ jobs:
 
       - name: Build hardened CLI
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          CLI_NAME="${{ steps.version.outputs.cli_name }}"
           mkdir -p dist
           for target in aarch64-apple-darwin x86_64-apple-darwin; do
             cargo build -p dockbridge-cli --release --features disable-cli-password --target "$target"
           done
-          CLI_NAME="dockbridge-${VERSION}-macOS"
           lipo -create \
             target/aarch64-apple-darwin/release/dockbridge \
             target/x86_64-apple-darwin/release/dockbridge \
@@ -427,6 +439,7 @@ jobs:
         id: assets
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          CLI_NAME="${{ steps.version.outputs.cli_name }}"
           APP_NAME="$(bash scripts/release-config.sh app_name)"
           ASSET_TEMPLATE="$(bash scripts/release-config.sh asset_name_template)"
           SBOM_TEMPLATE="$(bash scripts/release-config.sh sbom_name_template)"
@@ -434,13 +447,17 @@ jobs:
           ASSET_NAME="${ASSET_NAME//\{version\}/${VERSION}}"
           SBOM_NAME="${SBOM_TEMPLATE//\{app_name\}/${APP_NAME}}"
           SBOM_NAME="${SBOM_NAME//\{version\}/${VERSION}}"
-          CLI_NAME="dockbridge-${VERSION}-macOS"
-          echo "dmg=dist/${ASSET_NAME}" >> "$GITHUB_OUTPUT"
-          echo "sha256=dist/${ASSET_NAME}.sha256" >> "$GITHUB_OUTPUT"
-          echo "cli=dist/${CLI_NAME}" >> "$GITHUB_OUTPUT"
-          echo "cli_sha256=dist/${CLI_NAME}.sha256" >> "$GITHUB_OUTPUT"
-          echo "sbom=dist/${SBOM_NAME}" >> "$GITHUB_OUTPUT"
-          echo "sbom_sha256=dist/${SBOM_NAME}.sha256" >> "$GITHUB_OUTPUT"
+          # Write outputs only after every key resolves, so a missing key
+          # leaves $GITHUB_OUTPUT empty (the test asserts that).
+          {
+            echo "app_name=${APP_NAME}"
+            echo "dmg=dist/${ASSET_NAME}"
+            echo "sha256=dist/${ASSET_NAME}.sha256"
+            echo "cli=dist/${CLI_NAME}"
+            echo "cli_sha256=dist/${CLI_NAME}.sha256"
+            echo "sbom=dist/${SBOM_NAME}"
+            echo "sbom_sha256=dist/${SBOM_NAME}.sha256"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
@@ -455,7 +472,7 @@ jobs:
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', steps.version.outputs.version) || github.ref_name }}
           target_commitish: ${{ github.sha }}
-          name: DockBridge ${{ steps.version.outputs.version }}
+          name: ${{ steps.assets.outputs.app_name }} ${{ steps.version.outputs.version }}
           body_path: ${{ steps.notes.outputs.path }}
           draft: ${{ github.event_name == 'workflow_dispatch' }}
           prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
