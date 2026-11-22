@@ -249,4 +249,17 @@ final class RustBridgeServiceSessionTests: XCTestCase {
         XCTAssertNil(bridge.pendingKbdInteractiveChallenge)
         XCTAssertLessThan(elapsed, .seconds(5))
     }
+
+    func testUnresolvedAskOverwritePolicyThrowsInsteadOfFallingBackToReplace() throws {
+        XCTAssertEqual(try TransferOverwritePolicy.replace.resolvedForBridge().rustRecord, .replace)
+        XCTAssertEqual(try TransferOverwritePolicy.failIfExists.resolvedForBridge().rustRecord, .failIfExists)
+
+        XCTAssertThrowsError(try TransferOverwritePolicy.ask.resolvedForBridge()) { error in
+            guard case let DockBridgeError.Config(message) = error else {
+                XCTFail("Expected DockBridgeError.Config for unresolved .ask policy, got: \(error)")
+                return
+            }
+            XCTAssertTrue(message.contains(".ask"), message)
+        }
+    }
 }

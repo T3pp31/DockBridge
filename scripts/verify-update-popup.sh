@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 APP="${1:-/Applications/DockBridge.app}"
-BUNDLE_ID="${BUNDLE_ID:-$(awk -F'"' '/^bundle_identifier / { print $2; exit }' config/release.toml)}"
+BUNDLE_ID="${BUNDLE_ID:-$(bash "${ROOT}/scripts/release-config.sh" bundle_identifier)}"
 if [[ -z "$BUNDLE_ID" ]]; then
   echo "bundle_identifier not found in config/release.toml" >&2
   exit 1
@@ -227,9 +227,9 @@ main() {
     exit 1
   fi
   local expected_asset_name release_version release_app_name expected_dmg_name
-  expected_asset_name=$(awk -F'"' '/^asset_name_template / { print $2; exit }' config/release.toml)
-  release_version="${EXPECTED_RELEASE_VERSION:-$(awk -F'"' '/^version / { print $2; exit }' config/release.toml)}"
-  release_app_name=$(awk -F'"' '/^app_name / { print $2; exit }' config/release.toml)
+  expected_asset_name=$(bash "${ROOT}/scripts/release-config.sh" asset_name_template)
+  release_version="${EXPECTED_RELEASE_VERSION:-$(bash "${ROOT}/scripts/release-config.sh" version)}"
+  release_app_name=$(bash "${ROOT}/scripts/release-config.sh" app_name)
   if [[ -z "$expected_asset_name" || -z "$release_version" || -z "$release_app_name" ]]; then
     echo "FAIL: Required release asset configuration is missing" >&2
     exit 1
@@ -288,10 +288,10 @@ main() {
     SKIPPED_CHECKS=$((SKIPPED_CHECKS + 1))
   else
     local offline_api_host offline_probe_timeout_secs offline_observation_secs offline_poll_interval_secs
-    offline_api_host=$(awk -F'"' '/^offline_api_host / { print $2; exit }' config/release.toml)
-    offline_probe_timeout_secs=$(awk '/^offline_probe_timeout_secs / { print $3; exit }' config/release.toml)
-    offline_observation_secs=$(awk '/^offline_observation_secs / { print $3; exit }' config/release.toml)
-    offline_poll_interval_secs=$(awk '/^offline_poll_interval_secs / { print $3; exit }' config/release.toml)
+    offline_api_host=$(bash "${ROOT}/scripts/release-config.sh" --section verification offline_api_host)
+    offline_probe_timeout_secs=$(bash "${ROOT}/scripts/release-config.sh" --section verification --int offline_probe_timeout_secs)
+    offline_observation_secs=$(bash "${ROOT}/scripts/release-config.sh" --section verification --int offline_observation_secs)
+    offline_poll_interval_secs=$(bash "${ROOT}/scripts/release-config.sh" --section verification --int offline_poll_interval_secs)
     if [[ ! "$offline_observation_secs" =~ ^[1-9][0-9]*$ || ! "$offline_poll_interval_secs" =~ ^[1-9][0-9]*$ ]] ||
        (( offline_poll_interval_secs > offline_observation_secs )); then
       echo "FAIL: Invalid offline observation settings" >&2

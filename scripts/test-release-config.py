@@ -216,7 +216,7 @@ class ReleaseConfigTests(unittest.TestCase):
         self.assertNotIn("dockbridge-${VERSION}", build)
         text = (ROOT / ".github" / "workflows" / "release.yml").read_text()
         self.assertIn(
-            "name: ${{ steps.assets.outputs.app_name }} ${{ steps.version.outputs.version }}",
+            "name: ${{ needs.build.outputs.app_name }} ${{ needs.build.outputs.version }}",
             text)
 
     def test_missing_tool_and_asset_keys_stop_before_publication(self):
@@ -263,7 +263,43 @@ class ReleaseConfigTests(unittest.TestCase):
             text = (ROOT / ".github" / "workflows" / workflow).read_text()
             used_keys.update(re.findall(r"bash scripts/release-config\.sh ([a-z_][a-z0-9_]*)", text))
             self.assertNotRegex(text, r"awk[^\n]*config/release\.toml")
+            self.assertNotRegex(text, r"awk[^\n]*Cargo\.toml")
         self.assertEqual(used_keys, set(KEYS))
+
+    def test_scripts_use_shared_reader_without_adhoc_awk(self):
+        for script in sorted((ROOT / "scripts").glob("*.sh")):
+            if script.name == "release-config.sh":
+                continue
+            text = script.read_text()
+            with self.subTest(script=script.name):
+                self.assertNotRegex(text, r"awk[^\n]*(?:config/release\.toml|RELEASE_CONFIG)")
+                self.assertNotRegex(text, r"awk[^\n]*Cargo\.toml")
+
+    def test_bool_int_section_and_cargo_version_modes(self):
+        text = (ROOT / "config" / "release.toml").read_text()
+        self.config.write_text(text)
+        for key in ("require_signed_updates", "require_notarized_updates"):
+            result = self.read("--bool", key)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(result.stdout.strip(), ("true", "false"))
+        self.assert_failure(self.read("--bool", "version"))
+
+        result = self.read("--section", "verification", "offline_api_host")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "api.github.com")
+        for key in ("offline_probe_timeout_secs", "offline_observation_secs", "offline_poll_interval_secs"):
+            result = self.read("--section", "verification", "--int", key)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertRegex(result.stdout.strip(), r"^[0-9]+$")
+        self.assert_failure(self.read("--section", "verification", "--int", "offline_api_host"))
+
+        (self.root / "Cargo.toml").write_text(
+            '[dependencies]\nversion = "9.9.9"\n[workspace.package]\nversion = "2.3.4"\n[other]\nversion = "8.8.8"\n'
+        )
+        result = self.read("--cargo-version")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "2.3.4\n")
+        self.assert_failure(self.read("--cargo-version", "version"))
 
     def concurrency_block(self):
         text = (ROOT / ".github" / "workflows" / "release.yml").read_text()

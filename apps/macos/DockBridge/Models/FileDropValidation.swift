@@ -6,21 +6,49 @@ enum FileDropValidation {
         let isDirectory: Bool
     }
 
-    // Build a fresh index per validation batch, not per payload or across drops:
-    // both the displayed listing and local symlink targets may change.
+    // Precomputed normalized index for the currently displayed listing.
+    // MainViewModel caches this per listing/filter snapshot and invalidates it
+    // on directory reload or filter change so repeated drops only normalize the
+    // dragged payloads (issue #1417).
     struct DisplayedLocalItems {
         private let keys: Set<DisplayedItemKey>
         private let normalizePath: (URL) -> String
 
         init(
             _ items: [LocalFileItem],
-            normalizePath: @escaping (URL) -> String = FileDropValidation.normalizedLocalPath
+            normalizePath: ((URL) -> String)? = nil
         ) {
-            self.normalizePath = normalizePath
+            let payloadNormalizer = normalizePath ?? FileDropValidation.normalizedLocalPath
+            self.normalizePath = payloadNormalizer
             var keys: Set<DisplayedItemKey> = []
             keys.reserveCapacity(items.count)
-            for item in items where !item.isParentDirectory {
-                keys.insert(DisplayedItemKey(path: normalizePath(item.url), isDirectory: item.isDirectory))
+            if let normalizePath {
+                for item in items where !item.isParentDirectory {
+                    keys.insert(DisplayedItemKey(path: normalizePath(item.url), isDirectory: item.isDirectory))
+                }
+            } else {
+                // Non-symlink entries share their parent directory's symlink
+                // resolution, avoiding O(N) filesystem symlink resolution calls
+                // when indexing large directories.
+                var resolvedParents: [URL: URL] = [:]
+                for item in items where !item.isParentDirectory {
+                    let path: String
+                    if item.isSymbolicLink == false {
+                        let standardized = item.url.standardizedFileURL
+                        let parent = standardized.deletingLastPathComponent()
+                        let resolvedParent: URL
+                        if let cached = resolvedParents[parent] {
+                            resolvedParent = cached
+                        } else {
+                            resolvedParent = parent.resolvingSymlinksInPath()
+                            resolvedParents[parent] = resolvedParent
+                        }
+                        path = resolvedParent.appendingPathComponent(standardized.lastPathComponent).path
+                    } else {
+                        path = FileDropValidation.normalizedLocalPath(item.url)
+                    }
+                    keys.insert(DisplayedItemKey(path: path, isDirectory: item.isDirectory))
+                }
             }
             self.keys = keys
         }
@@ -36,13 +64,14 @@ enum FileDropValidation {
 
         init(
             _ items: [RemoteFileRecord],
-            normalizePath: @escaping (String) throws -> String = RemotePath.normalize
+            normalizePath: ((String) throws -> String)? = nil
         ) {
-            self.normalizePath = normalizePath
+            let effectiveNormalizePath = normalizePath ?? RemotePath.normalize
+            self.normalizePath = effectiveNormalizePath
             var keys: Set<DisplayedItemKey> = []
             keys.reserveCapacity(items.count)
             for item in items where !item.isParentDirectory {
-                guard let path = try? normalizePath(item.path) else { continue }
+                guard let path = try? effectiveNormalizePath(item.path) else { continue }
                 keys.insert(DisplayedItemKey(path: path, isDirectory: item.isDirectory))
             }
             self.keys = keys

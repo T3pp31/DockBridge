@@ -66,10 +66,10 @@ jobs:
         run: cargo test --workspace --all-targets
 
       - name: Build Rust static library
-        run: ./scripts/build-rust.sh
+        run: ./scripts/build-rust.sh "" debug
 
       - name: Generate UniFFI bindings
-        run: ./scripts/generate-uniffi.sh
+        run: ./scripts/generate-uniffi.sh "" debug
 
       # The macOS build/test steps below are copied verbatim from ci.yml
       # (including the testmanagerd watchdog and bounded retry) and kept in
@@ -250,15 +250,29 @@ jobs:
           # uncompressed keeps the artifact instantly grep-able.
           compression-level: 0
 
-  release:
-    name: Build and publish release
+  build:
+    # Build all Rust binaries, unsigned macOS app, and SBOM in an isolated job
+    # with zero release secrets (issue #1227). Because Xcode's user script
+    # sandboxing is disabled for Cargo, running every Cargo/build.rs/Xcode step
+    # here prevents dependency build scripts from ever executing on a runner that
+    # holds signing certificates or notarization credentials.
+    name: Build unsigned release artifacts
     needs: test
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      cli_name: ${{ steps.version.outputs.cli_name }}
+      app_name: ${{ steps.assets.outputs.app_name }}
+      dmg: ${{ steps.assets.outputs.dmg }}
+      sha256: ${{ steps.assets.outputs.sha256 }}
+      cli: ${{ steps.assets.outputs.cli }}
+      cli_sha256: ${{ steps.assets.outputs.cli_sha256 }}
+      sbom: ${{ steps.assets.outputs.sbom }}
+      sbom_sha256: ${{ steps.assets.outputs.sbom_sha256 }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -321,7 +335,7 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           release_version="$(bash scripts/release-config.sh version)"
-          cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          cargo_version="$(bash scripts/release-config.sh --cargo-version)"
           if [[ "$release_version" != "$VERSION" ]]; then
             echo "error: config/release.toml ($release_version) != tag version ($VERSION)" >&2
             exit 1
@@ -365,16 +379,101 @@ jobs:
             -output "dist/${CLI_NAME}"
           (cd dist && shasum -a 256 "${CLI_NAME}" > "${CLI_NAME}.sha256")
 
-      # Compile every Rust artifact the app packaging needs while no release
-      # secret is present on the runner (issue #1227). The cargo invocations in
-      # scripts/package-macos-release.sh then find fresh artifacts and do not
-      # re-run dependency build scripts or proc macros after the import below.
-      - name: Prebuild Rust app libraries before importing secrets
+      - name: Build unsigned macOS app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          SIGN_AND_NOTARIZE: "false"
+          PACKAGE_APP_ONLY: "true"
+          APP_ARCHIVE_PATH: dist/unsigned-app.zip
+        run: ./scripts/package-macos-release.sh
+
+      - name: Install cargo-cyclonedx
         run: |
-          for target in aarch64-apple-darwin x86_64-apple-darwin; do
-            ./scripts/build-rust.sh "$target" release
-          done
-          cargo build -p dockbridge-uniffi --features cli --bin uniffi-bindgen --release
+          VERSION="$(bash scripts/release-config.sh cargo_cyclonedx_version)"
+          cargo install cargo-cyclonedx --version "${VERSION}" --locked
+
+      - name: Generate SBOM
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/generate-sbom.sh --out dist
+
+      - name: Resolve asset paths
+        id: assets
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          CLI_NAME="${{ steps.version.outputs.cli_name }}"
+          APP_NAME="$(bash scripts/release-config.sh app_name)"
+          ASSET_TEMPLATE="$(bash scripts/release-config.sh asset_name_template)"
+          SBOM_TEMPLATE="$(bash scripts/release-config.sh sbom_name_template)"
+          ASSET_NAME="${ASSET_TEMPLATE//\{app_name\}/${APP_NAME}}"
+          ASSET_NAME="${ASSET_NAME//\{version\}/${VERSION}}"
+          SBOM_NAME="${SBOM_TEMPLATE//\{app_name\}/${APP_NAME}}"
+          SBOM_NAME="${SBOM_NAME//\{version\}/${VERSION}}"
+          # Write outputs only after every key resolves, so a missing key
+          # leaves $GITHUB_OUTPUT empty (the test asserts that).
+          {
+            echo "app_name=${APP_NAME}"
+            echo "dmg=dist/${ASSET_NAME}"
+            echo "sha256=dist/${ASSET_NAME}.sha256"
+            echo "cli=dist/${CLI_NAME}"
+            echo "cli_sha256=dist/${CLI_NAME}.sha256"
+            echo "sbom=dist/${SBOM_NAME}"
+            echo "sbom_sha256=dist/${SBOM_NAME}.sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Stage release notes for artifact upload
+        run: |
+          mkdir -p dist
+          cp "${{ steps.notes.outputs.path }}" dist/release-notes.md
+
+      - name: Upload unsigned release build artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: release-build-artifacts
+          path: |
+            dist/unsigned-app.zip
+            dist/release-notes.md
+            ${{ steps.assets.outputs.cli }}
+            ${{ steps.assets.outputs.cli_sha256 }}
+            ${{ steps.assets.outputs.sbom }}
+            ${{ steps.assets.outputs.sbom_sha256 }}
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    # Sign, notarize, package DMG, attest, and publish on a clean runner that
+    # never executes Cargo, dependency build scripts, or Xcode builds (issue #1227).
+    name: Sign, notarize, and publish release
+    needs: [test, build]
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Pin Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90  # v1.7.0
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+
+      - name: Download unsigned release build artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: release-build-artifacts
+          path: dist
+
+      - name: Extract unsigned macOS app
+        run: |
+          mkdir -p "${RUNNER_TEMP}/prebuilt-app"
+          ditto -x -k dist/unsigned-app.zip "${RUNNER_TEMP}/prebuilt-app"
+          chmod +x "${{ needs.build.outputs.cli }}"
 
       - name: Import signing certificate and notary profile
         env:
@@ -429,69 +528,36 @@ jobs:
           rm -f "$CERT_PATH" "$KEYCHAIN_PASSWORD_PATH"
           IMPORT_COMPLETED=true
 
-      - name: Package macOS app
+      - name: Sign, notarize, and package macOS app
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          BUILD_NUMBER: ${{ github.run_number }}
+          VERSION: ${{ needs.build.outputs.version }}
+          APP_NAME: ${{ needs.build.outputs.app_name }}
+          PREBUILT_APP_PATH: ${{ runner.temp }}/prebuilt-app/${{ needs.build.outputs.app_name }}.app
           SIGN_AND_NOTARIZE: "true"
         run: ./scripts/package-macos-release.sh
-
-      - name: Install cargo-cyclonedx
-        run: |
-          VERSION="$(bash scripts/release-config.sh cargo_cyclonedx_version)"
-          cargo install cargo-cyclonedx --version "${VERSION}" --locked
-
-      - name: Generate SBOM
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: ./scripts/generate-sbom.sh --out dist
-
-      - name: Resolve asset paths
-        id: assets
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          CLI_NAME="${{ steps.version.outputs.cli_name }}"
-          APP_NAME="$(bash scripts/release-config.sh app_name)"
-          ASSET_TEMPLATE="$(bash scripts/release-config.sh asset_name_template)"
-          SBOM_TEMPLATE="$(bash scripts/release-config.sh sbom_name_template)"
-          ASSET_NAME="${ASSET_TEMPLATE//\{app_name\}/${APP_NAME}}"
-          ASSET_NAME="${ASSET_NAME//\{version\}/${VERSION}}"
-          SBOM_NAME="${SBOM_TEMPLATE//\{app_name\}/${APP_NAME}}"
-          SBOM_NAME="${SBOM_NAME//\{version\}/${VERSION}}"
-          # Write outputs only after every key resolves, so a missing key
-          # leaves $GITHUB_OUTPUT empty (the test asserts that).
-          {
-            echo "app_name=${APP_NAME}"
-            echo "dmg=dist/${ASSET_NAME}"
-            echo "sha256=dist/${ASSET_NAME}.sha256"
-            echo "cli=dist/${CLI_NAME}"
-            echo "cli_sha256=dist/${CLI_NAME}.sha256"
-            echo "sbom=dist/${SBOM_NAME}"
-            echo "sbom_sha256=dist/${SBOM_NAME}.sha256"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: |
-            ${{ steps.assets.outputs.dmg }}
-            ${{ steps.assets.outputs.cli }}
-            ${{ steps.assets.outputs.sbom }}
+            ${{ needs.build.outputs.dmg }}
+            ${{ needs.build.outputs.cli }}
+            ${{ needs.build.outputs.sbom }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3  # v3.0.4
         with:
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', steps.version.outputs.version) || github.ref_name }}
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', needs.build.outputs.version) || github.ref_name }}
           target_commitish: ${{ github.sha }}
-          name: ${{ steps.assets.outputs.app_name }} ${{ steps.version.outputs.version }}
-          body_path: ${{ steps.notes.outputs.path }}
+          name: ${{ needs.build.outputs.app_name }} ${{ needs.build.outputs.version }}
+          body_path: dist/release-notes.md
           draft: ${{ github.event_name == 'workflow_dispatch' }}
-          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+          prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
           files: |
-            ${{ steps.assets.outputs.dmg }}
-            ${{ steps.assets.outputs.sha256 }}
-            ${{ steps.assets.outputs.cli }}
-            ${{ steps.assets.outputs.cli_sha256 }}
-            ${{ steps.assets.outputs.sbom }}
-            ${{ steps.assets.outputs.sbom_sha256 }}
+            ${{ needs.build.outputs.dmg }}
+            ${{ needs.build.outputs.sha256 }}
+            ${{ needs.build.outputs.cli }}
+            ${{ needs.build.outputs.cli_sha256 }}
+            ${{ needs.build.outputs.sbom }}
+            ${{ needs.build.outputs.sbom_sha256 }}
           generate_release_notes: false

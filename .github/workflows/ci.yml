@@ -140,7 +140,7 @@ jobs:
 
       - name: Check version consistency (Cargo.toml == release.toml)
         run: |
-          cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          cargo_version="$(bash scripts/release-config.sh --cargo-version)"
           release_version="$(bash scripts/release-config.sh version)"
           if [[ "$cargo_version" != "$release_version" ]]; then
             echo "error: Cargo.toml version ($cargo_version) != config/release.toml version ($release_version)" >&2
@@ -288,10 +288,10 @@ jobs:
           cache-bin: false
 
       - name: Build Rust static library
-        run: ./scripts/build-rust.sh
+        run: ./scripts/build-rust.sh "" debug
 
       - name: Generate UniFFI bindings
-        run: ./scripts/generate-uniffi.sh
+        run: ./scripts/generate-uniffi.sh "" debug
 
       - name: Verify localization catalog (en + ja)
         run: ./scripts/verify-localization.sh

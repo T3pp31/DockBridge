@@ -632,8 +632,8 @@
 /* Begin PBXShellScriptBuildPhase section */
 		EC79DED3014BF2D836249678 /* Generate UniFFI Bindings */ = {
 			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
+			dependencyFile = "$(DERIVED_FILE_DIR)/uniffi-bindings.d";
 			files = (
 			);
 			inputFileListPaths = (
@@ -641,23 +641,25 @@
 			inputPaths = (
 				"$(PROJECT_DIR)/../../Cargo.lock",
 				"$(PROJECT_DIR)/../../Cargo.toml",
-				"$(PROJECT_DIR)/../../crates",
+				"$(PROJECT_DIR)/../../rust-toolchain.toml",
+				"$(PROJECT_DIR)/../../crates/uniffi/src/dockbridge_uniffi.udl",
 				"$(PROJECT_DIR)/../../scripts/build-rust.sh",
 				"$(PROJECT_DIR)/../../scripts/generate-uniffi.sh",
-				"$(PROJECT_DIR)/../../vendor",
+				"$(PROJECT_DIR)/../../scripts/write-uniffi-depfile.sh",
 			);
 			name = "Generate UniFFI Bindings";
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(PROJECT_DIR)/../../target/release/libdockbridge_uniffi.a",
+				"$(DERIVED_FILE_DIR)/uniffi-bindings.stamp",
+				"$(PROJECT_DIR)/../../target/$(RUST_PROFILE)/libdockbridge_uniffi.a",
 				"$(SRCROOT)/DockBridge/Generated/DockBridgeUniffi.swift",
 				"$(SRCROOT)/DockBridge/Generated/Headers/dockbridge_uniffiFFI.h",
 				"$(SRCROOT)/DockBridge/Generated/Headers/module.modulemap",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
-			shellScript = "set -euo pipefail\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\nROOT=\"$SRCROOT/../..\"\n\"$ROOT/scripts/build-rust.sh\" \"\" release\n\"$ROOT/scripts/generate-uniffi.sh\" \"\" release\n";
+			shellScript = "set -euo pipefail\nexport PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"\nROOT=\"$SRCROOT/../..\"\nPROFILE=\"${RUST_PROFILE:-release}\"\n\"$ROOT/scripts/generate-uniffi.sh\" \"\" \"$PROFILE\"\n\"$ROOT/scripts/write-uniffi-depfile.sh\" \\\n  \"$ROOT\" \\\n  \"$DERIVED_FILE_DIR/uniffi-bindings.stamp\" \\\n  \"$DERIVED_FILE_DIR/uniffi-bindings.d\"\n";
 		};
 		F237171785F52D87CD46728E /* Generate Dock App Icon icns */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -893,13 +895,14 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-force_load",
-					"$(PROJECT_DIR)/../../target/release/libdockbridge_uniffi.a",
+					"$(PROJECT_DIR)/../../target/$(RUST_PROFILE)/libdockbridge_uniffi.a",
 					"-lc++",
 					"-framework",
 					Security,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.dockbridge.app;
 				PRODUCT_NAME = DockBridge;
+				RUST_PROFILE = release;
 				SDKROOT = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 			};
@@ -1045,13 +1048,14 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-force_load",
-					"$(PROJECT_DIR)/../../target/release/libdockbridge_uniffi.a",
+					"$(PROJECT_DIR)/../../target/$(RUST_PROFILE)/libdockbridge_uniffi.a",
 					"-lc++",
 					"-framework",
 					Security,
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.dockbridge.app;
 				PRODUCT_NAME = DockBridge;
+				RUST_PROFILE = debug;
 				SDKROOT = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 			};

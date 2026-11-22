@@ -191,7 +191,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     func upload(
         localPath: String,
         remoteDirectory: String,
-        overwritePolicy: TransferOverwritePolicy
+        overwritePolicy: ResolvedTransferOverwritePolicy
     ) async throws {
         let rustOverwritePolicy = overwritePolicy.rustRecord
         try await runOnBridge { client, sessionId in
@@ -207,7 +207,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     func download(
         remotePath: String,
         localDirectory: String,
-        overwritePolicy: TransferOverwritePolicy
+        overwritePolicy: ResolvedTransferOverwritePolicy
     ) async throws {
         let rustOverwritePolicy = overwritePolicy.rustRecord
         try await runOnBridge { client, sessionId in
@@ -659,10 +659,10 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     }
 }
 
-private extension TransferOverwritePolicy {
+extension ResolvedTransferOverwritePolicy {
     var rustRecord: TransferOverwritePolicyRecord {
         switch self {
-        case .replace, .ask:
+        case .replace:
             return .replace
         case .failIfExists:
             return .failIfExists

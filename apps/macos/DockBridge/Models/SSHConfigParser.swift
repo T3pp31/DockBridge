@@ -64,6 +64,10 @@ enum SSHConfigParser {
                 var blockAliases = Set<String>()
                 for alias in directive.arguments where isImportableAlias(alias) {
                     let normalized = normalizedAlias(alias)
+                    // A negated pattern on the same Host line excludes this alias
+                    // from the block (issue #1370). Do not register the alias or
+                    // block index when the header itself does not apply to it.
+                    guard blockApplies(patterns, to: normalized) else { continue }
                     if seenAliases.insert(normalized).inserted {
                         aliases.append((original: alias, normalized: normalized))
                     }

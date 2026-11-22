@@ -167,21 +167,36 @@ final class ConnectionListViewModelTests: XCTestCase {
         viewModel.importSSHConfig(contents: """
         Host Server
             HostName first.example.com
+            User alice
+            Port 2201
 
         Host other
             HostName other.example.com
         """)
 
-        XCTAssertEqual(viewModel.profiles.count, 2)
+        let before = viewModel.profiles
+        XCTAssertEqual(before.count, 2)
+        XCTAssertEqual(try store.loadProfiles(), before)
+        let originalServer = try XCTUnwrap(before.first { $0.name == "Server" })
+        XCTAssertEqual(originalServer.host, "first.example.com")
+        XCTAssertEqual(originalServer.username, "alice")
+        XCTAssertEqual(originalServer.port, 2201)
+        XCTAssertEqual(originalServer.authType, .password)
         XCTAssertNil(viewModel.errorMessage)
 
         viewModel.importSSHConfig(contents: """
         Host server
             HostName replacement.example.com
+            User mallory
+            Port 2299
+            IdentityFile ~/.ssh/id_ed25519
         """)
 
-        XCTAssertEqual(viewModel.profiles.count, 2)
-        XCTAssertEqual(try store.loadProfiles().count, 2)
+        let persisted = try store.loadProfiles()
+        XCTAssertEqual(viewModel.profiles, before)
+        XCTAssertEqual(persisted, before)
+        XCTAssertFalse(viewModel.profiles.contains { $0.host == "replacement.example.com" })
+        XCTAssertFalse(persisted.contains { $0.host == "replacement.example.com" })
         XCTAssertEqual(
             viewModel.importResultMessage,
             String(
