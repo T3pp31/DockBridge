@@ -73,7 +73,11 @@ final class MainViewModel: ObservableObject {
             }
         }
     }
-    @Published private(set) var localItems: [LocalFileItem] = []
+    @Published private(set) var localItems: [LocalFileItem] = [] {
+        didSet {
+            cachedDisplayedLocalItems = nil
+        }
+    }
     @Published var remotePath = "/" {
         didSet {
             if !isApplyingNavigationHistory {
@@ -81,10 +85,38 @@ final class MainViewModel: ObservableObject {
             }
         }
     }
-    @Published private(set) var remoteItems: [RemoteFileRecord] = []
+    @Published private(set) var remoteItems: [RemoteFileRecord] = [] {
+        didSet {
+            cachedDisplayedRemoteItems = nil
+        }
+    }
     @Published private(set) var showHiddenFiles: Bool
-    @Published var localFilter = ""
-    @Published var remoteFilter = ""
+    @Published var localFilter = "" {
+        didSet {
+            if oldValue != localFilter {
+                cachedDisplayedLocalItems = nil
+            }
+        }
+    }
+    @Published var remoteFilter = "" {
+        didSet {
+            if oldValue != remoteFilter {
+                cachedDisplayedRemoteItems = nil
+            }
+        }
+    }
+    private var cachedDisplayedLocalItems: FileDropValidation.DisplayedLocalItems?
+    private var cachedDisplayedRemoteItems: FileDropValidation.DisplayedRemoteItems?
+    var localDropPathNormalizer: ((URL) -> String)? {
+        didSet {
+            cachedDisplayedLocalItems = nil
+        }
+    }
+    var remoteDropPathNormalizer: ((String) throws -> String)? {
+        didSet {
+            cachedDisplayedRemoteItems = nil
+        }
+    }
     @Published var selectedLocalItemIDs: Set<String> = []
     @Published var selectedRemoteItemIDs: Set<String> = []
 
@@ -434,6 +466,7 @@ final class MainViewModel: ObservableObject {
     }
 
     func reloadLocal() {
+        cachedDisplayedLocalItems = nil
         let directory = localPath
         let includesHiddenFiles = showHiddenFiles
         localLoadGeneration += 1
@@ -728,6 +761,7 @@ final class MainViewModel: ObservableObject {
     }
 
     func reloadRemote() async {
+        cachedDisplayedRemoteItems = nil
         guard bridge.isConnected else {
             remoteItems = []
             isLoadingRemote = false
@@ -877,6 +911,30 @@ final class MainViewModel: ObservableObject {
             }
         }
         return items
+    }
+
+    var displayedLocalItemsIndex: FileDropValidation.DisplayedLocalItems {
+        if let cached = cachedDisplayedLocalItems {
+            return cached
+        }
+        let index = FileDropValidation.DisplayedLocalItems(
+            localTableItems,
+            normalizePath: localDropPathNormalizer
+        )
+        cachedDisplayedLocalItems = index
+        return index
+    }
+
+    var displayedRemoteItemsIndex: FileDropValidation.DisplayedRemoteItems {
+        if let cached = cachedDisplayedRemoteItems {
+            return cached
+        }
+        let index = FileDropValidation.DisplayedRemoteItems(
+            remoteTableItems,
+            normalizePath: remoteDropPathNormalizer
+        )
+        cachedDisplayedRemoteItems = index
+        return index
     }
 
     func openLocalTableItem(_ item: LocalFileItem) {
