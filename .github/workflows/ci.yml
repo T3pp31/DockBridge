@@ -281,10 +281,10 @@ jobs:
           cache-bin: false
 
       - name: Build Rust static library
-        run: ./scripts/build-rust.sh
+        run: ./scripts/build-rust.sh "" debug
 
       - name: Generate UniFFI bindings
-        run: ./scripts/generate-uniffi.sh
+        run: ./scripts/generate-uniffi.sh "" debug
 
       - name: Verify localization catalog (en + ja)
         run: ./scripts/verify-localization.sh
