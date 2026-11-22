@@ -1530,7 +1530,7 @@ final class MainViewModel: ObservableObject {
     private func runTransferOrAsk(
         destinationPath: String,
         destinationSide: TransferDestinationSide,
-        perform: @escaping (TransferOverwritePolicy) async -> Bool
+        perform: @escaping (ResolvedTransferOverwritePolicy) async -> Bool
     ) async -> Bool {
         let policy = settings.loadConfig().transferOverwritePolicy
 

@@ -26,13 +26,13 @@ final class FakeBridge: RemoteBridging {
     private(set) var uploaded: [(
         localPath: String,
         remoteDirectory: String,
-        overwritePolicy: TransferOverwritePolicy
+        overwritePolicy: ResolvedTransferOverwritePolicy
     )] = []
     /// Download destinations recorded during `download`.
     private(set) var downloaded: [(
         remotePath: String,
         localDirectory: String,
-        overwritePolicy: TransferOverwritePolicy
+        overwritePolicy: ResolvedTransferOverwritePolicy
     )] = []
     /// Delete paths recorded during `deleteRemote`.
     private(set) var deleted: [String] = []
@@ -95,7 +95,7 @@ final class FakeBridge: RemoteBridging {
     func upload(
         localPath: String,
         remoteDirectory: String,
-        overwritePolicy: TransferOverwritePolicy
+        overwritePolicy: ResolvedTransferOverwritePolicy
     ) async throws {
         uploaded.append((localPath, remoteDirectory, overwritePolicy))
         if failTransfers || uploadFails {
@@ -106,7 +106,7 @@ final class FakeBridge: RemoteBridging {
     func download(
         remotePath: String,
         localDirectory: String,
-        overwritePolicy: TransferOverwritePolicy
+        overwritePolicy: ResolvedTransferOverwritePolicy
     ) async throws {
         downloaded.append((remotePath, localDirectory, overwritePolicy))
         if failTransfers || downloadFails {
