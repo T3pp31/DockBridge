@@ -4,6 +4,7 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
     let url: URL
     let name: String
     let isDirectory: Bool
+    let isSymbolicLink: Bool?
     let size: Int64
     let modificationDate: Date?
 
@@ -20,10 +21,12 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
 
         let values = try? resourceValuesProvider(url, [
             .isDirectoryKey,
+            .isSymbolicLinkKey,
             .fileSizeKey,
             .contentModificationDateKey,
         ])
         self.isDirectory = values?.isDirectory ?? Self.isDirectoryOnFileSystem(at: url)
+        self.isSymbolicLink = values?.isSymbolicLink
         self.size = Int64(values?.fileSize ?? 0)
         self.modificationDate = values?.contentModificationDate
     }
@@ -32,6 +35,7 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
         self.url = url
         self.name = url.lastPathComponent
         self.isDirectory = values.isDirectory ?? Self.isDirectoryOnFileSystem(at: url)
+        self.isSymbolicLink = values.isSymbolicLink
         self.size = Int64(values.fileSize ?? 0)
         self.modificationDate = values.contentModificationDate
     }
@@ -41,6 +45,7 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
         self.url = parent
         self.name = ".."
         self.isDirectory = true
+        self.isSymbolicLink = false
         self.size = 0
         self.modificationDate = nil
     }
@@ -85,7 +90,7 @@ struct LocalFileItem: Identifiable, Hashable, Sendable {
             try $0.resourceValues(forKeys: $1)
         }
     ) throws -> [LocalFileItem] {
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
         let urls = try FileManager.default.contentsOfDirectory(
             at: directory,
             includingPropertiesForKeys: Array(keys),

@@ -317,6 +317,134 @@ final class FileDropValidationTests: XCTestCase {
         XCTAssertFalse(refreshedListing.contains(secondPayload))
     }
 
+    @MainActor
+    func testMainViewModelCachesLocalDisplayedIndexAcrossDropsAndInvalidatesOnReloadAndFilter() async throws {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("file-drop-vm-local-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("alpha.txt")
+        let second = directory.appendingPathComponent("beta.txt")
+        try Data().write(to: first)
+        try Data().write(to: second)
+        let link = directory.appendingPathComponent("link.txt")
+        try fileManager.createSymbolicLink(at: link, withDestinationURL: first)
+
+        let bridge = FakeBridge()
+        let viewModel = MainViewModel(
+            bridge: bridge,
+            connectionList: ConnectionListViewModel(bridge: RustBridgeService()),
+            transferQueue: TransferQueueViewModel(bridge: bridge)
+        )
+        viewModel.localPath = directory
+        viewModel.reloadLocal()
+        for _ in 0..<200 where viewModel.localItems.count < 3 {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(viewModel.localItems.count, 3)
+
+        var normalizationCount = 0
+        viewModel.localDropPathNormalizer = { url in
+            normalizationCount += 1
+            return url.standardizedFileURL.resolvingSymlinksInPath().path
+        }
+
+        let firstPayload = LocalFileDragPayload(url: first, isDirectory: false)
+        let secondPayload = LocalFileDragPayload(url: second, isDirectory: false)
+        // First drop builds the index once (3 items) + 1 payload = 4 normalizations.
+        XCTAssertTrue(viewModel.displayedLocalItemsIndex.contains(firstPayload))
+        XCTAssertEqual(normalizationCount, 4)
+
+        // Repeated drops reuse the cached index: only each payload is normalized.
+        XCTAssertTrue(viewModel.displayedLocalItemsIndex.contains(secondPayload))
+        XCTAssertTrue(viewModel.displayedLocalItemsIndex.contains(LocalFileDragPayload(url: link, isDirectory: false)))
+        XCTAssertEqual(normalizationCount, 6)
+
+        // Filtering invalidates the cached index so hidden items are rejected.
+        viewModel.localFilter = "alpha"
+        XCTAssertTrue(viewModel.displayedLocalItemsIndex.contains(firstPayload))
+        XCTAssertFalse(viewModel.displayedLocalItemsIndex.contains(secondPayload))
+        viewModel.localFilter = ""
+
+        // Changing a symlink target outside the displayed directory + reloading
+        // invalidates cached symlink resolutions even when file names stay the same.
+        viewModel.localDropPathNormalizer = nil
+        let outsideDir = fileManager.temporaryDirectory
+            .appendingPathComponent("file-drop-vm-outside-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: outsideDir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: outsideDir) }
+        let outsideFirst = outsideDir.appendingPathComponent("target-1.txt")
+        let outsideSecond = outsideDir.appendingPathComponent("target-2.txt")
+        try Data().write(to: outsideFirst)
+        try Data().write(to: outsideSecond)
+        try fileManager.removeItem(at: link)
+        try fileManager.createSymbolicLink(at: link, withDestinationURL: outsideFirst)
+        viewModel.reloadLocal()
+        for _ in 0..<200 where !viewModel.displayedLocalItemsIndex.contains(LocalFileDragPayload(url: outsideFirst, isDirectory: false)) {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertTrue(viewModel.displayedLocalItemsIndex.contains(LocalFileDragPayload(url: outsideFirst, isDirectory: false)))
+        XCTAssertFalse(viewModel.displayedLocalItemsIndex.contains(LocalFileDragPayload(url: outsideSecond, isDirectory: false)))
+
+        try fileManager.removeItem(at: link)
+        try fileManager.createSymbolicLink(at: link, withDestinationURL: outsideSecond)
+        viewModel.reloadLocal()
+        for _ in 0..<200 where !viewModel.displayedLocalItemsIndex.contains(LocalFileDragPayload(url: outsideSecond, isDirectory: false)) {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertFalse(viewModel.displayedLocalItemsIndex.contains(LocalFileDragPayload(url: outsideFirst, isDirectory: false)))
+        XCTAssertTrue(viewModel.displayedLocalItemsIndex.contains(LocalFileDragPayload(url: outsideSecond, isDirectory: false)))
+    }
+
+    @MainActor
+    func testMainViewModelCachesRemoteDisplayedIndexAcrossDropsAndInvalidatesOnReloadAndFilter() async throws {
+        let bridge = FakeBridge()
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        bridge.directoryListings["/remote"] = [
+            remoteItem(path: "/remote/alpha.txt", name: "alpha.txt"),
+            remoteItem(path: "/remote/beta.txt", name: "beta.txt"),
+        ]
+        let viewModel = MainViewModel(
+            bridge: bridge,
+            connectionList: ConnectionListViewModel(bridge: RustBridgeService()),
+            transferQueue: TransferQueueViewModel(bridge: bridge)
+        )
+        viewModel.remotePath = "/remote"
+        await viewModel.reloadRemote()
+        XCTAssertEqual(viewModel.remoteItems.count, 2)
+
+        var normalizationCount = 0
+        viewModel.remoteDropPathNormalizer = { path in
+            normalizationCount += 1
+            return try RemotePath.normalize(path)
+        }
+
+        let alphaPayload = RemoteFileDragPayload(path: "/remote/alpha.txt", isDirectory: false)
+        let betaPayload = RemoteFileDragPayload(path: "/remote/beta.txt", isDirectory: false)
+        // First access indexes 2 items + 1 payload = 3 normalizations.
+        XCTAssertTrue(viewModel.displayedRemoteItemsIndex.contains(alphaPayload))
+        XCTAssertEqual(normalizationCount, 3)
+
+        // Subsequent drops reuse the cached index: only 1 payload normalization each.
+        XCTAssertTrue(viewModel.displayedRemoteItemsIndex.contains(betaPayload))
+        XCTAssertEqual(normalizationCount, 4)
+
+        // Filter change invalidates the cached index.
+        viewModel.remoteFilter = "alpha"
+        XCTAssertTrue(viewModel.displayedRemoteItemsIndex.contains(alphaPayload))
+        XCTAssertFalse(viewModel.displayedRemoteItemsIndex.contains(betaPayload))
+        viewModel.remoteFilter = ""
+
+        // Reload invalidates the cached index and picks up new remote items.
+        bridge.directoryListings["/remote"] = [
+            remoteItem(path: "/remote/gamma.txt", name: "gamma.txt"),
+        ]
+        await viewModel.reloadRemote()
+        XCTAssertFalse(viewModel.displayedRemoteItemsIndex.contains(alphaPayload))
+        XCTAssertTrue(viewModel.displayedRemoteItemsIndex.contains(RemoteFileDragPayload(path: "/remote/gamma.txt", isDirectory: false)))
+    }
+
     func testRemoteDisplayedIndexNormalizesListingOnceAndEachPayloadOnce() {
         let items = (0..<512).map { remoteItem(path: "/remote/file-\($0)") }
         let invalidItems = [remoteItem(path: "/remote/../invalid"), remoteItem(path: "/remote/null\0")]

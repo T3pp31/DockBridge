@@ -34,7 +34,8 @@ enum FileDropTransferKickoff {
         displayedRemoteItems: [RemoteFileRecord]? = nil
     ) -> Bool {
         guard !items.isEmpty else { return false }
-        let displayedItems = FileDropValidation.DisplayedRemoteItems(displayedRemoteItems ?? viewModel.remoteTableItems)
+        let displayedItems = displayedRemoteItems.map { FileDropValidation.DisplayedRemoteItems($0) }
+            ?? viewModel.displayedRemoteItemsIndex
         let destination = toLocalDirectory ?? viewModel.localPath
         let validItems = items.filter { displayedItems.contains($0) }
         guard !validItems.isEmpty else { return false }
@@ -58,7 +59,8 @@ enum FileDropTransferKickoff {
         displayedLocalItems: [LocalFileItem]? = nil
     ) -> Bool {
         guard !items.isEmpty else { return false }
-        let displayedItems = FileDropValidation.DisplayedLocalItems(displayedLocalItems ?? viewModel.localTableItems)
+        let displayedItems = displayedLocalItems.map { FileDropValidation.DisplayedLocalItems($0) }
+            ?? viewModel.displayedLocalItemsIndex
         let destination = toRemoteDirectory ?? viewModel.remotePath
         let validItems = items.filter {
             displayedItems.contains($0) && FileDropValidation.canUploadLocalItem(at: $0.url)
@@ -144,7 +146,8 @@ enum FileDropTransferKickoff {
         displayedRemoteItems: [RemoteFileRecord]? = nil
     ) -> Bool {
         guard !items.isEmpty else { return false }
-        let displayedItems = FileDropValidation.DisplayedRemoteItems(displayedRemoteItems ?? viewModel.remoteTableItems)
+        let displayedItems = displayedRemoteItems.map { FileDropValidation.DisplayedRemoteItems($0) }
+            ?? viewModel.displayedRemoteItemsIndex
         let validItems = items.filter {
             displayedItems.contains($0) && FileDropValidation.canMoveRemoteItem(from: $0.path, to: remotePath)
         }
@@ -204,7 +207,7 @@ struct LocalPaneDropModifier: ViewModifier {
             viewModel.errorMessage = FileDropError.emptyPayload.localizedDescription
             return false
         }
-        let displayedItems = FileDropValidation.DisplayedLocalItems(viewModel.localTableItems)
+        let displayedItems = viewModel.displayedLocalItemsIndex
         var accepted = false
         var hasInvalidMove = false
         let target = viewModel.localPath
@@ -316,7 +319,7 @@ struct RemotePaneDropModifier: ViewModifier {
             return FileDropError.emptyPayload.localizedDescription
         }
 
-        let displayedItems = FileDropValidation.DisplayedLocalItems(viewModel.localTableItems)
+        let displayedItems = viewModel.displayedLocalItemsIndex
         let hasUnreadableSource = items.contains { item in
             displayedItems.contains(item) && !FileDropValidation.canUploadLocalItem(at: item.url)
         }
@@ -410,7 +413,7 @@ struct LocalFileTable: View {
               let target = FileDropValidation.destinationDirectory(forLocalDropOn: item) else {
             return
         }
-        let displayedItems = FileDropValidation.DisplayedLocalItems(viewModel.localTableItems)
+        let displayedItems = viewModel.displayedLocalItemsIndex
         for payload in items {
             guard displayedItems.contains(payload),
                   FileDropValidation.canMoveLocalItem(from: payload.url, to: target) else {
