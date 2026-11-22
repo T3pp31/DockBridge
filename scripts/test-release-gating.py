@@ -61,7 +61,22 @@ class ReleaseGatingTests(unittest.TestCase):
         for perm in ("contents: write", "id-token: write", "attestations: write"):
             with self.subTest(permission=perm):
                 self.assertNotIn(perm, self.release["test"])
+                self.assertNotIn(perm, self.release["build"])
                 self.assertIn(perm, self.release["release"])
+
+    def test_build_job_isolates_cargo_and_xcode_from_release_secrets(self):
+        # Issue #1227: Rust/Cargo/Xcode builds must run on a separate runner
+        # without signing secrets, and the signing/publishing job must never
+        # invoke Cargo or Xcode builds.
+        self.assertIn("build", self.release)
+        self.assertRegex(self.release["release"], r"(?m)^    needs: \[.*\bbuild\b.*\]$")
+        self.assertNotIn("secrets.", self.release["test"])
+        self.assertNotIn("secrets.", self.release["build"])
+        release_job = self.release["release"]
+        for forbidden in ("cargo", "rust-toolchain", "build-rust.sh", "generate-uniffi.sh", "xcodebuild"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, release_job)
+        self.assertIn("PREBUILT_APP_PATH:", release_job)
 
 
 if __name__ == "__main__":
