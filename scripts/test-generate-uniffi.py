@@ -208,6 +208,48 @@ class GenerateUniffiTests(unittest.TestCase):
         self.assertIn("unsupported profile", result.stderr)
         self.assertEqual(self.events(), [])
 
+    def test_write_uniffi_depfile_tracks_nested_rust_sources_and_touches_stamp(self):
+        (self.root / "Cargo.toml").write_text("[workspace]\n")
+        (self.root / "Cargo.lock").write_text("# lock\n")
+        nested_rs = self.root / "crates/core/src/nested.rs"
+        nested_rs.parent.mkdir(parents=True, exist_ok=True)
+        nested_rs.write_text("pub fn ok() {}\n")
+        vendor_rs = self.root / "vendor/fork/src/lib.rs"
+        vendor_rs.parent.mkdir(parents=True, exist_ok=True)
+        vendor_rs.write_text("pub fn v() {}\n")
+        ignored_target = self.root / "crates/core/target/ignored.rs"
+        ignored_target.parent.mkdir(parents=True, exist_ok=True)
+        ignored_target.write_text("ignored\n")
+        udl = self.root / "crates/uniffi/src/dockbridge_uniffi.udl"
+        udl.parent.mkdir(parents=True, exist_ok=True)
+        udl.write_text("namespace dockbridge_uniffi {};\n")
+
+        stamp = self.root / "derived/uniffi-bindings.stamp"
+        depfile = self.root / "derived/uniffi-bindings.d"
+        result = subprocess.run(
+            ["bash", str(SCRIPTS / "write-uniffi-depfile.sh"),
+             str(self.root), str(stamp), str(depfile)],
+            capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(stamp.exists())
+        dep_text = depfile.read_text()
+        self.assertIn("nested.rs", dep_text)
+        self.assertIn("vendor/fork/src/lib.rs", dep_text)
+        self.assertIn("dockbridge_uniffi.udl", dep_text)
+        self.assertNotIn("ignored.rs", dep_text)
+
+    def test_xcode_project_tracks_uniffi_dependencies_and_debug_profile(self):
+        repo_root = SCRIPTS.parent
+        project_yml = (repo_root / "apps/macos/project.yml").read_text()
+        pbxproj = (repo_root / "apps/macos/DockBridge.xcodeproj/project.pbxproj").read_text()
+        self.assertNotIn("alwaysOutOfDate = 1;", pbxproj)
+        self.assertIn("discoveredDependencyFile: $(DERIVED_FILE_DIR)/uniffi-bindings.d", project_yml)
+        self.assertIn('dependencyFile = "$(DERIVED_FILE_DIR)/uniffi-bindings.d";', pbxproj)
+        self.assertIn("RUST_PROFILE: debug", project_yml)
+        self.assertIn("RUST_PROFILE: release", project_yml)
+        self.assertIn("target/$(RUST_PROFILE)/libdockbridge_uniffi.a", project_yml)
+
 
 if __name__ == "__main__":
     unittest.main()

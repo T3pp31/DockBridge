@@ -66,10 +66,10 @@ jobs:
         run: cargo test --workspace --all-targets
 
       - name: Build Rust static library
-        run: ./scripts/build-rust.sh
+        run: ./scripts/build-rust.sh "" debug
 
       - name: Generate UniFFI bindings
-        run: ./scripts/generate-uniffi.sh
+        run: ./scripts/generate-uniffi.sh "" debug
 
       # The macOS build/test steps below are copied verbatim from ci.yml
       # (including the testmanagerd watchdog and bounded retry) and kept in
