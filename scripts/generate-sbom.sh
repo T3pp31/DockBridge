@@ -6,13 +6,8 @@ export PATH="${HOME}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-RELEASE_CONFIG="${ROOT}/config/release.toml"
-
 read_release_value() {
-  local key="$1"
-  awk -F'"' -v key="$key" '
-    $0 ~ "^" key " " { print $2; exit }
-  ' "$RELEASE_CONFIG"
+  bash "${ROOT}/scripts/release-config.sh" "$1"
 }
 
 OUT_DIR=""
@@ -41,7 +36,7 @@ SBOM_MANIFEST="$(read_release_value sbom_manifest_path)"
 SPEC_VERSION="$(read_release_value cyclonedx_spec_version)"
 
 if [[ -z "$VERSION" || -z "$APP_NAME" || -z "$SBOM_TEMPLATE" || -z "$SBOM_MANIFEST" || -z "$SPEC_VERSION" ]]; then
-  echo "Failed to read SBOM configuration from ${RELEASE_CONFIG}" >&2
+  echo "Failed to read SBOM configuration from ${ROOT}/config/release.toml" >&2
   exit 1
 fi
 
