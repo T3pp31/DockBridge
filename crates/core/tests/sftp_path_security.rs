@@ -118,9 +118,9 @@ fn remote_api_paths_reject_parent_segments() {
 
 #[test]
 fn upload_download_boundaries_reject_parent_segments() {
-    // Given: remote paths with parent-directory segments at transfer boundaries
-    // When: normalize_remote_path is applied
-    // Then: upload/download never receive unnormalized traversal paths
+    // Public API smoke check for path traversal rejection; end-to-end
+    // malicious-READDIR and transfer boundary tests live in sftp::client::tests
+    // where TestSftpServer is wired into walk/upload/download (issue #839 F30).
     for path in ["remote/../secret", "/nested/dir/.."] {
         let err = normalize_remote_path(path).unwrap_err();
         assert!(

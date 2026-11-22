@@ -59,10 +59,7 @@ static ALLOWED_HOST_KEY: std::sync::LazyLock<Vec<Algorithm>> = std::sync::LazyLo
 /// Wraps an OpenSSH certificate name in `Algorithm::Other` so russh sends
 /// the literal `*-cert-v01@openssh.com` string in KEXINIT (issue #797).
 fn host_certificate_algorithm(id: &str) -> Algorithm {
-    Algorithm::Other(
-        ssh_key::AlgorithmName::from_certificate_type(id)
-            .unwrap_or_else(|_| ssh_key::AlgorithmName::new(id).expect("valid algorithm id")),
-    )
+    Algorithm::Other(ssh_key::AlgorithmName::new(id).expect("valid algorithm id"))
 }
 
 const ALLOWED_CIPHER: &[cipher::Name] = &[
@@ -121,7 +118,11 @@ pub fn build_client_config(config: &AppConfig) -> client::Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ssh_key::Algorithm;
+    use std::sync::Arc;
+
+    use russh::server::Auth;
+    use ssh_key::{Algorithm, PrivateKey};
+    use tokio::net::TcpListener;
 
     const DISALLOWED_KEX: &[kex::Name] = &[kex::DH_G1_SHA1, kex::DH_G14_SHA1];
 
@@ -134,19 +135,59 @@ mod tests {
 
     const DISALLOWED_HOST_KEY: &[Algorithm] = &[Algorithm::Rsa { hash: None }];
 
-    /// Client-side algorithm selection mirroring russh negotiation order.
-    fn select_preferred<'a, S: AsRef<str>>(
-        client_list: &[S],
-        server_list: &'a [&'a str],
-    ) -> Option<&'a str> {
-        for client in client_list {
-            for server in server_list {
-                if server == &client.as_ref() {
-                    return Some(server);
-                }
-            }
+    struct PolicyTestServerHandler;
+
+    impl russh::server::Handler for PolicyTestServerHandler {
+        type Error = russh::Error;
+
+        async fn auth_password(
+            &mut self,
+            _user: &str,
+            _password: &str,
+        ) -> Result<Auth, Self::Error> {
+            Ok(Auth::Accept)
         }
-        None
+    }
+
+    struct PolicyTestClientHandler;
+
+    impl russh::client::Handler for PolicyTestClientHandler {
+        type Error = russh::Error;
+
+        async fn check_server_key(
+            &mut self,
+            _server_public_key: &russh::keys::PublicKeyOrCertificate,
+        ) -> Result<bool, Self::Error> {
+            Ok(true)
+        }
+    }
+
+    async fn negotiate_with_server(server_preferred: Preferred) -> Result<(), russh::Error> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_config = Arc::new(russh::server::Config {
+            keys: vec![PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap()],
+            preferred: server_preferred,
+            auth_rejection_time: Duration::from_secs(0),
+            auth_rejection_time_initial: Some(Duration::from_secs(0)),
+            ..Default::default()
+        });
+        let server_task = tokio::spawn(async move {
+            if let Ok((socket, _)) = listener.accept().await {
+                let _ =
+                    russh::server::run_stream(server_config, socket, PolicyTestServerHandler).await;
+            }
+        });
+
+        let client_config = Arc::new(build_client_config(&AppConfig::default()));
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            russh::client::connect(client_config, addr, PolicyTestClientHandler),
+        )
+        .await
+        .expect("SSH handshake should not time out");
+        server_task.abort();
+        result.map(|_| ())
     }
 
     #[test]
@@ -154,40 +195,63 @@ mod tests {
         // Given: the DockBridge SSH client algorithm policy
         let preferred = secure_client_preferred();
 
-        // When: checking each allowed algorithm category
-        // Then: modern algorithms are explicitly listed
-        for kex in ALLOWED_KEX {
+        // Then: compare against independent expected algorithm names (issue #839 F31)
+        let kex_names: Vec<&str> = preferred.kex.iter().map(AsRef::as_ref).collect();
+        assert_eq!(
+            kex_names,
+            vec![
+                "mlkem768x25519-sha256",
+                "curve25519-sha256",
+                "curve25519-sha256@libssh.org",
+                "diffie-hellman-group16-sha512",
+                "diffie-hellman-group14-sha256",
+                "ext-info-c",
+                "kex-strict-c-v00@openssh.com",
+            ]
+        );
+
+        let cipher_names: Vec<&str> = preferred.cipher.iter().map(AsRef::as_ref).collect();
+        assert_eq!(
+            cipher_names,
+            vec![
+                "chacha20-poly1305@openssh.com",
+                "aes256-gcm@openssh.com",
+                "aes256-ctr",
+                "aes192-ctr",
+                "aes128-ctr",
+            ]
+        );
+
+        let mac_names: Vec<&str> = preferred.mac.iter().map(AsRef::as_ref).collect();
+        assert_eq!(
+            mac_names,
+            vec![
+                "hmac-sha2-512-etm@openssh.com",
+                "hmac-sha2-256-etm@openssh.com",
+                "hmac-sha2-512",
+                "hmac-sha2-256",
+            ]
+        );
+
+        let host_key_names: Vec<String> = preferred.key.iter().map(ToString::to_string).collect();
+        for expected in [
+            "ssh-ed25519",
+            "ecdsa-sha2-nistp256",
+            "ecdsa-sha2-nistp384",
+            "ecdsa-sha2-nistp521",
+            "rsa-sha2-512",
+            "rsa-sha2-256",
+            "ssh-ed25519-cert-v01@openssh.com",
+        ] {
             assert!(
-                preferred.kex.contains(kex),
-                "expected allowed kex `{}`",
-                kex.as_ref()
+                host_key_names.iter().any(|name| name == expected),
+                "expected host key `{expected}`, got {host_key_names:?}"
             );
         }
 
-        for cipher in ALLOWED_CIPHER {
-            assert!(
-                preferred.cipher.contains(cipher),
-                "expected allowed cipher `{}`",
-                cipher.as_ref()
-            );
-        }
-
-        for mac in ALLOWED_MAC {
-            assert!(
-                preferred.mac.contains(mac),
-                "expected allowed mac `{}`",
-                mac.as_ref()
-            );
-        }
-
-        for host_key in ALLOWED_HOST_KEY.iter() {
-            assert!(
-                preferred.key.contains(host_key),
-                "expected allowed host key `{host_key}`"
-            );
-        }
-
-        assert_eq!(preferred.compression.as_ref(), ALLOWED_COMPRESSION);
+        let compression_names: Vec<&str> =
+            preferred.compression.iter().map(AsRef::as_ref).collect();
+        assert_eq!(compression_names, vec!["none"]);
     }
 
     #[test]
@@ -231,101 +295,101 @@ mod tests {
         }
     }
 
-    #[test]
-    fn negotiates_modern_server_algorithms() {
-        // Given: a server that offers modern algorithms
-        let preferred = secure_client_preferred();
-        let server_kex = ["mlkem768x25519-sha256", "curve25519-sha256"];
-        let server_cipher = ["chacha20-poly1305@openssh.com"];
-        let server_mac = ["hmac-sha2-256-etm@openssh.com"];
-        let server_host_key = ["ssh-ed25519"];
+    #[tokio::test]
+    async fn negotiates_modern_and_post_quantum_server_algorithms() {
+        // Modern server offering PQ + classic KEX negotiates via real russh handshake.
+        let modern = Preferred {
+            kex: Cow::Borrowed(&[kex::MLKEM768X25519_SHA256, kex::CURVE25519]),
+            key: Cow::Owned(vec![Algorithm::Ed25519]),
+            cipher: Cow::Borrowed(&[cipher::CHACHA20_POLY1305]),
+            mac: Cow::Borrowed(&[mac::HMAC_SHA256_ETM]),
+            compression: Cow::Borrowed(&[compression::NONE]),
+            ..Preferred::default()
+        };
+        negotiate_with_server(modern)
+            .await
+            .expect("modern server must negotiate cleanly");
 
-        // When: performing client-side selection
-        // Then: each category negotiates successfully, and the post-quantum
-        // KEX is selected first when the server offers it.
-        assert_eq!(
-            select_preferred(preferred.kex.as_ref(), &server_kex),
-            Some("mlkem768x25519-sha256")
-        );
-        assert_eq!(
-            select_preferred(preferred.kex.as_ref(), &["curve25519-sha256"]),
-            Some("curve25519-sha256")
-        );
-        assert_eq!(
-            select_preferred(preferred.cipher.as_ref(), &server_cipher),
-            Some("chacha20-poly1305@openssh.com")
-        );
-        assert_eq!(
-            select_preferred(preferred.mac.as_ref(), &server_mac),
-            Some("hmac-sha2-256-etm@openssh.com")
-        );
-        assert_eq!(
-            select_preferred(
-                &preferred
-                    .key
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>(),
-                &server_host_key
-            ),
-            Some("ssh-ed25519")
-        );
+        // PQ-only server also negotiates cleanly.
+        let pq_only = Preferred {
+            kex: Cow::Borrowed(&[kex::MLKEM768X25519_SHA256]),
+            key: Cow::Owned(vec![Algorithm::Ed25519]),
+            cipher: Cow::Borrowed(&[cipher::AES_256_GCM]),
+            mac: Cow::Borrowed(&[mac::HMAC_SHA512_ETM]),
+            compression: Cow::Borrowed(&[compression::NONE]),
+            ..Preferred::default()
+        };
+        negotiate_with_server(pq_only)
+            .await
+            .expect("PQ-only server must negotiate cleanly");
     }
 
-    #[test]
-    fn kex_falls_back_when_server_lacks_post_quantum() {
-        // Given: a server that does not support mlkem768x25519-sha256
-        //        (e.g. OpenSSH < 9.9, Dropbear, PuTTY)
-        // When: performing client-side selection
-        // Then: the strongest mutually supported classic KEX is selected
-        let preferred = secure_client_preferred();
-
-        assert_eq!(
-            select_preferred(preferred.kex.as_ref(), &["curve25519-sha256"]),
-            Some("curve25519-sha256")
-        );
-        assert_eq!(
-            select_preferred(preferred.kex.as_ref(), &["diffie-hellman-group14-sha256"]),
-            Some("diffie-hellman-group14-sha256")
-        );
+    #[tokio::test]
+    async fn kex_falls_back_when_server_lacks_post_quantum() {
+        // Servers without ML-KEM fall back to classic allowed KEX via real russh handshake.
+        for classic_kex in [kex::CURVE25519, kex::DH_G14_SHA256] {
+            let server_pref = Preferred {
+                kex: Cow::Owned(vec![classic_kex]),
+                key: Cow::Owned(vec![Algorithm::Ed25519]),
+                cipher: Cow::Borrowed(&[cipher::AES_256_CTR]),
+                mac: Cow::Borrowed(&[mac::HMAC_SHA256]),
+                compression: Cow::Borrowed(&[compression::NONE]),
+                ..Preferred::default()
+            };
+            negotiate_with_server(server_pref)
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "classic KEX `{}` should negotiate: {err}",
+                        classic_kex.as_ref()
+                    )
+                });
+        }
     }
 
-    #[test]
-    fn kex_selects_post_quantum_when_server_offers_only_pq() {
-        // Given: a server that offers only mlkem768x25519-sha256
-        // When: performing client-side selection
-        // Then: the post-quantum KEX is selected
-        let preferred = secure_client_preferred();
-
-        assert_eq!(
-            select_preferred(preferred.kex.as_ref(), &["mlkem768x25519-sha256"]),
-            Some("mlkem768x25519-sha256")
+    #[tokio::test]
+    async fn rejects_servers_offering_only_weak_algorithms() {
+        // Weak KEX only -> real russh handshake fails.
+        let weak_kex = Preferred {
+            kex: Cow::Borrowed(&[kex::DH_G1_SHA1]),
+            key: Cow::Owned(vec![Algorithm::Ed25519]),
+            cipher: Cow::Borrowed(&[cipher::CHACHA20_POLY1305]),
+            mac: Cow::Borrowed(&[mac::HMAC_SHA256_ETM]),
+            compression: Cow::Borrowed(&[compression::NONE]),
+            ..Preferred::default()
+        };
+        assert!(
+            negotiate_with_server(weak_kex).await.is_err(),
+            "weak SHA-1 KEX server must be rejected"
         );
-    }
 
-    #[test]
-    fn rejects_servers_offering_only_weak_algorithms() {
-        // Given: a server that only offers deprecated algorithms
-        let preferred = secure_client_preferred();
-        let weak_kex = ["diffie-hellman-group1-sha1"];
-        let weak_cipher = ["3des-cbc"];
-        let weak_mac = ["hmac-sha1"];
-        let weak_host_key = ["ssh-rsa"];
+        // Weak CBC cipher only -> real russh handshake fails.
+        let weak_cipher = Preferred {
+            kex: Cow::Borrowed(&[kex::CURVE25519]),
+            key: Cow::Owned(vec![Algorithm::Ed25519]),
+            cipher: Cow::Borrowed(&[cipher::AES_128_CBC]),
+            mac: Cow::Borrowed(&[mac::HMAC_SHA256]),
+            compression: Cow::Borrowed(&[compression::NONE]),
+            ..Preferred::default()
+        };
+        assert!(
+            negotiate_with_server(weak_cipher).await.is_err(),
+            "weak CBC cipher server must be rejected"
+        );
 
-        // When: performing client-side selection
-        // Then: no weak algorithm is accepted
-        assert!(select_preferred(preferred.kex.as_ref(), &weak_kex).is_none());
-        assert!(select_preferred(preferred.cipher.as_ref(), &weak_cipher).is_none());
-        assert!(select_preferred(preferred.mac.as_ref(), &weak_mac).is_none());
-        assert!(select_preferred(
-            &preferred
-                .key
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>(),
-            &weak_host_key
-        )
-        .is_none());
+        // Weak SHA-1 MAC only (with non-AEAD cipher) -> real russh handshake fails.
+        let weak_mac = Preferred {
+            kex: Cow::Borrowed(&[kex::CURVE25519]),
+            key: Cow::Owned(vec![Algorithm::Ed25519]),
+            cipher: Cow::Borrowed(&[cipher::AES_256_CTR]),
+            mac: Cow::Borrowed(&[mac::HMAC_SHA1]),
+            compression: Cow::Borrowed(&[compression::NONE]),
+            ..Preferred::default()
+        };
+        assert!(
+            negotiate_with_server(weak_mac).await.is_err(),
+            "weak SHA-1 MAC server must be rejected"
+        );
     }
 
     #[test]

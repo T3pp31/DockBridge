@@ -1069,21 +1069,42 @@ final class MainViewModelTestabilityTests: XCTestCase {
     }
 
     func testEndpointIdentityNormalizationIsCaseInsensitive() {
+        // Issue #839 F22: assert concrete canonical strings and distinct endpoints.
         XCTAssertEqual(
             MainViewModel.normalizedEndpointIdentity("User@Example.COM: 22"),
-            MainViewModel.normalizedEndpointIdentity("user@example.com:22")
+            "user@example.com:22"
+        )
+        XCTAssertEqual(
+            MainViewModel.normalizedEndpointIdentity("user@example.com:22"),
+            "user@example.com:22"
+        )
+        XCTAssertNotEqual(
+            MainViewModel.normalizedEndpointIdentity("alice@example.com:22"),
+            MainViewModel.normalizedEndpointIdentity("bob@example.com:22")
+        )
+        XCTAssertNotEqual(
+            MainViewModel.normalizedEndpointIdentity("user@example.com:22"),
+            MainViewModel.normalizedEndpointIdentity("user@example.com:2222")
         )
     }
 
     func testEndpointIdentityNormalizesIPv6EquivalentForms() {
-        // `::1` and its fully expanded form must map to the same identity.
+        // `::1` and its fully expanded form must map to the exact same canonical string.
         XCTAssertEqual(
             MainViewModel.normalizedEndpointIdentity("alice@[::1]:2222"),
-            MainViewModel.normalizedEndpointIdentity("alice@[0:0:0:0:0:0:0:1]:2222")
+            "alice@[::1]:2222"
         )
         XCTAssertEqual(
-            MainViewModel.normalizedEndpointIdentity("alice@[2001:db8::1]:22"),
-            MainViewModel.normalizedEndpointIdentity("alice@[2001:0db8:0000:0000:0000:0000:0000:0001]:22")
+            MainViewModel.normalizedEndpointIdentity("alice@[0:0:0:0:0:0:0:1]:2222"),
+            "alice@[::1]:2222"
+        )
+        XCTAssertEqual(
+            MainViewModel.normalizedEndpointIdentity("alice@[2001:0db8:0000:0000:0000:0000:0000:0001]:22"),
+            "alice@[2001:db8::1]:22"
+        )
+        XCTAssertNotEqual(
+            MainViewModel.normalizedEndpointIdentity("alice@[::1]:2222"),
+            MainViewModel.normalizedEndpointIdentity("alice@[::2]:2222")
         )
     }
 
@@ -1111,13 +1132,18 @@ final class MainViewModelTestabilityTests: XCTestCase {
     }
 
     func testStoppingCleanRemoteEditDeletesOnlyItsDedicatedDirectory() throws {
-        let tracked = try makeTrackedRemoteEditFile()
+        // Issue #839 F16: create a sibling edit directory and verify it survives.
+        let tracked = try makeTrackedRemoteEditFile(remotePath: "/srv/target.txt")
+        let sibling = try makeTrackedRemoteEditFile(remotePath: "/srv/sibling.txt")
         let directory = tracked.file.deletingLastPathComponent()
+        let siblingDirectory = sibling.file.deletingLastPathComponent()
 
         viewModel.stopRemoteEditSession(tracked.session)
 
-        XCTAssertTrue(viewModel.remoteEditSessions.isEmpty)
+        XCTAssertEqual(viewModel.remoteEditSessions.map(\.id), [sibling.session.id])
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: siblingDirectory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sibling.file.path))
     }
 
     func testStoppingDirtyRemoteEditPreservesRecoverableLocalCopy() throws {
@@ -1304,7 +1330,14 @@ final class MainViewModelTestabilityTests: XCTestCase {
     // MARK: - Transfer queue speed sampling
 
     func testTransferQueueComputesBytesPerSecond() async throws {
+        // Issue #839 F12: drive speed sampling with an injectable clock instead of Task.sleep.
         bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        var currentTime = Date(timeIntervalSince1970: 1_000)
+        let deterministicQueue = TransferQueueViewModel(
+            bridge: bridge,
+            settings: settings,
+            now: { currentTime }
+        )
 
         let task = TransferTaskRecord(
             id: 1,
@@ -1319,23 +1352,25 @@ final class MainViewModelTestabilityTests: XCTestCase {
 
         // First refresh seeds the sample (no speed yet).
         bridge.setTransferTasks([task])
-        await transferQueue.refresh()
-        XCTAssertNil(transferQueue.bytesPerSecond(for: task))
+        await deterministicQueue.refresh()
+        XCTAssertNil(deterministicQueue.bytesPerSecond(for: task))
 
-        // Second refresh with more bytes within one second does not sample
-        // (elapsed < 1.0 guard). Advance time past the guard instead by
-        // waiting, then confirm a positive speed.
-        try? await Task.sleep(nanoseconds: 1_100_000_000)
-
+        // Refresh within 1.0s does not compute speed yet.
+        currentTime = currentTime.addingTimeInterval(0.5)
         var progressed = task
-        progressed.bytesTransferred = 2_000
+        progressed.bytesTransferred = 1_000
         bridge.setTransferTasks([progressed])
-        await transferQueue.refresh()
+        await deterministicQueue.refresh()
+        XCTAssertNil(deterministicQueue.bytesPerSecond(for: progressed))
 
-        let speed = transferQueue.bytesPerSecond(for: progressed)
-        XCTAssertNotNil(speed)
-        XCTAssertGreaterThan(speed ?? 0, 0)
-        XCTAssertLessThanOrEqual(speed ?? 0, 2_000)
+        // Advancing past 1.0s computes exact bytes/sec deterministically.
+        currentTime = Date(timeIntervalSince1970: 1_002)
+        progressed.bytesTransferred = 4_000
+        bridge.setTransferTasks([progressed])
+        await deterministicQueue.refresh()
+
+        let speed = try XCTUnwrap(deterministicQueue.bytesPerSecond(for: progressed))
+        XCTAssertEqual(speed, 2_000, accuracy: 0.001)
     }
 }
 

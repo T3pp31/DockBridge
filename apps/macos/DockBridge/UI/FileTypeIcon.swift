@@ -33,6 +33,21 @@ enum FileTypeIcon {
         }
     }
 
+    #if canImport(AppKit)
+    static func resolvedUTType(for filename: String, isDirectory: Bool) -> UTType {
+        if isDirectory {
+            return .folder
+        }
+        let ext = (filename as NSString).pathExtension
+        guard !ext.isEmpty else { return .data }
+        return UTType(filenameExtension: ext) ?? .data
+    }
+
+    static func appKitIcon(for filename: String, isDirectory: Bool) -> NSImage {
+        NSWorkspace.shared.icon(for: resolvedUTType(for: filename, isDirectory: isDirectory))
+    }
+    #endif
+
     /// A 16pt file-type icon for table rows (Issue #229).
     ///
     /// Uses the system UTType icon (Finder-style) when one is available and
@@ -41,11 +56,7 @@ enum FileTypeIcon {
     @ViewBuilder
     static func fileIcon(for filename: String, isDirectory: Bool) -> some View {
         #if canImport(AppKit)
-        let ext = (filename as NSString).pathExtension
-        let utType: UTType = isDirectory
-            ? .folder
-            : (ext.isEmpty ? UTType.data : (UTType(filenameExtension: ext) ?? .data))
-        Image(nsImage: NSWorkspace.shared.icon(for: utType))
+        Image(nsImage: appKitIcon(for: filename, isDirectory: isDirectory))
             .resizable()
             .interpolation(.high)
             .frame(width: 16, height: 16)

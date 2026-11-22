@@ -25,7 +25,12 @@ class TransferCancelTests(unittest.TestCase):
             "HOME": str(self.root),
             "PATH": os.defpath,
             "SFTP_CONTAINER": "transfer-cancel-test",
-            "TEST_SUMMARY": json.dumps({"totalTestCount": 1, "failedTests": 0}),
+            "TEST_SUMMARY": json.dumps({
+                "totalTestCount": 1,
+                "passedTests": 1,
+                "skippedTests": 0,
+                "failedTests": 0,
+            }),
         }
         # Bash functions take precedence over installed tools and also work
         # when the sandbox mounts temporary filesystems with noexec. Bash allows
@@ -94,8 +99,47 @@ xcrun() {
 
     def test_failed_tests(self):
         self.assert_failure(self.verify(TEST_SUMMARY=json.dumps({
-            "totalTestCount": 3, "failedTests": 2,
+            "totalTestCount": 3, "passedTests": 1, "skippedTests": 0, "failedTests": 2,
         })), "2 transfer-cancel test(s) failed")
+
+    def test_skipped_test_fails(self):
+        # Issue #839 F51: an XCTSkip must fail instead of reporting PASS.
+        self.assert_failure(self.verify(TEST_SUMMARY=json.dumps({
+            "totalTestCount": 1, "passedTests": 0, "skippedTests": 1, "failedTests": 0,
+        })), "1 transfer-cancel test(s) were skipped")
+
+    def test_zero_passed_tests_fails(self):
+        self.assert_failure(self.verify(TEST_SUMMARY=json.dumps({
+            "totalTestCount": 1, "passedTests": 0, "skippedTests": 0, "failedTests": 0,
+        })), "expected at least 1 passed transfer-cancel test, got 0")
+
+    def test_exports_sftp_env_to_xcodebuild(self):
+        env_dump = self.root / "xcode-env.txt"
+        self.stubs.write_text(
+            self.stubs.read_text()
+            + f"""
+xcodebuild() {{
+  printf 'SFTP_PORT=%s\\nTEST_RUNNER_SFTP_PORT=%s\\nSFTP_USER=%s\\nTEST_RUNNER_SFTP_USER=%s\\nSFTP_CONTAINER=%s\\n' \\
+    "${{SFTP_PORT:-}}" "${{TEST_RUNNER_SFTP_PORT:-}}" "${{SFTP_USER:-}}" "${{TEST_RUNNER_SFTP_USER:-}}" "${{SFTP_CONTAINER:-}}" > "{env_dump}"
+  while [[ "$#" -gt 0 ]]; do
+    if [[ "$1" == -resultBundlePath ]]; then
+      mkdir -p "$2"
+      return 0
+    fi
+    shift
+  done
+  return 2
+}}
+"""
+        )
+        result = self.verify(SFTP_PORT="2299", SFTP_USER="custom-user")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        dumped = env_dump.read_text()
+        self.assertIn("SFTP_PORT=2299\n", dumped)
+        self.assertIn("TEST_RUNNER_SFTP_PORT=2299\n", dumped)
+        self.assertIn("SFTP_USER=custom-user\n", dumped)
+        self.assertIn("TEST_RUNNER_SFTP_USER=custom-user\n", dumped)
+        self.assertIn("SFTP_CONTAINER=transfer-cancel-test\n", dumped)
 
     def test_success(self):
         result = self.verify()

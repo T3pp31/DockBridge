@@ -1469,16 +1469,6 @@ pub(crate) fn is_non_retryable_error(error: &SftpError) -> bool {
     }
 }
 
-/// Legacy string-based classifier kept for messaging-only call sites.
-#[cfg(test)]
-pub(crate) fn is_non_retryable_transfer_error(message: &str) -> bool {
-    let lower = message.to_lowercase();
-    crate::ssh::is_connection_lost_message(message)
-        || lower.contains("permission denied")
-        || lower.contains("already exists and overwrite is disabled")
-        || lower.contains("failed to create directory")
-}
-
 fn transfer_error_from_sftp(error: SftpError) -> TransferError {
     match error {
         SftpError::Cancelled => TransferError::Cancelled,
@@ -1504,10 +1494,29 @@ mod tests {
 
     #[test]
     fn creates_monotonic_task_ids() {
+        // Issue #839 F33: verify production make_task allocates strictly increasing unique IDs.
         let manager = TransferManager::new(&AppConfig::default());
-        assert_eq!(manager.next_id.load(Ordering::Relaxed), 1);
-        assert_eq!(manager.next_id.fetch_add(1, Ordering::Relaxed), 1);
-        assert_eq!(manager.next_id.load(Ordering::Relaxed), 2);
+        let first = manager.make_task(
+            1,
+            TransferDirection::Upload,
+            Path::new("/tmp/a.txt"),
+            "/remote/a.txt",
+        );
+        let second = manager.make_task(
+            1,
+            TransferDirection::Download,
+            Path::new("/tmp/b.txt"),
+            "/remote/b.txt",
+        );
+        let third = manager.make_task(
+            2,
+            TransferDirection::Upload,
+            Path::new("/tmp/c.txt"),
+            "/remote/c.txt",
+        );
+        assert_eq!(first.id, 1);
+        assert_eq!(second.id, 2);
+        assert_eq!(third.id, 3);
     }
 
     #[test]
@@ -1618,25 +1627,6 @@ mod tests {
     }
 
     #[test]
-    fn retry_count_means_number_of_retries_not_attempts() {
-        // transfer_retry_count is stored verbatim for the retry loop to turn
-        // into `retry_count + 1` attempts.
-        let config_with_retries = AppConfig {
-            transfer_retry_count: 3,
-            ..AppConfig::default()
-        };
-        let manager = TransferManager::new(&config_with_retries);
-        assert_eq!(manager.retry_count, 3);
-
-        let config_zero = AppConfig {
-            transfer_retry_count: 0,
-            ..AppConfig::default()
-        };
-        let manager_zero = TransferManager::new(&config_zero);
-        assert_eq!(manager_zero.retry_count, 0);
-    }
-
-    #[test]
     fn cancel_unknown_task_returns_not_found() {
         let manager = TransferManager::new(&AppConfig::default());
         let err = manager.cancel_transfer(999).unwrap_err();
@@ -1673,30 +1663,6 @@ mod tests {
     }
 
     #[test]
-    fn non_retryable_errors_are_detected() {
-        assert!(is_non_retryable_transfer_error("session closed"));
-        assert!(is_non_retryable_transfer_error(
-            "failed to upload '/a' to '/b': Permission denied"
-        ));
-        assert!(is_non_retryable_transfer_error("connection reset"));
-        assert!(is_non_retryable_transfer_error(
-            "failed to create directory '/home/demo': Permission denied"
-        ));
-        assert!(is_non_retryable_transfer_error(
-            "failed to upload '/a' to '/b': destination '/b' already exists and overwrite is disabled"
-        ));
-
-        // A path containing the word "failure" must NOT be mistaken for a
-        // retryable-status failure (issue #308): the typed classifier uses
-        // status codes only, and the legacy message classifier no longer
-        // matches the bare word "failure" or "no such file".
-        assert!(!is_non_retryable_transfer_error(
-            "failed to upload '/home/Documents/failure-report.txt': timed out"
-        ));
-        assert!(!is_non_retryable_transfer_error("SFTP Failure"));
-    }
-
-    #[test]
     fn typed_retryability_is_decided_by_status_code_not_message() {
         // A generic SSH_FX_FAILURE (OpenSSH's "Failure") IS retryable.
         assert!(!is_non_retryable_error(&SftpError::RemoteStatus {
@@ -1722,42 +1688,6 @@ mod tests {
             remote: "/b".to_string(),
             message: "permission denied".to_string(),
         }));
-    }
-
-    #[test]
-    fn in_progress_task_can_be_cancelled() {
-        let manager = TransferManager::new(&AppConfig::default());
-        let task = TransferTask {
-            id: 99,
-            session_id: 1,
-            direction: TransferDirection::Upload,
-            local_path: PathBuf::from("/tmp/file.txt"),
-            remote_path: "/remote/file.txt".to_string(),
-            status: TransferStatus::Pending,
-            bytes_transferred: 0,
-            total_bytes: 0,
-        };
-        manager.insert_task(task.clone());
-        manager.register_cancellation_flag(task.id);
-        manager.update_task_status(task.id, TransferStatus::InProgress);
-
-        let queue = manager.get_transfer_queue();
-        assert_eq!(queue[0].status, TransferStatus::InProgress);
-
-        manager.cancel_transfer(99).unwrap();
-        assert!(manager.is_cancelled(99));
-
-        let queue = manager.get_transfer_queue();
-        assert_eq!(queue[0].status, TransferStatus::Cancelled);
-    }
-
-    #[test]
-    fn cancelled_task_is_detected_before_retry_attempt() {
-        let manager = TransferManager::new(&AppConfig::default());
-        manager.register_cancellation_flag(10);
-        manager.request_cancellation(10);
-
-        assert!(manager.is_cancelled(10));
     }
 
     #[test]
@@ -1970,39 +1900,6 @@ mod tests {
 
         let queue = manager.get_transfer_queue();
         assert_eq!(queue[0].status, TransferStatus::Completed);
-    }
-
-    #[test]
-    fn cancel_after_rename_success_marks_transfer_completed_not_cancelled() {
-        // Given: cancel was requested but rename already succeeded (Ok result)
-        let manager = TransferManager::new(&AppConfig::default());
-        let task = TransferTask {
-            id: 13,
-            session_id: 1,
-            direction: TransferDirection::Download,
-            local_path: PathBuf::from("/tmp/downloaded.txt"),
-            remote_path: "/remote/downloaded.txt".to_string(),
-            status: TransferStatus::InProgress,
-            bytes_transferred: 1024,
-            total_bytes: 1024,
-        };
-
-        manager.insert_task(task);
-        manager.register_cancellation_flag(13);
-        manager.request_cancellation(13);
-
-        // When: finalize receives Ok after rename completed
-        manager
-            .finalize_task_result(13, Ok(()))
-            .expect("post-rename success should finalize as completed");
-
-        // Then: status is Completed, not Cancelled
-        let queue = manager.get_transfer_queue();
-        assert_eq!(
-            queue[0].status,
-            TransferStatus::Completed,
-            "rename-after-cancel must prefer Completed over Cancelled"
-        );
     }
 
     #[test]
@@ -2845,6 +2742,49 @@ mod tests {
         );
         assert!(!manager.is_in_flight(task_id));
         assert!(!server.remote_file_exists("/upload/cancelled-retry.bin"));
+        // Issue #839 F34: verify zero additional server WRITEs occur after cancel during backoff.
+        assert_eq!(
+            server.failures.write_count.load(Ordering::SeqCst),
+            1,
+            "cancelled retry must not issue another WRITE attempt"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_persistent_write_failure_executes_exactly_retry_count_plus_one_attempts() {
+        // Issue #839 F34: verify transfer_retry_count=N translates to exactly N+1
+        // real server WRITE attempts on persistent failure.
+        let config = AppConfig {
+            transfer_retry_count: 2,
+            ..AppConfig::default()
+        };
+        let mut manager = TransferManager::new(&config);
+        manager.backoff_override_ms = Some(1);
+
+        let server = TestSftpServer::start().await;
+        let session = server.connect_session().await;
+        let local_dir = tempfile::tempdir().unwrap();
+        let local_path = local_dir.path().join("persistent-fail.bin");
+        tokio::fs::write(&local_path, b"payload").await.unwrap();
+
+        server
+            .failures
+            .fail_remote_write_remaining
+            .store(10, Ordering::SeqCst);
+
+        let err = manager
+            .enqueue_upload(&session, &local_path, "/upload/persistent-fail.bin")
+            .await
+            .expect_err("persistent write failure must exhaust retries");
+        assert!(
+            matches!(err, TransferError::RetriesExhausted { attempts: 3, .. }),
+            "expected 3 attempts (retry_count=2 + 1), got {err:?}"
+        );
+        assert_eq!(
+            server.failures.write_count.load(Ordering::SeqCst),
+            3,
+            "server must observe exactly retry_count + 1 WRITE attempts"
+        );
     }
 
     #[tokio::test]

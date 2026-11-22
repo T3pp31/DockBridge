@@ -92,7 +92,17 @@ Docker / SSH を使用する E2E テスト（`ManualTestPlanVerificationTests` �
 
 `python3 scripts/test-e2e-verify.py -v` は、外部CLI・比較結果等を制御するfixtureと本物の `main` / `check` を使います。既存CIの `Test E2E log cleanup` ステップで実行されます。修正前には11の失敗注入ケースで誤った成功を検出し、修正後は既存のログ保持・cleanupを含む13テストが成功しました。`bash -n scripts/e2e-verify.sh` と `shellcheck -x scripts/*.sh` も成功しています。
 
-この検証はrunnerの判定契約に限ります。実Docker/SFTP、Swift/Xcode、Rustの転送動作はここでは未実行です。#839 の全監査台帳の再構築や、F49以外の項目の完了判定は含みません。
+この検証はrunnerの判定契約に限ります。実Docker/SFTP、Swift/Xcode、Rustの転送動作はここでは未実行です。#839 の全監査台帳は [docs/test-audit-2026-10-23.md](test-audit-2026-10-23.md) および [docs/test-ledger-2026-10-23.md](test-ledger-2026-10-23.md) を参照してください。
+
+## テストスイート別の実行境界と保証（#839 / F57）
+
+| スイート / コマンド | CI で自動実行されるか | 保証する内容 | CI 外・機能ゲート付き境界 |
+|---|---|---|---|
+| `cargo test --workspace --all-targets` | はい（Linux `rust`・macOS `macos`） | `dockbridge-core` / `dockbridge-cli` / `dockbridge-uniffi` の単体・結合テスト（インプロセス SFTP サーバ含む） | `#[ignore]` 付き実 OpenSSH `sftp-server` 検証・ベンチマーク・`root` 専用テストは別途実行 |
+| `cargo test -p bssh-russh-sftp --lib` | はい（Linux `rust`） | ベンダー済み `bssh-russh-sftp` フォークの SFTP サーバ回帰テスト（プロトコル/転送/エラー変換） | なし |
+| `cargo test -p dockbridge-cli --features disable-cli-password` | はい（Linux `rust`） | ハードニング済み CLI 構成（`--password-stdin` 等、平文 `--password` 禁止）のテスト | なし |
+| `xcodebuild ... test-without-building` + `Verify macOS test result counts` | はい（macOS `macos`・unsigned） | Swift ユニットテスト・ViewModel/Bridge/ファイルドロップ結合テスト、および `.xcresult` の `totalTestCount >= 1` / `passedTests >= 1` / `failedTests == 0` 保証 | Docker SFTP E2E（`ManualTestPlanVerificationTests`）・署名済みアプリ Keychain / App Sandbox / 更新インストール検証は `XCTSkip` により明示的に分離 |
+| `scripts/test-*.py`・`scripts/test-website-download.cjs`・`shellcheck -x scripts/*.sh` | はい（Linux `rust` / `website`、一部 macOS） | 検証スクリプト群の判定契約・失敗伝播・xcresult 集計・設定リーダ・ローカライズ整合性 | 実 Docker コンテナ・実 Accessibility/UI・実 `pfctl` によるオフライン検証は手動スクリプト実行時のみ |
 
 ## 関連する GitHub Issue
 

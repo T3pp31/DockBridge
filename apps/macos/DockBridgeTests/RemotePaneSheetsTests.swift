@@ -5,9 +5,9 @@ import XCTest
 
 @MainActor
 final class RemotePaneSheetsTests: XCTestCase {
-    func testEntryNameSheetBuildsForRename() {
-        let bridge = RustBridgeService()
-        let connectionList = ConnectionListViewModel(bridge: bridge)
+    func testEntryNameSheetHostsForRenameAndTracksValidationState() {
+        let bridge = FakeBridge()
+        let connectionList = ConnectionListViewModel(bridge: RustBridgeService())
         let transferQueue = TransferQueueViewModel(bridge: bridge)
         let viewModel = MainViewModel(
             bridge: bridge,
@@ -16,13 +16,16 @@ final class RemotePaneSheetsTests: XCTestCase {
         )
         viewModel.renameText = "renamed.txt"
 
-        let view = RemoteRenameSheet(viewModel: viewModel)
-        XCTAssertNotNil(view.body)
+        let host = NSHostingView(rootView: RemoteRenameSheet(viewModel: viewModel))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(host.fittingSize.width, 0)
+        XCTAssertGreaterThan(host.fittingSize.height, 0)
+        XCTAssertTrue(RemoteEntryNameSheet.isConfirmEnabled(for: viewModel.renameText))
     }
 
-    func testEntryNameSheetBuildsForNewFolder() {
-        let bridge = RustBridgeService()
-        let connectionList = ConnectionListViewModel(bridge: bridge)
+    func testEntryNameSheetHostsForNewFolderAndTracksValidationState() {
+        let bridge = FakeBridge()
+        let connectionList = ConnectionListViewModel(bridge: RustBridgeService())
         let transferQueue = TransferQueueViewModel(bridge: bridge)
         let viewModel = MainViewModel(
             bridge: bridge,
@@ -31,23 +34,38 @@ final class RemotePaneSheetsTests: XCTestCase {
         )
         viewModel.mkdirName = "newfolder"
 
-        let view = RemoteNewFolderSheet(viewModel: viewModel)
-        XCTAssertNotNil(view.body)
+        let host = NSHostingView(rootView: RemoteNewFolderSheet(viewModel: viewModel))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(host.fittingSize.width, 0)
+        XCTAssertGreaterThan(host.fittingSize.height, 0)
+        XCTAssertTrue(RemoteEntryNameSheet.isConfirmEnabled(for: viewModel.mkdirName))
     }
 
-    func testDeleteConfirmSheetBuilds() {
+    func testDeleteConfirmSheetHostsAndInvokesCallbacks() {
+        var cancelled = 0
+        var deleted = 0
         let view = RemoteDeleteConfirmSheet(
             path: "/home/user/example.txt",
-            onCancel: {},
-            onDelete: {}
+            onCancel: { cancelled += 1 },
+            onDelete: { deleted += 1 }
         )
-        XCTAssertNotNil(view.body)
+        let host = NSHostingView(rootView: view)
+        host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(host.fittingSize.width, 0)
+        XCTAssertGreaterThan(host.fittingSize.height, 0)
+        view.onCancel()
+        view.onDelete()
+        XCTAssertEqual(cancelled, 1)
+        XCTAssertEqual(deleted, 1)
     }
 
-    func testEntryNameSheetShowsValidationMessageForInvalidName() {
+    func testEntryNameSheetValidationDisablesConfirmForInvalidOrBlankNames() {
         XCTAssertNotNil(RemoteEntryNameSheet.validationMessage(for: "bad/name"))
-        XCTAssertNil(RemoteEntryNameSheet.validationMessage(for: "valid-name"))
+        XCTAssertFalse(RemoteEntryNameSheet.isConfirmEnabled(for: "bad/name"))
+        XCTAssertFalse(RemoteEntryNameSheet.isConfirmEnabled(for: "  "))
         XCTAssertNil(RemoteEntryNameSheet.validationMessage(for: "  "))
+        XCTAssertNil(RemoteEntryNameSheet.validationMessage(for: "valid-name"))
+        XCTAssertTrue(RemoteEntryNameSheet.isConfirmEnabled(for: "valid-name"))
     }
 }
 

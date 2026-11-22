@@ -131,41 +131,55 @@ final class UpdateCheckViewModelTests: XCTestCase {
     }
 
     func testDownloadUpdateSurfacesVerificationFailure() async throws {
-        // This test requires signed/notarized builds (inAppUpdateInstallationEnabled).
-        // With signing/notarization disabled, downloadUpdate() returns early with
-        // "In-app installation is disabled" and never reaches signature verification.
-        try XCTSkipUnless(
-            viewModel.inAppUpdateInstallationEnabled,
-            "Requires in-app update installation (signed/notarized builds) to be enabled."
+        // Issue #839 F18: inject inAppUpdateInstallationEnabled=true and URL spy
+        // so both verification and browser-fallback branches run unconditionally.
+        var openedURLs: [URL] = []
+        let enabledViewModel = UpdateCheckViewModel(
+            updateService: AppUpdateService(session: mockSession),
+            downloadService: mockDownloadService,
+            settingsService: settingsService,
+            currentVersion: "0.1.0",
+            inAppUpdateInstallationEnabled: true,
+            openURL: { openedURLs.append($0) }
         )
 
         mockSession.responseJSON = newerReleaseJSON
         mockDownloadService.error = .signatureVerificationFailed(.unsignedBundle)
 
-        await viewModel.checkOnLaunch(isHostKeyBlocking: false)
-        await viewModel.downloadUpdate()
+        await enabledViewModel.checkOnLaunch(isHostKeyBlocking: false)
+        await enabledViewModel.downloadUpdate()
 
+        XCTAssertEqual(mockDownloadService.downloadedUpdates.count, 1)
+        XCTAssertTrue(openedURLs.isEmpty)
         XCTAssertEqual(
-            viewModel.downloadErrorMessage,
+            enabledViewModel.downloadErrorMessage,
             AppUpdateDownloadError.signatureVerificationFailed(.unsignedBundle).localizedDescription
         )
-        XCTAssertFalse(viewModel.isDownloadingUpdate)
+        XCTAssertFalse(enabledViewModel.isDownloadingUpdate)
     }
 
     func testDownloadUpdateOpensReleasePageWhenInAppInstallDisabled() async throws {
-        try XCTSkipUnless(
-            !viewModel.inAppUpdateInstallationEnabled,
-            "Requires in-app update installation to be disabled."
+        // Issue #839 F18: inject inAppUpdateInstallationEnabled=false and spy on openURL.
+        var openedURLs: [URL] = []
+        let disabledViewModel = UpdateCheckViewModel(
+            updateService: AppUpdateService(session: mockSession),
+            downloadService: mockDownloadService,
+            settingsService: settingsService,
+            currentVersion: "0.1.0",
+            inAppUpdateInstallationEnabled: false,
+            openURL: { openedURLs.append($0) }
         )
-        XCTAssertFalse(viewModel.inAppUpdateInstallationEnabled)
+        XCTAssertFalse(disabledViewModel.inAppUpdateInstallationEnabled)
 
         mockSession.responseJSON = newerReleaseJSON
-        await viewModel.checkOnLaunch(isHostKeyBlocking: false)
-        await viewModel.downloadUpdate()
+        await disabledViewModel.checkOnLaunch(isHostKeyBlocking: false)
+        await disabledViewModel.downloadUpdate()
 
-        XCTAssertNotNil(viewModel.downloadErrorMessage)
-        XCTAssertTrue(viewModel.downloadErrorMessage?.contains("In-app installation is disabled") == true)
-        XCTAssertFalse(viewModel.isDownloadingUpdate)
+        XCTAssertEqual(openedURLs, [URL(string: "https://github.com/T3pp31/DockBridge/releases/tag/v0.2.0")!])
+        XCTAssertTrue(mockDownloadService.downloadedUpdates.isEmpty)
+        XCTAssertNotNil(disabledViewModel.downloadErrorMessage)
+        XCTAssertTrue(disabledViewModel.downloadErrorMessage?.contains("In-app installation is disabled") == true)
+        XCTAssertFalse(disabledViewModel.isDownloadingUpdate)
     }
 
     func testInAppInstallationRequiresCompleteSignaturePolicy() {
@@ -254,8 +268,10 @@ private final class MockUpdateURLSession: URLSessionDataProviding, @unchecked Se
 
 private final class MockAppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable {
     var error: AppUpdateDownloadError?
+    var downloadedUpdates: [AppUpdateInfo] = []
 
     func downloadVerifyAndReveal(update: AppUpdateInfo) async throws {
+        downloadedUpdates.append(update)
         if let error {
             throw error
         }

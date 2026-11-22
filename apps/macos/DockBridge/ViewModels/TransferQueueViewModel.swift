@@ -52,6 +52,9 @@ final class TransferQueueViewModel: ObservableObject {
         }
     }
     private let settings: AppSettingsService
+    private let nowProvider: () -> Date
+    private let isAppActiveProvider: () -> Bool
+    private let notificationPoster: (_ identifier: String, _ title: String, _ body: String, _ playSound: Bool) -> Void
     private var refreshTask: Task<Void, Never>?
     private var refreshGeneration: UInt64 = 0
     private var progressSamples: [UInt64: (bytes: UInt64, date: Date)] = [:]
@@ -66,10 +69,18 @@ final class TransferQueueViewModel: ObservableObject {
 
     init(
         bridge: any RemoteBridging,
-        settings: AppSettingsService = .shared
+        settings: AppSettingsService = .shared,
+        now: @escaping () -> Date = Date.init,
+        isAppActive: @escaping () -> Bool = { NSApp.isActive },
+        postNotification: @escaping (_ identifier: String, _ title: String, _ body: String, _ playSound: Bool) -> Void = {
+            TransferNotificationService.post(identifier: $0, title: $1, body: $2, playSound: $3)
+        }
     ) {
         self.bridge = bridge
         self.settings = settings
+        self.nowProvider = now
+        self.isAppActiveProvider = isAppActive
+        self.notificationPoster = postNotification
     }
 
     /// Returns tasks filtered to this queue's session (or all when nil).
@@ -254,7 +265,7 @@ final class TransferQueueViewModel: ObservableObject {
 
     private func notifyFinishedTransitions(_ finished: [TransferTaskRecord]) {
         let config = settings.loadConfig()
-        guard config.notifyWhenTransfersFinish, !NSApp.isActive else { return }
+        guard config.notifyWhenTransfersFinish, !isAppActiveProvider() else { return }
 
         for task in finished {
             let direction = task.direction == .upload
@@ -282,11 +293,11 @@ final class TransferQueueViewModel: ObservableObject {
             case .failed: statusKey = "failed"
             case .cancelled, .pending, .inProgress: continue
             }
-            TransferNotificationService.post(
-                identifier: "transfer-\(task.id)-\(statusKey)",
-                title: title,
-                body: URL(fileURLWithPath: task.localPath).lastPathComponent,
-                playSound: config.playTransferNotificationSound
+            notificationPoster(
+                "transfer-\(task.id)-\(statusKey)",
+                title,
+                URL(fileURLWithPath: task.localPath).lastPathComponent,
+                config.playTransferNotificationSound
             )
         }
     }
@@ -315,7 +326,7 @@ final class TransferQueueViewModel: ObservableObject {
     }
 
     private func updateProgressSamples(for fetched: [TransferTaskRecord]) {
-        let now = Date()
+        let now = nowProvider()
         let activeIDs = Set(
             fetched
                 .filter { $0.status == .inProgress }

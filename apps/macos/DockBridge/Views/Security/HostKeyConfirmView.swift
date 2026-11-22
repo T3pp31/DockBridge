@@ -5,13 +5,17 @@ struct HostKeyConfirmView: View {
     let onAccept: () -> Void
     let onReject: () -> Void
 
-    private var isMismatch: Bool {
+    var isMismatch: Bool {
         challenge.expectedFingerprintSha256 != nil
+    }
+
+    var dialogTitle: String {
+        isMismatch ? String(localized: "Host Key Changed") : String(localized: "Unknown Host Key")
     }
 
     var body: some View {
         DialogCard(
-            title: isMismatch ? String(localized: "Host Key Changed") : String(localized: "Unknown Host Key"),
+            title: dialogTitle,
             titleSystemImage: isMismatch ? "exclamationmark.triangle" : nil
         ) {
             if isMismatch {

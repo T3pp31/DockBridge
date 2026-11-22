@@ -246,6 +246,45 @@ ssh-keygen() {
                     expected += ["cli:list", "cli:list"]
                 self.assertEqual(trace, expected)
 
+    def test_pwd_command_requires_canonical_path_not_substring_slash(self):
+        # Issue #839 F50: error text containing '/' must not pass pwd_command.
+        for output, should_fail in (
+            ("/", False),
+            ("/home/demo", False),
+            ("error: /unexpected/path", True),
+            ("relative/path", True),
+        ):
+            with self.subTest(output=output):
+                result, trace = self.run_check("pwd_command", fixture=f"""
+fixture_cli() {{
+  cat >/dev/null || return 1
+  printf 'cli:%s\\n' "$1" >> "$TEST_TRACE"
+  printf '%s\\n' {output!r}
+}}
+""")
+                self.assert_summary(result, failed=should_fail)
+                self.assertEqual(trace, ["cli:pwd"])
+
+    def test_remote_paths_include_unique_run_id_prefix(self):
+        # Issue #839 F50: remote paths must be scoped by RUN_ID so runs do not collide.
+        result, _ = self.run_check("mkdir_rename_delete", fixture="""
+fixture_cli() {
+  cat >/dev/null || return 1
+  printf 'args:%s\\n' "$*" >> "$TEST_TRACE"
+  printf '[]\\n'
+}
+""")
+        self.assert_summary(result, failed=False)
+        # Re-read args from trace via run_check return value
+        _, args_trace = self.run_check("mkdir_rename_delete", fixture="""
+fixture_cli() {
+  cat >/dev/null || return 1
+  printf '%s\\n' "$*" >> "$TEST_TRACE"
+  printf '[]\\n'
+}
+""")
+        self.assertTrue(any("upload/e2e-" in line and "-rename-test" in line for line in args_trace), args_trace)
+
 
 if __name__ == "__main__":
     unittest.main()

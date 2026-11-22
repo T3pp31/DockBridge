@@ -12,6 +12,7 @@ cd "$ROOT"
 export PATH="${HOME}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
 
 CONTAINER_NAME="${SFTP_CONTAINER:-dockbridge-e2e}"
+HOST="${SFTP_HOST:-127.0.0.1}"
 PORT="${SFTP_PORT:-2222}"
 # shellcheck source=config/sftp-test.conf
 source "$ROOT/config/sftp-test.conf"
@@ -70,6 +71,19 @@ main() {
   cd "$ROOT/apps/macos"
   result_bundle="$ROOT/.derivedData-transfer-cancel/results.xcresult"
   rm -rf "$result_bundle"
+  # Export both SFTP_* and TEST_RUNNER_SFTP_* so the hosted XCTest target
+  # receives custom container overrides regardless of xcodebuild forwarding mode
+  # (Issue #839 F51).
+  SFTP_CONTAINER="$CONTAINER_NAME" \
+  SFTP_HOST="$HOST" \
+  SFTP_PORT="$PORT" \
+  SFTP_USER="$USER" \
+  SFTP_PASSWORD="$PASSWORD" \
+  TEST_RUNNER_SFTP_CONTAINER="$CONTAINER_NAME" \
+  TEST_RUNNER_SFTP_HOST="$HOST" \
+  TEST_RUNNER_SFTP_PORT="$PORT" \
+  TEST_RUNNER_SFTP_USER="$USER" \
+  TEST_RUNNER_SFTP_PASSWORD="$PASSWORD" \
   xcodebuild \
     -scheme DockBridge \
     -destination 'platform=macOS' \
@@ -82,8 +96,8 @@ main() {
     CODE_SIGNING_ALLOWED=NO \
     DEVELOPMENT_TEAM=""
 
-  # -only-testing silently succeeds with 0 tests; require at least one ran
-  # and no failures (issue #680).
+  # -only-testing silently succeeds with 0 tests or an XCTSkip; require at least
+  # one passed test and zero failed or skipped tests (issue #680, #839 F51).
   if [[ ! -d "$result_bundle" ]]; then
     fail "xcodebuild did not produce a result bundle"
   fi
@@ -91,11 +105,19 @@ main() {
     || fail "failed to read xcodebuild result bundle"
   total=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("totalTestCount", 0))')
   failed=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("failedTests", 0))')
+  skipped=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("skippedTests", 0))')
+  passed=$(echo "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("passedTests", 0))')
   if [[ "$total" -lt 1 ]]; then
     fail "no tests matched the -only-testing identifier"
   fi
   if [[ "$failed" -ne 0 ]]; then
     fail "$failed transfer-cancel test(s) failed"
+  fi
+  if [[ "$skipped" -ne 0 ]]; then
+    fail "$skipped transfer-cancel test(s) were skipped"
+  fi
+  if [[ "$passed" -lt 1 ]]; then
+    fail "expected at least 1 passed transfer-cancel test, got $passed"
   fi
 
   log "PASS: in-progress large file upload can be cancelled via Transfer Queue API"

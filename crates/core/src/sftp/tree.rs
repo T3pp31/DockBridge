@@ -787,7 +787,7 @@ pub async fn walk_remote_directory_with_limits<'a>(
                 if visited.insert(child_remote.clone()) {
                     pending.push((child_remote, relative_path, child_depth));
                 }
-            } else {
+            } else if visited.insert(child_remote.clone()) {
                 accumulator.record_file(entry.size, &child_remote)?;
                 files.push(RemoteFileEntry {
                     remote_path: child_remote,
@@ -1005,25 +1005,6 @@ mod tests {
         // Then: InvalidRemotePath is returned before path comparison
         let err = validated_remote_entry("/remote/dir", ".", "/remote/dir").unwrap_err();
         assert!(matches!(err, SftpError::InvalidRemotePath { .. }));
-    }
-
-    #[test]
-    fn remote_directory_visit_tracking_skips_already_seen_paths() {
-        // Given: visited paths including a directory that would cycle back
-        // When: the same insert logic as walk_remote_directory is applied
-        // Then: already-seen paths are not enqueued again
-        let mut visited = HashSet::from(["/remote/dir".to_string()]);
-        let cycle_path = "/remote/dir".to_string();
-        assert!(
-            !visited.insert(cycle_path),
-            "already-seen directory paths must not be re-enqueued"
-        );
-
-        let child_path = "/remote/dir/sub".to_string();
-        assert!(
-            visited.insert(child_path),
-            "new directory paths must be enqueued once"
-        );
     }
 
     #[test]
