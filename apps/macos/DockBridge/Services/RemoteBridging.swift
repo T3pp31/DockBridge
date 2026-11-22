@@ -29,12 +29,12 @@ protocol RemoteBridging {
     func upload(
         localPath: String,
         remoteDirectory: String,
-        overwritePolicy: TransferOverwritePolicy
+        overwritePolicy: ResolvedTransferOverwritePolicy
     ) async throws
     func download(
         remotePath: String,
         localDirectory: String,
-        overwritePolicy: TransferOverwritePolicy
+        overwritePolicy: ResolvedTransferOverwritePolicy
     ) async throws
     func deleteRemote(path: String) async throws
     /// Renames and atomically replaces an existing destination. User-initiated
