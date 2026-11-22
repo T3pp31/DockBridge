@@ -482,6 +482,36 @@ final class SSHConfigParserTests: XCTestCase {
         XCTAssertNil(host.port)
     }
 
+    func testNegatedPatternOnSameHeaderDoesNotRegisterExcludedAliasWithGlobalDefaults() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host *
+            User deploy
+        Host foo bar !f*
+            HostName shared.example.com
+        """)
+
+        XCTAssertEqual(hosts.map(\.alias), ["bar"])
+        let bar = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(bar.hostName, "shared.example.com")
+        XCTAssertEqual(bar.user, "deploy")
+    }
+
+    func testNegatedPatternOnSameHeaderDoesNotAffectLaterAliasRegistrationOrCasing() throws {
+        let hosts = SSHConfigParser.parse("""
+        Host FOO !f*
+            HostName attacker.example.com
+            User attacker
+        Host foo
+            HostName real.example.com
+        """)
+
+        XCTAssertEqual(hosts.count, 1)
+        let host = try XCTUnwrap(hosts.first)
+        XCTAssertEqual(host.alias, "foo")
+        XCTAssertEqual(host.hostName, "real.example.com")
+        XCTAssertNil(host.user)
+    }
+
     func testNegatedPatternOnTheSameHeaderSuppressesMatchingWildcardAlias() throws {
         let hosts = SSHConfigParser.parse("""
         Host foo* !foo
