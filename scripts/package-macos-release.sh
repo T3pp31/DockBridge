@@ -6,16 +6,12 @@ export PATH="${HOME}/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:${PATH}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-RELEASE_CONFIG="${ROOT}/config/release.toml"
 INFO_PLIST="${ROOT}/apps/macos/DockBridge/Resources/Info.plist"
 MACOS_DIR="${ROOT}/apps/macos"
 DIST_DIR="${DIST_DIR:-${ROOT}/dist}"
 
 read_release_value() {
-  local key="$1"
-  awk -F'"' -v key="$key" '
-    $0 ~ "^" key " " { print $2; exit }
-  ' "$RELEASE_CONFIG"
+  bash "${ROOT}/scripts/release-config.sh" "$@"
 }
 
 VERSION="${VERSION:-$(read_release_value version)}"
@@ -26,7 +22,7 @@ RELEASE_ARCHS="${RELEASE_ARCHS:-arm64 x86_64}"
 RUST_TARGETS="${RUST_TARGETS:-aarch64-apple-darwin x86_64-apple-darwin}"
 
 if [[ -z "$VERSION" || -z "$APP_NAME" || -z "$ASSET_TEMPLATE" ]]; then
-  echo "Failed to read release configuration from ${RELEASE_CONFIG}" >&2
+  echo "Failed to read release configuration from ${ROOT}/config/release.toml" >&2
   exit 1
 fi
 
@@ -76,8 +72,8 @@ mkdir -p "$DERIVED_DATA"
 SIGN_AND_NOTARIZE="${SIGN_AND_NOTARIZE:-false}"
 
 if [[ "$SIGN_AND_NOTARIZE" == "true" ]]; then
-  require_signed_updates="$(awk -F'"' '/^require_signed_updates / { print $2; exit }' "$ROOT/config/release.toml")"
-  require_notarized_updates="$(awk -F'"' '/^require_notarized_updates / { print $2; exit }' "$ROOT/config/release.toml")"
+  require_signed_updates="$(read_release_value --bool require_signed_updates)"
+  require_notarized_updates="$(read_release_value --bool require_notarized_updates)"
   if [[ "$require_signed_updates" != "true" || "$require_notarized_updates" != "true" ]]; then
     echo "error: SIGN_AND_NOTARIZE=true requires require_signed_updates and require_notarized_updates=true in config/release.toml" >&2
     exit 1

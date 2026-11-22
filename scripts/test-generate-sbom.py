@@ -69,6 +69,7 @@ class GenerateSBOMTests(unittest.TestCase):
             (self.root / "crates" / crate).mkdir(parents=True)
         self.script = self.root / "scripts" / "generate-sbom.sh"
         shutil.copyfile(ROOT / "scripts" / "generate-sbom.sh", self.script)
+        shutil.copyfile(ROOT / "scripts" / "release-config.sh", self.root / "scripts" / "release-config.sh")
         shutil.copyfile(ROOT / "config" / "release.toml", self.root / "config" / "release.toml")
         # Bash functions avoid executing fixture files on noexec temp mounts.
         self.tool = self.root / "tool-double.py"

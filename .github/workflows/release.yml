@@ -321,7 +321,7 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           release_version="$(bash scripts/release-config.sh version)"
-          cargo_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          cargo_version="$(bash scripts/release-config.sh --cargo-version)"
           if [[ "$release_version" != "$VERSION" ]]; then
             echo "error: config/release.toml ($release_version) != tag version ($VERSION)" >&2
             exit 1
