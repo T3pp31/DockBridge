@@ -18,9 +18,7 @@ use dockbridge_core::{
     TransferManager, TransferOverwritePolicy, TransferStatus, TransferTask,
 };
 #[cfg(test)]
-use dockbridge_core::{
-    validate_transfer_chunk_size, MAX_TRANSFER_CHUNK_SIZE_BYTES, MIN_TRANSFER_CHUNK_SIZE_BYTES,
-};
+use dockbridge_core::{MAX_TRANSFER_CHUNK_SIZE_BYTES, MIN_TRANSFER_CHUNK_SIZE_BYTES};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -1495,39 +1493,112 @@ mod tests {
         assert_eq!(record.skipped, 1);
     }
 
-    #[test]
-    fn chunk_size_below_minimum_is_raised_to_minimum() {
-        // Given: a chunk size below the 4 KiB minimum
-        // When: validated
-        // Then: it is raised to the minimum instead of erroring
-        let validated = validate_transfer_chunk_size(1).unwrap();
-        assert_eq!(validated, MIN_TRANSFER_CHUNK_SIZE_BYTES);
-        let validated = validate_transfer_chunk_size(MIN_TRANSFER_CHUNK_SIZE_BYTES - 1).unwrap();
-        assert_eq!(validated, MIN_TRANSFER_CHUNK_SIZE_BYTES);
+    fn app_config_record_with_chunk_size(
+        chunk_size_bytes: u64,
+        known_hosts_path: &std::path::Path,
+    ) -> AppConfigRecord {
+        let defaults = AppConfig::default();
+        AppConfigRecord {
+            connection_timeout_secs: defaults.connection_timeout_secs,
+            session_health_check_interval_secs: defaults.session_health_check_interval_secs,
+            transfer_retry_count: defaults.transfer_retry_count,
+            transfer_chunk_size_bytes: chunk_size_bytes,
+            transfer_download_pipeline_depth: defaults.transfer_download_pipeline_depth as u64,
+            transfer_upload_pipeline_depth: defaults.transfer_upload_pipeline_depth as u64,
+            ssh_inactivity_timeout_secs: defaults.ssh_inactivity_timeout_secs,
+            ssh_keepalive_interval_secs: defaults.ssh_keepalive_interval_secs,
+            known_hosts_path: known_hosts_path.to_string_lossy().into_owned(),
+            openssh_known_hosts_path: defaults
+                .openssh_known_hosts_path
+                .to_string_lossy()
+                .into_owned(),
+            merge_openssh_known_hosts_on_connect: false,
+            known_hosts_strict_mode: defaults.known_hosts_strict_mode,
+            fail_connect_on_openssh_merge_error: defaults.fail_connect_on_openssh_merge_error,
+            directory_walk_max_files: defaults.directory_walk_max_files,
+            directory_walk_max_depth: defaults.directory_walk_max_depth,
+            directory_walk_max_total_bytes: defaults.directory_walk_max_total_bytes,
+        }
     }
 
     #[test]
-    fn chunk_size_at_minimum_and_maximum_are_accepted() {
-        // Given: chunk sizes at the accepted boundaries
-        // When: validated
-        // Then: they pass through unchanged
+    fn dockbridge_client_new_clamps_chunk_size_below_minimum() {
+        // Given: an AppConfigRecord whose chunk size is below the 4 KiB minimum
+        let kh_path = std::env::temp_dir().join(format!(
+            "dockbridge-uniffi-clamp-{}.json",
+            std::process::id()
+        ));
+        let record = app_config_record_with_chunk_size(1, &kh_path);
+
+        // When: constructing DockBridgeClient through the UniFFI boundary
+        let client = DockBridgeClient::new(
+            record,
+            Box::new(NoopHostKeyHandler),
+            Box::new(NoopAuthPromptHandler),
+            Box::new(RecordingDisconnectHandler::default()),
+        )
+        .expect("below-minimum chunk size should be clamped");
+
+        // Then: the resulting client stores the clamped minimum chunk size
         assert_eq!(
-            validate_transfer_chunk_size(MIN_TRANSFER_CHUNK_SIZE_BYTES).unwrap(),
+            client.config.transfer_chunk_size_bytes,
             MIN_TRANSFER_CHUNK_SIZE_BYTES
         );
-        assert_eq!(
-            validate_transfer_chunk_size(MAX_TRANSFER_CHUNK_SIZE_BYTES).unwrap(),
-            MAX_TRANSFER_CHUNK_SIZE_BYTES
-        );
     }
 
     #[test]
-    fn chunk_size_above_maximum_is_rejected() {
-        // Given: a chunk size above the 8 MiB maximum
-        // When: validated
-        // Then: Err is returned
-        assert!(validate_transfer_chunk_size(MAX_TRANSFER_CHUNK_SIZE_BYTES + 1).is_err());
-        assert!(validate_transfer_chunk_size(usize::MAX).is_err());
+    fn dockbridge_client_new_accepts_minimum_and_maximum_chunk_sizes() {
+        // Given: AppConfigRecords at the exact minimum and maximum chunk boundaries
+        let kh_path = std::env::temp_dir().join(format!(
+            "dockbridge-uniffi-bounds-{}.json",
+            std::process::id()
+        ));
+        for boundary in [
+            MIN_TRANSFER_CHUNK_SIZE_BYTES as u64,
+            MAX_TRANSFER_CHUNK_SIZE_BYTES as u64,
+        ] {
+            let client = DockBridgeClient::new(
+                app_config_record_with_chunk_size(boundary, &kh_path),
+                Box::new(NoopHostKeyHandler),
+                Box::new(NoopAuthPromptHandler),
+                Box::new(RecordingDisconnectHandler::default()),
+            )
+            .expect("boundary chunk size should be accepted");
+            assert_eq!(client.config.transfer_chunk_size_bytes as u64, boundary);
+        }
+    }
+
+    #[test]
+    fn dockbridge_client_new_rejects_chunk_size_above_maximum() {
+        // Given: an AppConfigRecord whose chunk size exceeds the 8 MiB maximum
+        let kh_path = std::env::temp_dir().join(format!(
+            "dockbridge-uniffi-overmax-{}.json",
+            std::process::id()
+        ));
+        let record =
+            app_config_record_with_chunk_size((MAX_TRANSFER_CHUNK_SIZE_BYTES + 1) as u64, &kh_path);
+
+        // When: constructing DockBridgeClient through the UniFFI boundary
+        let err = match DockBridgeClient::new(
+            record,
+            Box::new(NoopHostKeyHandler),
+            Box::new(NoopAuthPromptHandler),
+            Box::new(RecordingDisconnectHandler::default()),
+        ) {
+            Ok(_) => panic!("above-maximum chunk size must be rejected"),
+            Err(err) => err,
+        };
+
+        // Then: the UniFFI boundary rejects the oversized chunk size with a clear error
+        assert!(
+            matches!(
+                err,
+                DockBridgeError::Other { ref message }
+                    if message.contains("transfer_chunk_size_bytes")
+                        && message.contains(&(MAX_TRANSFER_CHUNK_SIZE_BYTES + 1).to_string())
+            ),
+            "expected transfer_chunk_size_bytes rejection error, got: {err:?}"
+        );
     }
 
     #[test]

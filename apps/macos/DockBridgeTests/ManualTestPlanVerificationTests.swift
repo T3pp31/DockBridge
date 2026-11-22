@@ -141,13 +141,18 @@ final class ManualTestPlanVerificationTests: XCTestCase {
 
         let remoteItems = try await bridge.listDirectory(path: remoteDirectory)
         let remoteItem = remoteItems.first { $0.name == remoteFileName }
-        if let remoteItem {
-            XCTAssertLessThan(
-                remoteItem.size,
-                UInt64(fileSize),
-                "Cancelled upload must not leave a complete remote file (remote=\(remoteItem.size), local=\(fileSize))"
-            )
+        // Issue #839 F14: cancelled upload must leave neither final file nor .partial remnants.
+        XCTAssertNil(
+            remoteItem,
+            "Cancelled upload must not leave a final remote file: \(String(describing: remoteItem))"
+        )
+        let leftoverPartials = remoteItems.filter {
+            $0.name.hasPrefix(".dockbridge-") && $0.name.hasSuffix(".partial")
         }
+        XCTAssertTrue(
+            leftoverPartials.isEmpty,
+            "Cancelled upload must clean up remote .partial files: \(leftoverPartials.map(\.name))"
+        )
     }
 
     func testCancelOverwriteUploadPreservesOriginalFile() async throws {
@@ -279,65 +284,44 @@ final class ManualTestPlanVerificationTests: XCTestCase {
     }
 
     func testUnknownHostPromptTimesOutAndRejectsConnection() async throws {
+        // Issue #839 F15: wait for pendingHostKeyChallenge to appear, leave it
+        // unanswered until timeout, then verify rejection error and cleared challenge.
         try prepareBridgeWithoutAutoAccept(connectionTimeoutSecs: 2)
         guard let service = bridge else {
             return XCTFail("Bridge should be initialized")
         }
 
-        do {
+        let connectTask = Task {
             try await service.connect(
                 profile: Self.e2eProfile,
-                password: "password",
+                password: Self.e2ePassword,
                 passphrase: nil
             )
+        }
+
+        try await waitForHostKeyChallenge(on: service, timeout: .seconds(5))
+        XCTAssertNotNil(service.pendingHostKeyChallenge)
+
+        do {
+            try await connectTask.value
             XCTFail("Expected connection to fail when host key prompt times out")
-        } catch {
+        } catch let error as DockBridgeError {
             XCTAssertFalse(service.isConnected)
-        }
-    }
-
-    func testTransferQueueClearsImmediatelyOnDisconnect() async throws {
-        try await prepareBridge()
-        guard let bridge else {
-            return XCTFail("Bridge should be connected")
-        }
-
-        let transferQueue = TransferQueueViewModel(bridge: bridge)
-        let connectionList = ConnectionListViewModel(bridge: bridge)
-        let viewModel = MainViewModel(
-            bridge: bridge,
-            connectionList: connectionList,
-            transferQueue: transferQueue
-        )
-
-        let remoteDirectory = try await resolveRemoteDirectory()
-        let localFile = tempDirectory!.appendingPathComponent("disconnect-clear-\(UUID().uuidString).bin")
-        let fileSize = 32 * 1024 * 1024
-        try Data(repeating: 0xCD, count: fileSize).write(to: localFile)
-
-        Task.detached { @MainActor in
-            _ = try? await bridge.upload(localPath: localFile.path, remoteDirectory: remoteDirectory)
-        }
-
-        var sawTasks = false
-        for _ in 0..<100 {
-            await transferQueue.refresh()
-            if !transferQueue.tasks.isEmpty {
-                sawTasks = true
+            XCTAssertNil(service.pendingHostKeyChallenge, "timed-out challenge must be cleared")
+            switch error {
+            case .HostKeyRejected:
                 break
+            default:
+                XCTAssertTrue(
+                    error.localizedDescription.lowercased().contains("host key")
+                        || error.localizedDescription.lowercased().contains("reject")
+                        || error.localizedDescription.lowercased().contains("timeout"),
+                    "expected host-key rejection/timeout error, got: \(error)"
+                )
             }
-            try await Task.sleep(for: .milliseconds(50))
+        } catch {
+            XCTFail("Expected DockBridgeError on host key prompt timeout, got: \(error)")
         }
-        XCTAssertTrue(sawTasks, "Expected transfer queue tasks before disconnect")
-
-        XCTAssertTrue(Self.killDockerSSHD(), "docker exec dockbridge-e2e pkill sshd should succeed")
-        let disconnected = await waitUntil(timeout: .seconds(12)) {
-            bridge.isConnected != true
-        }
-        XCTAssertTrue(disconnected, "Expected disconnected status within 12 seconds")
-
-        await viewModel.onConnectionChanged(isConnected: false)
-        XCTAssertTrue(transferQueue.tasks.isEmpty)
     }
 
     func testTransferQueueDoesNotRetainStaleTasksAfterDisconnect() async throws {
@@ -427,15 +411,21 @@ final class ManualTestPlanVerificationTests: XCTestCase {
 
         try await service.connect(
             profile: Self.e2eProfile,
-            password: "password",
+            password: Self.e2ePassword,
             passphrase: nil
         )
     }
 
     /// Trusts Docker E2E host keys up front so connect never blocks on `DropOperationSync`.
     private static func seedTrustedE2EHostKeys(for store: HostKeyStore) throws {
+        // Issue #839 F13: once isDockerE2EAvailable() passes, keyscan/fingerprint
+        // errors must fail the test rather than silently skipping.
         guard let fingerprint = try fetchPreferredE2EHostKeyFingerprint() else {
-            throw XCTSkip("No ED25519 fingerprint found for Docker E2E host")
+            throw NSError(
+                domain: "ManualTestPlanVerificationTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "No ED25519 fingerprint found for Docker E2E host \(e2eProfile.host):\(e2eProfile.port)"]
+            )
         }
         let entries = [[
             "host": e2eProfile.host,
@@ -458,12 +448,14 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         keyScan.standardOutput = scanPipe
         keyScan.standardError = Pipe()
 
-        guard (try? keyScan.run()) != nil else {
-            throw XCTSkip("ssh-keyscan is required to seed E2E known hosts")
-        }
+        try keyScan.run()
         keyScan.waitUntilExit()
         guard keyScan.terminationStatus == 0 else {
-            throw XCTSkip("ssh-keyscan failed for Docker E2E host")
+            throw NSError(
+                domain: "ManualTestPlanVerificationTests",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "ssh-keyscan exited with \(keyScan.terminationStatus)"]
+            )
         }
         // Close the parent copy of the pipe so ssh-keygen sees EOF instead of
         // blocking forever (issue #790).
@@ -478,12 +470,14 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         keyGen.standardOutput = genPipe
         keyGen.standardError = Pipe()
 
-        guard (try? keyGen.run()) != nil else {
-            throw XCTSkip("ssh-keygen is required to seed E2E known hosts")
-        }
+        try keyGen.run()
         keyGen.waitUntilExit()
         guard keyGen.terminationStatus == 0 else {
-            throw XCTSkip("ssh-keygen failed to fingerprint Docker E2E host")
+            throw NSError(
+                domain: "ManualTestPlanVerificationTests",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "ssh-keygen exited with \(keyGen.terminationStatus)"]
+            )
         }
 
         let output = String(data: genPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
@@ -514,16 +508,22 @@ final class ManualTestPlanVerificationTests: XCTestCase {
 
     private func resolveRemoteDirectory() async throws -> String {
         let candidates = [
+            ProcessInfo.processInfo.environment["DOCKBRIDGE_E2E_REMOTE_DIR"],
             bridge?.initialRemoteDirectory,
             try? await bridge?.getInitialDirectory(),
             "/upload",
         ]
-        for candidate in candidates.compactMap({ $0 }).filter({ $0 != "/" }) {
+        for candidate in candidates.compactMap({ $0 }).filter({ !$0.isEmpty && $0 != "/" }) {
             if (try? await bridge?.listDirectory(path: candidate)) != nil {
                 return candidate
             }
         }
-        throw XCTSkip("No writable remote directory found for Docker E2E")
+        XCTFail("No writable remote directory found for Docker E2E")
+        throw NSError(
+            domain: "ManualTestPlanVerificationTests",
+            code: 4,
+            userInfo: [NSLocalizedDescriptionKey: "No writable remote directory found for Docker E2E"]
+        )
     }
 
     private func waitUntil(timeout: Duration, condition: @escaping () async -> Bool) async -> Bool {
@@ -535,12 +535,28 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         return await condition()
     }
 
+    // Issue #839 F13 & F51: honor SFTP_* env vars so verify-transfer-cancel.sh
+    // and isolated E2E runs share the exact same container, port, and credentials.
+    private static var e2eContainerName: String {
+        let env = ProcessInfo.processInfo.environment["SFTP_CONTAINER"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (env?.isEmpty == false) ? env! : "dockbridge-e2e"
+    }
+
+    private static var e2ePassword: String {
+        let env = ProcessInfo.processInfo.environment["SFTP_PASSWORD"]
+        return (env?.isEmpty == false) ? env! : "password"
+    }
+
     private static var e2eProfile: ConnectionProfile {
-        ConnectionProfile(
+        let env = ProcessInfo.processInfo.environment
+        let host = (env["SFTP_HOST"]?.isEmpty == false) ? env["SFTP_HOST"]! : "127.0.0.1"
+        let port = env["SFTP_PORT"].flatMap(UInt16.init) ?? 2222
+        let user = (env["SFTP_USER"]?.isEmpty == false) ? env["SFTP_USER"]! : "demo"
+        return ConnectionProfile(
             name: "E2E",
-            host: "127.0.0.1",
-            port: 2222,
-            username: "demo",
+            host: host,
+            port: port,
+            username: user,
             authType: .password
         )
     }
@@ -555,11 +571,12 @@ final class ManualTestPlanVerificationTests: XCTestCase {
     }
 
     private static func isDockerE2EAvailable() -> Bool {
+        let container = e2eContainerName
         let process = Process()
         process.executableURL = URL(fileURLWithPath: dockerExecutable)
         process.arguments = [
             "ps",
-            "--filter", "name=dockbridge-e2e",
+            "--filter", "name=^\(container)$",
             "--filter", "status=running",
             "--format", "{{.Names}}",
         ]
@@ -571,13 +588,13 @@ final class ManualTestPlanVerificationTests: XCTestCase {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         let output = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return output == "dockbridge-e2e"
+        return output == container
     }
 
     private static func killDockerSSHD() -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: dockerExecutable)
-        process.arguments = ["exec", "dockbridge-e2e", "pkill", "sshd"]
+        process.arguments = ["exec", e2eContainerName, "pkill", "sshd"]
         guard (try? process.run()) != nil else { return false }
         process.waitUntilExit()
         // pkill exits 1 when no sshd process is found; treat that as already disconnected.

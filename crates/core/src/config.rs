@@ -671,10 +671,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_transfer_chunk_size_accepts_maximum() {
-        // Given: the maximum allowed chunk size
+    fn validate_transfer_chunk_size_accepts_minimum_and_maximum() {
+        // Given: the minimum and maximum allowed chunk sizes
         // When: validate_transfer_chunk_size is called
-        // Then: the value is accepted unchanged
+        // Then: both boundary values are accepted unchanged
+        assert_eq!(
+            validate_transfer_chunk_size(MIN_TRANSFER_CHUNK_SIZE_BYTES).unwrap(),
+            MIN_TRANSFER_CHUNK_SIZE_BYTES
+        );
         assert_eq!(
             validate_transfer_chunk_size(MAX_TRANSFER_CHUNK_SIZE_BYTES).unwrap(),
             MAX_TRANSFER_CHUNK_SIZE_BYTES
@@ -1240,18 +1244,35 @@ mod tests {
     }
 
     #[test]
-    fn default_toml_fields_match_app_config_schema() {
+    fn default_toml_values_match_app_config_default() {
         // Given: config/default.toml (the schema template the CLI ships with)
-        // When: every key it defines is loaded as an AppConfig
-        // Then: parsing succeeds, proving deny_unknown_fields rejects only
-        //       truly unknown keys in the repo's own config files
+        // When: loaded as an AppConfig
+        // Then: its parsed field values match AppConfig::default()
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let path = manifest_dir.join("../../config/default.toml");
-        AppConfig::from_toml_file(&path).unwrap_or_else(|err| {
+        let parsed = AppConfig::from_toml_file(&path).unwrap_or_else(|err| {
             panic!(
                 "config/default.toml must match AppConfig schema: {err} (path: {})",
                 path.display()
             )
         });
+        let defaults = AppConfig::default();
+        assert_eq!(
+            parsed.connection_timeout_secs,
+            defaults.connection_timeout_secs
+        );
+        assert_eq!(parsed.transfer_retry_count, defaults.transfer_retry_count);
+        assert_eq!(
+            parsed.transfer_chunk_size_bytes,
+            defaults.transfer_chunk_size_bytes
+        );
+        assert_eq!(
+            parsed.known_hosts_strict_mode,
+            defaults.known_hosts_strict_mode
+        );
+        assert_eq!(
+            parsed.fail_connect_on_openssh_merge_error,
+            defaults.fail_connect_on_openssh_merge_error
+        );
     }
 }

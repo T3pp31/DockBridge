@@ -34,6 +34,16 @@ pub struct FailureConfig {
     pub hang_sftp_init: AtomicBool,
     pub connection_phase_started: tokio::sync::Notify,
     pub fail_remote_write: AtomicBool,
+    /// Number of consecutive WRITEs to fail with `SSH_FX_FAILURE` (F34).
+    pub fail_remote_write_remaining: AtomicU64,
+    /// Total WRITE requests handled by the test server (F34).
+    pub write_count: AtomicU64,
+    /// Recorded `(offset, len)` of every successful WRITE request (F44).
+    pub write_requests: Mutex<Vec<(u64, usize)>>,
+    /// Recorded `(offset, len)` of every successful READ request (F44).
+    pub read_requests: Mutex<Vec<(u64, usize)>>,
+    /// Signals that a WRITE handler has started (before optional hang, F41).
+    pub write_started: tokio::sync::Notify,
     pub fail_remote_read: AtomicBool,
     pub fail_remote_close: AtomicBool,
     pub fail_remote_remove: AtomicBool,
@@ -54,9 +64,13 @@ pub struct FailureConfig {
     pub opendir_count: AtomicU64,
     /// Repeat each READDIR entry to exercise directory-walk deduplication.
     pub duplicate_readdir_entries: AtomicBool,
+    /// Extra entry filenames injected into READDIR responses (F30).
+    pub extra_readdir_entries: Mutex<Vec<String>>,
     /// Number of SSH_FXP_MKDIR requests handled, used to assert that
     /// directory mirrors issue at most one mkdir per directory (issue #312).
     pub mkdir_count: AtomicU64,
+    /// Ordered paths passed to SSH_FXP_MKDIR requests (F58).
+    pub mkdir_paths: Mutex<Vec<String>>,
     /// Number of SSH_FXP_REMOVE requests, used to detect delete-then-rename
     /// regressions when finalizing uploads.
     pub remove_count: AtomicU64,
@@ -659,6 +673,11 @@ impl russh_sftp::server::Handler for SftpHandler {
             .await
             .map_err(|_| StatusCode::Failure)?;
         buffer.truncate(bytes_read);
+        self.failures
+            .read_requests
+            .lock()
+            .unwrap()
+            .push((offset, bytes_read));
         Ok(Data { id, data: buffer })
     }
 
@@ -669,10 +688,18 @@ impl russh_sftp::server::Handler for SftpHandler {
         offset: u64,
         data: Vec<u8>,
     ) -> Result<Status, Self::Error> {
-        if self
+        self.failures.write_count.fetch_add(1, Ordering::SeqCst);
+        self.failures.write_started.notify_one();
+        let remaining_fail = self
             .failures
-            .fail_remote_write
-            .swap(false, Ordering::SeqCst)
+            .fail_remote_write_remaining
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
+        if remaining_fail
+            || self
+                .failures
+                .fail_remote_write
+                .swap(false, Ordering::SeqCst)
         {
             return Ok(Self::err_status(id, StatusCode::Failure, "write failed"));
         }
@@ -699,6 +726,11 @@ impl russh_sftp::server::Handler for SftpHandler {
             .write_all(&data)
             .await
             .map_err(|_| StatusCode::Failure)?;
+        self.failures
+            .write_requests
+            .lock()
+            .unwrap()
+            .push((offset, data.len()));
         Ok(Self::ok_status(id))
     }
 
@@ -762,6 +794,10 @@ impl russh_sftp::server::Handler for SftpHandler {
         {
             files.extend_from_within(..);
         }
+        let extra = self.failures.extra_readdir_entries.lock().unwrap().clone();
+        for name in extra {
+            files.push(File::new(name, FileAttributes::default()));
+        }
         dir.read_offset = dir.entries.len();
         Ok(Name { id, files })
     }
@@ -776,6 +812,7 @@ impl russh_sftp::server::Handler for SftpHandler {
             return Ok(Self::err_status(id, StatusCode::Failure, "Failure"));
         }
         self.failures.mkdir_count.fetch_add(1, Ordering::Relaxed);
+        self.failures.mkdir_paths.lock().unwrap().push(path.clone());
 
         let local = self.resolve(&path);
         if local.exists() {
@@ -838,9 +875,12 @@ impl russh_sftp::server::Handler for SftpHandler {
         {
             let link = self.resolve(&linkpath);
             if let Some(parent) = link.parent() {
-                if let Err(err) = fs::create_dir_all(parent).await {
-                    tracing::warn!(path = %parent.display(), error = %err, "symlink parent mkdir failed");
-                    return Ok(Self::err_status(id, StatusCode::Failure, "symlink failed"));
+                if !parent.is_dir() {
+                    return Ok(Self::err_status(
+                        id,
+                        StatusCode::NoSuchFile,
+                        "symlink parent does not exist",
+                    ));
                 }
             }
             // Absolute remote targets need translating into the test server's

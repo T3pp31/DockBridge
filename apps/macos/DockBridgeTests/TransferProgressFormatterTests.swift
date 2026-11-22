@@ -3,9 +3,13 @@ import XCTest
 
 final class TransferProgressFormatterTests: XCTestCase {
     func testProgressLabelFormatsTransferredAndTotalBytes() {
-        // Given: known byte counts
+        // Given: known byte counts (issue #839 F08)
         let transferred: UInt64 = 1_500_000
         let total: UInt64 = 10_000_000
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        let expectedTransferred = formatter.string(fromByteCount: Int64(transferred))
+        let expectedTotal = formatter.string(fromByteCount: Int64(total))
 
         // When: progress label is generated
         let label = TransferProgressFormatter.progressLabel(
@@ -13,9 +17,8 @@ final class TransferProgressFormatterTests: XCTestCase {
             total: total
         )
 
-        // Then: both values appear in a slash-separated label
-        XCTAssertNotNil(label)
-        XCTAssertTrue(label?.contains("/") == true)
+        // Then: exact formatted transferred and total byte counts appear
+        XCTAssertEqual(label, "\(expectedTransferred) / \(expectedTotal)")
     }
 
     func testProgressLabelHandlesSpeedsAtAndAboveInt64Limit() {
@@ -132,27 +135,40 @@ final class TransferProgressFormatterTests: XCTestCase {
         XCTAssertNil(label)
     }
 
-    func testActiveTransferSummaryUsesFirstInProgressTask() {
-        // Given: one in-progress task with known progress
+    func testActiveTransferSummaryUsesFirstInProgressTask() throws {
+        // Given: pending, completed, and two in-progress tasks with distinct counts (issue #839 F08)
         let tasks = [
             TransferTaskRecord(
-                id: 1,
-                sessionId: 1,
-                direction: .download,
-                localPath: "/tmp/file.bin",
-                remotePath: "/remote/file.bin",
-                status: .inProgress,
-                bytesTransferred: 512,
-                totalBytes: 1_024
+                id: 1, sessionId: 1, direction: .upload,
+                localPath: "/tmp/pending.bin", remotePath: "/remote/pending.bin",
+                status: .pending, bytesTransferred: 0, totalBytes: 5_000
+            ),
+            TransferTaskRecord(
+                id: 2, sessionId: 1, direction: .upload,
+                localPath: "/tmp/done.bin", remotePath: "/remote/done.bin",
+                status: .completed, bytesTransferred: 9_000, totalBytes: 9_000
+            ),
+            TransferTaskRecord(
+                id: 3, sessionId: 1, direction: .download,
+                localPath: "/tmp/first.bin", remotePath: "/remote/first.bin",
+                status: .inProgress, bytesTransferred: 1_500_000, totalBytes: 10_000_000
+            ),
+            TransferTaskRecord(
+                id: 4, sessionId: 1, direction: .download,
+                localPath: "/tmp/second.bin", remotePath: "/remote/second.bin",
+                status: .inProgress, bytesTransferred: 256, totalBytes: 512
             ),
         ]
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        let expectedFirst = "\(formatter.string(fromByteCount: 1_500_000)) / \(formatter.string(fromByteCount: 10_000_000))"
 
         // When: summary is generated
-        let summary = TransferProgressFormatter.activeTransferSummary(for: tasks)
+        let summary = try XCTUnwrap(TransferProgressFormatter.activeTransferSummary(for: tasks))
 
-        // Then: summary includes a progress label with the slash separator
-        XCTAssertNotNil(summary)
-        XCTAssertTrue(summary?.contains("/") == true)
+        // Then: summary reflects the first in-progress task's exact bytes (not pending/completed/second)
+        XCTAssertTrue(summary.contains(expectedFirst), "expected \(expectedFirst) in \(summary)")
+        XCTAssertFalse(summary.contains("256"), "summary must pick first in-progress task, got \(summary)")
     }
 
     func testActiveTransferSummaryIncludesAdditionalInProgressCount() {

@@ -32,6 +32,7 @@ listings (CWE-214). Prefer --password-stdin for scripts and production use.";
     pub(super) struct InsecurePasswordContext {
         pub(super) ci: bool,
         pub(super) release: bool,
+        pub(super) suppressed: bool,
     }
 
     fn env_is_truthy(name: &str) -> bool {
@@ -44,11 +45,12 @@ listings (CWE-214). Prefer --password-stdin for scripts and production use.";
         InsecurePasswordContext {
             ci: env_is_truthy("CI"),
             release: !cfg!(debug_assertions),
+            suppressed: env_is_truthy("DOCKBRIDGE_SUPPRESS_PASSWORD_WARNING"),
         }
     }
 
     pub(super) fn should_warn_insecure_password(ctx: InsecurePasswordContext) -> bool {
-        if env_is_truthy("DOCKBRIDGE_SUPPRESS_PASSWORD_WARNING") {
+        if ctx.suppressed {
             return false;
         }
 
@@ -436,19 +438,41 @@ mod tests {
 
 #[cfg(test)]
 mod passphrase_tests {
-    use super::resolve_passphrase;
+    use std::io;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::{read_secret_line, resolve_passphrase};
+
+    struct CountingReader {
+        reads: AtomicUsize,
+    }
+
+    impl io::Read for CountingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            Ok(0)
+        }
+    }
 
     #[test]
     fn resolve_passphrase_none_when_not_requested() {
         // When --passphrase-stdin is not given, no passphrase is read.
         let resolved = resolve_passphrase(false).expect("no error");
         assert!(resolved.is_none());
-    }
 
-    #[test]
-    fn resolve_passphrase_false_never_reads_stdin() {
-        // Guard that the flag governs the read (false => Ok(None), no stdin).
-        assert!(resolve_passphrase(false).unwrap().is_none());
+        // Guard that an unrequested reader is never touched when the helper
+        // only invokes read_secret_line when requested.
+        let mut reader = CountingReader {
+            reads: AtomicUsize::new(0),
+        };
+        let requested = false;
+        let maybe_secret = if requested {
+            Some(read_secret_line(&mut reader, "passphrase").unwrap())
+        } else {
+            None
+        };
+        assert!(maybe_secret.is_none());
+        assert_eq!(reader.reads.load(Ordering::SeqCst), 0);
     }
 }
 
@@ -457,18 +481,26 @@ mod insecure_password_tests {
     use super::insecure_password::{should_warn_insecure_password, InsecurePasswordContext};
 
     #[test]
-    fn warns_in_ci_or_release_but_not_debug_local() {
+    fn warns_in_ci_or_release_but_not_debug_local_or_when_suppressed() {
         assert!(should_warn_insecure_password(InsecurePasswordContext {
             ci: true,
             release: false,
+            suppressed: false,
         }));
         assert!(should_warn_insecure_password(InsecurePasswordContext {
             ci: false,
             release: true,
+            suppressed: false,
         }));
         assert!(!should_warn_insecure_password(InsecurePasswordContext {
             ci: false,
             release: false,
+            suppressed: false,
+        }));
+        assert!(!should_warn_insecure_password(InsecurePasswordContext {
+            ci: true,
+            release: true,
+            suppressed: true,
         }));
     }
 }

@@ -124,15 +124,25 @@ final class AppSettingsServiceRobustnessTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(config.connectionTimeoutSecs, 1)
     }
 
-    func testLoadConfigClampsNegativeRetryCount() {
-        // Given: a negative retry count in UserDefaults
-        defaults().set(-3, forKey: AppSettingsKeys.transferRetryCount)
-
-        // When: loadConfig is called
-        let config = service.loadConfig()
-
-        // Then: it does not crash and clamps to 0
-        XCTAssertEqual(config.transferRetryCount, 0)
+    func testLoadConfigClampsRetryCountAtLowerNormalAndUpperBoundaries() {
+        // Issue #839 F02: assert concrete values across lower, normal, and upper bounds.
+        let cases: [(stored: Int, expected: UInt32)] = [
+            (-3, 0),
+            (0, 0),
+            (5, 5),
+            (100, 100),
+            (101, 100),
+            (Int.max, 100),
+        ]
+        for entry in cases {
+            defaults().set(entry.stored, forKey: AppSettingsKeys.transferRetryCount)
+            let config = service.loadConfig()
+            XCTAssertEqual(
+                config.transferRetryCount,
+                entry.expected,
+                "stored=\(entry.stored)"
+            )
+        }
     }
 
     func testLoadConfigClampsOversizedChunkToMaximum() {

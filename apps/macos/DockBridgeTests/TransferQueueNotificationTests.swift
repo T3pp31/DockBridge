@@ -116,6 +116,59 @@ final class TransferQueueNotificationTests: XCTestCase {
         XCTAssertTrue(finished.isEmpty, "cancelled transitions are not notifications")
     }
 
+    func testRefreshMarksFinishedTasksNotifiedAndNeverPostsTwice() async throws {
+        // Issue #839 F20: verify production refresh() itself marks notified IDs
+        // and posts exactly one notification across repeated refreshes/reappearances.
+        let suiteName = "TransferQueueNotificationTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = AppSettingsService(defaults: defaults)
+        var config = settings.loadConfig()
+        config.notifyWhenTransfersFinish = true
+        settings.saveConfig(config)
+
+        let bridge = FakeBridge()
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        var posted: [String] = []
+        let queue = TransferQueueViewModel(
+            bridge: bridge,
+            settings: settings,
+            isAppActive: { false },
+            postNotification: { identifier, _, _, _ in posted.append(identifier) }
+        )
+
+        // First poll seeds active task.
+        bridge.setTransferTasks([makeTask(id: 7, status: .inProgress)])
+        await queue.refresh()
+        XCTAssertTrue(posted.isEmpty)
+
+        // Second poll transitions task to completed -> posts once.
+        bridge.setTransferTasks([makeTask(id: 7, status: .completed)])
+        await queue.refresh()
+        XCTAssertEqual(posted, ["transfer-7-completed"])
+
+        // Disappearing and reappearing on later polls must not post again.
+        bridge.setTransferTasks([])
+        await queue.refresh()
+        bridge.setTransferTasks([makeTask(id: 7, status: .completed)])
+        await queue.refresh()
+        XCTAssertEqual(posted, ["transfer-7-completed"])
+    }
+
+    func testRetryDelegatesToBridgeAndRecordsRetriedTaskID() async {
+        // Issue #839 F23: assert TransferQueueViewModel.retry delegates to bridge.retryTransfer.
+        let bridge = FakeBridge()
+        bridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        let failed = makeTask(id: 42, status: .failed(message: "boom"))
+        bridge.setTransferTasks([failed])
+        let queue = TransferQueueViewModel(bridge: bridge)
+
+        await queue.retry(task: failed)
+
+        XCTAssertEqual(bridge.retriedTaskIDs, [42])
+        XCTAssertNil(queue.errorMessage)
+    }
+
     private func makeTask(id: UInt64, status: TransferStatusRecord) -> TransferTaskRecord {
         TransferTaskRecord(
             id: id,

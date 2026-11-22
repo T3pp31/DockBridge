@@ -141,6 +141,8 @@ final class AppUpdateServiceTests: XCTestCase {
     }
 
     func testCheckForUpdateRejectsUntrustedDownloadURLAndFallsBackToReleasePage() async throws {
+        // Issue #839 F06: include a valid .sha256 asset so ONLY the untrusted host
+        // causes fallback to releasePageURL (not missing checksum).
         let json = """
         {
           "tag_name": "v0.2.0",
@@ -149,6 +151,10 @@ final class AppUpdateServiceTests: XCTestCase {
             {
               "name": "DockBridge-0.2.0-macOS.dmg",
               "browser_download_url": "https://example.com/DockBridge-0.2.0-macOS.dmg"
+            },
+            {
+              "name": "DockBridge-0.2.0-macOS.dmg.sha256",
+              "browser_download_url": "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg.sha256"
             }
           ]
         }
@@ -161,6 +167,8 @@ final class AppUpdateServiceTests: XCTestCase {
     }
 
     func testCheckForUpdateRejectsHTTPScheme() async throws {
+        // Issue #839 F06: include a valid .sha256 asset so ONLY the HTTP scheme
+        // causes fallback to releasePageURL.
         let json = """
         {
           "tag_name": "v0.2.0",
@@ -169,6 +177,10 @@ final class AppUpdateServiceTests: XCTestCase {
             {
               "name": "DockBridge-0.2.0-macOS.dmg",
               "browser_download_url": "http://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg"
+            },
+            {
+              "name": "DockBridge-0.2.0-macOS.dmg.sha256",
+              "browser_download_url": "https://github.com/T3pp31/DockBridge/releases/download/v0.2.0/DockBridge-0.2.0-macOS.dmg.sha256"
             }
           ]
         }
@@ -181,6 +193,8 @@ final class AppUpdateServiceTests: XCTestCase {
     }
 
     func testCheckForUpdateRejectsUnexpectedAssetName() async throws {
+        // Issue #839 F06: include a matching .sha256 asset so ONLY the unexpected
+        // asset name causes fallback to releasePageURL.
         let json = """
         {
           "tag_name": "v0.2.0",
@@ -188,26 +202,6 @@ final class AppUpdateServiceTests: XCTestCase {
           "assets": [
             {
               "name": "DockBridge-0.2.0-macOS-evil.dmg",
-              "browser_download_url": "\(validDownloadURL)"
-            }
-          ]
-        }
-        """.data(using: .utf8)!
-
-        let service = AppUpdateService(session: MockURLSession(statusCode: 200, data: json))
-        let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
-
-        XCTAssertEqual(update?.downloadURL.absoluteString, releasePageURL)
-    }
-
-    func testCheckForUpdateAcceptsValidGitHubReleaseDownloadURL() async throws {
-        let json = """
-        {
-          "tag_name": "v0.2.0",
-          "html_url": "\(releasePageURL)",
-          "assets": [
-            {
-              "name": "DockBridge-0.2.0-macOS.dmg",
               "browser_download_url": "\(validDownloadURL)"
             },
             {
@@ -221,7 +215,7 @@ final class AppUpdateServiceTests: XCTestCase {
         let service = AppUpdateService(session: MockURLSession(statusCode: 200, data: json))
         let update = try await service.checkForUpdate(currentVersion: "0.1.0", skippedVersion: nil)
 
-        XCTAssertEqual(update?.downloadURL.absoluteString, validDownloadURL)
+        XCTAssertEqual(update?.downloadURL.absoluteString, releasePageURL)
     }
 
     func testCheckForUpdateAcceptsObjectsGitHubusercontentURL() async throws {

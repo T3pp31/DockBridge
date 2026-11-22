@@ -89,22 +89,53 @@ final class FileDropAcceptanceTests: XCTestCase {
         )
     }
 
-    func testExternalUploadAcceptsOnSuccess() async throws {
-        try await prepareViewModel()
-        guard let viewModel else { return XCTFail("Missing view model") }
+    func testExternalUploadKickoffAcquiresAndReleasesSecurityScopesOnSuccessAndFailure() async throws {
+        // Issue #839 F10: consolidated S076 into real FileDropTransferKickoff.acceptExternalUploads
+        // spying on beginAccessing/stopAccessing across both succeeding and failing uploads.
+        final class RecordingScopeService: FileDropSecurityScopeService {
+            var began: [URL] = []
+            var stopped: [URL] = []
+            func beginAccessing(_ url: URL) -> Bool {
+                began.append(url)
+                return true
+            }
+            func stopAccessing(_ url: URL) {
+                stopped.append(url)
+            }
+        }
 
-        let localFile = tempDirectory!.appendingPathComponent("external-upload.txt")
-        try "external upload".write(to: localFile, atomically: true, encoding: .utf8)
-        viewModel.remotePath = try await resolveWritableRemoteDirectory()
+        for shouldFail in [false, true] {
+            let (viewModel, fakeBridge, dir) = try makeFakeKickoffViewModel()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            fakeBridge.uploadFails = shouldFail
+            viewModel.remotePath = "/remote/upload"
+            fakeBridge.directoryListings["/remote/upload"] = []
 
-        let accepted = await viewModel.upload(
-            localURL: localFile,
-            toRemoteDirectory: viewModel.remotePath
-        )
+            let localFile = dir.appendingPathComponent("external-\(shouldFail ? "fail" : "ok").txt")
+            try "external upload".write(to: localFile, atomically: true, encoding: .utf8)
+            let scope = RecordingScopeService()
 
-        XCTAssertTrue(accepted)
-        let items = try await bridge?.listDirectory(path: viewModel.remotePath) ?? []
-        XCTAssertTrue(items.contains { $0.name == localFile.lastPathComponent })
+            let accepted = FileDropTransferKickoff.acceptExternalUploads(
+                urls: [localFile],
+                viewModel: viewModel,
+                toRemoteDirectory: "/remote/upload",
+                bookmarkService: scope
+            )
+            XCTAssertTrue(accepted)
+
+            for _ in 0..<200 where scope.stopped.isEmpty {
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            XCTAssertEqual(scope.began, [localFile])
+            XCTAssertEqual(scope.stopped, [localFile])
+            XCTAssertEqual(fakeBridge.uploaded.map(\.localPath), [localFile.path])
+            XCTAssertEqual(fakeBridge.uploaded.map(\.remoteDirectory), ["/remote/upload"])
+            if shouldFail {
+                XCTAssertNotNil(viewModel.errorMessage)
+            } else {
+                XCTAssertNil(viewModel.errorMessage)
+            }
+        }
     }
 
     func testRemoteMoveAcceptsOnSuccess() async throws {
@@ -133,6 +164,8 @@ final class FileDropAcceptanceTests: XCTestCase {
     }
 
     func testLocalMoveAcceptsOnSuccess() async throws {
+        // Issue #839 F09: obtain drop acceptance from LocalPaneDropModifier.acceptLocalMoves
+        // and separately observe async filesystem move completion.
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("local-drop-\(UUID().uuidString)", isDirectory: true)
         let sourceDirectory = root.appendingPathComponent("source", isDirectory: true)
@@ -145,34 +178,25 @@ final class FileDropAcceptanceTests: XCTestCase {
         let sourceFile = sourceDirectory.appendingPathComponent("moved.txt")
         try "local move".write(to: sourceFile, atomically: true, encoding: .utf8)
 
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("bridge-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let bridge = RustBridgeService(hostKeyStore: HostKeyStore(baseDirectory: directory))
-        let transferQueue = TransferQueueViewModel(bridge: bridge)
-        let connectionList = ConnectionListViewModel(bridge: bridge)
-        let viewModel = MainViewModel(
-            bridge: bridge,
-            connectionList: connectionList,
-            transferQueue: transferQueue
-        )
+        let viewModel = try makeKickoffViewModel()
+        viewModel.localPath = sourceDirectory
+        await reloadLocalItems(in: viewModel)
+        // Switch drop destination without clearing the displayed listing snapshot:
+        // verify modifier acceptance directly for a move to destinationDirectory.
         viewModel.localPath = destinationDirectory
-
-        var accepted = false
-        guard FileDropValidation.canMoveLocalItem(from: sourceFile, to: viewModel.localPath) else {
-            return XCTFail("Expected valid local move")
-        }
-        try await viewModel.moveLocalItem(from: sourceFile, toDirectory: viewModel.localPath)
-        accepted = true
-
-        XCTAssertTrue(accepted)
-        XCTAssertTrue(
-            FileManager.default.fileExists(
-                atPath: destinationDirectory.appendingPathComponent("moved.txt").path
-            )
+        let modifier = LocalPaneDropModifier(
+            viewModel: viewModel,
+            isTargeted: .constant(false),
+            dropKind: .constant(.none)
         )
+        let accepted = modifier.acceptLocalMoves([LocalFileDragPayload(url: sourceFile, isDirectory: false)])
+        XCTAssertTrue(accepted)
+
+        let movedFile = destinationDirectory.appendingPathComponent("moved.txt")
+        for _ in 0..<200 where !FileManager.default.fileExists(atPath: movedFile.path) {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: movedFile.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: sourceFile.path))
     }
 
@@ -321,15 +345,15 @@ final class FileDropAcceptanceTests: XCTestCase {
 
     // MARK: - Async kickoff (non-blocking D&D accept)
 
-    func testRemoteDownloadKickoffAcceptsImmediatelyWithoutBlocking() throws {
-        // Given: a view model and non-empty remote drag items
-        let viewModel = try makeKickoffViewModel()
+    func testRemoteDownloadKickoffAcceptsImmediatelyWithoutBlocking() async throws {
+        // Issue #839 F11: wire connected FakeBridge and observe spawned download task + arguments.
+        let (viewModel, fakeBridge, dir) = try makeFakeKickoffViewModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
         let items = [RemoteFileDragPayload(path: "/remote/folder", isDirectory: true)]
         let displayedItems = [
             RemoteFileRecord(name: "folder", path: "/remote/folder", isDirectory: true, isSymlink: false, size: 0, modifiedAtSecs: nil, permissions: nil, uid: nil, gid: nil, symlinkTarget: nil, symlinkTargetIsDir: nil),
         ]
 
-        // When: kickoff is invoked
         let start = ContinuousClock.now
         let accepted = FileDropTransferKickoff.acceptRemoteDownloads(
             items: items,
@@ -338,31 +362,37 @@ final class FileDropAcceptanceTests: XCTestCase {
         )
         let elapsed = start.duration(to: ContinuousClock.now)
 
-        // Then: accepts immediately without waiting for transfer completion
         XCTAssertTrue(accepted)
         XCTAssertLessThan(elapsed, .milliseconds(100))
+
+        for _ in 0..<200 where fakeBridge.downloaded.isEmpty {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(fakeBridge.downloaded.count, 1)
+        XCTAssertEqual(fakeBridge.downloaded.first?.remotePath, "/remote/folder")
+        XCTAssertEqual(fakeBridge.downloaded.first?.localDirectory, viewModel.localPath.path)
     }
 
     func testRemoteDownloadKickoffRejectsEmptyItems() throws {
-        // Given: a view model and no drag items
-        let viewModel = try makeKickoffViewModel()
+        let (viewModel, fakeBridge, dir) = try makeFakeKickoffViewModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
 
-        // When: kickoff is invoked with empty items
         let accepted = FileDropTransferKickoff.acceptRemoteDownloads(items: [], viewModel: viewModel)
 
-        // Then: drop is rejected
         XCTAssertFalse(accepted)
+        XCTAssertTrue(fakeBridge.downloaded.isEmpty)
     }
 
-    func testUploadKickoffAcceptsImmediatelyWithoutBlocking() throws {
-        // Given: a displayed local drag item
-        let viewModel = try makeKickoffViewModel()
+    func testUploadKickoffAcceptsImmediatelyWithoutBlocking() async throws {
+        // Issue #839 F11: wire connected FakeBridge and observe spawned upload task + arguments.
+        let (viewModel, fakeBridge, dir) = try makeFakeKickoffViewModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        viewModel.remotePath = "/remote/default"
         let localFile = viewModel.localPath.appendingPathComponent("kickoff-upload.txt")
         try "kickoff upload".write(to: localFile, atomically: true, encoding: .utf8)
         let displayedItems = [LocalFileItem(url: localFile)]
         let payload = LocalFileDragPayload(url: localFile, isDirectory: false)
 
-        // When: kickoff is invoked
         let start = ContinuousClock.now
         let accepted = FileDropTransferKickoff.acceptLocalPayloadUploads(
             items: [payload],
@@ -371,28 +401,35 @@ final class FileDropAcceptanceTests: XCTestCase {
         )
         let elapsed = start.duration(to: ContinuousClock.now)
 
-        // Then: accepts immediately without waiting for upload completion
         XCTAssertTrue(accepted)
         XCTAssertLessThan(elapsed, .milliseconds(100))
+
+        for _ in 0..<200 where fakeBridge.uploaded.isEmpty {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(fakeBridge.uploaded.count, 1)
+        XCTAssertEqual(fakeBridge.uploaded.first?.localPath, localFile.path)
+        XCTAssertEqual(fakeBridge.uploaded.first?.remoteDirectory, "/remote/default")
     }
 
     func testUploadKickoffRejectsInvalidURLs() throws {
-        // Given: a view model and a non-existent upload URL
-        let viewModel = try makeKickoffViewModel()
+        let (viewModel, fakeBridge, dir) = try makeFakeKickoffViewModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
         let missingURL = viewModel.localPath.appendingPathComponent("missing-upload.txt")
 
-        // When: kickoff is invoked
         let accepted = FileDropTransferKickoff.acceptExternalUploads(
             urls: [missingURL],
             viewModel: viewModel
         )
 
-        // Then: drop is rejected
         XCTAssertFalse(accepted)
+        XCTAssertTrue(fakeBridge.uploaded.isEmpty)
+        XCTAssertEqual(viewModel.errorMessage, FileDropError.unreadableSource.localizedDescription)
     }
 
     func testLocalPayloadUploadKickoffRejectsSpoofedItem() throws {
-        let viewModel = try makeKickoffViewModel()
+        let (viewModel, fakeBridge, dir) = try makeFakeKickoffViewModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
         let displayedFile = viewModel.localPath.appendingPathComponent("visible.txt")
         try "visible".write(to: displayedFile, atomically: true, encoding: .utf8)
 
@@ -406,10 +443,12 @@ final class FileDropAcceptanceTests: XCTestCase {
         )
 
         XCTAssertFalse(accepted)
+        XCTAssertTrue(fakeBridge.uploaded.isEmpty)
     }
 
     func testExternalUploadKickoffRejectsWhenSecurityScopeFails() throws {
-        let viewModel = try makeKickoffViewModel()
+        let (viewModel, fakeBridge, dir) = try makeFakeKickoffViewModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
         let localFile = viewModel.localPath.appendingPathComponent("scope-fail.txt")
         try "scope fail".write(to: localFile, atomically: true, encoding: .utf8)
 
@@ -425,18 +464,20 @@ final class FileDropAcceptanceTests: XCTestCase {
         )
 
         XCTAssertFalse(accepted)
+        XCTAssertTrue(fakeBridge.uploaded.isEmpty)
     }
 
-    func testRemoteMoveKickoffAcceptsImmediatelyWithoutBlocking() throws {
-        // Given: valid remote move items
-        let viewModel = try makeKickoffViewModel()
+    func testRemoteMoveKickoffAcceptsImmediatelyWithoutBlocking() async throws {
+        // Issue #839 F11: wire connected FakeBridge and observe spawned rename task.
+        let (viewModel, fakeBridge, dir) = try makeFakeKickoffViewModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
         viewModel.remotePath = "/destination"
+        fakeBridge.directoryListings["/destination"] = []
         let items = [RemoteFileDragPayload(path: "/source/file.txt", isDirectory: false)]
         let displayedItems = [
             RemoteFileRecord(name: "file.txt", path: "/source/file.txt", isDirectory: false, isSymlink: false, size: 10, modifiedAtSecs: nil, permissions: nil, uid: nil, gid: nil, symlinkTarget: nil, symlinkTargetIsDir: nil),
         ]
 
-        // When: kickoff is invoked
         let start = ContinuousClock.now
         let accepted = FileDropTransferKickoff.acceptRemoteMoves(
             items: items,
@@ -446,13 +487,22 @@ final class FileDropAcceptanceTests: XCTestCase {
         )
         let elapsed = start.duration(to: ContinuousClock.now)
 
-        // Then: accepts immediately without waiting for move completion
         XCTAssertTrue(accepted)
         XCTAssertLessThan(elapsed, .milliseconds(100))
+
+        for _ in 0..<200 where fakeBridge.renamedNoOverwrite.isEmpty {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(fakeBridge.renamedNoOverwrite.count, 1)
+        XCTAssertEqual(fakeBridge.renamedNoOverwrite.first?.from, "/source/file.txt")
+        XCTAssertEqual(fakeBridge.renamedNoOverwrite.first?.to, "/destination/file.txt")
     }
 
-    func testUploadKickoffUsesExplicitRemoteDirectoryDestination() throws {
-        let viewModel = try makeKickoffViewModel()
+    func testUploadKickoffUsesExplicitRemoteDirectoryDestination() async throws {
+        // Issue #839 F11: assert explicit remote destination reaches FakeBridge.upload.
+        let (viewModel, fakeBridge, dir) = try makeFakeKickoffViewModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        viewModel.remotePath = "/different/default"
         let localFile = viewModel.localPath.appendingPathComponent("dest-upload.txt")
         try "dest upload".write(to: localFile, atomically: true, encoding: .utf8)
         let displayedItems = [LocalFileItem(url: localFile)]
@@ -466,10 +516,18 @@ final class FileDropAcceptanceTests: XCTestCase {
         )
 
         XCTAssertTrue(accepted)
+        for _ in 0..<200 where fakeBridge.uploaded.isEmpty {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(fakeBridge.uploaded.count, 1)
+        XCTAssertEqual(fakeBridge.uploaded.first?.localPath, localFile.path)
+        XCTAssertEqual(fakeBridge.uploaded.first?.remoteDirectory, "/explicit/target")
     }
 
-    func testRemoteDownloadKickoffUsesExplicitLocalDirectoryDestination() throws {
-        let viewModel = try makeKickoffViewModel()
+    func testRemoteDownloadKickoffUsesExplicitLocalDirectoryDestination() async throws {
+        // Issue #839 F11: assert explicit local destination reaches FakeBridge.download.
+        let (viewModel, fakeBridge, dir) = try makeFakeKickoffViewModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
         let destination = viewModel.localPath.appendingPathComponent("DownloadsTarget", isDirectory: true)
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
         let items = [RemoteFileDragPayload(path: "/remote/file.txt", isDirectory: false)]
@@ -485,23 +543,53 @@ final class FileDropAcceptanceTests: XCTestCase {
         )
 
         XCTAssertTrue(accepted)
+        for _ in 0..<200 where fakeBridge.downloaded.isEmpty {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTAssertEqual(fakeBridge.downloaded.count, 1)
+        XCTAssertEqual(fakeBridge.downloaded.first?.remotePath, "/remote/file.txt")
+        XCTAssertEqual(fakeBridge.downloaded.first?.localDirectory, destination.path)
     }
 
     func testRemoteMoveKickoffRejectsInvalidMoves() throws {
-        // Given: a move into the same directory as the source
-        let viewModel = try makeKickoffViewModel()
+        // Issue #839 F11: supply valid displayedRemoteItems so rejection proves
+        // invalid-move logic (same directory), not missing displayed item.
+        let (viewModel, fakeBridge, dir) = try makeFakeKickoffViewModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
         viewModel.remotePath = "/same"
         let items = [RemoteFileDragPayload(path: "/same/file.txt", isDirectory: false)]
+        let displayedItems = [
+            RemoteFileRecord(name: "file.txt", path: "/same/file.txt", isDirectory: false, isSymlink: false, size: 1, modifiedAtSecs: nil, permissions: nil, uid: nil, gid: nil, symlinkTarget: nil, symlinkTargetIsDir: nil),
+        ]
 
-        // When: kickoff is invoked
         let accepted = FileDropTransferKickoff.acceptRemoteMoves(
             items: items,
             toDirectory: viewModel.remotePath,
-            viewModel: viewModel
+            viewModel: viewModel,
+            displayedRemoteItems: displayedItems
         )
 
-        // Then: drop is rejected
         XCTAssertFalse(accepted)
+        XCTAssertTrue(fakeBridge.renamedNoOverwrite.isEmpty)
+        XCTAssertTrue(fakeBridge.renamed.isEmpty)
+    }
+
+    private func makeFakeKickoffViewModel() throws -> (MainViewModel, FakeBridge, URL) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("file-drop-fake-kickoff-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let fakeBridge = FakeBridge()
+        fakeBridge.connectionStatus = .connected(endpoint: "user@example.com:22")
+        let transferQueue = TransferQueueViewModel(bridge: fakeBridge)
+        let connectionList = ConnectionListViewModel(bridge: RustBridgeService())
+        let viewModel = MainViewModel(
+            bridge: fakeBridge,
+            connectionList: connectionList,
+            transferQueue: transferQueue
+        )
+        viewModel.localPath = directory
+        return (viewModel, fakeBridge, directory)
     }
 
     private func makeKickoffViewModel() throws -> MainViewModel {

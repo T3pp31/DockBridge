@@ -382,14 +382,13 @@ mod tests {
         fail_offsets: Vec<u64>,
     }
 
-    /// Mock handler. `open` sleeps 50 ms before replying, which gives the
-    /// reader task ample time to enqueue every already-sent request. Tests
-    /// exploit this: sending OPEN followed by a burst of WRITEs makes the
-    /// queue state during write processing deterministic, so coalescing
-    /// expectations can be exact instead of timing-tolerant.
+    /// Mock handler. `open` waits on `open_release` when configured so the
+    /// reader task can deterministically enqueue every already-sent request
+    /// before the processor resumes, avoiding wall-clock sleeps (issue #839 F12).
     #[derive(Debug, Clone, Default)]
     struct MockHandler {
         shared: Arc<Mutex<Shared>>,
+        open_release: Option<Arc<tokio::sync::Notify>>,
     }
 
     impl Handler for MockHandler {
@@ -407,10 +406,11 @@ mod tests {
             _attrs: crate::protocol::FileAttributes,
         ) -> impl std::future::Future<Output = Result<Handle, Self::Error>> + Send {
             let shared = Arc::clone(&self.shared);
+            let open_release = self.open_release.clone();
             async move {
-                // Let the reader task queue all pipelined requests sent
-                // after this OPEN before the processor resumes.
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                if let Some(notify) = open_release {
+                    notify.notified().await;
+                }
                 shared
                     .lock()
                     .unwrap()
@@ -520,9 +520,14 @@ mod tests {
         cfg: Config,
     ) -> Vec<Packet> {
         let (client, server) = tokio::io::duplex(1 << 20);
+        let open_release = Arc::new(tokio::sync::Notify::new());
+        let open_release_server = Arc::clone(&open_release);
 
         let session = tokio::spawn(async move {
-            let mut handler = MockHandler { shared };
+            let mut handler = MockHandler {
+                shared,
+                open_release: Some(open_release_server),
+            };
             process_stream(server, &mut handler, &cfg).await;
         });
 
@@ -531,6 +536,13 @@ mod tests {
             client_wr.write_all(request).await.unwrap();
         }
         client_wr.shutdown().await.unwrap();
+        // Yield until the reader task has drained the duplex buffer into its
+        // channel (client_wr is shut down so EOF is reached without waiting on
+        // wall-clock timers), then release OPEN.
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        open_release.notify_one();
 
         let mut responses = Vec::new();
         let mut buf = BytesMut::new();
@@ -788,7 +800,10 @@ mod tests {
         let (client, server) = tokio::io::duplex(4096);
 
         let session = tokio::spawn(async move {
-            let mut handler = MockHandler { shared };
+            let mut handler = MockHandler {
+                shared,
+                open_release: None,
+            };
             process_stream(server, &mut handler, &cfg).await;
         });
 
@@ -866,7 +881,10 @@ mod tests {
         let (client, server) = tokio::io::duplex(1 << 20);
 
         let session = tokio::spawn(async move {
-            let mut handler = MockHandler { shared };
+            let mut handler = MockHandler {
+                shared,
+                open_release: None,
+            };
             process_stream(server, &mut handler, &cfg).await;
         });
 

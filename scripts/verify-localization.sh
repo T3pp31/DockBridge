@@ -229,5 +229,8 @@ if errors:
         print(f"FAIL: {message}", file=sys.stderr)
     sys.exit(1)
 
-print("OK: all user-facing strings are translated (en + ja)")
+print(
+    "OK: Localizable.xcstrings (en + ja), format specifiers, and explicit "
+    "String(localized:) literals verified (excludes implicit SwiftUI Text/Button keys)"
+)
 PY

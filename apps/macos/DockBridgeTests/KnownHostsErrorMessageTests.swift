@@ -45,12 +45,25 @@ final class KnownHostsErrorMessageTests: XCTestCase {
     }
 
     func testConnectionStatusTitles() {
-        // The title is localized; assert the state transition is reflected
-        // rather than a specific language string.
-        XCTAssertFalse(ConnectionStatus.disconnected.statusTitle.isEmpty)
-        let connectedTitle = ConnectionStatus.connected(endpoint: "user@host:22").statusTitle
-        XCTAssertFalse(connectedTitle.isEmpty)
-        XCTAssertTrue(connectedTitle.contains("user@host:22"))
+        // Assert exact localized titles and endpoint labels across all states
+        // regardless of host locale (issue #839 F16).
+        let disconnected = ConnectionStatus.disconnected
+        XCTAssertEqual(disconnected.statusTitle, String(localized: "Disconnected"))
+        XCTAssertNil(disconnected.endpointLabel)
+
+        let connecting = ConnectionStatus.connecting(endpoint: "user@host:22")
+        XCTAssertEqual(connecting.statusTitle, String(localized: "Connecting…"))
+        XCTAssertEqual(connecting.endpointLabel, "user@host:22")
+        XCTAssertNotEqual(connecting.statusTitle, disconnected.statusTitle)
+
+        let connected = ConnectionStatus.connected(endpoint: "user@host:22")
+        XCTAssertEqual(
+            connected.statusTitle,
+            String(format: String(localized: "Connected: %@"), "user@host:22")
+        )
+        XCTAssertEqual(connected.endpointLabel, "user@host:22")
+        XCTAssertTrue(connected.statusTitle.contains("user@host:22"))
+        XCTAssertNotEqual(connected.statusTitle, connecting.statusTitle)
     }
 
     func testUploadPermissionDeniedErrorMessageMentionsRemoteDirectory() {

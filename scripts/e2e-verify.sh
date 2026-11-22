@@ -16,11 +16,15 @@ source "$ROOT/config/sftp-test.conf"
 IMAGE="${SFTP_IMAGE:-$DEFAULT_SFTP_IMAGE}"
 
 WORKDIR="$(mktemp -d)"
+RUN_ID="e2e-$$-$(date -u +%Y%m%d%H%M%S)"
 KNOWN_HOSTS="$WORKDIR/known_hosts.json"
 CONFIG="$WORKDIR/config.toml"
 LOCAL_FILE="$WORKDIR/local-upload.txt"
 DOWNLOAD_FILE="$WORKDIR/local-download.txt"
-REMOTE_FILE="/upload/e2e-verify.txt"
+REMOTE_FILE="/upload/${RUN_ID}-verify.txt"
+REMOTE_RENAME_SRC="upload/${RUN_ID}-rename-test"
+REMOTE_RENAME_DST="upload/${RUN_ID}-rename-test-2"
+REMOTE_TREE_NAME="${RUN_ID}-tree"
 LOG="$WORKDIR/e2e.log"
 KEYFILE="$WORKDIR/id_ed25519"
 KEYFILE_ENC="$WORKDIR/id_ed25519_enc"
@@ -95,6 +99,20 @@ ensure_key() {
   fi
 }
 
+wait_for_sftp_readiness() {
+  local attempts=30
+  for _ in $(seq 1 "$attempts"); do
+    if [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" == "true" ]] \
+      && docker exec "$CONTAINER_NAME" pgrep -x sshd >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Docker SFTP container $CONTAINER_NAME did not become ready" >&2
+  docker logs "$CONTAINER_NAME" >&2 || true
+  return 1
+}
+
 ensure_container() {
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     echo "SFTP verification already holds $LOCK_DIR; use a different SFTP_CONTAINER or remove a stale lock after checking no run is active" >&2
@@ -110,7 +128,7 @@ ensure_container() {
     -v "$WORKDIR/id_ed25519.pub:/home/$USER/.ssh/keys/id_ed25519.pub:ro" \
     -v "$WORKDIR/id_ed25519_enc.pub:/home/$USER/.ssh/keys/id_ed25519_enc.pub:ro" \
     "$IMAGE" "${USER}:${PASSWORD}:::upload" >/dev/null
-  sleep 3
+  wait_for_sftp_readiness
 }
 
 host_key_reject() {
@@ -146,7 +164,7 @@ host_key_accept() {
 host_key_no_reprompt() {
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --path upload >/dev/null
+    --path upload
 }
 
 json_output() {
@@ -158,29 +176,35 @@ json_output() {
 }
 
 pwd_command() {
-  printf '%s\n' "$PASSWORD" | "${CLI[@]}" pwd \
+  local pwd_out
+  pwd_out=$(printf '%s\n' "$PASSWORD" | "${CLI[@]}" pwd \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new | grep -q '/'
+    --host-key-policy accept-new) || return 1
+  printf '%s\n' "$pwd_out"
+  if [[ "$pwd_out" != "/" && "$pwd_out" != "/home/$USER" ]]; then
+    echo "pwd_command expected canonical '/' or '/home/$USER', got: $pwd_out" >&2
+    return 1
+  fi
 }
 
 mkdir_rename_delete() {
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" mkdir \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --remote "upload/rename-test" || return 1
+    --host-key-policy accept-new --remote "$REMOTE_RENAME_SRC" || return 1
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" rename \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --from "upload/rename-test" --to "upload/rename-test-2" || return 1
+    --host-key-policy accept-new --from "$REMOTE_RENAME_SRC" --to "$REMOTE_RENAME_DST" || return 1
   # delete is a file-only command; exercise it on a file in the renamed directory.
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" upload \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --local "$LOCAL_FILE" --remote "upload/rename-test-2/file.txt" || return 1
+    --host-key-policy accept-new --local "$LOCAL_FILE" --remote "${REMOTE_RENAME_DST}/file.txt" || return 1
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" delete \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --remote "upload/rename-test-2/file.txt"
+    --host-key-policy accept-new --remote "${REMOTE_RENAME_DST}/file.txt"
 }
 
 recursive_upload_download() {
-  local tree="$WORKDIR/tree"
+  local tree="$WORKDIR/$REMOTE_TREE_NAME"
   mkdir -p "$tree/sub" || return 1
   echo one >"$tree/a.txt" || return 1
   echo two >"$tree/sub/b.txt" || return 1
@@ -189,9 +213,9 @@ recursive_upload_download() {
     --host-key-policy accept-new --local "$tree" --remote "upload" --recursive || return 1
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" download \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --remote "upload/tree" --local "$WORKDIR/dl" --recursive || return 1
-  cmp -s "$tree/a.txt" "$WORKDIR/dl/tree/a.txt" || return 1
-  cmp -s "$tree/sub/b.txt" "$WORKDIR/dl/tree/sub/b.txt"
+    --host-key-policy accept-new --remote "upload/$REMOTE_TREE_NAME" --local "$WORKDIR/dl" --recursive || return 1
+  cmp -s "$tree/a.txt" "$WORKDIR/dl/$REMOTE_TREE_NAME/a.txt" || return 1
+  cmp -s "$tree/sub/b.txt" "$WORKDIR/dl/$REMOTE_TREE_NAME/sub/b.txt"
 }
 
 private_key_auth_plain() {
@@ -201,11 +225,11 @@ private_key_auth_plain() {
   # never needs an interactive host-key prompt.
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new --path upload >/dev/null || return 1
+    --host-key-policy accept-new --path upload || return 1
   # Now authenticate with the key (host key already trusted)
   "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" \
-    --identity "$WORKDIR/id_ed25519" --path upload >/dev/null
+    --identity "$WORKDIR/id_ed25519" --path upload </dev/null
 }
 
 private_key_auth_encrypted() {
@@ -213,7 +237,7 @@ private_key_auth_encrypted() {
   printf '%s\n' "$KEY_PASSPHRASE" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" \
     --identity "$WORKDIR/id_ed25519_enc" --passphrase-stdin \
-    --path upload >/dev/null
+    --path upload
 }
 
 upload_file() {
@@ -240,7 +264,7 @@ corrupted_known_hosts_errors() {
   prepare_config || return 1
   printf '%s\n' "$PASSWORD" | "${CLI[@]}" list \
     --host "$HOST" --port "$PORT" --user "$USER" --password-stdin \
-    --host-key-policy accept-new >/dev/null || return 1
+    --host-key-policy accept-new || return 1
   echo '{}' >"$KNOWN_HOSTS" || return 1
   local output
   set +e
@@ -253,21 +277,39 @@ corrupted_known_hosts_errors() {
     echo "corrupted_known_hosts_errors expected nonzero exit" >&2
     return 1
   fi
+  printf '%s\n' "$output"
   echo "$output" | grep -qi 'known hosts'
 }
 
 swift_corrupted_known_hosts_message() {
+  local result_bundle="$WORKDIR/swift-known-hosts.xcresult"
+  rm -rf "$result_bundle"
   cd "$ROOT/apps/macos" || return 1
   xcodebuild \
     -scheme DockBridge \
     -destination 'platform=macOS' \
     -only-testing:DockBridgeTests/KnownHostsErrorMessageTests \
+    -resultBundlePath "$result_bundle" \
     -configuration Debug \
     build test \
     CODE_SIGN_IDENTITY="-" \
     CODE_SIGNING_REQUIRED=NO \
     CODE_SIGNING_ALLOWED=NO \
-    DEVELOPMENT_TEAM=""
+    DEVELOPMENT_TEAM="" || return 1
+  if [[ ! -d "$result_bundle" ]]; then
+    echo "swift_corrupted_known_hosts_message: missing result bundle" >&2
+    return 1
+  fi
+  local summary total passed skipped failed
+  summary=$(xcrun xcresulttool get test-results summary --path "$result_bundle" --format json 2>/dev/null) || return 1
+  total=$(printf '%s' "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("totalTestCount", 0))')
+  passed=$(printf '%s' "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("passedTests", 0))')
+  skipped=$(printf '%s' "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("skippedTests", 0))')
+  failed=$(printf '%s' "$summary" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("failedTests", 0))')
+  if [[ "$total" -lt 1 || "$passed" -lt 1 || "$skipped" -ne 0 || "$failed" -ne 0 ]]; then
+    echo "swift_corrupted_known_hosts_message: unexpected xcresult counts (total=$total passed=$passed skipped=$skipped failed=$failed)" >&2
+    return 1
+  fi
 }
 
 transfer_cancel_in_progress() {

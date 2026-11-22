@@ -12,8 +12,13 @@ struct RemoteEntryNameSheet: View {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var isValid: Bool {
-        RemotePath.isValidEntryName(trimmedName)
+    var isValid: Bool {
+        Self.isConfirmEnabled(for: name)
+    }
+
+    static func isConfirmEnabled(for rawName: String) -> Bool {
+        let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return RemotePath.isValidEntryName(trimmed)
     }
 
     private var validationMessage: String? {

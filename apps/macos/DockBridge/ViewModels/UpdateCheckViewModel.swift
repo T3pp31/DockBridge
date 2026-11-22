@@ -13,6 +13,8 @@ final class UpdateCheckViewModel: ObservableObject {
     private let downloadService: AppUpdateDownloading
     private let settingsService: AppSettingsService
     private let currentVersion: String
+    private let inAppInstallEnabledProvider: () -> Bool
+    private let openURL: (URL) -> Void
     /// Tracks whether the startup host-key prompt has been resolved, so a
     /// slow update check can still present after dismissal (issue #636).
     private var isHostKeyResolved = false
@@ -21,12 +23,18 @@ final class UpdateCheckViewModel: ObservableObject {
         updateService: AppUpdateService = AppUpdateService(),
         downloadService: AppUpdateDownloading = AppUpdateDownloadService(),
         settingsService: AppSettingsService = .shared,
-        currentVersion: String = VersionComparator.currentAppVersion
+        currentVersion: String = VersionComparator.currentAppVersion,
+        inAppUpdateInstallationEnabled: Bool? = nil,
+        openURL: @escaping (URL) -> Void = { NSWorkspace.shared.open($0) }
     ) {
         self.updateService = updateService
         self.downloadService = downloadService
         self.settingsService = settingsService
         self.currentVersion = currentVersion
+        self.inAppInstallEnabledProvider = {
+            inAppUpdateInstallationEnabled ?? AppUpdateConfig.inAppUpdateInstallationEnabled
+        }
+        self.openURL = openURL
     }
 
     func checkOnLaunch(isHostKeyBlocking: Bool) async {
@@ -53,7 +61,7 @@ final class UpdateCheckViewModel: ObservableObject {
     }
 
     var inAppUpdateInstallationEnabled: Bool {
-        AppUpdateConfig.inAppUpdateInstallationEnabled
+        inAppInstallEnabledProvider()
     }
 
     func downloadUpdate() async {
@@ -64,7 +72,7 @@ final class UpdateCheckViewModel: ObservableObject {
             AppLogging.update.info(
                 "opening update release page: \(pendingUpdate.releasePageURL.absoluteString, privacy: .public)"
             )
-            NSWorkspace.shared.open(pendingUpdate.releasePageURL)
+            openURL(pendingUpdate.releasePageURL)
             if !inAppUpdateInstallationEnabled {
                 downloadErrorMessage = """
                 In-app installation is disabled until release builds are signed and notarized. \

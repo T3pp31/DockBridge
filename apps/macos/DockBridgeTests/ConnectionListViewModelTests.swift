@@ -630,10 +630,26 @@ final class ConnectionListViewModelTests: XCTestCase {
 
         try store.saveProfiles([profile])
         viewModel.load()
+        XCTAssertTrue(viewModel.showInitialTrustConfirmation)
         viewModel.confirmInitialTrust()
 
+        // Issue #839 F24: assert trust persistence, initial-trust prompt clearance,
+        // and that a fresh ConnectionListViewModel no longer prompts for initial trust.
         XCTAssertFalse(viewModel.showInitialTrustConfirmation)
-        XCTAssertTrue(try store.loadProfilesWithEndpointCheck().endpointChanges.isEmpty)
+        let persistedTrust = try trustStore.loadTrustedEndpoints()
+        XCTAssertEqual(persistedTrust[profile.id], TrustedProfileEndpoint(profile: profile))
+        let checkResult = try store.loadProfilesWithEndpointCheck()
+        XCTAssertTrue(checkResult.pendingInitialTrust.isEmpty)
+        XCTAssertTrue(checkResult.endpointChanges.isEmpty)
+
+        let reloadedViewModel = ConnectionListViewModel(
+            store: store,
+            keychain: keychain,
+            bridge: RustBridgeService()
+        )
+        reloadedViewModel.load()
+        XCTAssertFalse(reloadedViewModel.showInitialTrustConfirmation)
+        XCTAssertEqual(reloadedViewModel.profiles, [profile])
     }
 
     func testSaveDoesNotSeedTrustBeforeInitialConfirmation() throws {
@@ -1128,31 +1144,13 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertNotNil(viewModel.errorMessage)
     }
 
-    func testConnectReleasesPrivateKeyBookmarkAccessAfterCompletion() async throws {
-        let bookmarkService = SecurityScopedBookmarkService.shared
-        bookmarkService.stopAllAccess()
-
-        let profile = try makePrivateKeyProfile()
-        guard let bookmark = profile.privateKeyBookmark else {
-            throw XCTSkip("Security-scoped bookmarks require App Sandbox context")
-        }
-
-        let keyURL = try bookmarkService.resolveBookmarkURL(bookmark)
-
-        await viewModel.connect(profile: profile)
-
-        XCTAssertFalse(bookmarkService.isAccessActive(for: keyURL))
-    }
-
     func testConnectReleasesPrivateKeyBookmarkAccessAfterFailure() async throws {
+        // Issue #839 F26: consolidated duplicate bookmark-release test (S059->S060).
         let bookmarkService = SecurityScopedBookmarkService.shared
         bookmarkService.stopAllAccess()
 
         let profile = try makePrivateKeyProfile()
-        guard let bookmark = profile.privateKeyBookmark else {
-            throw XCTSkip("Security-scoped bookmarks require App Sandbox context")
-        }
-
+        let bookmark = try XCTUnwrap(profile.privateKeyBookmark)
         let keyURL = try bookmarkService.resolveBookmarkURL(bookmark)
 
         await viewModel.connect(profile: profile)

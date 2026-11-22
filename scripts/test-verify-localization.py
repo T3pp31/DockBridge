@@ -291,6 +291,16 @@ class LocalizationTests(unittest.TestCase):
             "at variations.plural.one do not match en [(1, 'lld')]"
         )
 
+    def test_success_message_states_exact_verification_scope(self):
+        # Issue #839 F56: the summary must not overclaim coverage of implicit
+        # SwiftUI Text/Button localization keys.
+        result = self.verify({"stringUnit": {"value": "%lld items"}},
+                             {"stringUnit": {"value": "%lld個"}})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Localizable.xcstrings (en + ja)", result.stdout)
+        self.assertIn("excludes implicit SwiftUI Text/Button keys", result.stdout)
+        self.assertNotIn("all user-facing strings are translated", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
