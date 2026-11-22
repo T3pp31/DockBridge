@@ -216,7 +216,7 @@ class ReleaseConfigTests(unittest.TestCase):
         self.assertNotIn("dockbridge-${VERSION}", build)
         text = (ROOT / ".github" / "workflows" / "release.yml").read_text()
         self.assertIn(
-            "name: ${{ steps.assets.outputs.app_name }} ${{ steps.version.outputs.version }}",
+            "name: ${{ needs.build.outputs.app_name }} ${{ needs.build.outputs.version }}",
             text)
 
     def test_missing_tool_and_asset_keys_stop_before_publication(self):

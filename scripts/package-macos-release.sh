@@ -33,43 +33,100 @@ SHA256_PATH="${DMG_PATH}.sha256"
 
 echo "Packaging ${APP_NAME} ${VERSION} (build ${BUILD_NUMBER})..."
 
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
+SIGN_AND_NOTARIZE="${SIGN_AND_NOTARIZE:-false}"
+PACKAGE_APP_ONLY="${PACKAGE_APP_ONLY:-false}"
+PREBUILT_APP_PATH="${PREBUILT_APP_PATH:-}"
+APP_ARCHIVE_PATH="${APP_ARCHIVE_PATH:-}"
 
-# Restore the source Info.plist no matter how the packaging exits so the
-# working tree is never left with release version stamps (issue #677).
-INFO_PLIST_BACKUP="$(mktemp)"
-cp "$INFO_PLIST" "$INFO_PLIST_BACKUP"
-restore_info_plist() {
-  cp "$INFO_PLIST_BACKUP" "$INFO_PLIST"
-  rm -f "$INFO_PLIST_BACKUP"
-}
-trap restore_info_plist EXIT
-
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "$INFO_PLIST"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "$INFO_PLIST"
-
-UNIVERSAL_LIB="${CARGO_TARGET_DIR}/release/libdockbridge_uniffi.a"
-RUST_LIB_PATHS=()
-
-for target in ${RUST_TARGETS}; do
-  rustup target add "${target}" >/dev/null 2>&1 || true
-  ./scripts/build-rust.sh "${target}" release
-  RUST_LIB_PATHS+=("${CARGO_TARGET_DIR}/${target}/release/libdockbridge_uniffi.a")
-done
-
-if [[ ${#RUST_LIB_PATHS[@]} -eq 1 ]]; then
-  cp "${RUST_LIB_PATHS[0]}" "${UNIVERSAL_LIB}"
-else
-  lipo -create "${RUST_LIB_PATHS[@]}" -output "${UNIVERSAL_LIB}"
+if [[ "$PACKAGE_APP_ONLY" == "true" && "$SIGN_AND_NOTARIZE" == "true" ]]; then
+  echo "error: PACKAGE_APP_ONLY=true cannot be combined with SIGN_AND_NOTARIZE=true" >&2
+  exit 1
 fi
 
-# Keep the freshly assembled universal library instead of rebuilding for host.
-DOCKBRIDGE_SKIP_HOST_BUILD=1 ./scripts/generate-uniffi.sh "" release
+if [[ -n "$PREBUILT_APP_PATH" && "$PACKAGE_APP_ONLY" == "true" ]]; then
+  echo "error: PREBUILT_APP_PATH cannot be combined with PACKAGE_APP_ONLY=true" >&2
+  exit 1
+fi
 
-DERIVED_DATA="${DERIVED_DATA:-${ROOT}/.derivedData/Release}"
-mkdir -p "$DERIVED_DATA"
+if [[ -n "$PREBUILT_APP_PATH" ]]; then
+  APP_PATH="$PREBUILT_APP_PATH"
+  if [[ ! -d "$APP_PATH" ]]; then
+    echo "Expected prebuilt app bundle not found: ${APP_PATH}" >&2
+    exit 1
+  fi
+  echo "Using prebuilt app bundle: ${APP_PATH} (skipping Rust and Xcode builds)"
+else
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 
-SIGN_AND_NOTARIZE="${SIGN_AND_NOTARIZE:-false}"
+  # Restore the source Info.plist no matter how the packaging exits so the
+  # working tree is never left with release version stamps (issue #677).
+  INFO_PLIST_BACKUP="$(mktemp)"
+  cp "$INFO_PLIST" "$INFO_PLIST_BACKUP"
+  restore_info_plist() {
+    cp "$INFO_PLIST_BACKUP" "$INFO_PLIST"
+    rm -f "$INFO_PLIST_BACKUP"
+  }
+  trap restore_info_plist EXIT
+
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "$INFO_PLIST"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER}" "$INFO_PLIST"
+
+  UNIVERSAL_LIB="${CARGO_TARGET_DIR}/release/libdockbridge_uniffi.a"
+  RUST_LIB_PATHS=()
+
+  for target in ${RUST_TARGETS}; do
+    rustup target add "${target}" >/dev/null 2>&1 || true
+    ./scripts/build-rust.sh "${target}" release
+    RUST_LIB_PATHS+=("${CARGO_TARGET_DIR}/${target}/release/libdockbridge_uniffi.a")
+  done
+
+  if [[ ${#RUST_LIB_PATHS[@]} -eq 1 ]]; then
+    cp "${RUST_LIB_PATHS[0]}" "${UNIVERSAL_LIB}"
+  else
+    lipo -create "${RUST_LIB_PATHS[@]}" -output "${UNIVERSAL_LIB}"
+  fi
+
+  # Keep the freshly assembled universal library instead of rebuilding for host.
+  DOCKBRIDGE_SKIP_HOST_BUILD=1 ./scripts/generate-uniffi.sh "" release
+
+  DERIVED_DATA="${DERIVED_DATA:-${ROOT}/.derivedData/Release}"
+  mkdir -p "$DERIVED_DATA"
+
+  echo "Building macOS app (Release, archs: ${RELEASE_ARCHS})..."
+  export DOCKBRIDGE_SKIP_HOST_BUILD=1
+  (
+    cd "$MACOS_DIR"
+    xcodebuild \
+      -scheme DockBridge \
+      -destination 'platform=macOS' \
+      -configuration Release \
+      -derivedDataPath "$DERIVED_DATA" \
+      ARCHS="${RELEASE_ARCHS}" \
+      ONLY_ACTIVE_ARCH=NO \
+      build \
+      CODE_SIGN_IDENTITY="-" \
+      CODE_SIGNING_REQUIRED=NO \
+      CODE_SIGNING_ALLOWED=NO \
+      DEVELOPMENT_TEAM=""
+  )
+
+  APP_PATH="${DERIVED_DATA}/Build/Products/Release/${APP_NAME}.app"
+  if [[ ! -d "$APP_PATH" ]]; then
+    echo "Expected app bundle not found: ${APP_PATH}" >&2
+    exit 1
+  fi
+
+  if [[ "$PACKAGE_APP_ONLY" == "true" ]]; then
+    if [[ -n "$APP_ARCHIVE_PATH" ]]; then
+      mkdir -p "$(dirname "$APP_ARCHIVE_PATH")"
+      ditto --norsrc --noextattr -c -k --sequesterRsrc --keepParent "$APP_PATH" "$APP_ARCHIVE_PATH"
+      echo "Unsigned app archive ready: ${APP_ARCHIVE_PATH}"
+    else
+      echo "Unsigned app bundle ready: ${APP_PATH}"
+    fi
+    exit 0
+  fi
+fi
 
 if [[ "$SIGN_AND_NOTARIZE" == "true" ]]; then
   require_signed_updates="$(read_release_value --bool require_signed_updates)"
@@ -78,30 +135,6 @@ if [[ "$SIGN_AND_NOTARIZE" == "true" ]]; then
     echo "error: SIGN_AND_NOTARIZE=true requires require_signed_updates and require_notarized_updates=true in config/release.toml" >&2
     exit 1
   fi
-fi
-
-echo "Building macOS app (Release, archs: ${RELEASE_ARCHS})..."
-export DOCKBRIDGE_SKIP_HOST_BUILD=1
-(
-  cd "$MACOS_DIR"
-  xcodebuild \
-    -scheme DockBridge \
-    -destination 'platform=macOS' \
-    -configuration Release \
-    -derivedDataPath "$DERIVED_DATA" \
-    ARCHS="${RELEASE_ARCHS}" \
-    ONLY_ACTIVE_ARCH=NO \
-    build \
-    CODE_SIGN_IDENTITY="-" \
-    CODE_SIGNING_REQUIRED=NO \
-    CODE_SIGNING_ALLOWED=NO \
-    DEVELOPMENT_TEAM=""
-)
-
-APP_PATH="${DERIVED_DATA}/Build/Products/Release/${APP_NAME}.app"
-if [[ ! -d "$APP_PATH" ]]; then
-  echo "Expected app bundle not found: ${APP_PATH}" >&2
-  exit 1
 fi
 
 if [[ "$SIGN_AND_NOTARIZE" == "true" ]]; then
