@@ -466,6 +466,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         connectedUsername = nil
         connectionStatus = .disconnected
         connectedProfileID = nil
+        lastDisconnectReason = nil
     }
 
     private func resolveWorkingDirectory(
@@ -684,6 +685,7 @@ extension RustBridgeService {
             client = nil
             connectionStatus = status
             connectedProfileID = nil
+            lastDisconnectReason = nil
             initialRemoteDirectory = nil
             connectedUsername = nil
             return
