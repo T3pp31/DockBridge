@@ -1,0 +1,34 @@
+name: Upload macOS test diagnostics
+description: Summarize failed macOS XCTest cases and upload raw logs and .xcresult bundles after a test failure or timeout.
+
+runs:
+  using: "composite"
+  steps:
+    # On failure or timeout the raw log and .xcresult are otherwise destroyed
+    # with the runner, leaving no record of where the tests got to (issue #266).
+    - name: List failed tests from xcresult
+      shell: bash
+      run: |
+        set -u
+        for xcresult in /tmp/xcodebuild-test-attempt-*.xcresult; do
+          [ -d "$xcresult" ] || continue
+          echo "::group::Failed tests in ${xcresult}"
+          xcrun xcresulttool get test-results summary --path "$xcresult" --format json 2>/dev/null \
+            | jq -r '.testFailures[]? | "- \(.testName) [\(.targetName)]: \(.failureText)"' 2>/dev/null \
+            || echo "(no xcresult summary available for ${xcresult})"
+          echo "::endgroup::"
+        done
+
+    - name: Upload macOS test artifacts
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+      with:
+        name: macos-test-artifacts
+        path: |
+          /tmp/xcodebuild-test-attempt-*.log
+          /tmp/xcodebuild-test-attempt-*.xcresult
+        if-no-files-found: ignore
+        retention-days: 14
+        # .xcresult bundles are already compressed internally; re-compressing
+        # them is wasted CPU. The plain-text logs are small, so leaving them
+        # uncompressed keeps the artifact instantly grep-able.
+        compression-level: 0

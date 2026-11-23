@@ -69,6 +69,12 @@ jobs:
         timeout-minutes: 33
         uses: ./.github/actions/run-macos-tests
 
+      # Keep diagnostics outside the timed-out composite step so a step timeout
+      # or Verify macOS test result counts failure still uploads logs/.xcresult (#266).
+      - name: Upload macOS test diagnostics
+        if: failure()
+        uses: ./.github/actions/upload-macos-test-diagnostics
+
   build:
     # Build all Rust binaries, unsigned macOS app, and SBOM in an isolated job
     # with zero release secrets (issue #1227). Because Xcode's user script

@@ -340,3 +340,9 @@ jobs:
       - name: Build and test macOS app
         timeout-minutes: 33
         uses: ./.github/actions/run-macos-tests
+
+      # Keep diagnostics outside the timed-out composite step so a step timeout
+      # or Verify macOS test result counts failure still uploads logs/.xcresult (#266).
+      - name: Upload macOS test diagnostics
+        if: failure()
+        uses: ./.github/actions/upload-macos-test-diagnostics

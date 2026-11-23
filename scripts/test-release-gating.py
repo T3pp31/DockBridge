@@ -13,6 +13,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 MACOS_TEST_ACTION = ROOT / ".github" / "actions" / "run-macos-tests" / "action.yml"
 MACOS_TEST_ACTION_REF = "./.github/actions/run-macos-tests"
+MACOS_DIAG_ACTION = ROOT / ".github" / "actions" / "upload-macos-test-diagnostics" / "action.yml"
+MACOS_DIAG_ACTION_REF = "./.github/actions/upload-macos-test-diagnostics"
 
 
 def jobs(text):
@@ -36,6 +38,7 @@ class ReleaseGatingTests(unittest.TestCase):
         cls.release = jobs((WORKFLOWS / "release.yml").read_text())
         cls.ci = jobs((WORKFLOWS / "ci.yml").read_text())
         cls.action = MACOS_TEST_ACTION.read_text()
+        cls.diag_action = MACOS_DIAG_ACTION.read_text()
 
     def test_release_job_needs_test_job(self):
         self.assertIn("test", self.release)
@@ -50,27 +53,36 @@ class ReleaseGatingTests(unittest.TestCase):
         self.assertIn("test-without-building", self.action)
 
     def test_macos_test_steps_share_composite_action(self):
-        ci_step = step(self.ci["macos"], "Build and test macOS app")
-        release_step = step(self.release["test"], "Build and test macOS app")
-        self.assertEqual(release_step, ci_step)
-        self.assertIn(f"uses: {MACOS_TEST_ACTION_REF}", release_step)
+        for step_name, action_ref in (
+            ("Build and test macOS app", MACOS_TEST_ACTION_REF),
+            ("Upload macOS test diagnostics", MACOS_DIAG_ACTION_REF),
+        ):
+            with self.subTest(step=step_name):
+                ci_step = step(self.ci["macos"], step_name)
+                release_step = step(self.release["test"], step_name)
+                self.assertEqual(release_step, ci_step)
+                self.assertIn(f"uses: {action_ref}", release_step)
         # Ensure neither workflow duplicates xcodebuild build/test steps inline.
         self.assertNotIn("build-for-testing", self.ci["macos"])
         self.assertNotIn("test-without-building", self.ci["macos"])
         self.assertNotIn("build-for-testing", self.release["test"])
         self.assertNotIn("test-without-building", self.release["test"])
-        # Composite action must own all 5 macOS test/diagnostic/verification steps
-        # and avoid invalid composite-level step `timeout-minutes:`.
+        # Composite actions must not use invalid composite-level `timeout-minutes:`.
         self.assertNotRegex(self.action, r"(?m)^\s*timeout-minutes:")
+        self.assertNotRegex(self.diag_action, r"(?m)^\s*timeout-minutes:")
         for name in (
             "Build macOS app (for testing)",
             "Test macOS app",
-            "List failed tests from xcresult",
-            "Upload macOS test artifacts",
             "Verify macOS test result counts",
         ):
             with self.subTest(step=name):
                 self.assertTrue(step(self.action, name, indent="    "))
+        for name in (
+            "List failed tests from xcresult",
+            "Upload macOS test artifacts",
+        ):
+            with self.subTest(step=name):
+                self.assertTrue(step(self.diag_action, name, indent="    "))
 
     def test_rust_test_command_matches_ci(self):
         self.assertIn("run: cargo test --workspace --all-targets", self.ci["macos"])
