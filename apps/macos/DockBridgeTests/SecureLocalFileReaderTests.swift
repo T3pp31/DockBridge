@@ -83,6 +83,54 @@ final class SecureLocalFileReaderTests: XCTestCase {
             XCTAssertEqual(error as? SecureLocalFileReaderError, .fileTooLarge)
         }
     }
+
+    func testReadDataRetriesOnEINTR() throws {
+        let fileURL = baseDirectory.appendingPathComponent("eintr.json", isDirectory: false)
+        let expected = Data("{\"status\":\"recovered\"}".utf8)
+        try expected.write(to: fileURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o600))],
+            ofItemAtPath: fileURL.path
+        )
+
+        var callCount = 0
+        let data = try SecureLocalFileReader.readData(from: fileURL) { fd, buffer, count in
+            callCount += 1
+            if callCount == 1 || callCount == 3 {
+                errno = EINTR
+                return -1
+            }
+            // Return small chunks so the second EINTR occurs mid-stream.
+            return Darwin.read(fd, buffer, min(count, 8))
+        }
+
+        XCTAssertEqual(data, expected)
+        XCTAssertGreaterThanOrEqual(callCount, 5)
+    }
+
+    func testReadDataFailsImmediatelyOnNonEINTRReadError() throws {
+        let fileURL = baseDirectory.appendingPathComponent("ioerror.json", isDirectory: false)
+        try Data("payload".utf8).write(to: fileURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: Int16(0o600))],
+            ofItemAtPath: fileURL.path
+        )
+
+        var callCount = 0
+        XCTAssertThrowsError(
+            try SecureLocalFileReader.readData(from: fileURL) { _, _, _ in
+                callCount += 1
+                errno = EIO
+                return -1
+            }
+        ) { error in
+            XCTAssertEqual(
+                error as? SecureLocalFileReaderError,
+                .readFailed(String(cString: strerror(EIO)))
+            )
+        }
+        XCTAssertEqual(callCount, 1)
+    }
 }
 
 extension SecureLocalFileReaderError: Equatable {

@@ -30,6 +30,13 @@ enum SecureLocalFileReader {
     private static let maxFileSizeBytes: UInt64 = 5 * 1024 * 1024
 
     static func readData(from url: URL) throws -> Data {
+        try readData(from: url, readBytes: Darwin.read)
+    }
+
+    static func readData(
+        from url: URL,
+        readBytes: (Int32, UnsafeMutableRawPointer?, Int) -> Int
+    ) throws -> Data {
         let path = url.path
 
         var linkStat = stat()
@@ -84,9 +91,13 @@ enum SecureLocalFileReader {
         var buffer = [UInt8](repeating: 0, count: 4096)
         var totalBytesRead: UInt64 = 0
         while true {
-            let bytesRead = read(fd, &buffer, buffer.count)
+            let bytesRead = readBytes(fd, &buffer, buffer.count)
             if bytesRead < 0 {
-                throw SecureLocalFileReaderError.readFailed(String(cString: strerror(errno)))
+                let readError = errno
+                if readError == EINTR {
+                    continue
+                }
+                throw SecureLocalFileReaderError.readFailed(String(cString: strerror(readError)))
             }
             if bytesRead == 0 {
                 break
