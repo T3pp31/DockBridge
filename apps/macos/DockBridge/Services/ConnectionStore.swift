@@ -121,7 +121,22 @@ final class ConnectionStore: @unchecked Sendable {
     /// Writes `profiles.json`. The caller must hold `mutationLock`.
     private func saveProfilesLocked(_ profiles: [ConnectionProfile], updateTrust: Bool = true) throws {
         let stored = profiles.map(StoredConnectionProfile.init(from:))
-        try writeEncryptedProfiles(stored, updateTrust: updateTrust, sourceProfiles: profiles)
+        // Never create a replacement master key when profiles.json already exists
+        // on disk; doing so would overwrite existing ciphertext that could still
+        // be recovered once the original key is restored (issue #1438).
+        try writeEncryptedProfiles(
+            stored,
+            updateTrust: updateTrust,
+            sourceProfiles: profiles,
+            allowMasterKeyCreation: !profilesFileExistsOnDisk()
+        )
+    }
+
+    /// Returns `true` if `profiles.json` exists (including symlinks) or if its
+    /// absence cannot be verified (fail closed so key creation is disallowed).
+    private func profilesFileExistsOnDisk() -> Bool {
+        var fileStat = stat()
+        return lstat(profilesURL.path, &fileStat) == 0 || errno != ENOENT
     }
 
     func upsert(_ profile: ConnectionProfile) throws -> [ConnectionProfile] {
@@ -236,7 +251,8 @@ final class ConnectionStore: @unchecked Sendable {
                         try writeEncryptedProfiles(
                             refreshed,
                             updateTrust: false,
-                            sourceProfiles: profiles
+                            sourceProfiles: profiles,
+                            allowMasterKeyCreation: false
                         )
                     } catch {
                         AppLogging.connection.error(
@@ -278,7 +294,12 @@ final class ConnectionStore: @unchecked Sendable {
             }
             let stored = migrated.map(StoredConnectionProfile.init(from:))
             do {
-                try writeEncryptedProfiles(stored, updateTrust: false, sourceProfiles: migrated)
+                try writeEncryptedProfiles(
+                    stored,
+                    updateTrust: false,
+                    sourceProfiles: migrated,
+                    allowMasterKeyCreation: true
+                )
             } catch {
                 throw ConnectionStoreError.writeFailed(error.localizedDescription)
             }
@@ -323,14 +344,15 @@ final class ConnectionStore: @unchecked Sendable {
     private func writeEncryptedProfiles(
         _ stored: [StoredConnectionProfile],
         updateTrust: Bool,
-        sourceProfiles: [ConnectionProfile]
+        sourceProfiles: [ConnectionProfile],
+        allowMasterKeyCreation: Bool
     ) throws {
         let url = profilesURL
         let parent = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
 
         do {
-            let envelope = try encryptionService.encrypt(stored)
+            let envelope = try encryptionService.encrypt(stored, allowKeyCreation: allowMasterKeyCreation)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(envelope)
