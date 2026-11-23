@@ -38,7 +38,7 @@ class MacOSRustCITests(unittest.TestCase):
                      "Build x86_64 (Intel) Rust static library"):
             with self.subTest(step=name):
                 self.assertLess(self.job.index(f"- name: {name}\n"), test_position)
-        self.assertLess(test_position, self.job.index("- name: Build macOS app (for testing)\n"))
+        self.assertLess(test_position, self.job.index("- name: Build and test macOS app\n"))
 
     def test_test_success_and_failure_are_propagated(self):
         # Exercise the actual run value in an isolated shell. No real tools,

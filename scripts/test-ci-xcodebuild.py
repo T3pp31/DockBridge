@@ -10,7 +10,8 @@ import tempfile
 import textwrap
 import unittest
 
-WORKFLOW = pathlib.Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+ACTION = ROOT / ".github/actions/run-macos-tests/action.yml"
 BUILD = "Build macOS app (for testing)"
 TEST = "Test macOS app"
 # Shell functions also work on noexec filesystems. Mock only process lookup,
@@ -33,33 +34,56 @@ DEFAULTS = {
     "XCODEBUILD_CODE_SIGNING_ALLOWED": "NO",
     "XCODEBUILD_DEVELOPMENT_TEAM": "",
 }
+INPUT_TO_ENV = {
+    "scheme": "XCODEBUILD_SCHEME",
+    "destination": "XCODEBUILD_DESTINATION",
+    "configuration": "XCODEBUILD_CONFIGURATION",
+    "code_sign_identity": "XCODEBUILD_CODE_SIGN_IDENTITY",
+    "code_sign_required": "XCODEBUILD_CODE_SIGNING_REQUIRED",
+    "code_sign_allowed": "XCODEBUILD_CODE_SIGNING_ALLOWED",
+    "development_team": "XCODEBUILD_DEVELOPMENT_TEAM",
+}
 
 
-def environment(block, indent):
-    # Read only the workflow's quoted string env entries (no YAML dependency).
+def input_defaults(action_text):
+    inputs_block = action_text.split("inputs:\n", 1)[1].split("\nruns:\n", 1)[0]
+    defaults = {}
+    for name, body in re.findall(r"(?ms)^  (\w+):\n(.*?)(?=^  \w+:|\Z)", inputs_block):
+        match = re.search(r"(?m)^    default: (.*)$", body)
+        if match and name in INPUT_TO_ENV:
+            defaults[INPUT_TO_ENV[name]] = json.loads(match[1])
+    return defaults
+
+
+def environment(block, indent, input_values):
+    # Resolve literal strings and ${{ inputs.<name> }} references in step env blocks.
     match = re.search(rf"^{indent}env:\n((?:{indent}  .*\n)+)", block, re.MULTILINE)
     if not match:
         return {}
-    return {
-        key: json.loads(value)
-        for key, value in re.findall(
-            rf"^{indent}  (\w+): (.*)$", match[1], re.MULTILINE)
-    }
+    resolved = {}
+    for key, raw in re.findall(rf"^{indent}  (\w+): (.*)$", match[1], re.MULTILINE):
+        input_ref = re.fullmatch(r"\$\{\{\s*inputs\.(\w+)\s*\}\}", raw.strip())
+        if input_ref:
+            resolved[key] = input_values[INPUT_TO_ENV[input_ref[1]]]
+        else:
+            resolved[key] = json.loads(raw)
+    return resolved
 
 
 class CIXcodebuildTests(unittest.TestCase):
     def setUp(self):
-        macos = WORKFLOW.read_text().split("  macos:\n", 1)[1]
-        self.job_env = environment(macos, "    ")
+        action_text = ACTION.read_text()
+        self.job_env = input_defaults(action_text)
+        steps_text = action_text.split("\n  steps:\n", 1)[1]
         self.steps = {}
         for name in (BUILD, TEST):
             block = re.search(
-                rf"^      - name: {re.escape(name)}\n(.*?)(?=^      - name: |\Z)",
-                macos, re.MULTILINE | re.DOTALL)[1]
+                rf"^    - name: {re.escape(name)}\n(.*?)(?=^    - name: |\Z)",
+                steps_text, re.MULTILINE | re.DOTALL)[1]
             run = re.search(
-                r"^        run: \|\n((?:          .*\n|\n)+)",
+                r"^      run: \|\n((?:        .*\n|\n)+)",
                 block, re.MULTILINE)[1]
-            self.steps[name] = (textwrap.dedent(run), environment(block, "        "))
+            self.steps[name] = (textwrap.dedent(run), block)
         temporary = tempfile.TemporaryDirectory(prefix="ci-xcodebuild-")
         self.addCleanup(temporary.cleanup)
         self.directory = pathlib.Path(temporary.name)
@@ -75,7 +99,9 @@ sys.exit(int(os.environ["XCODEBUILD_EXIT"]))
 
     def run_step(self, name, overrides=None, status=0):
         self.calls.unlink(missing_ok=True)
-        run, step_env = self.steps[name]
+        run, block = self.steps[name]
+        input_values = {**self.job_env, **(overrides or {})}
+        step_env = environment(block, "      ", input_values)
         # Keep result bundles/log cleanup inside the fixture. Never inspect or
         # signal real app processes; only normal success and exit 65 run here.
         run = run.replace("/tmp/xcodebuild-test-attempt-",
@@ -86,7 +112,7 @@ sys.exit(int(os.environ["XCODEBUILD_EXIT"]))
             env={"PATH": os.defpath,
                  "MOCK_PYTHON": sys.executable, "MOCK_XCODEBUILD": str(self.mock),
                  "CALLS": str(self.calls), "XCODEBUILD_EXIT": str(status),
-                 **self.job_env, **(overrides or {}), **step_env},
+                 **step_env},
             cwd=self.directory, capture_output=True, text=True, timeout=5,
         )
         calls = ([json.loads(line) for line in self.calls.read_text().splitlines()]

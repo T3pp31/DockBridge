@@ -18,9 +18,9 @@
 | パラメータ | 値 | 役割 |
 |---|---|---|
 | ジョブ `timeout-minutes` | 45 | macOS ジョブ全体の上限（過去に xcodebuild が 6 時間停止した実績への対処） |
-| `Build macOS app` ステップ `timeout-minutes` | 15 | ビルド専用ステップの上限 |
-| `Test macOS app` ステップ `timeout-minutes` | 18 | テストステップの上限（後述の最悪ケースを覆う） |
-| ウォッチドック `alarm` | 420 秒 | テスト全体の無反応（testmanagerd スタール）を検知して kill |
+| `Build and test macOS app` ステップ `timeout-minutes` | 33 | 共有 composite action（`.github/actions/run-macos-tests`）全体の上限（ビルド 15 分 + テスト 18 分） |
+| ビルドウォッチドック `alarm` | 900 秒 | `xcodebuild build-for-testing` のハングを 15 分で打ち切り |
+| テストウォッチドック `alarm` | 420 秒 | テスト全体の無反応（testmanagerd スタール）を検知して kill |
 | `-default-test-execution-time-allowance` | 300 秒 | 1 テストあたりの実行上限。超過は個別テストの失敗となる |
 | リトライ回数 | 1（MAX_ATTEMPTS=2） | ランナー側スタールは flaky なので 1 回だけ再試行 |
 | リトライ間の `sleep` | 5 秒 | kill 後のクリーンアップ待ち |
@@ -33,7 +33,7 @@
 初回 420 秒 + リトライ待機 5 秒 + 2 回目 420 秒 = 845 秒 ≒ 14.1 分
 ```
 
-ステップタイムアウトは `timeout-minutes: 18`（1080 秒）なので、xcodebuild 起動などのオーバーヘッドを加えても最悪ケースを覆えます（1080 − 845 = 235 秒の余裕）。ジョブタイムアウト 45 分に対しても、ビルド（最大 15 分）とテスト（最悪 18 分）の合計で収まります。
+ビルド上限（900 秒 = 15 分）とテスト最悪ケース（845 秒 ≒ 14.1 分）の合計は約 29.1 分で、呼び出し側ステップの `timeout-minutes: 33` に収まります（xcodebuild 起動や結果検証のオーバーヘッドを含めても約 4 分の余裕）。ジョブタイムアウト 45 分にも収まります。また失敗時の診断・artifact アップロード（`.github/actions/upload-macos-test-diagnostics`）は `if: failure()` の独立した外側ステップとして実行されるため、ステップタイムアウトや結果件数検証の失敗時でもログと `.xcresult` を回収できます（#266）。
 
 `timeout-minutes: 18` が最悪ケース（845 秒）を覆っていることは理論計算で確認しています。最悪ケース自体が実際に観測されたことはまだありません（正常時は約 2 分、ビルド込みで約 13 分）。将来 2 回連続でウォッチドックが発火した実行が観測された場合は、この計算値と実際の所要時間を突き合わせてください。
 
