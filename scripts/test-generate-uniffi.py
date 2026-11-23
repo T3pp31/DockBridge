@@ -250,6 +250,19 @@ class GenerateUniffiTests(unittest.TestCase):
         self.assertIn("RUST_PROFILE: release", project_yml)
         self.assertIn("target/$(RUST_PROFILE)/libdockbridge_uniffi.a", project_yml)
 
+    def test_xcode_project_excludes_raw_uniffi_headers_from_generated_group(self):
+        repo_root = SCRIPTS.parent
+        project_yml = (repo_root / "apps/macos/project.yml").read_text()
+        pbxproj = (repo_root / "apps/macos/DockBridge.xcodeproj/project.pbxproj").read_text()
+        self.assertIn('"Generated/*.h"', project_yml)
+        self.assertIn('"Generated/*.modulemap"', project_yml)
+        # Raw gitignored bindgen outputs under Generated/ must not appear as
+        # PBXFileReference entries; headers resolve via Generated/Headers.
+        self.assertNotIn("path = dockbridge_uniffiFFI.h;", pbxproj)
+        self.assertNotIn("path = dockbridge_uniffiFFI.modulemap;", pbxproj)
+        self.assertIn("path = DockBridgeUniffi.swift;", pbxproj)
+        self.assertIn("$(PROJECT_DIR)/DockBridge/Generated/Headers", pbxproj)
+
 
 if __name__ == "__main__":
     unittest.main()
