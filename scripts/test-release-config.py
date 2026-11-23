@@ -210,6 +210,59 @@ class ReleaseConfigTests(unittest.TestCase):
         self.assertIn("unsupported placeholder", result.stderr)
         self.assertEqual(self.output.read_text(), "")
 
+    def test_unresolved_asset_and_sbom_placeholders_fail(self):
+        cases = (
+            (
+                'asset_name_template = "{app_name}-{version}-macOS.dmg"',
+                'asset_name_template = "{app_name}-{versoin}-macOS.dmg"',
+            ),
+            (
+                'sbom_name_template = "{app_name}-{version}.cdx.json"',
+                'sbom_name_template = "{app_name}-{unknown}.cdx.json"',
+            ),
+        )
+        for old, new in cases:
+            with self.subTest(template=new):
+                self.output.write_text("")
+                self.config.write_text(CONFIG.replace(old, new))
+                result = self.run_step("release.yml", "Resolve asset paths")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unsupported placeholder", result.stderr)
+                self.assertEqual(self.output.read_text(), "")
+
+    def test_expand_mode_handles_placeholders_overrides_and_invalid_inputs(self):
+        result = self.read("--expand", "asset_name_template", "--version", "2.0.0-rc.1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "Fixture App-2.0.0-rc.1-macOS.dmg\n")
+
+        result = self.read(
+            "--expand", "sbom_name_template", "--version", "2.0.0", "--app-name", "Custom App"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "Custom App-2.0.0.cdx.json\n")
+
+        # Literal '&' and '\' must not trigger Bash 5.2+ patsub_replacement.
+        result = self.read(
+            "--expand", "asset_name_template", "--version", "2.0.0", "--app-name", r"A&B\C"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, r"A&B\C-2.0.0-macOS.dmg" + "\n")
+
+        # Reject missing/duplicate --version, braces in replacement values, and unsupported combinations.
+        for bad_args in (
+            ("--expand", "asset_name_template"),
+            ("--expand", "asset_name_template", "--version", ""),
+            ("--expand", "asset_name_template", "--version", "", "--version", "1.0.0"),
+            ("--expand", "asset_name_template", "--version", "{app_name}"),
+            ("--expand", "asset_name_template", "--version", "1.0.0", "--app-name", "{version}"),
+            ("--expand", "asset_name_template", "--version", "1.0.0", "--app-name", ""),
+            ("--expand", "asset_name_template", "--bool", "--version", "1.0.0"),
+            ("--section", "verification", "--expand", "asset_name_template", "--version", "1.0.0"),
+            ("--expand", "asset_name_template", "--section", "verification", "--version", "1.0.0"),
+        ):
+            with self.subTest(args=bad_args):
+                self.assert_failure(self.read(*bad_args))
+
     def test_downstream_steps_read_resolved_names(self):
         build = workflow_block("release.yml", "Build hardened CLI")
         self.assertIn("${{ steps.version.outputs.cli_name }}", build)
@@ -261,9 +314,10 @@ class ReleaseConfigTests(unittest.TestCase):
         used_keys = set()
         for workflow in ("ci.yml", "release.yml"):
             text = (ROOT / ".github" / "workflows" / workflow).read_text()
-            used_keys.update(re.findall(r"bash scripts/release-config\.sh ([a-z_][a-z0-9_]*)", text))
+            used_keys.update(re.findall(r"bash scripts/release-config\.sh (?:--expand )?([a-z_][a-z0-9_]*)", text))
             self.assertNotRegex(text, r"awk[^\n]*config/release\.toml")
             self.assertNotRegex(text, r"awk[^\n]*Cargo\.toml")
+            self.assertNotRegex(text, r"//\\\{(?:app_name|version)\\\}/")
         self.assertEqual(used_keys, set(KEYS))
 
     def test_scripts_use_shared_reader_without_adhoc_awk(self):
@@ -274,6 +328,7 @@ class ReleaseConfigTests(unittest.TestCase):
             with self.subTest(script=script.name):
                 self.assertNotRegex(text, r"awk[^\n]*(?:config/release\.toml|RELEASE_CONFIG)")
                 self.assertNotRegex(text, r"awk[^\n]*Cargo\.toml")
+                self.assertNotRegex(text, r"//\\\{(?:app_name|version)\\\}/")
 
     def test_bool_int_section_and_cargo_version_modes(self):
         text = (ROOT / "config" / "release.toml").read_text()

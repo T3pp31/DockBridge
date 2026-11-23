@@ -313,17 +313,8 @@ jobs:
             PRERELEASE=false
           fi
           # Resolve the CLI artifact name once; the build, attestation, and
-          # upload steps all read it from here (issue #1363).
-          # Supports the same {app_name}/{version} placeholders as the other
-          # *_name_template keys; anything left unresolved fails the release.
-          CLI_TEMPLATE="$(bash scripts/release-config.sh cli_name_template)"
-          CLI_APP_NAME="$(bash scripts/release-config.sh app_name)"
-          CLI_NAME="${CLI_TEMPLATE//\{app_name\}/${CLI_APP_NAME}}"
-          CLI_NAME="${CLI_NAME//\{version\}/${VERSION}}"
-          if [[ "$CLI_NAME" == *[{}]* ]]; then
-            echo "error: cli_name_template has an unsupported placeholder: ${CLI_TEMPLATE}" >&2
-            exit 1
-          fi
+          # upload steps all read it from here (issue #1363, #1431).
+          CLI_NAME="$(bash scripts/release-config.sh --expand cli_name_template --version "$VERSION")"
           {
             echo "version=${VERSION}"
             echo "prerelease=${PRERELEASE}"
@@ -404,12 +395,8 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           CLI_NAME="${{ steps.version.outputs.cli_name }}"
           APP_NAME="$(bash scripts/release-config.sh app_name)"
-          ASSET_TEMPLATE="$(bash scripts/release-config.sh asset_name_template)"
-          SBOM_TEMPLATE="$(bash scripts/release-config.sh sbom_name_template)"
-          ASSET_NAME="${ASSET_TEMPLATE//\{app_name\}/${APP_NAME}}"
-          ASSET_NAME="${ASSET_NAME//\{version\}/${VERSION}}"
-          SBOM_NAME="${SBOM_TEMPLATE//\{app_name\}/${APP_NAME}}"
-          SBOM_NAME="${SBOM_NAME//\{version\}/${VERSION}}"
+          ASSET_NAME="$(bash scripts/release-config.sh --expand asset_name_template --version "$VERSION" --app-name "$APP_NAME")"
+          SBOM_NAME="$(bash scripts/release-config.sh --expand sbom_name_template --version "$VERSION" --app-name "$APP_NAME")"
           # Write outputs only after every key resolves, so a missing key
           # leaves $GITHUB_OUTPUT empty (the test asserts that).
           {
