@@ -226,16 +226,13 @@ main() {
     echo "FAIL: no DMG asset in latest release" >&2
     exit 1
   fi
-  local expected_asset_name release_version release_app_name expected_dmg_name
-  expected_asset_name=$(bash "${ROOT}/scripts/release-config.sh" asset_name_template)
+  local release_version expected_dmg_name
   release_version="${EXPECTED_RELEASE_VERSION:-$(bash "${ROOT}/scripts/release-config.sh" version)}"
-  release_app_name=$(bash "${ROOT}/scripts/release-config.sh" app_name)
-  if [[ -z "$expected_asset_name" || -z "$release_version" || -z "$release_app_name" ]]; then
+  expected_dmg_name=$(bash "${ROOT}/scripts/release-config.sh" --expand asset_name_template --version "$release_version")
+  if [[ -z "$release_version" || -z "$expected_dmg_name" ]]; then
     echo "FAIL: Required release asset configuration is missing" >&2
     exit 1
   fi
-  expected_dmg_name="${expected_asset_name//\{app_name\}/${release_app_name}}"
-  expected_dmg_name="${expected_dmg_name//\{version\}/${release_version}}"
   if [[ "$expected_asset_url" != *"$expected_dmg_name" ]]; then
     echo "FAIL: Unexpected DMG URL: $expected_asset_url (expected suffix $expected_dmg_name)" >&2
     exit 1

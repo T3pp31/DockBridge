@@ -17,17 +17,15 @@ read_release_value() {
 VERSION="${VERSION:-$(read_release_value version)}"
 APP_NAME="${APP_NAME:-$(read_release_value app_name)}"
 BUILD_NUMBER="${BUILD_NUMBER:-${GITHUB_RUN_NUMBER:-1}}"
-ASSET_TEMPLATE="$(read_release_value asset_name_template)"
 RELEASE_ARCHS="${RELEASE_ARCHS:-arm64 x86_64}"
 RUST_TARGETS="${RUST_TARGETS:-aarch64-apple-darwin x86_64-apple-darwin}"
 
-if [[ -z "$VERSION" || -z "$APP_NAME" || -z "$ASSET_TEMPLATE" ]]; then
+if [[ -z "$VERSION" || -z "$APP_NAME" ]]; then
   echo "Failed to read release configuration from ${ROOT}/config/release.toml" >&2
   exit 1
 fi
 
-ASSET_NAME="${ASSET_TEMPLATE//\{app_name\}/${APP_NAME}}"
-ASSET_NAME="${ASSET_NAME//\{version\}/${VERSION}}"
+ASSET_NAME="$(read_release_value --expand asset_name_template --version "$VERSION" --app-name "$APP_NAME")"
 DMG_PATH="${DIST_DIR}/${ASSET_NAME}"
 SHA256_PATH="${DMG_PATH}.sha256"
 

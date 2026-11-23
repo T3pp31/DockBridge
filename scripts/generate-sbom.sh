@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 read_release_value() {
-  bash "${ROOT}/scripts/release-config.sh" "$1"
+  bash "${ROOT}/scripts/release-config.sh" "$@"
 }
 
 OUT_DIR=""
@@ -31,17 +31,15 @@ fi
 
 VERSION="${VERSION:-$(read_release_value version)}"
 APP_NAME="${APP_NAME:-$(read_release_value app_name)}"
-SBOM_TEMPLATE="$(read_release_value sbom_name_template)"
 SBOM_MANIFEST="$(read_release_value sbom_manifest_path)"
 SPEC_VERSION="$(read_release_value cyclonedx_spec_version)"
 
-if [[ -z "$VERSION" || -z "$APP_NAME" || -z "$SBOM_TEMPLATE" || -z "$SBOM_MANIFEST" || -z "$SPEC_VERSION" ]]; then
+if [[ -z "$VERSION" || -z "$APP_NAME" || -z "$SBOM_MANIFEST" || -z "$SPEC_VERSION" ]]; then
   echo "Failed to read SBOM configuration from ${ROOT}/config/release.toml" >&2
   exit 1
 fi
 
-SBOM_FILENAME="${SBOM_TEMPLATE//\{app_name\}/${APP_NAME}}"
-SBOM_FILENAME="${SBOM_FILENAME//\{version\}/${VERSION}}"
+SBOM_FILENAME="$(read_release_value --expand sbom_name_template --version "$VERSION" --app-name "$APP_NAME")"
 
 MANIFEST_ABS="${ROOT}/${SBOM_MANIFEST}"
 MANIFEST_DIR="$(dirname "$MANIFEST_ABS")"
