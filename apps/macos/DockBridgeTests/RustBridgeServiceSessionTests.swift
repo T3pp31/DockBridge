@@ -92,6 +92,29 @@ final class RustBridgeServiceSessionTests: XCTestCase {
         XCTAssertNil(bridge.activeSession)
         XCTAssertEqual(bridge.connectionStatus, .disconnected)
         XCTAssertNil(bridge.connectedProfileID)
+        XCTAssertNil(bridge.lastDisconnectReason)
+        XCTAssertNil(bridge.connectedUsername)
+        XCTAssertNil(bridge.initialRemoteDirectory)
+    }
+
+    func testRemovingLastLostSessionResetsLastDisconnectReason() async throws {
+        let bridge = RustBridgeService()
+        let session = try addConnectedSession(to: bridge, sessionID: 11)
+
+        bridge.simulateSessionDisconnectedForTesting(
+            sessionId: 11,
+            reason: "connection reset by peer"
+        )
+        XCTAssertEqual(bridge.lastDisconnectReason, "connection reset by peer")
+        XCTAssertEqual(bridge.connectionStatus, .disconnected)
+
+        try await bridge.disconnect(session: session)
+
+        XCTAssertTrue(bridge.allSessions.isEmpty)
+        XCTAssertNil(bridge.activeSessionID)
+        XCTAssertNil(bridge.lastDisconnectReason)
+        XCTAssertEqual(bridge.connectionStatus, .disconnected)
+        XCTAssertNil(bridge.connectedProfileID)
         XCTAssertNil(bridge.connectedUsername)
         XCTAssertNil(bridge.initialRemoteDirectory)
     }
