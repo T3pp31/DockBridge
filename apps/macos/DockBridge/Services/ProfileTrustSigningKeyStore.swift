@@ -42,6 +42,11 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
     private let operations: KeychainOperations
     private let serviceName: String
     private let account = "profile-trust.hmac-key"
+    /// Guarded by `Self.keychainLock`. Once the legacy Keychain item is
+    /// confirmed absent, migrated, or cleaned up (or deliberately kept because
+    /// it holds a different key), subsequent protected-key loads skip the
+    /// extra legacy lookup (issue #1441).
+    private var legacyKeyCleanupCompleted = false
 
     init(serviceName: String = "com.dockbridge", operations: KeychainOperations = .live) {
         self.serviceName = serviceName
@@ -73,12 +78,17 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
         }
 
         let data = Data(bytes)
-        return SymmetricKey(data: try addKeyDataUnlessAlreadyCreated(data))
+        let stored = try addKeyDataUnlessAlreadyCreated(data)
+        // `loadKeyData()` above already confirmed neither protected nor legacy
+        // key existed before creation.
+        legacyKeyCleanupCompleted = true
+        return SymmetricKey(data: stored)
     }
 
     func deleteKey() throws {
         Self.keychainLock.lock()
         defer { Self.keychainLock.unlock() }
+        legacyKeyCleanupCompleted = false
 
         // Delete the legacy item first so it cannot migrate back after
         // deletion. If legacy deletion fails, fail closed: deleting the
@@ -111,17 +121,29 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
             throw ProfileTrustSigningKeyStoreError.keyMismatchDuringMigration
         }
         try deleteKey(usingDataProtection: false)
+        legacyKeyCleanupCompleted = true
         return migratedData
     }
 
     private func cleanupLegacyKeyIfMatching(_ protectedData: Data) {
+        guard !legacyKeyCleanupCompleted else { return }
         // Best-effort recovery from a migration that was interrupted after the
         // protected item was created. Never migrate or replace keys here.
-        guard let legacyData = try? loadKeyData(usingDataProtection: false),
-              legacyData == protectedData else {
-            return
+        do {
+            guard let legacyData = try loadKeyData(usingDataProtection: false) else {
+                legacyKeyCleanupCompleted = true
+                return
+            }
+            guard legacyData == protectedData else {
+                legacyKeyCleanupCompleted = true
+                return
+            }
+            try deleteKey(usingDataProtection: false)
+            legacyKeyCleanupCompleted = true
+        } catch {
+            // Leave `legacyKeyCleanupCompleted` false on transient Keychain
+            // errors so a later load can retry best-effort cleanup.
         }
-        try? deleteKey(usingDataProtection: false)
     }
 
     private func keyExists(usingDataProtection: Bool) throws -> Bool {

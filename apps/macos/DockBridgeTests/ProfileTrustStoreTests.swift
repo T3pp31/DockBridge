@@ -109,6 +109,96 @@ final class ProfileTrustStoreTests: XCTestCase {
         XCTAssertEqual(backend.protectedKey, key)
     }
 
+    func testProtectedKeyReloadDoesNotRepeatLegacyLookupAfterAbsenceConfirmed() throws {
+        let backend = InMemoryProfileTrustKeychain()
+        let key = Data(repeating: 42, count: 32)
+        backend.protectedKey = key
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+
+        for _ in 0..<3 {
+            XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        }
+
+        XCTAssertEqual(backend.protectedReadCount, 3)
+        XCTAssertEqual(backend.legacyReadCount, 1)
+    }
+
+    func testProtectedKeyReloadDoesNotRepeatLegacyLookupAfterCleanup() throws {
+        let backend = InMemoryProfileTrustKeychain()
+        let key = Data(repeating: 42, count: 32)
+        backend.protectedKey = key
+        backend.legacyKey = key
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+
+        for _ in 0..<3 {
+            XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        }
+
+        XCTAssertNil(backend.legacyKey)
+        XCTAssertEqual(backend.protectedReadCount, 3)
+        XCTAssertEqual(backend.legacyReadCount, 1)
+        XCTAssertEqual(backend.legacyDeleteCount, 1)
+    }
+
+    func testTransientLegacyCleanupErrorRetriesOnSubsequentLoad() throws {
+        let backend = InMemoryProfileTrustKeychain()
+        let key = Data(repeating: 42, count: 32)
+        backend.protectedKey = key
+        backend.legacyKey = key
+        backend.legacyReadStatus = errSecInteractionNotAllowed
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+
+        // First load fails legacy read transiently; protected key is still returned.
+        XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        XCTAssertEqual(backend.legacyKey, key)
+        XCTAssertEqual(backend.legacyReadCount, 1)
+
+        // Second load succeeds legacy read but fails legacy delete transiently.
+        backend.legacyReadStatus = errSecSuccess
+        backend.legacyDeleteStatus = errSecInteractionNotAllowed
+        XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        XCTAssertEqual(backend.legacyKey, key)
+        XCTAssertEqual(backend.legacyReadCount, 2)
+        XCTAssertEqual(backend.legacyDeleteCount, 1)
+
+        // Third load succeeds cleanup; fourth load skips legacy lookup.
+        backend.legacyDeleteStatus = errSecSuccess
+        XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        XCTAssertNil(backend.legacyKey)
+        XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        XCTAssertEqual(backend.legacyReadCount, 3)
+        XCTAssertEqual(backend.legacyDeleteCount, 2)
+    }
+
+    func testMigrationMarksLegacyCleanupCompletedForSubsequentLoads() throws {
+        let backend = InMemoryProfileTrustKeychain()
+        let key = Data(repeating: 42, count: 32)
+        backend.legacyKey = key
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+
+        XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        let legacyReadsAfterMigration = backend.legacyReadCount
+        XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        XCTAssertEqual(backend.legacyReadCount, legacyReadsAfterMigration)
+    }
+
+    func testDeleteKeyResetsLegacyCleanupState() throws {
+        let backend = InMemoryProfileTrustKeychain()
+        let key = Data(repeating: 42, count: 32)
+        backend.protectedKey = key
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+
+        _ = try store.loadOrCreateKey()
+        XCTAssertEqual(backend.legacyReadCount, 1)
+
+        try store.deleteKey()
+        backend.protectedKey = key
+        backend.legacyKey = key
+        _ = try store.loadOrCreateKey()
+        XCTAssertNil(backend.legacyKey)
+        XCTAssertEqual(backend.legacyReadCount, 2)
+    }
+
     func testDataProtectionKeychainIntegrationWhenEntitled() throws {
         let store = ProfileTrustSigningKeyStore(serviceName: "com.dockbridge.tests.\(UUID().uuidString)")
         defer { try? store.deleteKey() }
@@ -650,17 +740,29 @@ final class InMemoryProfileTrustKeychain: @unchecked Sendable {
     var legacyKey: Data?
     var protectedKey: Data?
     var readStatus: OSStatus = errSecSuccess
+    var legacyReadStatus: OSStatus = errSecSuccess
     var addStatus: OSStatus = errSecSuccess
+    var legacyDeleteStatus: OSStatus = errSecSuccess
     var lastAccessibility: String?
     var competingKey: Data?
+    var protectedReadCount = 0
+    var legacyReadCount = 0
+    var legacyDeleteCount = 0
 
     var operations: ProfileTrustSigningKeyStore.KeychainOperations {
         .init(
             copyMatching: { [self] query, item in
-                if readStatus != errSecSuccess { return readStatus }
                 let attributes = query as NSDictionary
-                let data = attributes[kSecUseDataProtectionKeychain] as? Bool == true
-                    ? protectedKey : legacyKey
+                let usesDataProtection = attributes[kSecUseDataProtectionKeychain] as? Bool == true
+                if usesDataProtection {
+                    protectedReadCount += 1
+                    if readStatus != errSecSuccess { return readStatus }
+                } else {
+                    legacyReadCount += 1
+                    if readStatus != errSecSuccess { return readStatus }
+                    if legacyReadStatus != errSecSuccess { return legacyReadStatus }
+                }
+                let data = usesDataProtection ? protectedKey : legacyKey
                 guard let data else { return errSecItemNotFound }
                 item?.pointee = data as CFData
                 return errSecSuccess
@@ -684,6 +786,8 @@ final class InMemoryProfileTrustKeychain: @unchecked Sendable {
                 if attributes[kSecUseDataProtectionKeychain] as? Bool == true {
                     protectedKey = nil
                 } else {
+                    legacyDeleteCount += 1
+                    if legacyDeleteStatus != errSecSuccess { return legacyDeleteStatus }
                     legacyKey = nil
                 }
                 return errSecSuccess
