@@ -285,4 +285,171 @@ final class RustBridgeServiceSessionTests: XCTestCase {
             XCTAssertTrue(message.contains(".ask"), message)
         }
     }
+
+    func testFailedInitialDirectoryDisconnectsRustSessionAndRestoresPreviousActiveSession() async throws {
+        let mockClient = MockDockBridgeClient(
+            connectResult: .success(42),
+            initialDirectoryResult: .failure(DockBridgeError.Other(message: "pwd failed"))
+        )
+        let bridge = try makeBridgeWithMockClient(mockClient)
+        let previousSession = try addConnectedSession(to: bridge, sessionID: 11)
+        let profile = ConnectionProfile(name: "Broken", host: "broken.example.com", port: 22, username: "alice")
+
+        do {
+            try await bridge.connectToNewSession(profile: profile, password: nil, passphrase: nil)
+            XCTFail("Expected getInitialDirectory failure")
+        } catch let error as DockBridgeError {
+            XCTAssertEqual(error, .Other(message: "pwd failed"))
+        }
+
+        XCTAssertEqual(mockClient.disconnectedSessionIDs, [42])
+        XCTAssertEqual(bridge.allSessions.map(\.id), [previousSession.id])
+        XCTAssertEqual(bridge.activeSessionID, previousSession.id)
+        XCTAssertTrue(bridge.activeSession === previousSession)
+        XCTAssertEqual(bridge.connectedProfileID, previousSession.profileID)
+        XCTAssertEqual(bridge.connectionStatus, previousSession.connectionStatus)
+    }
+
+    func testFailedInitialDirectoryOnFirstSessionDisconnectsRustSessionAndResetsState() async throws {
+        let mockClient = MockDockBridgeClient(
+            connectResult: .success(99),
+            initialDirectoryResult: .failure(DockBridgeError.Other(message: "initial dir failed"))
+        )
+        let bridge = try makeBridgeWithMockClient(mockClient)
+        let profile = ConnectionProfile(name: "First", host: "first.example.com", port: 22, username: "bob")
+
+        do {
+            try await bridge.connectToNewSession(profile: profile, password: nil, passphrase: nil)
+            XCTFail("Expected getInitialDirectory failure")
+        } catch let error as DockBridgeError {
+            XCTAssertEqual(error, .Other(message: "initial dir failed"))
+        }
+
+        XCTAssertEqual(mockClient.disconnectedSessionIDs, [99])
+        XCTAssertTrue(bridge.allSessions.isEmpty)
+        XCTAssertNil(bridge.activeSessionID)
+        XCTAssertEqual(bridge.connectionStatus, .disconnected)
+        XCTAssertNil(bridge.connectedProfileID)
+        XCTAssertNil(bridge.lastDisconnectReason)
+        XCTAssertNil(bridge.connectedUsername)
+        XCTAssertNil(bridge.initialRemoteDirectory)
+    }
+
+    func testFailedInitialDirectoryPropagatesOriginalErrorWhenDisconnectCleanupAlsoFails() async throws {
+        let mockClient = MockDockBridgeClient(
+            connectResult: .success(77),
+            initialDirectoryResult: .failure(DockBridgeError.Other(message: "pwd failed")),
+            disconnectError: DockBridgeError.ConnectionLost(message: "cleanup failed")
+        )
+        let bridge = try makeBridgeWithMockClient(mockClient)
+        let profile = ConnectionProfile(name: "CleanupFail", host: "fail.example.com", port: 22, username: "carol")
+
+        do {
+            try await bridge.connectToNewSession(profile: profile, password: nil, passphrase: nil)
+            XCTFail("Expected original getInitialDirectory error")
+        } catch let error as DockBridgeError {
+            XCTAssertEqual(error, .Other(message: "pwd failed"))
+        }
+
+        XCTAssertEqual(mockClient.disconnectedSessionIDs, [77])
+        XCTAssertTrue(bridge.allSessions.isEmpty)
+        XCTAssertNil(bridge.activeSessionID)
+    }
+
+    func testFailedConnectBeforeSessionCreationDoesNotCallDisconnect() async throws {
+        let mockClient = MockDockBridgeClient(
+            connectResult: .failure(DockBridgeError.AuthFailed(username: "dave")),
+            initialDirectoryResult: .success("/")
+        )
+        let bridge = try makeBridgeWithMockClient(mockClient)
+        let profile = ConnectionProfile(name: "AuthFail", host: "auth.example.com", port: 22, username: "dave")
+
+        do {
+            try await bridge.connectToNewSession(profile: profile, password: nil, passphrase: nil)
+            XCTFail("Expected connect failure")
+        } catch let error as DockBridgeError {
+            XCTAssertEqual(error, .AuthFailed(username: "dave"))
+        }
+
+        XCTAssertTrue(mockClient.disconnectedSessionIDs.isEmpty)
+        XCTAssertTrue(bridge.allSessions.isEmpty)
+    }
+
+    private func makeBridgeWithMockClient(_ mockClient: MockDockBridgeClient) throws -> RustBridgeService {
+        let suiteName = "RustBridgeServiceSessionTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(suiteName, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+        return RustBridgeService(
+            settings: AppSettingsService(defaults: defaults),
+            hostKeyStore: HostKeyStore(baseDirectory: directory),
+            clientFactory: { _, _, _, _ in mockClient }
+        )
+    }
+}
+
+private final class MockDockBridgeClient: DockBridgeClientProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private let connectResult: Result<UInt64, Error>
+    private let initialDirectoryResult: Result<String, Error>
+    private let disconnectError: Error?
+    private var _disconnectedSessionIDs: [UInt64] = []
+
+    var disconnectedSessionIDs: [UInt64] {
+        lock.withLock { _disconnectedSessionIDs }
+    }
+
+    init(
+        connectResult: Result<UInt64, Error>,
+        initialDirectoryResult: Result<String, Error>,
+        disconnectError: Error? = nil
+    ) {
+        self.connectResult = connectResult
+        self.initialDirectoryResult = initialDirectoryResult
+        self.disconnectError = disconnectError
+    }
+
+    func connect(profile: ConnectionProfileRecord) throws -> UInt64 {
+        try connectResult.get()
+    }
+
+    func disconnect(sessionId: UInt64) throws {
+        lock.withLock { _disconnectedSessionIDs.append(sessionId) }
+        if let disconnectError {
+            throw disconnectError
+        }
+    }
+
+    func getInitialDirectory(sessionId: UInt64) throws -> String {
+        try initialDirectoryResult.get()
+    }
+
+    func cancelTransfer(taskId: UInt64) throws {}
+    func clearAllTransfers() throws {}
+    func clearCompletedTransfers() {}
+    func createDirectory(sessionId: UInt64, remotePath: String) throws {}
+    func delete(sessionId: UInt64, remotePath: String) throws {}
+    func deleteEntry(sessionId: UInt64, remotePath: String, recursive: Bool) throws -> UInt64 { 0 }
+    func download(sessionId: UInt64, remotePath: String, localPath: String, overwritePolicy: TransferOverwritePolicyRecord) throws {}
+    func downloadEntry(sessionId: UInt64, remotePath: String, localDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws {}
+    func getTransferQueue() -> [TransferTaskRecord] { [] }
+    func knownHostsEntries() -> [KnownHostEntryRecord] { [] }
+    func knownHostsRemove(host: String, port: UInt16) throws -> Bool { false }
+    func knownHostsRepairPermissions() throws {}
+    func knownHostsReset(backup: Bool) throws {}
+    func knownHostsStatus() -> KnownHostsStatusRecord { .available }
+    func listDirectory(sessionId: UInt64, path: String) throws -> [RemoteFileRecord] { [] }
+    func readLink(sessionId: UInt64, path: String) throws -> String { "" }
+    func rename(sessionId: UInt64, from: String, to: String) throws {}
+    func renameNoOverwrite(sessionId: UInt64, from: String, to: String) throws {}
+    func retryTransfer(sessionId: UInt64, taskId: UInt64) throws {}
+    func setPermissions(sessionId: UInt64, path: String, mode: UInt32) throws {}
+    func stat(sessionId: UInt64, path: String, followSymlinks: Bool) throws -> RemoteFileRecord {
+        throw DockBridgeError.Other(message: "not implemented")
+    }
+    func upload(sessionId: UInt64, localPath: String, remotePath: String, overwritePolicy: TransferOverwritePolicyRecord) throws {}
+    func uploadEntry(sessionId: UInt64, localPath: String, remoteDirectory: String, overwritePolicy: TransferOverwritePolicyRecord) throws {}
 }

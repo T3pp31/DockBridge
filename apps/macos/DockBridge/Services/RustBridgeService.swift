@@ -26,12 +26,20 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     /// The session currently surfaced through the published properties above.
     private(set) var activeSessionID: UUID?
 
-    private var client: DockBridgeClient?
+    typealias ClientFactory = (
+        AppConfigRecord,
+        any HostKeyHandler,
+        any KeyboardInteractivePromptHandler,
+        any ConnectionEventHandler
+    ) throws -> any DockBridgeClientProtocol
+
+    private var client: (any DockBridgeClientProtocol)?
     /// Most recent Rust client configuration, exposed for test verification.
     private(set) var lastAppConfigRecord: AppConfigRecord?
     private let settings: AppSettingsService
     private let hostKeyStore: HostKeyStore
     private let bookmarkService: SecurityScopedBookmarkService
+    private let clientFactory: ClientFactory
     private var sessionCancellables: [UUID: AnyCancellable] = [:]
     /// Insertion order of open sessions; used to pick a fallback active
     /// session without depending on Rust-side sessionId reuse.
@@ -40,11 +48,20 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     init(
         settings: AppSettingsService = .shared,
         hostKeyStore: HostKeyStore = .shared,
-        bookmarkService: SecurityScopedBookmarkService = .shared
+        bookmarkService: SecurityScopedBookmarkService = .shared,
+        clientFactory: @escaping ClientFactory = { record, hostKeyHandler, authPromptHandler, connectionEventHandler in
+            try DockBridgeClient(
+                appConfig: record,
+                hostKeyHandler: hostKeyHandler,
+                authPromptHandler: authPromptHandler,
+                connectionEventHandler: connectionEventHandler
+            )
+        }
     ) {
         self.settings = settings
         self.hostKeyStore = hostKeyStore
         self.bookmarkService = bookmarkService
+        self.clientFactory = clientFactory
         super.init()
     }
 
@@ -54,12 +71,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         guard client == nil || sessions.isEmpty else { return }
         try hostKeyStore.ensureStoreDirectoryExists()
         let record = settings.buildAppConfigRecord(knownHostsPath: hostKeyStore.knownHostsPath.path)
-        client = try DockBridgeClient(
-            appConfig: record,
-            hostKeyHandler: self,
-            authPromptHandler: self,
-            connectionEventHandler: self
-        )
+        client = try clientFactory(record, self, self, self)
         lastAppConfigRecord = record
     }
 
@@ -473,7 +485,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
         _ rawDirectory: String,
         username: String,
         isRootUser: Bool,
-        client: DockBridgeClient,
+        client: any DockBridgeClientProtocol,
         sessionId: UInt64
     ) async throws -> String {
         guard rawDirectory == "/", !isRootUser else {
@@ -504,7 +516,7 @@ final class RustBridgeService: NSObject, RemoteBridging, ObservableObject, HostK
     }
 
     private func runOnBridge<T: Sendable>(
-        _ operation: @escaping @Sendable (DockBridgeClient, UInt64) throws -> T
+        _ operation: @escaping @Sendable (any DockBridgeClientProtocol, UInt64) throws -> T
     ) async throws -> T {
         guard
             let client,
