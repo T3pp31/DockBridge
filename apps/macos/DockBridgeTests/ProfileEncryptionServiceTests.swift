@@ -85,6 +85,25 @@ final class ProfileEncryptionServiceTests: XCTestCase {
             XCTAssertEqual(error as? ProfileEncryptionError, .invalidEnvelope)
         }
     }
+
+    func testEncryptWithoutKeyCreationFailsWhenMasterKeyMissingAndSucceedsOncePresent() throws {
+        let profile = StoredConnectionProfile(
+            from: ConnectionProfile(name: "Existing", host: "host.example.com", username: "user")
+        )
+
+        XCTAssertThrowsError(try service.encrypt([profile], allowKeyCreation: false)) { error in
+            XCTAssertEqual(
+                error as? ProfileEncryptionError,
+                .encryptionFailed(String(localized: "Master encryption key is missing from Keychain."))
+            )
+        }
+        XCTAssertNil(try keychain.loadKeyData(account: ProfileEncryptionService.masterKeyAccount))
+
+        // Once the master key exists, encrypting without key creation succeeds.
+        _ = try service.encrypt([profile], allowKeyCreation: true)
+        let envelope = try service.encrypt([profile], allowKeyCreation: false)
+        XCTAssertEqual(try service.decrypt(envelope), [profile])
+    }
 }
 
 /// Shared by encryption-service and connection-store tests; never touches Keychain.

@@ -53,7 +53,10 @@ final class ProfileEncryptionService: @unchecked Sendable {
         self.keychain = keychain
     }
 
-    func encrypt(_ profiles: [StoredConnectionProfile]) throws -> EncryptedProfilesEnvelope {
+    func encrypt(
+        _ profiles: [StoredConnectionProfile],
+        allowKeyCreation: Bool = true
+    ) throws -> EncryptedProfilesEnvelope {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let plaintext: Data
@@ -64,7 +67,7 @@ final class ProfileEncryptionService: @unchecked Sendable {
         }
 
         do {
-            let key = try loadOrCreateMasterKey()
+            let key = try loadMasterKey(allowCreation: allowKeyCreation)
             let sealed = try AES.GCM.seal(plaintext, using: key)
             guard let combined = sealed.combined else {
                 throw ProfileEncryptionError.encryptionFailed(
@@ -110,12 +113,18 @@ final class ProfileEncryptionService: @unchecked Sendable {
         }
     }
 
-    private func loadOrCreateMasterKey() throws -> SymmetricKey {
+    private func loadMasterKey(allowCreation: Bool) throws -> SymmetricKey {
         Self.masterKeyLock.lock()
         defer { Self.masterKeyLock.unlock() }
 
         if let existing = try keychain.loadKeyData(account: Self.masterKeyAccount) {
             return SymmetricKey(data: existing)
+        }
+
+        guard allowCreation else {
+            throw ProfileEncryptionError.encryptionFailed(
+                String(localized: "Master encryption key is missing from Keychain.")
+            )
         }
 
         let key = SymmetricKey(size: .bits256)

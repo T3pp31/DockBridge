@@ -410,6 +410,33 @@ final class ConnectionStoreTests: XCTestCase {
         XCTAssertNil(try keychain.loadKeyData(account: ProfileEncryptionService.masterKeyAccount))
     }
 
+    func testSaveProfilesRefusesToOverwriteExistingStoreWhenMasterKeyMissing() throws {
+        let originalProfile = ConnectionProfile(name: "Original", host: "original.example.com", username: "user")
+        let replacementProfile = ConnectionProfile(name: "Replacement", host: "replacement.example.com", username: "user")
+        try store.saveProfiles([originalProfile])
+        let profilesURL = URL(fileURLWithPath: storeProfilesPath)
+        let originalData = try Data(contentsOf: profilesURL)
+        let originalKey = try XCTUnwrap(keychain.loadKeyData(account: ProfileEncryptionService.masterKeyAccount))
+
+        try keychain.deleteKeyData(account: ProfileEncryptionService.masterKeyAccount)
+
+        XCTAssertThrowsError(try store.saveProfiles([replacementProfile])) { error in
+            guard case ConnectionStoreError.writeFailed(let message) = error else {
+                return XCTFail("Expected writeFailed, got \(error)")
+            }
+            XCTAssertTrue(
+                message.contains(String(localized: "Master encryption key is missing from Keychain.")),
+                "Unexpected error message: \(message)"
+            )
+        }
+        XCTAssertEqual(try Data(contentsOf: profilesURL), originalData)
+        XCTAssertNil(try keychain.loadKeyData(account: ProfileEncryptionService.masterKeyAccount))
+
+        // Restoring the original key recovers the untouched encrypted store.
+        try keychain.saveKeyData(originalKey, account: ProfileEncryptionService.masterKeyAccount)
+        XCTAssertEqual(try store.loadProfiles(), [originalProfile])
+    }
+
     func testLoadProfilesStillReportsCorruptionForTamperedCiphertext() throws {
         let profile = ConnectionProfile(name: "Tampered", host: "example.com", username: "user")
         try store.saveProfiles([profile])
