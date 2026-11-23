@@ -27,7 +27,13 @@ targets:
     sources:
       - path: DockBridge
         excludes:
+          # Headers and modulemap are gitignored outputs resolved via
+          # HEADER_SEARCH_PATHS (Generated/Headers); exclude raw bindgen files
+          # too so xcodegen output stays deterministic before/after generation
+          # (issue #1436).
           - Generated/Headers
+          - "Generated/*.h"
+          - "Generated/*.modulemap"
     settings:
       base:
         PRODUCT_NAME: DockBridge

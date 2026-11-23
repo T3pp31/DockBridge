@@ -138,7 +138,6 @@
 
 /* Begin PBXFileReference section */
 		0425FC0D2CF057DFD6A34495 /* RemotePathTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePathTests.swift; sourceTree = "<group>"; };
-		04953A36DB0EDB535210B85E /* dockbridge_uniffiFFI.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = dockbridge_uniffiFFI.modulemap; sourceTree = "<group>"; };
 		04F953F7F5F4706BD65DD16C /* TransferQueueViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TransferQueueViewModel.swift; sourceTree = "<group>"; };
 		05B778C12C7CFFE61F207E94 /* HostKeyStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyStoreTests.swift; sourceTree = "<group>"; };
 		05BB12FE8EB2A21EBC8273E1 /* UpdateCheckViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateCheckViewModelTests.swift; sourceTree = "<group>"; };
@@ -251,7 +250,6 @@
 		E81136E0581349A8B6441902 /* GoToPathSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoToPathSheet.swift; sourceTree = "<group>"; };
 		E919019F81DFF4080137271C /* ProfileEncryptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEncryptionService.swift; sourceTree = "<group>"; };
 		E9C17CF9159341F5CC463BD7 /* PathSummaryRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathSummaryRow.swift; sourceTree = "<group>"; };
-		EA7BE89750800CFF89F48B96 /* dockbridge_uniffiFFI.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = dockbridge_uniffiFFI.h; sourceTree = "<group>"; };
 		EE643F14DF2F712780D2C681 /* MainViewCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainViewCommands.swift; sourceTree = "<group>"; };
 		EF57C041023CC35AB886B10E /* ProfileTrustStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileTrustStore.swift; sourceTree = "<group>"; };
 		F0ABCF5CC2BA115EB556CE0B /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
@@ -325,8 +323,6 @@
 		31AC3AEF0D5B14D38BA9144E /* Generated */ = {
 			isa = PBXGroup;
 			children = (
-				EA7BE89750800CFF89F48B96 /* dockbridge_uniffiFFI.h */,
-				04953A36DB0EDB535210B85E /* dockbridge_uniffiFFI.modulemap */,
 				0C3DD773B195E0553CA6AEEF /* DockBridgeUniffi.swift */,
 			);
 			path = Generated;
