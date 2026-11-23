@@ -1401,6 +1401,295 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         )
     }
 
+    // MARK: - Pending connection deletion protection (#1452)
+
+    func testPendingConnectProtectsProfileFromDeletionAcrossWarningsAndRsaInspection() async throws {
+        // 1. Root warning protects the pending profile until cancelled.
+        let rootProfile = ConnectionProfile(name: "Root", host: "root.example.com", username: "root")
+        viewModel.save(rootProfile, password: "root-password", passphrase: nil)
+        let rootAccount = keychain.keychainAccount(for: rootProfile.id, kind: "profile")
+
+        viewModel.requestConnect(profile: rootProfile)
+        for _ in 0..<20 where !viewModel.showRootWarning {
+            await Task.yield()
+        }
+        XCTAssertTrue(viewModel.showRootWarning)
+        XCTAssertTrue(viewModel.isActiveProfile(rootProfile))
+
+        viewModel.requestDelete(profile: rootProfile)
+        XCTAssertNil(viewModel.confirmDeleteProfile)
+        viewModel.delete(profile: rootProfile)
+        XCTAssertEqual(viewModel.profiles, [rootProfile])
+        XCTAssertEqual(try store.loadProfiles(), [rootProfile])
+        XCTAssertEqual(try keychain.loadPassword(account: rootAccount), "root-password")
+
+        viewModel.cancelPendingConnect()
+        XCTAssertFalse(viewModel.isActiveProfile(rootProfile))
+        viewModel.delete(profile: rootProfile)
+        XCTAssertTrue(viewModel.profiles.isEmpty)
+        XCTAssertTrue(try store.loadProfiles().isEmpty)
+        XCTAssertNil(try keychain.loadPassword(account: rootAccount))
+
+        // 2. In-flight async RSA inspection and resulting RSA warning protect the profile.
+        let inspectionStarted = DispatchSemaphore(value: 0)
+        let finishInspection = DispatchSemaphore(value: 0)
+        let inspectionCompleted = DispatchSemaphore(value: 0)
+        let rsaModel = makeViewModel(
+            rsaKeyInspector: { _, _, _ in
+                inspectionStarted.signal()
+                finishInspection.wait()
+                return true
+            },
+            onRsaInspectionCompleted: { _ in
+                inspectionCompleted.signal()
+            }
+        )
+        let rsaProfile = ConnectionProfile(
+            name: "RSA",
+            host: "rsa.example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyBookmark: Data([1])
+        )
+        rsaModel.save(rsaProfile, password: nil, passphrase: "rsa-passphrase")
+        let rsaAccount = keychain.keychainAccount(for: rsaProfile.id, kind: "profile")
+
+        rsaModel.requestDelete(profile: rsaProfile)
+        XCTAssertEqual(rsaModel.confirmDeleteProfile, rsaProfile)
+
+        rsaModel.requestConnect(profile: rsaProfile)
+        let didStart = await waitForSignal(inspectionStarted)
+        XCTAssertTrue(didStart)
+        XCTAssertTrue(rsaModel.isActiveProfile(rsaProfile))
+
+        // Even a pre-opened confirmation dialog cannot delete while RSA inspection is running.
+        rsaModel.delete(profile: rsaProfile)
+        XCTAssertNil(rsaModel.confirmDeleteProfile)
+        XCTAssertEqual(rsaModel.profiles, [rsaProfile])
+        XCTAssertEqual(try store.loadProfiles(), [rsaProfile])
+        XCTAssertEqual(try keychain.loadPassphrase(account: rsaAccount), "rsa-passphrase")
+
+        finishInspection.signal()
+        let didComplete = await waitForSignal(inspectionCompleted)
+        XCTAssertTrue(didComplete)
+        for _ in 0..<20 where !rsaModel.showRsaKeyWarning {
+            await Task.yield()
+        }
+        XCTAssertTrue(rsaModel.showRsaKeyWarning)
+        XCTAssertTrue(rsaModel.isActiveProfile(rsaProfile))
+
+        rsaModel.delete(profile: rsaProfile)
+        XCTAssertEqual(rsaModel.profiles, [rsaProfile])
+        XCTAssertEqual(try store.loadProfiles(), [rsaProfile])
+
+        rsaModel.cancelPendingConnect()
+        XCTAssertFalse(rsaModel.isActiveProfile(rsaProfile))
+        rsaModel.delete(profile: rsaProfile)
+        XCTAssertTrue(rsaModel.profiles.isEmpty)
+        XCTAssertTrue(try store.loadProfiles().isEmpty)
+        XCTAssertNil(try keychain.loadPassphrase(account: rsaAccount))
+
+        // 3. Endpoint-change warning during requestConnect protects the profile until resolved.
+        let endpointProfile = ConnectionProfile(name: "Endpoint", host: "good.example.com", username: "user")
+        try store.saveProfiles([endpointProfile])
+        try store.seedInitialTrust(for: [endpointProfile])
+        var tampered = endpointProfile
+        tampered.host = "evil.example.com"
+        try store.saveProfiles([tampered], updateTrust: false)
+        viewModel.load()
+        // Dismiss the load-time warning to test requestConnect-triggered endpoint warning.
+        viewModel.pendingEndpointChange = nil
+        viewModel.showEndpointChangeWarning = false
+
+        viewModel.requestConnect(profile: tampered)
+        XCTAssertTrue(viewModel.showEndpointChangeWarning)
+        XCTAssertTrue(viewModel.isActiveProfile(tampered))
+
+        viewModel.delete(profile: tampered)
+        XCTAssertEqual(viewModel.profiles, [tampered])
+        XCTAssertEqual(try store.loadProfiles(), [tampered])
+
+        viewModel.restoreTrustedEndpoint()
+        XCTAssertFalse(viewModel.isActiveProfile(tampered))
+        viewModel.delete(profile: tampered)
+        XCTAssertTrue(viewModel.profiles.isEmpty)
+        XCTAssertTrue(try store.loadProfiles().isEmpty)
+    }
+
+    func testPendingCredentialPromptProtectsProfileFromDeletion() async throws {
+        let passwordProfile = ConnectionProfile(
+            name: "Password",
+            host: "pw.example.com",
+            username: "user",
+            authType: .password
+        )
+        viewModel.save(passwordProfile, password: nil, passphrase: nil)
+        viewModel.requestDelete(profile: passwordProfile)
+        XCTAssertEqual(viewModel.confirmDeleteProfile, passwordProfile)
+
+        await viewModel.connect(profile: passwordProfile)
+        XCTAssertEqual(viewModel.pendingCredentialPrompt?.profile.id, passwordProfile.id)
+        XCTAssertEqual(viewModel.pendingCredentialPrompt?.kind, .password)
+        XCTAssertTrue(viewModel.isActiveProfile(passwordProfile))
+
+        viewModel.delete(profile: passwordProfile)
+        XCTAssertNil(viewModel.confirmDeleteProfile)
+        XCTAssertEqual(viewModel.profiles, [passwordProfile])
+        XCTAssertEqual(try store.loadProfiles(), [passwordProfile])
+
+        viewModel.cancelCredentialPrompt()
+        XCTAssertFalse(viewModel.isActiveProfile(passwordProfile))
+        viewModel.delete(profile: passwordProfile)
+        XCTAssertTrue(viewModel.profiles.isEmpty)
+        XCTAssertTrue(try store.loadProfiles().isEmpty)
+
+        // Passphrase prompt also protects its profile until cancelled.
+        let keyProfile = ConnectionProfile(
+            name: "Key",
+            host: "key.example.com",
+            username: "user",
+            authType: .privateKey,
+            privateKeyBookmark: Data([1])
+        )
+        viewModel.save(keyProfile, password: nil, passphrase: nil)
+        viewModel.beginPassphrasePrompt(for: keyProfile)
+        XCTAssertTrue(viewModel.isActiveProfile(keyProfile))
+
+        viewModel.requestDelete(profile: keyProfile)
+        XCTAssertNil(viewModel.confirmDeleteProfile)
+        viewModel.delete(profile: keyProfile)
+        XCTAssertEqual(viewModel.profiles, [keyProfile])
+
+        viewModel.cancelCredentialPrompt()
+        XCTAssertFalse(viewModel.isActiveProfile(keyProfile))
+        viewModel.delete(profile: keyProfile)
+        XCTAssertTrue(viewModel.profiles.isEmpty)
+    }
+
+    func testDeleteDuringLoadEndpointWarningClearsPendingPrompts() throws {
+        let first = ConnectionProfile(name: "First", host: "first.example.com", username: "user")
+        let second = ConnectionProfile(name: "Second", host: "second.example.com", username: "user")
+        try store.saveProfiles([first, second])
+        try store.seedInitialTrust(for: [first, second])
+
+        var tamperedFirst = first
+        tamperedFirst.host = "evil1.example.com"
+        var tamperedSecond = second
+        tamperedSecond.host = "evil2.example.com"
+        try store.saveProfiles([tamperedFirst, tamperedSecond], updateTrust: false)
+
+        viewModel.load()
+        XCTAssertTrue(viewModel.showEndpointChangeWarning)
+        XCTAssertEqual(viewModel.pendingEndpointChange?.profileID, first.id)
+        XCTAssertFalse(viewModel.isActiveProfile(tamperedFirst))
+
+        viewModel.delete(profile: tamperedFirst)
+        XCTAssertEqual(viewModel.profiles, [tamperedSecond])
+        XCTAssertTrue(viewModel.showEndpointChangeWarning)
+        XCTAssertEqual(viewModel.pendingEndpointChange?.profileID, second.id)
+
+        viewModel.delete(profile: tamperedSecond)
+        XCTAssertTrue(viewModel.profiles.isEmpty)
+        XCTAssertFalse(viewModel.showEndpointChangeWarning)
+        XCTAssertNil(viewModel.pendingEndpointChange)
+    }
+
+    func testSuccessfulConnectDoesNotResurrectDeletedProfile() async throws {
+        let mockClient = MockDockBridgeClient(
+            connectResult: .success(101),
+            initialDirectoryResult: .success("/home/user")
+        )
+        let localViewModel = try makeViewModelWithMockClient(mockClient)
+
+        // Normal saved profile updates lastConnectedAt on successful connect.
+        let activeProfile = ConnectionProfile(name: "Active", host: "active.example.com", username: "user")
+        localViewModel.save(activeProfile, password: "secret", passphrase: nil)
+        await localViewModel.connect(profile: activeProfile)
+        XCTAssertTrue(localViewModel.isConnected)
+        XCTAssertEqual(localViewModel.profiles.count, 1)
+        XCTAssertNotNil(localViewModel.profiles.first?.lastConnectedAt)
+        XCTAssertNotNil(try store.loadProfiles().first?.lastConnectedAt)
+        await localViewModel.disconnect()
+
+        // Deleted profile is ignored by subsequent connect/requestConnect/prompt calls.
+        localViewModel.delete(profile: activeProfile)
+        XCTAssertTrue(localViewModel.profiles.isEmpty)
+        XCTAssertTrue(try store.loadProfiles().isEmpty)
+
+        localViewModel.requestConnect(profile: activeProfile)
+        XCTAssertNil(localViewModel.pendingConnectProfile)
+        await localViewModel.connect(profile: activeProfile)
+        XCTAssertFalse(localViewModel.isConnected)
+        XCTAssertTrue(localViewModel.profiles.isEmpty)
+        XCTAssertTrue(try store.loadProfiles().isEmpty)
+
+        localViewModel.beginPasswordPrompt(for: activeProfile)
+        XCTAssertNil(localViewModel.pendingCredentialPrompt)
+        let credential = SensitiveString()
+        credential.text = "resurrected-secret"
+        localViewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: true)
+        XCTAssertEqual(credential.text, "")
+        let account = keychain.keychainAccount(for: activeProfile.id, kind: "profile")
+        XCTAssertNil(try keychain.loadPassword(account: account))
+
+        // Belt-and-suspenders: even if a profile is absent from viewModel.profiles
+        // (e.g. removed externally before connect succeeds), performConnect must
+        // not re-insert it via store.upsert.
+        let externalProfile = ConnectionProfile(name: "External", host: "ext.example.com", username: "user")
+        try keychain.savePassword("ext-secret", account: keychain.keychainAccount(for: externalProfile.id, kind: "profile"))
+        await localViewModel.connect(profile: externalProfile)
+        XCTAssertTrue(localViewModel.isConnected)
+        XCTAssertTrue(localViewModel.profiles.isEmpty)
+        XCTAssertTrue(try store.loadProfiles().isEmpty)
+        await localViewModel.disconnect()
+    }
+
+    func testConfirmRootConnectProtectsProfileDuringQueuedTaskHandoff() async throws {
+        let mockClient = MockDockBridgeClient(
+            connectResult: .success(202),
+            initialDirectoryResult: .success("/root")
+        )
+        let localViewModel = try makeViewModelWithMockClient(mockClient)
+        let rootProfile = ConnectionProfile(name: "Root", host: "root.example.com", username: "root")
+        localViewModel.save(rootProfile, password: "root-password", passphrase: nil)
+
+        localViewModel.requestConnect(profile: rootProfile)
+        for _ in 0..<20 where !localViewModel.showRootWarning {
+            await Task.yield()
+        }
+        XCTAssertTrue(localViewModel.showRootWarning)
+
+        // Confirming root warning schedules an async Task and clears pendingConnectProfile
+        // right before calling connect(profile:). Deletion must remain blocked across the handoff.
+        localViewModel.confirmRootConnect()
+        XCTAssertTrue(localViewModel.isActiveProfile(rootProfile))
+        localViewModel.delete(profile: rootProfile)
+        XCTAssertEqual(localViewModel.profiles, [rootProfile])
+
+        for _ in 0..<50 where !localViewModel.isConnected {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(localViewModel.isConnected)
+        XCTAssertEqual(localViewModel.connectedProfileID, rootProfile.id)
+        XCTAssertEqual(localViewModel.profiles.map(\.id), [rootProfile.id])
+        XCTAssertNotNil(try store.loadProfiles().first?.lastConnectedAt)
+        await localViewModel.disconnect()
+    }
+
+    private func makeViewModelWithMockClient(_ mockClient: MockDockBridgeClient) throws -> ConnectionListViewModel {
+        let suiteName = "ConnectionListViewModelTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
+        let hostKeyDir = baseDirectory.appendingPathComponent("hostkeys-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: hostKeyDir, withIntermediateDirectories: true)
+        let bridge = RustBridgeService(
+            settings: AppSettingsService(defaults: defaults),
+            hostKeyStore: HostKeyStore(baseDirectory: hostKeyDir),
+            clientFactory: { _, _, _, _ in mockClient }
+        )
+        return ConnectionListViewModel(store: store, keychain: keychain, bridge: bridge)
+    }
+
     private func waitForSignal(_ semaphore: DispatchSemaphore) async -> Bool {
         for _ in 0..<100 {
             if semaphore.wait(timeout: .now()) == .success {

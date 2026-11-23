@@ -39,6 +39,8 @@ final class ConnectionListViewModel: ObservableObject {
     private var rootWarningAcknowledged = false
     private var rsaWarningAcknowledged = false
     private var connectRequestGeneration = 0
+    private var inFlightConnectCounts: [UUID: Int] = [:]
+    private var deletedProfileIDs: Set<UUID> = []
     private var cancellables = Set<AnyCancellable>()
 
     var isConnected: Bool { bridge.isConnected }
@@ -50,9 +52,38 @@ final class ConnectionListViewModel: ObservableObject {
     var canDisconnect: Bool { connectionStatus.isConnected }
 
     func isActiveProfile(_ profile: ConnectionProfile) -> Bool {
-        // A pending connection must also protect its profile from deletion (#783).
-        connectedProfileID == profile.id
-            && (connectionStatus.isConnected || connectionStatus.isConnecting)
+        // A pending connection (including pre-connect warnings, async RSA
+        // inspection, credential prompts, and queued connect tasks) must also
+        // protect its profile from deletion (#783, #1452).
+        if connectedProfileID == profile.id
+            && (connectionStatus.isConnected || connectionStatus.isConnecting) {
+            return true
+        }
+        if pendingConnectProfile?.id == profile.id {
+            return true
+        }
+        if pendingCredentialPrompt?.profile.id == profile.id {
+            return true
+        }
+        return (inFlightConnectCounts[profile.id] ?? 0) > 0
+    }
+
+    private func beginInFlightConnect(for profileID: UUID) {
+        let previous = inFlightConnectCounts[profileID] ?? 0
+        if previous == 0 {
+            objectWillChange.send()
+        }
+        inFlightConnectCounts[profileID] = previous + 1
+    }
+
+    private func endInFlightConnect(for profileID: UUID) {
+        guard let previous = inFlightConnectCounts[profileID] else { return }
+        if previous <= 1 {
+            objectWillChange.send()
+            inFlightConnectCounts.removeValue(forKey: profileID)
+        } else {
+            inFlightConnectCounts[profileID] = previous - 1
+        }
     }
 
     var filteredProfiles: [ConnectionProfile] {
@@ -225,6 +256,7 @@ final class ConnectionListViewModel: ObservableObject {
 
         do {
             profiles = try store.upsert(profile)
+            deletedProfileIDs.remove(profile.id)
             selectedProfileID = profile.id
         } catch {
             errorMessage = error.localizedDescription
@@ -284,11 +316,14 @@ final class ConnectionListViewModel: ObservableObject {
 
     func delete(profile: ConnectionProfile) {
         defer { confirmDeleteProfile = nil }
-        // The connection may have started while the confirmation dialog was open.
+        // The connection (or pre-connect confirmation) may have started while
+        // the confirmation dialog was open.
         guard !isActiveProfile(profile) else { return }
         do {
             profiles = try store.delete(id: profile.id)
+            deletedProfileIDs.insert(profile.id)
             transientCredentials.removeValue(forKey: profile.id)
+            clearPendingPrompts(forDeletedProfileID: profile.id)
             let account = keychain.keychainAccount(for: profile.id, kind: "profile")
             do {
 
@@ -317,7 +352,34 @@ final class ConnectionListViewModel: ObservableObject {
         }
     }
 
+    private func clearPendingPrompts(forDeletedProfileID profileID: UUID) {
+        if pendingConnectProfile?.id == profileID {
+            clearPendingConnectState()
+        }
+        if pendingCredentialPrompt?.profile.id == profileID {
+            pendingCredentialPrompt = nil
+        }
+        pendingEndpointChanges.removeAll { $0.profileID == profileID }
+        if pendingEndpointChange?.profileID == profileID {
+            pendingEndpointChange = nil
+            if pendingEndpointChanges.isEmpty {
+                showEndpointChangeWarning = false
+            } else {
+                presentNextEndpointChangeWarning()
+            }
+        }
+        pendingInitialTrustProfiles.removeAll { $0.id == profileID }
+        if showInitialTrustConfirmation, pendingInitialTrustProfiles.isEmpty {
+            showInitialTrustConfirmation = false
+        }
+        pendingNewProfileTrustProfiles.removeAll { $0.id == profileID }
+        if showNewProfileTrustConfirmation, pendingNewProfileTrustProfiles.isEmpty {
+            showNewProfileTrustConfirmation = false
+        }
+    }
+
     func requestConnect(profile: ConnectionProfile) {
+        guard !deletedProfileIDs.contains(profile.id) else { return }
         connectRequestGeneration &+= 1
         pendingConnectProfile = nil
         showRootWarning = false
@@ -347,7 +409,11 @@ final class ConnectionListViewModel: ObservableObject {
 
     private func continueConnectAfterWarnings(generation: Int) async {
         guard generation == connectRequestGeneration else { return }
-        guard let profile = pendingConnectProfile else { return }
+        guard let profile = pendingConnectProfile,
+              !deletedProfileIDs.contains(profile.id) else {
+            clearPendingConnectState()
+            return
+        }
 
         if profile.isRootUser, !rootWarningAcknowledged {
             showRootWarning = true
@@ -388,9 +454,14 @@ final class ConnectionListViewModel: ObservableObject {
 
         guard generation == connectRequestGeneration,
               let profileToConnect = pendingConnectProfile,
-              profileToConnect.id == profile.id else { return }
+              profileToConnect.id == profile.id,
+              !deletedProfileIDs.contains(profileToConnect.id) else { return }
+        beginInFlightConnect(for: profileToConnect.id)
         clearPendingConnectState()
-        Task { await connect(profile: profileToConnect) }
+        Task {
+            defer { endInFlightConnect(for: profileToConnect.id) }
+            await connect(profile: profileToConnect)
+        }
     }
 
     func cancelPendingConnect() {
@@ -423,7 +494,9 @@ final class ConnectionListViewModel: ObservableObject {
 
             if let profile = pendingConnectProfile {
                 pendingConnectProfile = nil
-                requestConnect(profile: profile)
+                if !deletedProfileIDs.contains(profile.id) {
+                    requestConnect(profile: profile)
+                }
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -437,7 +510,7 @@ final class ConnectionListViewModel: ObservableObject {
             profiles = try store.restoreTrustedEndpoint(for: change)
             pendingEndpointChanges.removeAll { $0.id == change.id }
             pendingEndpointChange = nil
-            pendingConnectProfile = nil
+            clearPendingConnectState()
 
             if pendingEndpointChanges.isEmpty {
                 showEndpointChangeWarning = false
@@ -507,10 +580,12 @@ final class ConnectionListViewModel: ObservableObject {
     @Published var pendingCredentialPrompt: (profile: ConnectionProfile, kind: CredentialPromptKind)?
 
     func beginPasswordPrompt(for profile: ConnectionProfile) {
+        guard !deletedProfileIDs.contains(profile.id) else { return }
         pendingCredentialPrompt = (profile, .password)
     }
 
     func beginPassphrasePrompt(for profile: ConnectionProfile) {
+        guard !deletedProfileIDs.contains(profile.id) else { return }
         pendingCredentialPrompt = (profile, .passphrase)
     }
 
@@ -522,6 +597,10 @@ final class ConnectionListViewModel: ObservableObject {
             if !connectionScheduled { credential.clear() }
         }
         guard let prompt = pendingCredentialPrompt else { return }
+        if deletedProfileIDs.contains(prompt.profile.id) {
+            pendingCredentialPrompt = nil
+            return
+        }
 
         // Only the empty check trims: SSH passwords/passphrases may legitimately
         // contain leading/trailing whitespace, which must be preserved both in
@@ -551,9 +630,11 @@ final class ConnectionListViewModel: ObservableObject {
             transientCredentials.removeValue(forKey: prompt.profile.id)
         }
 
+        beginInFlightConnect(for: profile.id)
         pendingCredentialPrompt = nil
         connectionScheduled = true
         Task {
+            defer { endInFlightConnect(for: profile.id) }
             await connect(
                 profile: profile,
                 allowCredentialPrompt: false,
@@ -580,6 +661,9 @@ final class ConnectionListViewModel: ObservableObject {
         // Keep prompt credentials local to this attempt, never in a retry cache
         // shared with another profile (issue #778).
         defer { promptCredential?.value.clear() }
+        guard !deletedProfileIDs.contains(profile.id) else { return }
+        beginInFlightConnect(for: profile.id)
+        defer { endInFlightConnect(for: profile.id) }
         do {
             if profile.authType == .privateKey {
                 guard let bookmark = profile.privateKeyBookmark else {
@@ -669,10 +753,14 @@ final class ConnectionListViewModel: ObservableObject {
             throw error
         }
 
-        var updated = profile
-        updated.lastConnectedAt = Date()
-        profiles = try store.upsert(updated)
-        selectedProfileID = updated.id
+        // Only persist `lastConnectedAt` when the profile still exists in the
+        // view model; never resurrect a deleted profile in `profiles.json` (#1452).
+        if !deletedProfileIDs.contains(profile.id),
+           var updated = profiles.first(where: { $0.id == profile.id }) {
+            updated.lastConnectedAt = Date()
+            profiles = try store.upsert(updated)
+            selectedProfileID = updated.id
+        }
     }
 
     /// Runs off the main actor; returns `.some(true)` when the private key is
