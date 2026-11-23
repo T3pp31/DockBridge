@@ -199,6 +199,66 @@ final class ProfileTrustStoreTests: XCTestCase {
         XCTAssertEqual(backend.legacyReadCount, 2)
     }
 
+    func testInterruptedMigrationAfterPriorCleanupStillRetriesLegacyDeletion() throws {
+        let backend = InMemoryProfileTrustKeychain()
+        let key = Data(repeating: 42, count: 32)
+        backend.protectedKey = key
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+
+        // Confirm absence once so `legacyKeyCleanupCompleted` becomes true.
+        XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        XCTAssertEqual(backend.legacyReadCount, 1)
+
+        // Simulate external state where protected key disappears and a legacy
+        // key is present, then migration fails during legacy delete.
+        backend.protectedKey = nil
+        backend.legacyKey = key
+        backend.legacyDeleteStatus = errSecInteractionNotAllowed
+        XCTAssertThrowsError(try store.loadOrCreateKey())
+        XCTAssertEqual(backend.protectedKey, key)
+        XCTAssertEqual(backend.legacyKey, key)
+
+        // Subsequent load must still clean up the lingering matching legacy key.
+        backend.legacyDeleteStatus = errSecSuccess
+        XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        XCTAssertNil(backend.legacyKey)
+
+        // And once cleaned up, further loads skip legacy lookups again.
+        let legacyReadsAfterRecovery = backend.legacyReadCount
+        XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, key)
+        XCTAssertEqual(backend.legacyReadCount, legacyReadsAfterRecovery)
+    }
+
+    func testMismatchedLegacyKeyIsPreservedAndDoesNotRepeatLookup() throws {
+        let backend = InMemoryProfileTrustKeychain()
+        let protectedKey = Data(repeating: 42, count: 32)
+        let legacyKey = Data(repeating: 99, count: 32)
+        backend.protectedKey = protectedKey
+        backend.legacyKey = legacyKey
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+
+        for _ in 0..<3 {
+            XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, protectedKey)
+        }
+
+        XCTAssertEqual(backend.legacyKey, legacyKey)
+        XCTAssertEqual(backend.legacyReadCount, 1)
+        XCTAssertEqual(backend.legacyDeleteCount, 0)
+    }
+
+    func testFreshKeyCreationSkipsSubsequentLegacyLookups() throws {
+        let backend = InMemoryProfileTrustKeychain()
+        let store = ProfileTrustSigningKeyStore(operations: backend.operations)
+
+        let created = try store.loadOrCreateKey().withUnsafeBytes { Data($0) }
+        let legacyReadsAfterCreation = backend.legacyReadCount
+        for _ in 0..<3 {
+            XCTAssertEqual(try store.loadOrCreateKey().withUnsafeBytes { Data($0) }, created)
+        }
+
+        XCTAssertEqual(backend.legacyReadCount, legacyReadsAfterCreation)
+    }
+
     func testDataProtectionKeychainIntegrationWhenEntitled() throws {
         let store = ProfileTrustSigningKeyStore(serviceName: "com.dockbridge.tests.\(UUID().uuidString)")
         defer { try? store.deleteKey() }

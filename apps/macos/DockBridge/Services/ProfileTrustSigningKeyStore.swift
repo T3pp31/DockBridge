@@ -113,6 +113,10 @@ final class ProfileTrustSigningKeyStore: @unchecked Sendable {
         guard let legacyData = try loadKeyData(usingDataProtection: false) else {
             return nil
         }
+        // A legacy key is present; clear the completion flag before migrating
+        // so an interrupted migration (e.g. legacy delete fails after protected
+        // add succeeds) still retries cleanup on the next load.
+        legacyKeyCleanupCompleted = false
 
         // Preserve signatures already stored in trusted_endpoints.json. A failed
         // migration must leave the legacy key intact and must not create a new key.
