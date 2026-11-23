@@ -241,13 +241,24 @@ class ReleaseConfigTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "Custom App-2.0.0.cdx.json\n")
 
-        # Reject missing --version, braces in replacement values, and unsupported combinations.
+        # Literal '&' and '\' must not trigger Bash 5.2+ patsub_replacement.
+        result = self.read(
+            "--expand", "asset_name_template", "--version", "2.0.0", "--app-name", r"A&B\C"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, r"A&B\C-2.0.0-macOS.dmg" + "\n")
+
+        # Reject missing/duplicate --version, braces in replacement values, and unsupported combinations.
         for bad_args in (
             ("--expand", "asset_name_template"),
+            ("--expand", "asset_name_template", "--version", ""),
+            ("--expand", "asset_name_template", "--version", "", "--version", "1.0.0"),
             ("--expand", "asset_name_template", "--version", "{app_name}"),
             ("--expand", "asset_name_template", "--version", "1.0.0", "--app-name", "{version}"),
             ("--expand", "asset_name_template", "--version", "1.0.0", "--app-name", ""),
             ("--expand", "asset_name_template", "--bool", "--version", "1.0.0"),
+            ("--section", "verification", "--expand", "asset_name_template", "--version", "1.0.0"),
+            ("--expand", "asset_name_template", "--section", "verification", "--version", "1.0.0"),
         ):
             with self.subTest(args=bad_args):
                 self.assert_failure(self.read(*bad_args))

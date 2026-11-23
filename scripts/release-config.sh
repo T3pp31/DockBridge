@@ -16,6 +16,7 @@ VALUE_TYPE="string"
 CARGO_VERSION=false
 EXPAND=false
 EXPAND_VERSION=""
+HAS_EXPAND_VERSION=false
 EXPAND_APP_NAME=""
 HAS_EXPAND_APP_NAME=false
 KEY=""
@@ -89,7 +90,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --expand)
-      if [[ $# -lt 2 || "$EXPAND" == true || "$CARGO_VERSION" == true || "$VALUE_TYPE" != "string" || -n "$KEY" ]]; then
+      if [[ $# -lt 2 || "$EXPAND" == true || "$CARGO_VERSION" == true || "$SECTION" != "release" || "$VALUE_TYPE" != "string" || -n "$KEY" ]]; then
         usage
       fi
       EXPAND=true
@@ -97,10 +98,11 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --version)
-      if [[ $# -lt 2 || "$EXPAND" != true || -n "$EXPAND_VERSION" ]]; then
+      if [[ $# -lt 2 || "$EXPAND" != true || "$HAS_EXPAND_VERSION" == true ]]; then
         usage
       fi
       EXPAND_VERSION="$2"
+      HAS_EXPAND_VERSION=true
       shift 2
       ;;
     --app-name)
@@ -112,7 +114,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --section)
-      [[ $# -ge 2 && "$CARGO_VERSION" == false ]] || usage
+      [[ $# -ge 2 && "$CARGO_VERSION" == false && "$EXPAND" == false ]] || usage
       SECTION="$2"
       shift 2
       ;;
@@ -162,6 +164,8 @@ if [[ "$EXPAND" == true ]]; then
     echo "error: template replacement values must not contain braces when expanding ${KEY}" >&2
     exit 1
   fi
+  # Disable Bash 5.2+ patsub_replacement so '&' and '\' in values stay literal.
+  shopt -u patsub_replacement 2>/dev/null || true
   EXPANDED="${TEMPLATE//\{app_name\}/${EXPAND_APP_NAME}}"
   EXPANDED="${EXPANDED//\{version\}/${EXPAND_VERSION}}"
   if [[ "$EXPANDED" == *[{}]* ]]; then
