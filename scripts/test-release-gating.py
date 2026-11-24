@@ -84,6 +84,38 @@ class ReleaseGatingTests(unittest.TestCase):
             with self.subTest(step=name):
                 self.assertTrue(step(self.diag_action, name, indent="    "))
 
+    def test_static_and_artifact_consistency_checks_match_ci(self):
+        # Issue #1434: a tag push / workflow_dispatch does not run ci.yml, so
+        # the pre-release test gate must also run CI's localization, Settings
+        # wiring, xcodeproj, and UniFFI Swift binding consistency checks.
+        test_job = self.release["test"]
+        for step_name in (
+            "Verify localization catalog (en + ja)",
+            "Guard Settings scene state wiring",
+            "Install pinned XcodeGen",
+            "Verify xcodeproj matches project.yml (xcodegen)",
+            "Verify committed Swift bindings are up to date",
+        ):
+            with self.subTest(step=step_name):
+                self.assertEqual(step(test_job, step_name), step(self.ci["macos"], step_name))
+
+        def step_pos(name):
+            return test_job.index(f"      - name: {name}\n")
+
+        build_and_test = step_pos("Build and test macOS app")
+        self.assertLess(step_pos("Verify localization catalog (en + ja)"), build_and_test)
+        self.assertLess(step_pos("Guard Settings scene state wiring"), build_and_test)
+        self.assertLess(
+            step_pos("Install pinned XcodeGen"),
+            step_pos("Verify xcodeproj matches project.yml (xcodegen)"),
+        )
+        self.assertLess(step_pos("Verify xcodeproj matches project.yml (xcodegen)"), build_and_test)
+        self.assertLess(
+            step_pos("Generate UniFFI bindings"),
+            step_pos("Verify committed Swift bindings are up to date"),
+        )
+        self.assertLess(step_pos("Verify committed Swift bindings are up to date"), build_and_test)
+
     def test_rust_test_command_matches_ci(self):
         self.assertIn("run: cargo test --workspace --all-targets", self.ci["macos"])
 
@@ -105,7 +137,7 @@ class ReleaseGatingTests(unittest.TestCase):
         release_job = self.release["release"]
         for forbidden in (
             "cargo", "rust-toolchain", "build-rust.sh", "generate-uniffi.sh",
-            "xcodebuild", MACOS_TEST_ACTION_REF,
+            "xcodebuild", "xcodegen", MACOS_TEST_ACTION_REF,
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, release_job)

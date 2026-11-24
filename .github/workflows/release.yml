@@ -42,6 +42,12 @@ jobs:
       - name: Test release workflow test gate
         run: python3 scripts/test-release-gating.py
 
+      - name: Verify localization catalog (en + ja)
+        run: ./scripts/verify-localization.sh
+
+      - name: Guard Settings scene state wiring
+        run: python3 scripts/test-settings-scene.py
+
       - name: Pin Xcode
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90  # v1.7.0
         with:
@@ -64,6 +70,43 @@ jobs:
 
       - name: Generate UniFFI bindings
         run: ./scripts/generate-uniffi.sh "" debug
+
+      - name: Install pinned XcodeGen
+        run: |
+          version="$(bash scripts/release-config.sh xcodegen_version)"
+          checksum="$(bash scripts/release-config.sh xcodegen_sha256)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid xcodegen_version in config/release.toml"
+            exit 1
+          fi
+          if [[ ! "$checksum" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::Invalid xcodegen_sha256 in config/release.toml"
+            exit 1
+          fi
+          archive="${RUNNER_TEMP}/xcodegen-${version}.zip"
+          curl --fail --location --silent --show-error \
+            --proto '=https' --tlsv1.2 \
+            --output "$archive" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${version}/xcodegen.zip"
+          printf '%s  %s\n' "$checksum" "$archive" | shasum -a 256 --check
+          unzip -q "$archive" -d "$RUNNER_TEMP"
+          echo "${RUNNER_TEMP}/xcodegen/bin" >> "$GITHUB_PATH"
+
+      - name: Verify xcodeproj matches project.yml (xcodegen)
+        run: |
+          cd apps/macos
+          xcodegen generate
+          if ! git diff --exit-code DockBridge.xcodeproj; then
+            echo "::error::DockBridge.xcodeproj is out of date. Run 'cd apps/macos && xcodegen generate' and commit the result."
+            exit 1
+          fi
+
+      - name: Verify committed Swift bindings are up to date
+        run: |
+          if ! git diff --exit-code apps/macos/DockBridge/Generated/DockBridgeUniffi.swift; then
+            echo "::error::DockBridgeUniffi.swift is out of date. Run ./scripts/generate-uniffi.sh locally and commit the result."
+            exit 1
+          fi
 
       - name: Build and test macOS app
         timeout-minutes: 33
