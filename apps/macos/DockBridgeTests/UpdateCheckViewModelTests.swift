@@ -59,9 +59,18 @@ final class UpdateCheckViewModelTests: XCTestCase {
     }
 
     func testSkipVersionPersistsSkippedVersionAndSuppressesRelaunch() async {
+        var currentTime = Date(timeIntervalSince1970: 1_700_000_000)
         mockSession.responseJSON = newerReleaseJSON
+        viewModel = UpdateCheckViewModel(
+            updateService: updateService,
+            downloadService: mockDownloadService,
+            settingsService: settingsService,
+            currentVersion: "0.1.0",
+            now: { currentTime }
+        )
 
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
+        XCTAssertEqual(mockSession.requestCount, 1)
         XCTAssertEqual(viewModel.pendingUpdate?.version, "0.2.0")
         XCTAssertTrue(viewModel.showUpdateSheet)
         viewModel.skipVersion()
@@ -69,14 +78,19 @@ final class UpdateCheckViewModelTests: XCTestCase {
         XCTAssertEqual(settingsService.loadSkippedUpdateVersion(), "0.2.0")
         XCTAssertFalse(viewModel.showUpdateSheet)
 
+        // Advance past the 24h launch throttle so the next launch actually queries
+        // the service and proves skippedUpdateVersion itself suppresses relaunch.
+        currentTime = currentTime.addingTimeInterval(25 * 60 * 60)
         viewModel = UpdateCheckViewModel(
             updateService: updateService,
             downloadService: mockDownloadService,
             settingsService: settingsService,
-            currentVersion: "0.1.0"
+            currentVersion: "0.1.0",
+            now: { currentTime }
         )
         await viewModel.checkOnLaunch(isHostKeyBlocking: false)
 
+        XCTAssertEqual(mockSession.requestCount, 2)
         XCTAssertNil(viewModel.pendingUpdate)
         XCTAssertFalse(viewModel.showUpdateSheet)
     }
@@ -89,6 +103,7 @@ final class UpdateCheckViewModelTests: XCTestCase {
 
         // "Later" dismisses the sheet but does NOT save the skipped version.
         XCTAssertNil(settingsService.loadSkippedUpdateVersion())
+        XCTAssertNil(settingsService.loadLastUpdateCheckAt())
         XCTAssertFalse(viewModel.showUpdateSheet)
 
         viewModel = UpdateCheckViewModel(
@@ -106,7 +121,8 @@ final class UpdateCheckViewModelTests: XCTestCase {
     func testCheckOnLaunchIgnoresCurrentOrOlderRelease() async {
         mockSession.responseJSON = newerReleaseJSON
 
-        for currentVersion in ["0.2.0", "0.3.0"] {
+        for (index, currentVersion) in ["0.2.0", "0.3.0"].enumerated() {
+            settingsService.saveLastUpdateCheckAt(nil)
             viewModel = UpdateCheckViewModel(
                 updateService: updateService,
                 downloadService: mockDownloadService,
@@ -116,6 +132,7 @@ final class UpdateCheckViewModelTests: XCTestCase {
 
             await viewModel.checkOnLaunch(isHostKeyBlocking: false)
 
+            XCTAssertEqual(mockSession.requestCount, index + 1, "currentVersion: \(currentVersion)")
             XCTAssertNil(viewModel.pendingUpdate, "currentVersion: \(currentVersion)")
             XCTAssertFalse(viewModel.showUpdateSheet, "currentVersion: \(currentVersion)")
         }
@@ -379,6 +396,92 @@ final class UpdateCheckViewModelTests: XCTestCase {
         XCTAssertFalse(vm.isCheckingManually)
     }
 
+    func testCheckOnLaunchClearsOutOfRangeFutureBackoffFromClockSkew() async {
+        let currentTime = Date(timeIntervalSince1970: 1_700_000_000)
+        // A corrupt or clock-skewed timestamp > 24h in the future must not disable checks forever.
+        settingsService.saveUpdateCheckBackoffUntil(currentTime.addingTimeInterval(48 * 60 * 60))
+        mockSession.responseJSON = newerReleaseJSON
+        let vm = UpdateCheckViewModel(
+            updateService: updateService,
+            downloadService: mockDownloadService,
+            settingsService: settingsService,
+            currentVersion: "0.1.0",
+            now: { currentTime }
+        )
+
+        await vm.checkOnLaunch(isHostKeyBlocking: false)
+
+        XCTAssertEqual(mockSession.requestCount, 1)
+        XCTAssertNil(settingsService.loadUpdateCheckBackoffUntil())
+        XCTAssertTrue(vm.showUpdateSheet)
+    }
+
+    func testStaleLaunchCheckDoesNotClobberNewerManualCheck() async {
+        settingsService.saveSkippedUpdateVersion("0.2.0")
+        mockSession.responseJSON = newerReleaseJSON
+        let vm = UpdateCheckViewModel(
+            updateService: updateService,
+            downloadService: mockDownloadService,
+            settingsService: settingsService,
+            currentVersion: "0.1.0"
+        )
+        var triggeredManual = false
+        mockSession.onRequest = {
+            guard !triggeredManual else { return }
+            triggeredManual = true
+            // While launch check (with skippedVersion=0.2.0) is in flight,
+            // run manual check (which ignores skippedVersion) to completion.
+            await vm.checkManually()
+        }
+
+        await vm.checkOnLaunch(isHostKeyBlocking: false)
+
+        // Manual check presented 0.2.0; stale launch check (which got nil due to skippedVersion)
+        // must NOT clear pendingUpdate or collapse the open sheet.
+        XCTAssertEqual(vm.pendingUpdate?.version, "0.2.0")
+        XCTAssertTrue(vm.showUpdateSheet)
+    }
+
+    func testCheckManuallyIsIgnoredWhileDownloadInProgress() async {
+        mockSession.responseJSON = newerReleaseJSON
+        let vm = UpdateCheckViewModel(
+            updateService: updateService,
+            downloadService: mockDownloadService,
+            settingsService: settingsService,
+            currentVersion: "0.1.0",
+            inAppUpdateInstallationEnabled: true
+        )
+        await vm.checkOnLaunch(isHostKeyBlocking: false)
+        XCTAssertEqual(mockSession.requestCount, 1)
+        XCTAssertEqual(vm.pendingUpdate?.version, "0.2.0")
+
+        mockDownloadService.onDownload = {
+            // Attempting a manual check mid-download must be ignored so pendingUpdate stays intact.
+            await vm.checkManually()
+        }
+        await vm.downloadUpdate()
+
+        XCTAssertEqual(mockSession.requestCount, 1)
+        XCTAssertEqual(vm.pendingUpdate?.version, "0.2.0")
+        XCTAssertFalse(vm.isDownloadingUpdate)
+    }
+
+    func testDuplicateCheckOnLaunchIgnoredWhenUpdateAlreadyPending() async {
+        mockSession.responseJSON = newerReleaseJSON
+        let vm = UpdateCheckViewModel(
+            updateService: updateService,
+            downloadService: mockDownloadService,
+            settingsService: settingsService,
+            currentVersion: "0.1.0"
+        )
+        await vm.checkOnLaunch(isHostKeyBlocking: false)
+        XCTAssertEqual(mockSession.requestCount, 1)
+
+        // Opening a second window runs .task -> checkOnLaunch again while pendingUpdate is set.
+        await vm.checkOnLaunch(isHostKeyBlocking: false)
+        XCTAssertEqual(mockSession.requestCount, 1)
+    }
+
     private var newerReleaseJSON: String {
         """
         {
@@ -426,9 +529,11 @@ private final class MockUpdateURLSession: URLSessionDataProviding, @unchecked Se
 private final class MockAppUpdateDownloadService: AppUpdateDownloading, @unchecked Sendable {
     var error: AppUpdateDownloadError?
     var downloadedUpdates: [AppUpdateInfo] = []
+    var onDownload: (@Sendable () async -> Void)?
 
     func downloadVerifyAndReveal(update: AppUpdateInfo) async throws {
         downloadedUpdates.append(update)
+        await onDownload?()
         if let error {
             throw error
         }

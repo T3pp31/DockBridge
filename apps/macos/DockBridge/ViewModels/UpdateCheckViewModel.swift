@@ -34,6 +34,9 @@ final class UpdateCheckViewModel: ObservableObject {
     /// Tracks whether the startup host-key prompt has been resolved, so a
     /// slow update check can still present after dismissal (issue #636).
     private var isHostKeyResolved = false
+    /// Monotonic token so a newer manual check supersedes any in-flight launch check.
+    private var checkGeneration: UInt64 = 0
+    private var isCheckingOnLaunch = false
 
     init(
         updateService: AppUpdateService = AppUpdateService(),
@@ -59,13 +62,22 @@ final class UpdateCheckViewModel: ObservableObject {
 
     func checkOnLaunch(isHostKeyBlocking: Bool) async {
         isHostKeyResolved = !isHostKeyBlocking
-        let currentTime = now()
-        if let backoffUntil = settingsService.loadUpdateCheckBackoffUntil(),
-           currentTime < backoffUntil {
-            AppLogging.update.info(
-                "skipping launch update check due to rate-limit backoff until \(backoffUntil, privacy: .public)"
-            )
+        guard !isCheckingOnLaunch, !isCheckingManually, !isDownloadingUpdate, pendingUpdate == nil else {
             return
+        }
+        let currentTime = now()
+        if let backoffUntil = settingsService.loadUpdateCheckBackoffUntil() {
+            let remaining = backoffUntil.timeIntervalSince(currentTime)
+            if remaining > 0 {
+                if remaining <= AppUpdateService.maxRateLimitBackoff {
+                    AppLogging.update.info(
+                        "skipping launch update check due to rate-limit backoff until \(backoffUntil, privacy: .public)"
+                    )
+                    return
+                }
+                // Clock skew or corrupt future timestamp exceeds max backoff; clear it.
+                settingsService.saveUpdateCheckBackoffUntil(nil)
+            }
         }
         if let lastCheck = settingsService.loadLastUpdateCheckAt(),
            currentTime >= lastCheck,
@@ -74,23 +86,32 @@ final class UpdateCheckViewModel: ObservableObject {
             return
         }
 
+        checkGeneration &+= 1
+        let generation = checkGeneration
+        isCheckingOnLaunch = true
+        defer { isCheckingOnLaunch = false }
+
         do {
             let update = try await updateService.checkForUpdate(
                 currentVersion: currentVersion,
                 skippedVersion: settingsService.loadSkippedUpdateVersion()
             )
+            guard generation == checkGeneration, !isDownloadingUpdate else { return }
             settingsService.saveUpdateCheckBackoffUntil(nil)
             guard let update else {
                 pendingUpdate = nil
+                showUpdateSheet = false
                 settingsService.saveLastUpdateCheckAt(now())
                 return
             }
             pendingUpdate = update
             presentPendingUpdateIfAllowed()
         } catch let error as AppUpdateServiceError {
+            guard generation == checkGeneration else { return }
             recordRateLimitBackoffIfNeeded(for: error)
             AppLogging.update.error("update check failed on launch: \(error.localizedDescription, privacy: .public)")
         } catch {
+            guard generation == checkGeneration else { return }
             AppLogging.update.error("update check failed on launch: \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -100,7 +121,9 @@ final class UpdateCheckViewModel: ObservableObject {
     /// rate-limit backoff, and skipped version) and reports up-to-date or error
     /// states via `manualCheckAlert`.
     func checkManually() async {
-        guard !isCheckingManually else { return }
+        guard !isCheckingManually, !isDownloadingUpdate else { return }
+        checkGeneration &+= 1
+        let generation = checkGeneration
         isCheckingManually = true
         defer { isCheckingManually = false }
 
@@ -112,12 +135,14 @@ final class UpdateCheckViewModel: ObservableObject {
                 currentVersion: currentVersion,
                 skippedVersion: nil
             )
+            guard generation == checkGeneration, !isDownloadingUpdate else { return }
             settingsService.saveUpdateCheckBackoffUntil(nil)
             if let update {
                 pendingUpdate = update
                 showUpdateSheet = true
             } else {
                 pendingUpdate = nil
+                showUpdateSheet = false
                 settingsService.saveLastUpdateCheckAt(now())
                 let versionLabel = VersionComparator.normalize(currentVersion)
                 manualCheckAlert = ManualCheckAlert(
@@ -129,6 +154,7 @@ final class UpdateCheckViewModel: ObservableObject {
                 )
             }
         } catch let error as AppUpdateServiceError {
+            guard generation == checkGeneration else { return }
             recordRateLimitBackoffIfNeeded(for: error)
             AppLogging.update.error("manual update check failed: \(error.localizedDescription, privacy: .public)")
             manualCheckAlert = ManualCheckAlert(
@@ -136,6 +162,7 @@ final class UpdateCheckViewModel: ObservableObject {
                 message: error.localizedDescription
             )
         } catch {
+            guard generation == checkGeneration else { return }
             AppLogging.update.error("manual update check failed: \(error.localizedDescription, privacy: .public)")
             manualCheckAlert = ManualCheckAlert(
                 title: String(localized: "Update Check Failed"),

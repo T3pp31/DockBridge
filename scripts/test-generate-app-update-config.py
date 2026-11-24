@@ -96,12 +96,24 @@ class GenerateAppUpdateConfigTests(unittest.TestCase):
         ok = self.run_gen("--check")
         self.assertEqual(ok.returncode, 0, ok.stderr)
 
-        # Idempotent re-run preserves mtime.
+        # Idempotent re-run preserves mtime and succeeds even if output dir is read-only.
         old_mtime = self.out.stat().st_mtime_ns - 10_000_000_000
         os.utime(self.out, ns=(old_mtime, old_mtime))
-        rerun = self.run_gen()
-        self.assertEqual(rerun.returncode, 0, rerun.stderr)
-        self.assertEqual(self.out.stat().st_mtime_ns, old_mtime)
+        out_dir = self.out.parent
+        out_dir.chmod(0o555)
+        try:
+            rerun = self.run_gen()
+            self.assertEqual(rerun.returncode, 0, rerun.stderr)
+            self.assertEqual(self.out.stat().st_mtime_ns, old_mtime)
+        finally:
+            out_dir.chmod(0o755)
+
+        # Custom --out path writes and checks cleanly.
+        custom_out = self.root / "custom" / "OutConfig.swift"
+        custom_gen = self.run_gen("--out", str(custom_out))
+        self.assertEqual(custom_gen.returncode, 0, custom_gen.stderr)
+        self.assertEqual(custom_out.read_text(), text)
+        self.assertEqual(self.run_gen("--check", "--out", str(custom_out)).returncode, 0)
 
         # Mutate config/release.toml with populated signing fields -> --check fails.
         self.config.write_text(
@@ -129,9 +141,12 @@ class GenerateAppUpdateConfigTests(unittest.TestCase):
         for bad_line in (
             'github_repo = "not-a-repo"',
             'github_repo = "owner/repo/extra"',
+            'app_name = "Dock;Bridge"',
             'bundle_identifier = "com.dockbridge/evil"',
             'team_id = "TEAM;evil"',
             'signing_certificate_fingerprint_sha256 = "not-hex-xyz"',
+            'signing_certificate_fingerprint_sha256 = "ab:cd:ef"',
+            'signing_certificate_fingerprint_sha256 = "abcdef"',
         ):
             with self.subTest(bad_line=bad_line):
                 key = bad_line.split("=", 1)[0].strip()

@@ -16,7 +16,7 @@ struct MainViewCommands: Commands {
             Button(String(localized: "Check for Updates…")) {
                 Task { await updateCheck.checkManually() }
             }
-            .disabled(updateCheck.isCheckingManually)
+            .disabled(updateCheck.isCheckingManually || updateCheck.isDownloadingUpdate)
         }
 
         CommandMenu(String(localized: "Go")) {

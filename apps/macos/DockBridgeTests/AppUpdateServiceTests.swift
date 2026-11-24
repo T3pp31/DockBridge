@@ -574,5 +574,16 @@ extension AppUpdateServiceTests {
             AppUpdateService.maxRateLimitBackoff,
             accuracy: 0.5
         )
+        // Obsolete RFC 850 and ANSI C asctime formats.
+        XCTAssertEqual(
+            AppUpdateService.parseRetryAfter("Tuesday, 14-Nov-23 22:18:20 GMT", now: base),
+            300,
+            accuracy: 0.5
+        )
+        XCTAssertEqual(
+            AppUpdateService.parseRetryAfter("Tue Nov 14 22:18:20 2023", now: base),
+            300,
+            accuracy: 0.5
+        )
     }
 }
