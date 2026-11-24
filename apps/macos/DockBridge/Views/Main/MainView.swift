@@ -23,7 +23,7 @@ struct MainView: View {
         connectionList: ConnectionListViewModel,
         transferQueue: TransferQueueViewModel,
         viewModel: MainViewModel,
-        updateCheck: UpdateCheckViewModel = UpdateCheckViewModel(),
+        updateCheck: UpdateCheckViewModel,
         showSettings: Binding<Bool>
     ) {
         _bridge = ObservedObject(wrappedValue: bridge)

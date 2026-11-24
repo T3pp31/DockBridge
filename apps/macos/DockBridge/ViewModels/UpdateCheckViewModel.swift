@@ -45,7 +45,7 @@ final class UpdateCheckViewModel: ObservableObject {
         currentVersion: String = VersionComparator.currentAppVersion,
         inAppUpdateInstallationEnabled: Bool? = nil,
         openURL: @escaping (URL) -> Void = { NSWorkspace.shared.open($0) },
-        now: @escaping () -> Date = Date.init,
+        now: @escaping () -> Date = { Date() },
         launchCheckInterval: TimeInterval = UpdateCheckViewModel.defaultLaunchCheckInterval
     ) {
         self.updateService = updateService

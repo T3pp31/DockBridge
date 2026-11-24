@@ -6,7 +6,7 @@ struct DockBridgeApp: App {
     @StateObject private var connectionList: ConnectionListViewModel
     @StateObject private var transferQueue: TransferQueueViewModel
     @StateObject private var mainViewModel: MainViewModel
-    @StateObject private var updateCheck = UpdateCheckViewModel()
+    @StateObject private var updateCheck: UpdateCheckViewModel
     @State private var settingsConfig = AppConfig.default
     @State private var showSettings = false
 
@@ -15,12 +15,14 @@ struct DockBridgeApp: App {
         let connectionList = ConnectionListViewModel(bridge: bridge)
         let transferQueue = TransferQueueViewModel(bridge: bridge)
         let main = MainViewModel(bridge: bridge, connectionList: connectionList, transferQueue: transferQueue)
+        let updateCheck = UpdateCheckViewModel()
         let config = AppSettingsService.shared.loadConfig()
 
         _bridge = StateObject(wrappedValue: bridge)
         _connectionList = StateObject(wrappedValue: connectionList)
         _transferQueue = StateObject(wrappedValue: transferQueue)
         _mainViewModel = StateObject(wrappedValue: main)
+        _updateCheck = StateObject(wrappedValue: updateCheck)
         _settingsConfig = State(initialValue: config)
         TransferNotificationService.requestAuthorizationIfNeeded(for: config)
     }
