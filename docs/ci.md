@@ -103,7 +103,7 @@ Docker / SSH を使用する E2E テスト（`ManualTestPlanVerificationTests` �
 | `cargo test --workspace --all-targets` | はい（Linux `rust`・macOS `macos`） | `dockbridge-core` / `dockbridge-cli` / `dockbridge-uniffi` の単体・結合テスト（インプロセス SFTP サーバ含む） | `#[ignore]` 付き実 OpenSSH `sftp-server` 検証・ベンチマーク・`root` 専用テストは別途実行 |
 | `cargo test -p bssh-russh-sftp --lib` | はい（Linux `rust`） | ベンダー済み `bssh-russh-sftp` フォークの SFTP サーバ回帰テスト（プロトコル/転送/エラー変換） | なし |
 | `cargo test -p dockbridge-cli --features disable-cli-password` | はい（Linux `rust`） | ハードニング済み CLI 構成（`--password-stdin` 等、平文 `--password` 禁止）のテスト | なし |
-| `xcodebuild ... test-without-building` + `Verify macOS test result counts` | はい（macOS `macos`・unsigned） | Swift ユニットテスト・ViewModel/Bridge/ファイルドロップ結合テスト、および `.xcresult` の `totalTestCount >= 1` / `passedTests >= 1` / `failedTests == 0` 保証 | Docker SFTP E2E（`ManualTestPlanVerificationTests`）・署名済みアプリ Keychain / App Sandbox / 更新インストール検証は `XCTSkip` により明示的に分離 |
+| `xcodebuild ... test-without-building` + `Verify macOS test result counts` | はい（macOS `macos`・unsigned） | Swift ユニットテスト・ViewModel/Bridge/ファイルドロップ結合テスト、および `scripts/verify-macos-test-results.py` による `failedTests == 0` / `expectedFailures == 0` / 最低合格件数（`DEFAULT_MIN_PASSED_TESTS`）/ `ALLOWED_SKIPPED_TESTS` 外の `XCTSkip` 0 件保証 | Docker SFTP E2E（`ManualTestPlanVerificationTests` / `FileDropAcceptanceTests`）・署名済みアプリ Keychain・大文字小文字区別 FS テストは `ALLOWED_SKIPPED_TESTS` で明示的に分離 |
 | `scripts/test-*.py`・`scripts/test-website-download.cjs`・`shellcheck -x scripts/*.sh` | はい（Linux `rust` / `website`、一部 macOS） | 検証スクリプト群の判定契約・失敗伝播・xcresult 集計・設定リーダ・ローカライズ整合性 | 実 Docker コンテナ・実 Accessibility/UI・実 `pfctl` によるオフライン検証は手動スクリプト実行時のみ |
 
 ## 関連する GitHub Issue
