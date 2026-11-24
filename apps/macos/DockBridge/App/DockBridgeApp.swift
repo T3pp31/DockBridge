@@ -6,6 +6,7 @@ struct DockBridgeApp: App {
     @StateObject private var connectionList: ConnectionListViewModel
     @StateObject private var transferQueue: TransferQueueViewModel
     @StateObject private var mainViewModel: MainViewModel
+    @StateObject private var updateCheck = UpdateCheckViewModel()
     @State private var settingsConfig = AppConfig.default
     @State private var showSettings = false
 
@@ -31,6 +32,7 @@ struct DockBridgeApp: App {
                 connectionList: connectionList,
                 transferQueue: transferQueue,
                 viewModel: mainViewModel,
+                updateCheck: updateCheck,
                 showSettings: $showSettings
             )
             .onReceive(NotificationCenter.default.publisher(for: .appConfigDidChange)) { notification in
@@ -50,6 +52,7 @@ struct DockBridgeApp: App {
             MainViewCommands(
                 connectionList: connectionList,
                 viewModel: mainViewModel,
+                updateCheck: updateCheck,
                 showSettings: $showSettings
             )
         }

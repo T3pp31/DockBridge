@@ -360,6 +360,28 @@ class ReleaseConfigTests(unittest.TestCase):
         self.assertEqual(result.stdout, "2.3.4\n")
         self.assert_failure(self.read("--cargo-version", "version"))
 
+        self.config.write_text(
+            '[release]\nteam_id = ""\nfilled = "TEAM123"\nflag = true\n'
+        )
+        result = self.read("--allow-empty", "team_id")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "\n")
+        result = self.read("--allow-empty", "filled")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "TEAM123\n")
+        for bad_args in (
+            ("team_id",),
+            ("--allow-empty", "missing"),
+            ("--allow-empty", "flag"),
+            ("--allow-empty", "--bool", "flag"),
+            ("--bool", "--allow-empty", "flag"),
+            ("--allow-empty", "--int", "team_id"),
+            ("--allow-empty", "--cargo-version"),
+            ("--allow-empty", "--expand", "team_id", "--version", "1.0.0"),
+        ):
+            with self.subTest(args=bad_args):
+                self.assert_failure(self.read(*bad_args))
+
     def concurrency_block(self):
         text = (ROOT / ".github" / "workflows" / "release.yml").read_text()
         block = re.search(r"^concurrency:\n((?:[ \t]+.*\n)+)", text, re.MULTILINE)

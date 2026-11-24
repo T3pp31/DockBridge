@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Read metadata from config/release.toml or [workspace.package].version from Cargo.toml.
 # Supported invocations:
-#   bash scripts/release-config.sh [--section <name>] [--bool|--int] <key>
+#   bash scripts/release-config.sh [--section <name>] [--bool|--int|--allow-empty] <key>
 #   bash scripts/release-config.sh --expand <template_key> --version <version> [--app-name <app_name>]
 #   bash scripts/release-config.sh --cargo-version
 # Workflow and script metadata uses single-line, unescaped double-quoted strings,
@@ -13,6 +13,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="${ROOT}/config/release.toml"
 SECTION="release"
 VALUE_TYPE="string"
+ALLOW_EMPTY=false
 CARGO_VERSION=false
 EXPAND=false
 EXPAND_VERSION=""
@@ -22,7 +23,7 @@ HAS_EXPAND_APP_NAME=false
 KEY=""
 
 usage() {
-  echo "Usage: bash $0 [--section <section>] [--bool|--int] <key> | --expand <template_key> --version <version> [--app-name <app_name>] | --cargo-version" >&2
+  echo "Usage: bash $0 [--section <section>] [--bool|--int|--allow-empty] <key> | --expand <template_key> --version <version> [--app-name <app_name>] | --cargo-version" >&2
   exit 1
 }
 
@@ -31,8 +32,9 @@ read_config_value() {
   local section="$2"
   local value_type="$3"
   local key="$4"
+  local allow_empty="${5:-false}"
 
-  awk -v section="$section" -v key="$key" -v value_type="$value_type" '
+  awk -v section="$section" -v key="$key" -v value_type="$value_type" -v allow_empty="$allow_empty" '
     {
       sub(/\r$/, "")
       if ($0 ~ /^[ \t]*\[/) {
@@ -71,7 +73,7 @@ read_config_value() {
       }
     }
     END {
-      if (found != 1 || invalid || value == "") {
+      if (found != 1 || invalid || (value == "" && allow_empty != "true")) {
         printf "error: expected one valid %s for [%s].%s in %s\n", value_type, section, key, FILENAME > "/dev/stderr"
         exit 1
       }
@@ -83,14 +85,14 @@ read_config_value() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --cargo-version)
-      if [[ "$CARGO_VERSION" == true || "$EXPAND" == true || "$SECTION" != "release" || "$VALUE_TYPE" != "string" || -n "$KEY" ]]; then
+      if [[ "$CARGO_VERSION" == true || "$EXPAND" == true || "$ALLOW_EMPTY" == true || "$SECTION" != "release" || "$VALUE_TYPE" != "string" || -n "$KEY" ]]; then
         usage
       fi
       CARGO_VERSION=true
       shift
       ;;
     --expand)
-      if [[ $# -lt 2 || "$EXPAND" == true || "$CARGO_VERSION" == true || "$SECTION" != "release" || "$VALUE_TYPE" != "string" || -n "$KEY" ]]; then
+      if [[ $# -lt 2 || "$EXPAND" == true || "$CARGO_VERSION" == true || "$ALLOW_EMPTY" == true || "$SECTION" != "release" || "$VALUE_TYPE" != "string" || -n "$KEY" ]]; then
         usage
       fi
       EXPAND=true
@@ -119,13 +121,18 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --bool)
-      [[ "$CARGO_VERSION" == false && "$EXPAND" == false && "$VALUE_TYPE" == "string" ]] || usage
+      [[ "$CARGO_VERSION" == false && "$EXPAND" == false && "$ALLOW_EMPTY" == false && "$VALUE_TYPE" == "string" ]] || usage
       VALUE_TYPE="bool"
       shift
       ;;
     --int)
-      [[ "$CARGO_VERSION" == false && "$EXPAND" == false && "$VALUE_TYPE" == "string" ]] || usage
+      [[ "$CARGO_VERSION" == false && "$EXPAND" == false && "$ALLOW_EMPTY" == false && "$VALUE_TYPE" == "string" ]] || usage
       VALUE_TYPE="int"
+      shift
+      ;;
+    --allow-empty)
+      [[ "$CARGO_VERSION" == false && "$EXPAND" == false && "$ALLOW_EMPTY" == false && "$VALUE_TYPE" == "string" ]] || usage
+      ALLOW_EMPTY=true
       shift
       ;;
     --*)
@@ -176,4 +183,4 @@ if [[ "$EXPAND" == true ]]; then
   exit 0
 fi
 
-read_config_value "$CONFIG" "$SECTION" "$VALUE_TYPE" "$KEY"
+read_config_value "$CONFIG" "$SECTION" "$VALUE_TYPE" "$KEY" "$ALLOW_EMPTY"

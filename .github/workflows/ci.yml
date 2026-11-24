@@ -94,6 +94,8 @@ jobs:
         run: python3 scripts/test-release-notes.py
       - name: Test release configuration reader and workflow guards
         run: python3 scripts/test-release-config.py
+      - name: Test AppUpdateReleaseConfig generation
+        run: python3 scripts/test-generate-app-update-config.py -v
       - name: Test signing identity resolution (mocked macOS commands)
         run: python3 scripts/test-sign-and-notarize-macos.py
       - name: Test transfer-cancel verification diagnostics
@@ -261,6 +263,8 @@ jobs:
 
       - name: Test release configuration reader and workflow guards
         run: python3 scripts/test-release-config.py
+      - name: Test AppUpdateReleaseConfig generation
+        run: python3 scripts/test-generate-app-update-config.py -v
 
       - name: Pin Xcode 16.4
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90  # v1.7.0
@@ -286,6 +290,9 @@ jobs:
 
       - name: Verify localization catalog (en + ja)
         run: ./scripts/verify-localization.sh
+
+      - name: Verify AppUpdateReleaseConfig matches config/release.toml
+        run: ./scripts/generate-app-update-config.sh --check
 
       - name: Guard Settings scene state wiring
         run: python3 scripts/test-settings-scene.py
