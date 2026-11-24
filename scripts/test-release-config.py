@@ -302,9 +302,9 @@ class ReleaseConfigTests(unittest.TestCase):
                 result = self.run_step(workflow, "Install pinned XcodeGen", preamble=preamble)
                 self.assertEqual(result.returncode, 99, result.stdout + result.stderr)
                 self.assertEqual(self.output.read_text(), "download\n")
-            self.output.write_text("")
             for key in ("xcodegen_version", "xcodegen_sha256"):
                 with self.subTest(workflow=workflow, key=key):
+                    self.output.write_text("")
                     self.config.write_text(re.sub(
                         rf'^{key} = .*$', f'{key} = "invalid"', CONFIG, flags=re.MULTILINE))
                     result = self.run_step(

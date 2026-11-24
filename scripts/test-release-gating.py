@@ -92,6 +92,8 @@ class ReleaseGatingTests(unittest.TestCase):
         for step_name in (
             "Verify localization catalog (en + ja)",
             "Guard Settings scene state wiring",
+            "Build Rust static library",
+            "Generate UniFFI bindings",
             "Install pinned XcodeGen",
             "Verify xcodeproj matches project.yml (xcodegen)",
             "Verify committed Swift bindings are up to date",
@@ -105,6 +107,10 @@ class ReleaseGatingTests(unittest.TestCase):
         build_and_test = step_pos("Build and test macOS app")
         self.assertLess(step_pos("Verify localization catalog (en + ja)"), build_and_test)
         self.assertLess(step_pos("Guard Settings scene state wiring"), build_and_test)
+        self.assertLess(
+            step_pos("Build Rust static library"),
+            step_pos("Generate UniFFI bindings"),
+        )
         self.assertLess(
             step_pos("Install pinned XcodeGen"),
             step_pos("Verify xcodeproj matches project.yml (xcodegen)"),
