@@ -295,20 +295,24 @@ class ReleaseConfigTests(unittest.TestCase):
         # Stop unconditionally at curl; these tests never download or install tools.
         self.env.update(RUNNER_TEMP=str(self.root), GITHUB_PATH=str(self.output))
         preamble = 'curl() { echo download > "$GITHUB_OUTPUT"; return 99; }\n'
-        result = self.run_step("ci.yml", "Install pinned XcodeGen", preamble=preamble)
-        self.assertEqual(result.returncode, 99, result.stdout + result.stderr)
-        self.assertEqual(self.output.read_text(), "download\n")
-        self.output.write_text("")
-        for key in ("xcodegen_version", "xcodegen_sha256"):
-            with self.subTest(key=key):
-                self.config.write_text(re.sub(
-                    rf'^{key} = .*$', f'{key} = "invalid"', CONFIG, flags=re.MULTILINE))
-                result = self.run_step(
-                    "ci.yml", "Install pinned XcodeGen",
-                    preamble='curl() { echo unexpected > "$GITHUB_OUTPUT"; return 99; }\n')
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(f"Invalid {key}", result.stdout)
-                self.assertEqual(self.output.read_text(), "")
+        for workflow in ("ci.yml", "release.yml"):
+            self.output.write_text("")
+            self.config.write_text(CONFIG)
+            with self.subTest(workflow=workflow, case="valid"):
+                result = self.run_step(workflow, "Install pinned XcodeGen", preamble=preamble)
+                self.assertEqual(result.returncode, 99, result.stdout + result.stderr)
+                self.assertEqual(self.output.read_text(), "download\n")
+            for key in ("xcodegen_version", "xcodegen_sha256"):
+                with self.subTest(workflow=workflow, key=key):
+                    self.output.write_text("")
+                    self.config.write_text(re.sub(
+                        rf'^{key} = .*$', f'{key} = "invalid"', CONFIG, flags=re.MULTILINE))
+                    result = self.run_step(
+                        workflow, "Install pinned XcodeGen",
+                        preamble='curl() { echo unexpected > "$GITHUB_OUTPUT"; return 99; }\n')
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"Invalid {key}", result.stdout)
+                    self.assertEqual(self.output.read_text(), "")
 
     def test_workflows_use_shared_reader(self):
         used_keys = set()
