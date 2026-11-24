@@ -52,20 +52,26 @@ final class ConnectionListViewModel: ObservableObject {
     var canDisconnect: Bool { connectionStatus.isConnected }
 
     func isActiveProfile(_ profile: ConnectionProfile) -> Bool {
-        // A pending connection (including pre-connect warnings, async RSA
-        // inspection, credential prompts, and queued connect tasks) must also
-        // protect its profile from deletion (#783, #1452).
-        if connectedProfileID == profile.id
-            && (connectionStatus.isConnected || connectionStatus.isConnecting) {
-            return true
+        // Active bridge session (connected or connecting). Used for context-menu
+        // Connect/Disconnect and row indicators.
+        connectedProfileID == profile.id
+            && (connectionStatus.isConnected || connectionStatus.isConnecting)
+    }
+
+    func canDeleteProfile(_ profile: ConnectionProfile) -> Bool {
+        // Active sessions and pending/in-flight connections (pre-connect
+        // warnings, async RSA inspection, credential prompts, and queued
+        // connect tasks) must protect their profile from deletion (#783, #1452).
+        if isActiveProfile(profile) {
+            return false
         }
         if pendingConnectProfile?.id == profile.id {
-            return true
+            return false
         }
         if pendingCredentialPrompt?.profile.id == profile.id {
-            return true
+            return false
         }
-        return (inFlightConnectCounts[profile.id] ?? 0) > 0
+        return (inFlightConnectCounts[profile.id] ?? 0) == 0
     }
 
     private func beginInFlightConnect(for profileID: UUID) {
@@ -126,6 +132,7 @@ final class ConnectionListViewModel: ObservableObject {
         do {
             let result = try store.loadProfilesWithEndpointCheck()
             profiles = result.profiles
+            deletedProfileIDs.subtract(result.profiles.map(\.id))
             if selectedProfileID == nil {
                 selectedProfileID = profiles.first?.id
             }
@@ -310,7 +317,7 @@ final class ConnectionListViewModel: ObservableObject {
     /// Asks the user to confirm before deleting a profile (and its Keychain
     /// credentials). The actual `delete(profile:)` runs only after approval.
     func requestDelete(profile: ConnectionProfile) {
-        guard !isActiveProfile(profile) else { return }
+        guard canDeleteProfile(profile) else { return }
         confirmDeleteProfile = profile
     }
 
@@ -318,7 +325,7 @@ final class ConnectionListViewModel: ObservableObject {
         defer { confirmDeleteProfile = nil }
         // The connection (or pre-connect confirmation) may have started while
         // the confirmation dialog was open.
-        guard !isActiveProfile(profile) else { return }
+        guard canDeleteProfile(profile) else { return }
         do {
             profiles = try store.delete(id: profile.id)
             deletedProfileIDs.insert(profile.id)
@@ -353,6 +360,8 @@ final class ConnectionListViewModel: ObservableObject {
     }
 
     private func clearPendingPrompts(forDeletedProfileID profileID: UUID) {
+        // Defensive cleanup in case pending connect/prompt state was populated
+        // for a profile that was removed.
         if pendingConnectProfile?.id == profileID {
             clearPendingConnectState()
         }
@@ -436,7 +445,8 @@ final class ConnectionListViewModel: ObservableObject {
             }.value
             onRsaInspectionCompleted?(usesRsa)
             guard generation == connectRequestGeneration,
-                  pendingConnectProfile?.id == profile.id else { return }
+                  pendingConnectProfile?.id == profile.id,
+                  !deletedProfileIDs.contains(profile.id) else { return }
             switch usesRsa {
             case .some(true):
                 showRsaKeyWarning = true
@@ -488,6 +498,11 @@ final class ConnectionListViewModel: ObservableObject {
             if pendingEndpointChanges.isEmpty {
                 showEndpointChangeWarning = false
             } else {
+                // Do not leave a requestConnect-originated pending profile
+                // wedged behind another profile's load-time warning.
+                if pendingConnectProfile?.id == change.profileID {
+                    clearPendingConnectState()
+                }
                 presentNextEndpointChangeWarning()
                 return
             }
@@ -499,6 +514,11 @@ final class ConnectionListViewModel: ObservableObject {
                 }
             }
         } catch {
+            // SwiftUI already dismissed the alert when the button was tapped;
+            // clear pending connect state so the profile is never stuck undeletable.
+            pendingEndpointChange = nil
+            showEndpointChangeWarning = false
+            clearPendingConnectState()
             errorMessage = error.localizedDescription
         }
     }
@@ -518,6 +538,9 @@ final class ConnectionListViewModel: ObservableObject {
                 presentNextEndpointChangeWarning()
             }
         } catch {
+            pendingEndpointChange = nil
+            showEndpointChangeWarning = false
+            clearPendingConnectState()
             errorMessage = error.localizedDescription
         }
     }

@@ -1404,7 +1404,8 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
     // MARK: - Pending connection deletion protection (#1452)
 
     func testPendingConnectProtectsProfileFromDeletionAcrossWarningsAndRsaInspection() async throws {
-        // 1. Root warning protects the pending profile until cancelled.
+        // 1. Root warning protects the pending profile from deletion without
+        // marking it as an active bridge session (context menu stays Connect).
         let rootProfile = ConnectionProfile(name: "Root", host: "root.example.com", username: "root")
         viewModel.save(rootProfile, password: "root-password", passphrase: nil)
         let rootAccount = keychain.keychainAccount(for: rootProfile.id, kind: "profile")
@@ -1414,7 +1415,8 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
             await Task.yield()
         }
         XCTAssertTrue(viewModel.showRootWarning)
-        XCTAssertTrue(viewModel.isActiveProfile(rootProfile))
+        XCTAssertFalse(viewModel.isActiveProfile(rootProfile))
+        XCTAssertFalse(viewModel.canDeleteProfile(rootProfile))
 
         viewModel.requestDelete(profile: rootProfile)
         XCTAssertNil(viewModel.confirmDeleteProfile)
@@ -1424,7 +1426,7 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertEqual(try keychain.loadPassword(account: rootAccount), "root-password")
 
         viewModel.cancelPendingConnect()
-        XCTAssertFalse(viewModel.isActiveProfile(rootProfile))
+        XCTAssertTrue(viewModel.canDeleteProfile(rootProfile))
         viewModel.delete(profile: rootProfile)
         XCTAssertTrue(viewModel.profiles.isEmpty)
         XCTAssertTrue(try store.loadProfiles().isEmpty)
@@ -1434,6 +1436,12 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         let inspectionStarted = DispatchSemaphore(value: 0)
         let finishInspection = DispatchSemaphore(value: 0)
         let inspectionCompleted = DispatchSemaphore(value: 0)
+        var inspectionReleased = false
+        defer {
+            if !inspectionReleased {
+                finishInspection.signal()
+            }
+        }
         let rsaModel = makeViewModel(
             rsaKeyInspector: { _, _, _ in
                 inspectionStarted.signal()
@@ -1460,7 +1468,8 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         rsaModel.requestConnect(profile: rsaProfile)
         let didStart = await waitForSignal(inspectionStarted)
         XCTAssertTrue(didStart)
-        XCTAssertTrue(rsaModel.isActiveProfile(rsaProfile))
+        XCTAssertFalse(rsaModel.isActiveProfile(rsaProfile))
+        XCTAssertFalse(rsaModel.canDeleteProfile(rsaProfile))
 
         // Even a pre-opened confirmation dialog cannot delete while RSA inspection is running.
         rsaModel.delete(profile: rsaProfile)
@@ -1469,6 +1478,7 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertEqual(try store.loadProfiles(), [rsaProfile])
         XCTAssertEqual(try keychain.loadPassphrase(account: rsaAccount), "rsa-passphrase")
 
+        inspectionReleased = true
         finishInspection.signal()
         let didComplete = await waitForSignal(inspectionCompleted)
         XCTAssertTrue(didComplete)
@@ -1476,14 +1486,15 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
             await Task.yield()
         }
         XCTAssertTrue(rsaModel.showRsaKeyWarning)
-        XCTAssertTrue(rsaModel.isActiveProfile(rsaProfile))
+        XCTAssertFalse(rsaModel.isActiveProfile(rsaProfile))
+        XCTAssertFalse(rsaModel.canDeleteProfile(rsaProfile))
 
         rsaModel.delete(profile: rsaProfile)
         XCTAssertEqual(rsaModel.profiles, [rsaProfile])
         XCTAssertEqual(try store.loadProfiles(), [rsaProfile])
 
         rsaModel.cancelPendingConnect()
-        XCTAssertFalse(rsaModel.isActiveProfile(rsaProfile))
+        XCTAssertTrue(rsaModel.canDeleteProfile(rsaProfile))
         rsaModel.delete(profile: rsaProfile)
         XCTAssertTrue(rsaModel.profiles.isEmpty)
         XCTAssertTrue(try store.loadProfiles().isEmpty)
@@ -1503,14 +1514,15 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
 
         viewModel.requestConnect(profile: tampered)
         XCTAssertTrue(viewModel.showEndpointChangeWarning)
-        XCTAssertTrue(viewModel.isActiveProfile(tampered))
+        XCTAssertFalse(viewModel.isActiveProfile(tampered))
+        XCTAssertFalse(viewModel.canDeleteProfile(tampered))
 
         viewModel.delete(profile: tampered)
         XCTAssertEqual(viewModel.profiles, [tampered])
         XCTAssertEqual(try store.loadProfiles(), [tampered])
 
         viewModel.restoreTrustedEndpoint()
-        XCTAssertFalse(viewModel.isActiveProfile(tampered))
+        XCTAssertTrue(viewModel.canDeleteProfile(tampered))
         viewModel.delete(profile: tampered)
         XCTAssertTrue(viewModel.profiles.isEmpty)
         XCTAssertTrue(try store.loadProfiles().isEmpty)
@@ -1530,7 +1542,8 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         await viewModel.connect(profile: passwordProfile)
         XCTAssertEqual(viewModel.pendingCredentialPrompt?.profile.id, passwordProfile.id)
         XCTAssertEqual(viewModel.pendingCredentialPrompt?.kind, .password)
-        XCTAssertTrue(viewModel.isActiveProfile(passwordProfile))
+        XCTAssertFalse(viewModel.isActiveProfile(passwordProfile))
+        XCTAssertFalse(viewModel.canDeleteProfile(passwordProfile))
 
         viewModel.delete(profile: passwordProfile)
         XCTAssertNil(viewModel.confirmDeleteProfile)
@@ -1538,7 +1551,7 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertEqual(try store.loadProfiles(), [passwordProfile])
 
         viewModel.cancelCredentialPrompt()
-        XCTAssertFalse(viewModel.isActiveProfile(passwordProfile))
+        XCTAssertTrue(viewModel.canDeleteProfile(passwordProfile))
         viewModel.delete(profile: passwordProfile)
         XCTAssertTrue(viewModel.profiles.isEmpty)
         XCTAssertTrue(try store.loadProfiles().isEmpty)
@@ -1553,7 +1566,8 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         )
         viewModel.save(keyProfile, password: nil, passphrase: nil)
         viewModel.beginPassphrasePrompt(for: keyProfile)
-        XCTAssertTrue(viewModel.isActiveProfile(keyProfile))
+        XCTAssertFalse(viewModel.isActiveProfile(keyProfile))
+        XCTAssertFalse(viewModel.canDeleteProfile(keyProfile))
 
         viewModel.requestDelete(profile: keyProfile)
         XCTAssertNil(viewModel.confirmDeleteProfile)
@@ -1561,12 +1575,13 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertEqual(viewModel.profiles, [keyProfile])
 
         viewModel.cancelCredentialPrompt()
-        XCTAssertFalse(viewModel.isActiveProfile(keyProfile))
+        XCTAssertTrue(viewModel.canDeleteProfile(keyProfile))
         viewModel.delete(profile: keyProfile)
         XCTAssertTrue(viewModel.profiles.isEmpty)
     }
 
-    func testDeleteDuringLoadEndpointWarningClearsPendingPrompts() throws {
+    func testDeleteDuringLoadWarningsClearsPendingPromptsAndTrustConfirmations() throws {
+        // 1. Load-time endpoint warnings advance or close when profiles are deleted.
         let first = ConnectionProfile(name: "First", host: "first.example.com", username: "user")
         let second = ConnectionProfile(name: "Second", host: "second.example.com", username: "user")
         try store.saveProfiles([first, second])
@@ -1581,7 +1596,7 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         viewModel.load()
         XCTAssertTrue(viewModel.showEndpointChangeWarning)
         XCTAssertEqual(viewModel.pendingEndpointChange?.profileID, first.id)
-        XCTAssertFalse(viewModel.isActiveProfile(tamperedFirst))
+        XCTAssertTrue(viewModel.canDeleteProfile(tamperedFirst))
 
         viewModel.delete(profile: tamperedFirst)
         XCTAssertEqual(viewModel.profiles, [tamperedSecond])
@@ -1592,9 +1607,78 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         XCTAssertTrue(viewModel.profiles.isEmpty)
         XCTAssertFalse(viewModel.showEndpointChangeWarning)
         XCTAssertNil(viewModel.pendingEndpointChange)
+
+        // 2. Deleting the only profile awaiting initial trust clears the confirmation.
+        let trustFile = baseDirectory.appendingPathComponent("trusted_endpoints.json")
+        try? FileManager.default.removeItem(at: trustFile)
+        let initialOnly = ConnectionProfile(name: "Initial", host: "init.example.com", username: "user")
+        try store.saveProfiles([initialOnly])
+        viewModel.load()
+        XCTAssertTrue(viewModel.showInitialTrustConfirmation)
+        viewModel.delete(profile: initialOnly)
+        XCTAssertFalse(viewModel.showInitialTrustConfirmation)
+
+        // 3. Deleting the only untrusted new profile clears new-profile trust confirmation.
+        let trusted = ConnectionProfile(name: "Trusted", host: "trusted.example.com", username: "user")
+        let added = ConnectionProfile(name: "Added", host: "added.example.com", username: "user")
+        try store.saveProfiles([trusted])
+        try store.seedInitialTrust(for: [trusted])
+        try store.saveProfiles([trusted, added])
+        viewModel.load()
+        XCTAssertTrue(viewModel.showNewProfileTrustConfirmation)
+        viewModel.delete(profile: added)
+        XCTAssertFalse(viewModel.showNewProfileTrustConfirmation)
     }
 
-    func testSuccessfulConnectDoesNotResurrectDeletedProfile() async throws {
+    func testEndpointChangeFailureClearsPendingConnectStateSoProfileRemainsDeletable() throws {
+        let profile = ConnectionProfile(name: "Endpoint", host: "good.example.com", username: "user")
+        try store.saveProfiles([profile])
+        try store.seedInitialTrust(for: [profile])
+        var tampered = profile
+        tampered.host = "evil.example.com"
+        try store.saveProfiles([tampered], updateTrust: false)
+        viewModel.load()
+        viewModel.pendingEndpointChange = nil
+        viewModel.showEndpointChangeWarning = false
+
+        // Trigger requestConnect-originated endpoint warning.
+        viewModel.requestConnect(profile: tampered)
+        XCTAssertNotNil(viewModel.pendingConnectProfile)
+        XCTAssertFalse(viewModel.canDeleteProfile(tampered))
+
+        // Corrupt trust store so acceptEndpointChange() throws after SwiftUI dismisses the alert.
+        let trustURL = baseDirectory.appendingPathComponent("trusted_endpoints.json")
+        try Data("not-json".utf8).write(to: trustURL)
+        viewModel.acceptEndpointChange()
+
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertNil(viewModel.pendingEndpointChange)
+        XCTAssertFalse(viewModel.showEndpointChangeWarning)
+        XCTAssertTrue(viewModel.canDeleteProfile(tampered))
+
+        // Corrupt profiles.json so restoreTrustedEndpoint() throws and also clears pendingConnectProfile.
+        viewModel.errorMessage = nil
+        viewModel.pendingConnectProfile = tampered
+        viewModel.pendingEndpointChange = ProfileEndpointChange(
+            profileID: tampered.id,
+            profileName: tampered.displayName,
+            trusted: TrustedProfileEndpoint(profile: profile),
+            current: TrustedProfileEndpoint(profile: tampered)
+        )
+        viewModel.showEndpointChangeWarning = true
+        let profilesURL = baseDirectory.appendingPathComponent("profiles.json")
+        try Data("not-json".utf8).write(to: profilesURL)
+        viewModel.restoreTrustedEndpoint()
+
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertNil(viewModel.pendingConnectProfile)
+        XCTAssertNil(viewModel.pendingEndpointChange)
+        XCTAssertFalse(viewModel.showEndpointChangeWarning)
+        XCTAssertTrue(viewModel.canDeleteProfile(tampered))
+    }
+
+    func testSuccessfulConnectDoesNotResurrectDeletedProfileAndReconcilesOnSaveAndLoad() async throws {
         let mockClient = MockDockBridgeClient(
             connectResult: .success(101),
             initialDirectoryResult: .success("/home/user")
@@ -1625,12 +1709,34 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
 
         localViewModel.beginPasswordPrompt(for: activeProfile)
         XCTAssertNil(localViewModel.pendingCredentialPrompt)
+
+        // Directly populate pendingCredentialPrompt to exercise confirmCredentialPrompt's
+        // deletedProfileIDs guard: Keychain must not be written and credential must be cleared.
+        localViewModel.pendingCredentialPrompt = (activeProfile, .password)
         let credential = SensitiveString()
         credential.text = "resurrected-secret"
         localViewModel.confirmCredentialPrompt(credential: credential, saveToKeychain: true)
         XCTAssertEqual(credential.text, "")
+        XCTAssertNil(localViewModel.pendingCredentialPrompt)
         let account = keychain.keychainAccount(for: activeProfile.id, kind: "profile")
         XCTAssertNil(try keychain.loadPassword(account: account))
+        XCTAssertFalse(localViewModel.isConnected)
+        XCTAssertTrue(localViewModel.profiles.isEmpty)
+
+        // Re-saving or reloading the deleted profile's ID reconciles deletedProfileIDs.
+        try store.saveProfiles([activeProfile])
+        try keychain.savePassword("restored-secret", account: account)
+        localViewModel.load()
+        await localViewModel.connect(profile: activeProfile)
+        XCTAssertTrue(localViewModel.isConnected)
+        await localViewModel.disconnect()
+
+        localViewModel.delete(profile: activeProfile)
+        localViewModel.save(activeProfile, password: "resaved-secret", passphrase: nil)
+        await localViewModel.connect(profile: activeProfile)
+        XCTAssertTrue(localViewModel.isConnected)
+        await localViewModel.disconnect()
+        localViewModel.delete(profile: activeProfile)
 
         // Belt-and-suspenders: even if a profile is absent from viewModel.profiles
         // (e.g. removed externally before connect succeeds), performConnect must
@@ -1644,7 +1750,44 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         await localViewModel.disconnect()
     }
 
-    func testConfirmRootConnectProtectsProfileDuringQueuedTaskHandoff() async throws {
+    func testInFlightConnectHandoffProtectsProfileAfterPendingStateClearsAndUnblocksOnFailure() async throws {
+        // 1. confirmCredentialPrompt synchronously clears pendingCredentialPrompt while
+        // scheduling Task { await connect(...) }. During that handoff (before bridge.connect
+        // starts), inFlightConnectCounts alone must keep canDeleteProfile == false, and
+        // must unblock once the failed connect finishes.
+        let failingModel = try makeBridgeFailingViewModel()
+        let profile = ConnectionProfile(name: "Handoff", host: "handoff.example.com", username: "user")
+        failingModel.save(profile, password: nil, passphrase: nil)
+        failingModel.beginPasswordPrompt(for: profile)
+
+        let credential = SensitiveString()
+        credential.text = "one-time-password"
+        let failed = expectation(description: "Queued connect fails at bridge preparation")
+        let cancellable = failingModel.$errorMessage.compactMap { $0 }.first().sink { _ in
+            failed.fulfill()
+        }
+        defer { cancellable.cancel() }
+
+        failingModel.confirmCredentialPrompt(credential: credential, saveToKeychain: false)
+        // Right here, pendingCredentialPrompt is already nil and bridge is still disconnected;
+        // inFlightConnectCounts is the sole guard blocking deletion.
+        XCTAssertNil(failingModel.pendingCredentialPrompt)
+        XCTAssertNil(failingModel.pendingConnectProfile)
+        XCTAssertFalse(failingModel.isActiveProfile(profile))
+        XCTAssertFalse(failingModel.canDeleteProfile(profile))
+        failingModel.delete(profile: profile)
+        XCTAssertEqual(failingModel.profiles, [profile])
+
+        await fulfillment(of: [failed], timeout: 5)
+        // After the queued connect finishes failing, inFlightConnectCounts drops to 0.
+        for _ in 0..<20 where !failingModel.canDeleteProfile(profile) {
+            await Task.yield()
+        }
+        XCTAssertTrue(failingModel.canDeleteProfile(profile))
+        failingModel.delete(profile: profile)
+        XCTAssertTrue(failingModel.profiles.isEmpty)
+
+        // 2. confirmRootConnect handoff to successful MockDockBridgeClient connect.
         let mockClient = MockDockBridgeClient(
             connectResult: .success(202),
             initialDirectoryResult: .success("/root")
@@ -1659,18 +1802,18 @@ func testSaveKeepsExistingPasswordWhenPasswordNil() throws {
         }
         XCTAssertTrue(localViewModel.showRootWarning)
 
-        // Confirming root warning schedules an async Task and clears pendingConnectProfile
-        // right before calling connect(profile:). Deletion must remain blocked across the handoff.
         localViewModel.confirmRootConnect()
-        XCTAssertTrue(localViewModel.isActiveProfile(rootProfile))
+        XCTAssertFalse(localViewModel.canDeleteProfile(rootProfile))
         localViewModel.delete(profile: rootProfile)
         XCTAssertEqual(localViewModel.profiles, [rootProfile])
 
-        for _ in 0..<50 where !localViewModel.isConnected {
+        for _ in 0..<200 where !localViewModel.isConnected {
             try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertTrue(localViewModel.isConnected)
         XCTAssertEqual(localViewModel.connectedProfileID, rootProfile.id)
+        XCTAssertTrue(localViewModel.isActiveProfile(rootProfile))
+        XCTAssertFalse(localViewModel.canDeleteProfile(rootProfile))
         XCTAssertEqual(localViewModel.profiles.map(\.id), [rootProfile.id])
         XCTAssertNotNil(try store.loadProfiles().first?.lastConnectedAt)
         await localViewModel.disconnect()

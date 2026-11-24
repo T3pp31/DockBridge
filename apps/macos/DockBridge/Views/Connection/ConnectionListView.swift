@@ -257,7 +257,7 @@ struct ConnectionListView: View {
             Button(String(localized: "Delete"), role: .destructive) {
                 viewModel.requestDelete(profile: profile)
             }
-            .disabled(viewModel.isActiveProfile(profile))
+            .disabled(!viewModel.canDeleteProfile(profile))
         }
     }
 
