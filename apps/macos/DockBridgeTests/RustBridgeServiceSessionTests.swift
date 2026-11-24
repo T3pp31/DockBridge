@@ -391,7 +391,7 @@ final class RustBridgeServiceSessionTests: XCTestCase {
     }
 }
 
-private final class MockDockBridgeClient: DockBridgeClientProtocol, @unchecked Sendable {
+final class MockDockBridgeClient: DockBridgeClientProtocol, @unchecked Sendable {
     private let lock = NSLock()
     private let connectResult: Result<UInt64, Error>
     private let initialDirectoryResult: Result<String, Error>
