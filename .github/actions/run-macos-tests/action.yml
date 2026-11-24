@@ -1,5 +1,5 @@
 name: Run macOS tests
-description: Build and test the macOS app with watchdog, failure diagnostics, artifact upload, and result count verification.
+description: Build and test the macOS app with watchdog and result count/skip verification.
 
 inputs:
   scheme:
@@ -199,20 +199,4 @@ runs:
     - name: Verify macOS test result counts
       if: success()
       shell: bash
-      run: |
-        set -euo pipefail
-        latest_xcresult="$(ls -dt /tmp/xcodebuild-test-attempt-*.xcresult 2>/dev/null | head -1 || true)"
-        if [[ -z "$latest_xcresult" || ! -d "$latest_xcresult" ]]; then
-          echo "::error::No .xcresult bundle found after Test macOS app"
-          exit 1
-        fi
-        summary="$(xcrun xcresulttool get test-results summary --path "$latest_xcresult" --format json)"
-        total="$(printf '%s' "$summary" | jq -r '.totalTestCount // 0')"
-        passed="$(printf '%s' "$summary" | jq -r '.passedTests // 0')"
-        skipped="$(printf '%s' "$summary" | jq -r '.skippedTests // 0')"
-        failed="$(printf '%s' "$summary" | jq -r '.failedTests // 0')"
-        echo "macOS test summary: total=${total}, passed=${passed}, skipped=${skipped}, failed=${failed}"
-        if [[ "$total" -lt 1 || "$passed" -lt 1 || "$failed" -ne 0 ]]; then
-          echo "::error::Unexpected macOS test counts (total=${total}, passed=${passed}, skipped=${skipped}, failed=${failed})"
-          exit 1
-        fi
+      run: python3 scripts/verify-macos-test-results.py
