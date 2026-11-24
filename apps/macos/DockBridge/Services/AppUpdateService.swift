@@ -28,18 +28,69 @@ struct GitHubReleaseResponse: Decodable {
     }
 }
 
-enum AppUpdateServiceError: Error, Equatable {
+enum AppUpdateServiceError: Error, Equatable, LocalizedError {
     case invalidResponse
     /// GitHub rate-limited us (403/429) after `If-None-Match` handled 304s.
     /// `retryAfter` is the server-provided Retry-After header when present.
     case rateLimited(retryAfter: String?)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidResponse:
+            return String(localized: "Received an invalid response from GitHub.")
+        case .rateLimited:
+            return String(localized: "GitHub API rate limit exceeded. Please try again later.")
+        }
+    }
 }
 
 final class AppUpdateService: @unchecked Sendable {
+    /// Fallback rate-limit backoff when `Retry-After` is absent or unparseable (1 hour).
+    static let defaultRateLimitBackoff: TimeInterval = 3_600
+    /// Upper bound on server-supplied `Retry-After` delays (24 hours) so a bad header
+    /// cannot disable update checks indefinitely.
+    static let maxRateLimitBackoff: TimeInterval = 24 * 60 * 60
+
     private let session: URLSessionDataProviding
 
     init(session: URLSessionDataProviding = URLSession.shared) {
         self.session = session
+    }
+
+    /// Parses an HTTP `Retry-After` header (RFC 9110 delta-seconds or HTTP-date)
+    /// into a non-negative delay clamped to `maxRateLimitBackoff`.
+    static func parseRetryAfter(_ header: String?, now: Date = Date()) -> TimeInterval {
+        guard let raw = header?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return defaultRateLimitBackoff
+        }
+
+        // RFC 9110 delta-seconds: non-negative ASCII digits only.
+        if raw.allSatisfy({ $0.isASCII && $0.isNumber }) {
+            guard let seconds = UInt64(raw) else {
+                return maxRateLimitBackoff
+            }
+            return min(TimeInterval(seconds), maxRateLimitBackoff)
+        }
+
+        // RFC 9110 HTTP-date formats: IMF-fixdate, obsolete RFC 850, and asctime.
+        let formats = [
+            "EEE, dd MMM yyyy HH:mm:ss 'GMT'",
+            "EEEE, dd-MMM-yy HH:mm:ss 'GMT'",
+            "EEE MMM d HH:mm:ss yyyy",
+        ]
+        for format in formats {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = format
+            if let retryDate = formatter.date(from: raw) {
+                let delta = retryDate.timeIntervalSince(now)
+                return min(max(0, delta), maxRateLimitBackoff)
+            }
+        }
+
+        return defaultRateLimitBackoff
     }
 
     func checkForUpdate(

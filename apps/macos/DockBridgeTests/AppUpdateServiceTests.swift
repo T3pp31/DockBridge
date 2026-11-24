@@ -536,4 +536,54 @@ extension AppUpdateServiceTests {
             XCTFail("unexpected error: \(error)")
         }
     }
+
+    func testParseRetryAfterHandlesDeltaSecondsHttpDatesClampingAndFallbacks() {
+        let base = Date(timeIntervalSince1970: 1_700_000_000) // Tue, 14 Nov 2023 22:13:20 GMT
+
+        XCTAssertEqual(AppUpdateService.parseRetryAfter(nil, now: base), AppUpdateService.defaultRateLimitBackoff)
+        XCTAssertEqual(AppUpdateService.parseRetryAfter("   ", now: base), AppUpdateService.defaultRateLimitBackoff)
+        XCTAssertEqual(AppUpdateService.parseRetryAfter("not-a-date", now: base), AppUpdateService.defaultRateLimitBackoff)
+        XCTAssertEqual(AppUpdateService.parseRetryAfter("-30", now: base), AppUpdateService.defaultRateLimitBackoff)
+
+        XCTAssertEqual(AppUpdateService.parseRetryAfter("0", now: base), 0)
+        XCTAssertEqual(AppUpdateService.parseRetryAfter(" 120 ", now: base), 120)
+        XCTAssertEqual(
+            AppUpdateService.parseRetryAfter("999999999", now: base),
+            AppUpdateService.maxRateLimitBackoff
+        )
+        XCTAssertEqual(
+            AppUpdateService.parseRetryAfter("99999999999999999999999999", now: base),
+            AppUpdateService.maxRateLimitBackoff
+        )
+
+        // IMF-fixdate: 5 minutes after base.
+        XCTAssertEqual(
+            AppUpdateService.parseRetryAfter("Tue, 14 Nov 2023 22:18:20 GMT", now: base),
+            300,
+            accuracy: 0.5
+        )
+        // Past HTTP-date clamps to 0.
+        XCTAssertEqual(
+            AppUpdateService.parseRetryAfter("Tue, 14 Nov 2023 22:00:00 GMT", now: base),
+            0,
+            accuracy: 0.5
+        )
+        // Far-future HTTP-date clamps to maxRateLimitBackoff.
+        XCTAssertEqual(
+            AppUpdateService.parseRetryAfter("Thu, 16 Nov 2023 22:13:20 GMT", now: base),
+            AppUpdateService.maxRateLimitBackoff,
+            accuracy: 0.5
+        )
+        // Obsolete RFC 850 and ANSI C asctime formats.
+        XCTAssertEqual(
+            AppUpdateService.parseRetryAfter("Tuesday, 14-Nov-23 22:18:20 GMT", now: base),
+            300,
+            accuracy: 0.5
+        )
+        XCTAssertEqual(
+            AppUpdateService.parseRetryAfter("Tue Nov 14 22:18:20 2023", now: base),
+            300,
+            accuracy: 0.5
+        )
+    }
 }

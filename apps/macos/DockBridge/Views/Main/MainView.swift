@@ -5,7 +5,7 @@ struct MainView: View {
     @ObservedObject private var connectionList: ConnectionListViewModel
     @ObservedObject private var transferQueue: TransferQueueViewModel
     @ObservedObject private var viewModel: MainViewModel
-    @StateObject private var updateCheck = UpdateCheckViewModel()
+    @ObservedObject private var updateCheck: UpdateCheckViewModel
 
     @Binding private var showSettings: Bool
     @SceneStorage("sidebarHidden") private var sidebarHidden = false
@@ -23,12 +23,14 @@ struct MainView: View {
         connectionList: ConnectionListViewModel,
         transferQueue: TransferQueueViewModel,
         viewModel: MainViewModel,
+        updateCheck: UpdateCheckViewModel,
         showSettings: Binding<Bool>
     ) {
         _bridge = ObservedObject(wrappedValue: bridge)
         _connectionList = ObservedObject(wrappedValue: connectionList)
         _transferQueue = ObservedObject(wrappedValue: transferQueue)
         _viewModel = ObservedObject(wrappedValue: viewModel)
+        _updateCheck = ObservedObject(wrappedValue: updateCheck)
         _showSettings = showSettings
         _settingsConfig = State(initialValue: AppSettingsService.shared.loadConfig())
     }
@@ -213,6 +215,20 @@ struct MainView: View {
                     onSkipVersion: updateCheck.skipVersion
                 )
             }
+        }
+        .alert(
+            updateCheck.manualCheckAlert?.title ?? "",
+            isPresented: Binding(
+                get: { updateCheck.manualCheckAlert != nil },
+                set: { if !$0 { updateCheck.manualCheckAlert = nil } }
+            ),
+            presenting: updateCheck.manualCheckAlert
+        ) { _ in
+            Button(String(localized: "OK"), role: .cancel) {
+                updateCheck.manualCheckAlert = nil
+            }
+        } message: { alert in
+            Text(alert.message)
         }
         .task {
             await updateCheck.checkOnLaunch(

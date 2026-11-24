@@ -7,8 +7,8 @@ struct ReleaseBodyCacheEntry: Codable {
 }
 
 enum AppUpdateConfig {
-    static let githubRepo = "T3pp31/DockBridge"
-    static let releasesLatestURL = URL(string: "https://api.github.com/repos/T3pp31/DockBridge/releases/latest")!
+    static let githubRepo = AppUpdateReleaseConfig.githubRepo
+    static let releasesLatestURL = URL(string: "https://api.github.com/repos/\(githubRepo)/releases/latest")!
     static let githubAPIAcceptHeader = "application/vnd.github+json"
     static let githubAPIVersion = "2022-11-28"
 
@@ -88,18 +88,18 @@ enum AppUpdateConfig {
     }
 
     static let allowedDownloadHosts: Set<String> = ["github.com", "objects.githubusercontent.com"]
-    static let githubReleaseDownloadPathPrefix = "/T3pp31/DockBridge/releases/download/"
-    static let githubReleasePagePathPrefix = "/T3pp31/DockBridge/releases/"
-    static let appName = "DockBridge"
-    static let bundleIdentifier = "com.dockbridge.app"
+    static let githubReleaseDownloadPathPrefix = "/\(githubRepo)/releases/download/"
+    static let githubReleasePagePathPrefix = "/\(githubRepo)/releases/"
+    static let appName = AppUpdateReleaseConfig.appName
+    static let bundleIdentifier = AppUpdateReleaseConfig.bundleIdentifier
     /// Bound update bundle metadata even when signature verification is disabled.
     static let maxInfoPlistSizeBytes = 5 * 1024 * 1024
 
-    // Keep in sync with config/release.toml. Enable when SIGN_AND_NOTARIZE=true.
-    static let expectedTeamIdentifier = ""
-    static let signingCertificateFingerprintSHA256 = ""
-    static let requireSignedUpdates = true
-    static let requireNotarizedUpdates = true
+    // Generated from config/release.toml via scripts/generate-app-update-config.sh.
+    static let expectedTeamIdentifier = AppUpdateReleaseConfig.expectedTeamIdentifier
+    static let signingCertificateFingerprintSHA256 = AppUpdateReleaseConfig.signingCertificateFingerprintSHA256
+    static let requireSignedUpdates = AppUpdateReleaseConfig.requireSignedUpdates
+    static let requireNotarizedUpdates = AppUpdateReleaseConfig.requireNotarizedUpdates
 
     /// In-app update installation (download → verify → mount DMG) is only allowed when
     /// the required signature policy is complete. Until the signing identity values

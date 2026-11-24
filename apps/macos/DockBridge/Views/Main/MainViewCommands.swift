@@ -8,9 +8,17 @@ import SwiftUI
 struct MainViewCommands: Commands {
     @ObservedObject var connectionList: ConnectionListViewModel
     @ObservedObject var viewModel: MainViewModel
+    @ObservedObject var updateCheck: UpdateCheckViewModel
     @Binding var showSettings: Bool
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button(String(localized: "Check for Updates…")) {
+                Task { await updateCheck.checkManually() }
+            }
+            .disabled(updateCheck.isCheckingManually || updateCheck.isDownloadingUpdate)
+        }
+
         CommandMenu(String(localized: "Go")) {
             Button(String(localized: "Back")) {
                 Task { await viewModel.navigateBackForFocusedPane() }

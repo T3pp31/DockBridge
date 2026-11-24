@@ -39,6 +39,8 @@ enum AppSettingsKeys {
     static let notifyWhenTransfersFinish = "notifyWhenTransfersFinish"
     static let playTransferNotificationSound = "playTransferNotificationSound"
     static let skippedUpdateVersion = "skippedUpdateVersion"
+    static let lastUpdateCheckAt = "lastUpdateCheckAt"
+    static let updateCheckBackoffUntil = "updateCheckBackoffUntil"
 }
 
 extension Notification.Name {
@@ -273,6 +275,38 @@ final class AppSettingsService: @unchecked Sendable {
 
     func saveSkippedUpdateVersion(_ version: String) {
         defaults.set(version, forKey: AppSettingsKeys.skippedUpdateVersion)
+    }
+
+    func loadLastUpdateCheckAt() -> Date? {
+        guard let timestamp = defaults.object(forKey: AppSettingsKeys.lastUpdateCheckAt) as? Double,
+              timestamp.isFinite else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: timestamp)
+    }
+
+    func saveLastUpdateCheckAt(_ date: Date?) {
+        if let date {
+            defaults.set(date.timeIntervalSince1970, forKey: AppSettingsKeys.lastUpdateCheckAt)
+        } else {
+            defaults.removeObject(forKey: AppSettingsKeys.lastUpdateCheckAt)
+        }
+    }
+
+    func loadUpdateCheckBackoffUntil() -> Date? {
+        guard let timestamp = defaults.object(forKey: AppSettingsKeys.updateCheckBackoffUntil) as? Double,
+              timestamp.isFinite else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: timestamp)
+    }
+
+    func saveUpdateCheckBackoffUntil(_ date: Date?) {
+        if let date {
+            defaults.set(date.timeIntervalSince1970, forKey: AppSettingsKeys.updateCheckBackoffUntil)
+        } else {
+            defaults.removeObject(forKey: AppSettingsKeys.updateCheckBackoffUntil)
+        }
     }
 
     func buildAppConfigRecord(knownHostsPath: String) -> AppConfigRecord {

@@ -91,6 +91,7 @@ class ReleaseGatingTests(unittest.TestCase):
         test_job = self.release["test"]
         for step_name in (
             "Verify localization catalog (en + ja)",
+            "Verify AppUpdateReleaseConfig matches config/release.toml",
             "Guard Settings scene state wiring",
             "Build Rust static library",
             "Generate UniFFI bindings",
@@ -106,6 +107,7 @@ class ReleaseGatingTests(unittest.TestCase):
 
         build_and_test = step_pos("Build and test macOS app")
         self.assertLess(step_pos("Verify localization catalog (en + ja)"), build_and_test)
+        self.assertLess(step_pos("Verify AppUpdateReleaseConfig matches config/release.toml"), build_and_test)
         self.assertLess(step_pos("Guard Settings scene state wiring"), build_and_test)
         self.assertLess(
             step_pos("Build Rust static library"),

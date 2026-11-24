@@ -22,6 +22,8 @@ read_skipped_version() {
 
 clear_skipped_version() {
   defaults delete "$BUNDLE_ID" skippedUpdateVersion 2>/dev/null || true
+  defaults delete "$BUNDLE_ID" lastUpdateCheckAt 2>/dev/null || true
+  defaults delete "$BUNDLE_ID" updateCheckBackoffUntil 2>/dev/null || true
 }
 
 kill_dockbridge() {

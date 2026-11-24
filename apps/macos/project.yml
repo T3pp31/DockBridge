@@ -58,6 +58,19 @@ targets:
           RUST_PROFILE: release
           ENABLE_HARDENED_RUNTIME: YES
     preBuildScripts:
+      - name: Generate AppUpdate Release Config
+        shell: /bin/bash
+        basedOnDependencyAnalysis: true
+        inputFiles:
+          - $(PROJECT_DIR)/../../config/release.toml
+          - $(PROJECT_DIR)/../../scripts/release-config.sh
+          - $(PROJECT_DIR)/../../scripts/generate-app-update-config.sh
+        outputFiles:
+          - $(SRCROOT)/DockBridge/Generated/AppUpdateReleaseConfig.swift
+        script: |
+          set -euo pipefail
+          ROOT="$SRCROOT/../.."
+          "$ROOT/scripts/generate-app-update-config.sh"
       - name: Generate UniFFI Bindings
         shell: /bin/bash
         # Track nested Rust sources via a generated .d dependency file so Xcode

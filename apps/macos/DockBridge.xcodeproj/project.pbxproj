@@ -94,6 +94,7 @@
 		AAE60CCE427717CBB5CAF5E6 /* VersionComparatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99EC71A49B225645A7167E28 /* VersionComparatorTests.swift */; };
 		AC195B49DA756264C53C5F8F /* StoredConnectionProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 731417E727E4DA8265BB8885 /* StoredConnectionProfile.swift */; };
 		B006382B1AF217CEE4AAC79C /* AppSettingsServiceRobustnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA5FF3DB1270E0704AF71C0F /* AppSettingsServiceRobustnessTests.swift */; };
+		B18B29E71438BB08B2424D4C /* AppUpdateReleaseConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B1A74D1D672892716B4E9F7 /* AppUpdateReleaseConfig.swift */; };
 		B22A49B7350C3FEFF116A07E /* KeychainServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40B6CAD8533A0FBA4F996349 /* KeychainServiceTests.swift */; };
 		B4E46253C6768099506CB96D /* PathBreadcrumbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81367EB61E6C8BEF9793A8E1 /* PathBreadcrumbView.swift */; };
 		BA295992A6B766D72FA081DB /* FileDropError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36588669F6048754258FD882 /* FileDropError.swift */; };
@@ -207,6 +208,7 @@
 		81367EB61E6C8BEF9793A8E1 /* PathBreadcrumbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathBreadcrumbView.swift; sourceTree = "<group>"; };
 		8247DEA74B1E50706678F56B /* DropOperationSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DropOperationSync.swift; sourceTree = "<group>"; };
 		84B29A44A31F477495651C24 /* FileTypeIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTypeIcon.swift; sourceTree = "<group>"; };
+		8B1A74D1D672892716B4E9F7 /* AppUpdateReleaseConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateReleaseConfig.swift; sourceTree = "<group>"; };
 		8EB55A6D6119BAE06270A395 /* ClipboardHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHelper.swift; sourceTree = "<group>"; };
 		8F9AA96EE2C5518250D58347 /* AppUpdateDownloadServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppUpdateDownloadServiceTests.swift; sourceTree = "<group>"; };
 		90BB7D7A43BF9C283562C1D4 /* ConnectionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStore.swift; sourceTree = "<group>"; };
@@ -323,6 +325,7 @@
 		31AC3AEF0D5B14D38BA9144E /* Generated */ = {
 			isa = PBXGroup;
 			children = (
+				8B1A74D1D672892716B4E9F7 /* AppUpdateReleaseConfig.swift */,
 				0C3DD773B195E0553CA6AEEF /* DockBridgeUniffi.swift */,
 			);
 			path = Generated;
@@ -547,6 +550,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 5E5CA235653CC19E13524480 /* Build configuration list for PBXNativeTarget "DockBridge" */;
 			buildPhases = (
+				0DF11FCB6E1EA7E33E9FDAC1 /* Generate AppUpdate Release Config */,
 				EC79DED3014BF2D836249678 /* Generate UniFFI Bindings */,
 				24118F555DBB1496A265D185 /* Sources */,
 				752CD2D0C8C2F0C96591E41A /* Resources */,
@@ -626,6 +630,28 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		0DF11FCB6E1EA7E33E9FDAC1 /* Generate AppUpdate Release Config */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(PROJECT_DIR)/../../config/release.toml",
+				"$(PROJECT_DIR)/../../scripts/release-config.sh",
+				"$(PROJECT_DIR)/../../scripts/generate-app-update-config.sh",
+			);
+			name = "Generate AppUpdate Release Config";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/DockBridge/Generated/AppUpdateReleaseConfig.swift",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -euo pipefail\nROOT=\"$SRCROOT/../..\"\n\"$ROOT/scripts/generate-app-update-config.sh\"\n";
+		};
 		EC79DED3014BF2D836249678 /* Generate UniFFI Bindings */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -742,6 +768,7 @@
 				1772AA8C3458715C16C58552 /* AppUpdateConfig.swift in Sources */,
 				3BC089BE93C75A03587C45AF /* AppUpdateDownloadService.swift in Sources */,
 				14BA406FA6C050462700CC86 /* AppUpdateInfo.swift in Sources */,
+				B18B29E71438BB08B2424D4C /* AppUpdateReleaseConfig.swift in Sources */,
 				9DC5DEE3E3DE311E16157016 /* AppUpdateService.swift in Sources */,
 				D84B34AF8FDA59BA9E267AA1 /* AuthType.swift in Sources */,
 				1C4293843D7BBEC971CEE158 /* ClipboardHelper.swift in Sources */,

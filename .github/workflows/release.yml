@@ -45,6 +45,9 @@ jobs:
       - name: Verify localization catalog (en + ja)
         run: ./scripts/verify-localization.sh
 
+      - name: Verify AppUpdateReleaseConfig matches config/release.toml
+        run: ./scripts/generate-app-update-config.sh --check
+
       - name: Guard Settings scene state wiring
         run: python3 scripts/test-settings-scene.py
 
